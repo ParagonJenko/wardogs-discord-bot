@@ -73,8 +73,10 @@ export const runCommand =
       return { embeds: [buildSeedersEmbed(await seeders(days), days, seedMinutes, vip)] };
     }
 
-    const { rconUrl, rconPassword, rules } = config();
-    if (name === 'serverstatus') return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules)] };
+    const { rconUrl, rconPassword, rules, siteUrl } = config();
+    if (name === 'serverstatus') {
+      return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl)] };
+    }
     if (name === 'players') return { embeds: [buildPlayersEmbed(await fetchPlayers(rconUrl, rconPassword, http))] };
     if (name === 'rotation') return { embeds: [buildRotationEmbed(await fetchRotation(rconUrl, rconPassword, http))] };
 

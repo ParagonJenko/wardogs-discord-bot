@@ -71,7 +71,7 @@ export const emptyStats = (): SiteStats => ({
   discord: null,
 });
 
-const Scores = z.array(z.object({ name: z.string(), score: z.number() }));
+const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() }));
 const Players = z.array(z.object({ name: z.string(), kills: z.number(), deaths: z.number() }));
 
 const SiteStatsSchema = z.object({

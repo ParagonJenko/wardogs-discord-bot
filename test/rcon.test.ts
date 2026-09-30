@@ -44,8 +44,8 @@ describe('fetchStatus', () => {
       map: 'Kavkazi',
       rotationIndex: 0,
       factionScores: [
-        { name: 'Valkyra', score: 412 },
-        { name: 'Kharr', score: 388 },
+        { name: 'Valkyra', score: 412, colorHex: '#3366ff' },
+        { name: 'Kharr', score: 388, colorHex: '#ff3333' },
       ],
     });
   });

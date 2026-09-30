@@ -38,6 +38,8 @@ const EnvSchema = z
       .regex(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/, 'must be a Discord webhook URL'),
     DISCORD_ROLE_ID: numericId.optional(),
     DISCORD_INVITE: invite.optional(),
+    // The community website; Discord posts link to it.
+    SITE_URL: z.url({ protocol: /^https?$/ }).optional(),
     SEEDING_THRESHOLD: count(1),
     LIVE_THRESHOLD: count(20),
     LOW_POP_THRESHOLD: count(20),
@@ -69,6 +71,7 @@ export type Config = {
   webhookUrl: string;
   roleId: string | undefined;
   inviteCode: string | undefined;
+  siteUrl: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
@@ -93,6 +96,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     webhookUrl: e.DISCORD_WEBHOOK_URL,
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
+    siteUrl: e.SITE_URL,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,
     rules: {
       seeding: e.SEEDING_THRESHOLD,

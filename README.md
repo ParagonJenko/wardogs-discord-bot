@@ -15,6 +15,10 @@ It also posts:
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
+Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
+pop), medals for the top three players, each faction's score with a dot in its in-game colour, and match
+summaries in the winning faction's colour.
+
 And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
 `/broadcast`, `/seeders` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
 
@@ -54,7 +58,8 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    npx wrangler secret put RCON_PASSWORD
    npx wrangler secret put DISCORD_WEBHOOK_URL
    ```
-3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`.
+3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`, and `SITE_URL` (your community
+   website, such as `https://gaminginit.com`): post titles then link to it, and their footer points people there.
 4. Deploy:
    ```bash
    npm run deploy

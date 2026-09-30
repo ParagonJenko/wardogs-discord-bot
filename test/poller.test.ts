@@ -13,6 +13,7 @@ const config: Config = {
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   roleId: undefined,
   inviteCode: undefined,
+  siteUrl: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
   seedMinutes: 10,
@@ -61,6 +62,9 @@ const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: S
 
 const titles = (sent: DiscordMessage[]) => sent.map((m) => m.embeds[0]?.title);
 
+// A field of the first embed, by its name.
+const field = (message: DiscordMessage | undefined, name: string) => message?.embeds[0]?.fields?.find((f) => f.name === name)?.value;
+
 describe('poller', () => {
   it('posts nothing on the first check, so restarts do not re-announce', async () => {
     const { tick, send } = setup([snapshot(crowd(25))]);
@@ -91,7 +95,7 @@ describe('poller', () => {
 
     await run(5);
 
-    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toBe('1. Pa (3 min)\n2. Pb (2 min)\n3. Px0 (1 min)');
+    expect(field(sent[1], 'Top seeders')).toBe('🥇 Pa · 3 min\n🥈 Pb · 2 min\n🥉 Px0 · 1 min');
   });
 
   it('does not credit players who only joined on the check that went live', async () => {
@@ -100,7 +104,7 @@ describe('poller', () => {
 
     await run(3);
 
-    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toBe('1. Pa (1 min)');
+    expect(field(sent[1], 'Top seeders')).toBe('🥇 Pa · 1 min');
   });
 
   it('counts players who were already seeding when the bot started', async () => {
@@ -109,7 +113,7 @@ describe('poller', () => {
 
     await run(3);
 
-    expect(sent[0]?.embeds[0]?.fields?.[0]?.value).toBe('1. Pa (2 min)');
+    expect(field(sent[0], 'Top seeders')).toBe('🥇 Pa · 2 min');
   });
 
   it('starts the seeding count again after the server empties', async () => {
@@ -126,7 +130,7 @@ describe('poller', () => {
 
     await run(6);
 
-    expect(sent.at(-1)?.embeds[0]?.fields?.[0]?.value).toBe('1. Pb (1 min)');
+    expect(field(sent.at(-1), 'Top seeders')).toBe('🥇 Pb · 1 min');
   });
 
   it('posts a match summary when the map changes after a live match', async () => {
@@ -139,8 +143,8 @@ describe('poller', () => {
 
     await run(4);
 
-    expect(titles(sent)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over on Bakurani']);
-    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toMatch(/^1\. Pa: 9 kills/);
+    expect(titles(sent)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · Bakurani']);
+    expect(field(sent[1], 'Top players')).toMatch(/^🥇 \*\*Pa\*\* · 9 kills/);
   });
 
   it('does not summarise the match that was already live when the bot started', async () => {
@@ -168,7 +172,7 @@ describe('poller', () => {
 
     expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual([
       '🟢 UK Wardogs #1 is live',
-      '🏁 Match over on Bakurani',
+      '🏁 Match over · Bakurani',
       '🔻 UK Wardogs #1 dropped below 20 players',
       '🔻 UK Wardogs #1 dropped below 20 players',
     ]);
@@ -191,7 +195,7 @@ describe('poller', () => {
     await run(3);
 
     // The live alert is not retried; the match that was live for that minute is still summarised once it empties.
-    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over on Bakurani']);
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · Bakurani']);
   });
 
   it('keeps going when RCON is unreachable', async () => {
@@ -357,9 +361,7 @@ describe('poller stats', () => {
         240_000,
       ],
     ]);
-    expect(sent.find((m) => m.embeds[0]?.title.endsWith('is live'))?.embeds[0]?.fields).toEqual([
-      { name: 'Top seeders', value: '1. Pa (2 min)\n2. Pb (1 min)' },
-    ]);
+    expect(field(sent.find((m) => m.embeds[0]?.title.endsWith('is live')), 'Top seeders')).toBe('🥇 Pa · 2 min\n🥈 Pb · 1 min');
   });
 
   it('credits seeders and names them on the live alert even when every Discord post was failing', async () => {
@@ -376,11 +378,11 @@ describe('poller stats', () => {
       [[{ steamId: 'a', name: 'Pa', minutes: 2 }], 240_000],
       [[{ steamId: 'a', name: 'Pa', minutes: 2 }], 300_000],
     ]);
-    expect(send.mock.calls.map(([m]) => [m.embeds[0]?.title, m.embeds[0]?.fields?.[0]?.value])).toEqual([
+    expect(send.mock.calls.map(([m]) => [m.embeds[0]?.title, field(m, 'Top seeders')])).toEqual([
       ['🌱 UK Wardogs #1 is seeding', undefined],
       ['🌱 UK Wardogs #1 is seeding', undefined],
-      ['🟢 UK Wardogs #1 is live', '1. Pa (2 min)'],
-      ['🟢 UK Wardogs #1 is live', '1. Pa (2 min)'],
+      ['🟢 UK Wardogs #1 is live', '🥇 Pa · 2 min'],
+      ['🟢 UK Wardogs #1 is live', '🥇 Pa · 2 min'],
     ]);
   });
 
@@ -418,7 +420,7 @@ describe('poller stats', () => {
       ['Kavkazi#0', 4, 180_000],
       ['Kavkazi#0', 4, 240_000],
     ]);
-    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over on Bakurani']);
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · Bakurani']);
   });
 
   it('credits seeders on the next check if recording the seed failed', async () => {
@@ -451,8 +453,8 @@ describe('poller stats', () => {
 
     expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual([
       '🟢 UK Wardogs #1 is live',
-      '🏁 Match over on Bakurani',
-      '🏁 Match over on Bakurani',
+      '🏁 Match over · Bakurani',
+      '🏁 Match over · Bakurani',
     ]);
   });
 

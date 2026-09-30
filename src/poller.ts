@@ -60,7 +60,7 @@ const AlertsSchema = z.object({
   lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop']), z.number()),
 });
 
-const Scores = z.array(z.object({ name: z.string(), score: z.number() }));
+const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() }));
 
 const BotStateSchema = z.object({
   alerts: AlertsSchema,
@@ -197,14 +197,21 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     try {
       const summary = tracked.unsentSummary;
       if (summary !== null) {
-        await send(buildMatchSummary(summary, status.name));
+        await send(buildMatchSummary(summary, status.name, config.siteUrl));
         // So a failed alert below does not post the summary a second time.
         tracked = { ...tracked, unsentSummary: null };
         log.info(`Sent match summary for ${summary.map}`);
       }
       if (result.alert !== null) {
         await send(
-          buildMessage(result.alert, status, { lowPop: config.rules.lowPop, roleId: config.roleId, seeders, vip: config.vip }),
+          buildMessage(result.alert, status, {
+            lowPop: config.rules.lowPop,
+            live: config.rules.live,
+            roleId: config.roleId,
+            seeders,
+            vip: config.vip,
+            siteUrl: config.siteUrl,
+          }),
         );
         log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
       }

@@ -163,7 +163,7 @@ export class Watcher extends DurableObject<Env> {
       await storage.put('vip', next.state);
       // Posted once, after the list is saved: a failed post is logged, not retried, so nobody is announced twice.
       if (next.added.length > 0 || next.renewed.length > 0) {
-        await postWebhook(config.webhookUrl, buildVipMessage(next.added, next.renewed, rule)).catch((error: unknown) =>
+        await postWebhook(config.webhookUrl, buildVipMessage(next.added, next.renewed, rule, config.siteUrl)).catch((error: unknown) =>
           console.error(`VIP announcement failed: ${errorText(error)}`),
         );
       }
