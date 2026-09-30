@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildMessage, postWebhook } from '../src/discord.ts';
 
-const server = { id: '123', name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
+const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 
 describe('buildMessage', () => {
   it('announces seeding with the server name and population', () => {
@@ -9,7 +9,6 @@ describe('buildMessage', () => {
 
     expect(embed?.title).toMatch(/UK Wardogs #1 is seeding/);
     expect(embed?.description).toContain('7/64');
-    expect(embed?.url).toBe('https://www.battlemetrics.com/servers/wardogs/123');
   });
 
   it('announces going live', () => {

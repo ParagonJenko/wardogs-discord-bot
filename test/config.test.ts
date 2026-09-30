@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 
 const required = {
-  BATTLEMETRICS_SERVER_ID: '12345678',
+  RCON_URL: 'http://203.0.113.10:7776',
+  RCON_PASSWORD: 'secret',
   DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/111/abc-DEF_123',
 };
 
 describe('loadConfig', () => {
   it('applies the default thresholds and intervals', () => {
     expect(loadConfig(required)).toEqual({
-      serverId: '12345678',
+      rconUrl: 'http://203.0.113.10:7776',
+      rconPassword: 'secret',
       webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123',
       roleId: undefined,
       pollIntervalMs: 60_000,
@@ -40,10 +42,17 @@ describe('loadConfig', () => {
     expect(config.rules.live).toBe(20);
   });
 
-  it('rejects a missing server id', () => {
-    expect(() => loadConfig({ DISCORD_WEBHOOK_URL: required.DISCORD_WEBHOOK_URL })).toThrow(
-      /BATTLEMETRICS_SERVER_ID/,
-    );
+  it('rejects a missing RCON password', () => {
+    expect(() => loadConfig({ ...required, RCON_PASSWORD: undefined })).toThrow(/RCON_PASSWORD/);
+  });
+
+  it('rejects an RCON URL that is not http(s)://host:port', () => {
+    expect(() => loadConfig({ ...required, RCON_URL: '203.0.113.10:7776' })).toThrow(/RCON_URL/);
+    expect(() => loadConfig({ ...required, RCON_URL: 'http://203.0.113.10:7776/v1/status' })).toThrow(/RCON_URL/);
+  });
+
+  it('accepts an https RCON URL behind a proxy', () => {
+    expect(loadConfig({ ...required, RCON_URL: 'https://rcon.example.com' }).rconUrl).toBe('https://rcon.example.com');
   });
 
   it('rejects a webhook URL that is not a Discord webhook', () => {

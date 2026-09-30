@@ -1,5 +1,5 @@
 import { initialState, step, type MonitorState } from './alerts.ts';
-import type { ServerStatus } from './battlemetrics.ts';
+import type { ServerStatus } from './rcon.ts';
 import type { Config } from './config.ts';
 import { buildMessage, type DiscordMessage } from './discord.ts';
 

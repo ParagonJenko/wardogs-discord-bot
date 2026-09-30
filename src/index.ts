@@ -1,7 +1,7 @@
-import { fetchServer } from './battlemetrics.ts';
 import { loadConfig } from './config.ts';
 import { postWebhook } from './discord.ts';
 import { createPoller, memoryStore } from './poller.ts';
+import { fetchGet, fetchStatus } from './rcon.ts';
 
 const config = loadConfig(process.env);
 
@@ -12,7 +12,7 @@ const timestamped =
 
 const poll = createPoller({
   config,
-  fetchServer: () => fetchServer(config.serverId),
+  fetchServer: () => fetchStatus(config.rconUrl, config.rconPassword, fetchGet()),
   send: (message) => postWebhook(config.webhookUrl, message),
   now: Date.now,
   log: { info: timestamped(console.log), error: timestamped(console.error) },

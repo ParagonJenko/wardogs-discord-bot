@@ -1,7 +1,6 @@
 # WARDOGS Discord bot
 
-Watches a WARDOGS server on [BattleMetrics](https://www.battlemetrics.com/servers/wardogs) and posts to a
-Discord channel when:
+Watches a WARDOGS server through its RCON API and posts to a Discord channel when:
 
 | Alert        | When                                                       | Default     |
 | ------------ | ---------------------------------------------------------- | ----------- |
@@ -9,13 +8,15 @@ Discord channel when:
 | 🟢 Live      | The server reaches `LIVE_THRESHOLD` players                | 20 players  |
 | 🔻 Low pop   | A live server drops below `LOW_POP_THRESHOLD` players      | below 20    |
 
-It posts through a Discord webhook, so there is no bot account or token to set up. It checks BattleMetrics
-every 60 seconds; no API key is needed.
+It posts through a Discord webhook, so there is no bot account or token to set up. It reads
+`GET /v1/status` from the server's RCON listener every 60 seconds.
 
 ## Setup
 
-1. **Server ID.** Find your server on BattleMetrics. The ID is the number at the end of the URL:
-   `https://www.battlemetrics.com/servers/wardogs/12345678` → `12345678`.
+1. **RCON address and password.** From your host's control panel (QONZER, BisectHosting, xREALM), or
+   `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini`. The address is the server IP and RCON port,
+   written as a URL: `http://203.0.113.10:7776` (7776 is the default port). If your host puts RCON
+   behind HTTPS, use the `https://` address it gives you.
 2. **Webhook.** In Discord: channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
 3. **Role to ping (optional).** Enable Developer Mode (User Settings → Advanced), then Server Settings →
    Roles → right-click the role → Copy Role ID.
@@ -30,21 +31,27 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    npm ci
    npx wrangler login
    ```
-2. Put your server ID (and optionally role ID and thresholds) in the `vars` block of `wrangler.jsonc`.
-3. Store the webhook as a secret, so it is not committed:
+2. Store the RCON address, RCON password and webhook as secrets, so they are never committed:
    ```bash
+   npx wrangler secret put RCON_URL
+   npx wrangler secret put RCON_PASSWORD
    npx wrangler secret put DISCORD_WEBHOOK_URL
    ```
+3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`.
 4. Deploy:
    ```bash
    npm run deploy
    ```
 
 Logs are under Workers & Pages → wardogs-discord-bot → Logs in the Cloudflare dashboard. The first run
-logs `Watching "<server name>": N/M players`. On Workers the check always runs every minute;
+logs `Watching "<server name>": N/M players`. `RCON rejected the password (401)` means the password
+is wrong; `timed out` means the address or port is wrong or the host's firewall blocks it. On Workers the check always runs every minute;
 `POLL_INTERVAL_SECONDS` is not used.
 
 To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` again.
+
+Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
+socket to the RCON listener and sends the HTTP request itself.
 
 ## Run with Node or Docker
 
@@ -73,9 +80,18 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   19–20 players would post live / low-pop every minute.
 - `LOW_POP_THRESHOLD` can be set lower than `LIVE_THRESHOLD` (for example live at 40, warn below 30) to
   give more slack before the warning.
-- If a Discord post fails, the alert is retried on the next check. If BattleMetrics is unreachable, the
-  check is skipped and logged.
-- A server BattleMetrics reports as offline counts as 0 players.
+- If a Discord post fails, the alert is retried on the next check while it is still true. If RCON is
+  unreachable (for example during the game's daily restart), the check is skipped and logged; no alert
+  is sent for the outage itself.
+
+## Security
+
+The RCON password gives full admin control of the server (kick, ban, end match, change settings). The
+bot only ever calls `GET /v1/status`, but:
+
+- Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
+- Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if
+  your host offers one.
 
 ## Development
 

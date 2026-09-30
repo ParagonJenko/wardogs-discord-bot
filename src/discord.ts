@@ -1,9 +1,9 @@
 import type { AlertKind } from './alerts.ts';
-import type { ServerStatus } from './battlemetrics.ts';
+import type { ServerStatus } from './rcon.ts';
 
 export type DiscordMessage = {
   content?: string;
-  embeds: { title: string; description: string; url: string; color: number }[];
+  embeds: { title: string; description: string; color: number }[];
   allowed_mentions: { parse: never[]; roles: string[] };
 };
 
@@ -40,7 +40,6 @@ export const buildMessage = (kind: AlertKind, server: ServerStatus, options: Mes
     {
       title: title(kind, server, options.lowPop),
       description: `**${server.players}/${server.maxPlayers}** players. ${CALL_TO_ACTION[kind]}`,
-      url: `https://www.battlemetrics.com/servers/wardogs/${server.id}`,
       color: COLORS[kind],
     },
   ],

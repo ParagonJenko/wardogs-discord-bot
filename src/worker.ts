@@ -1,9 +1,11 @@
+import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
 import type { MonitorState } from './alerts.ts';
-import { fetchServer } from './battlemetrics.ts';
 import { loadConfig } from './config.ts';
 import { postWebhook } from './discord.ts';
 import { createPoller } from './poller.ts';
+import { fetchStatus } from './rcon.ts';
+import { socketGet } from './socket-http.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -22,7 +24,7 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const poll = createPoller({
       config,
-      fetchServer: () => fetchServer(config.serverId),
+      fetchServer: () => fetchStatus(config.rconUrl, config.rconPassword, socketGet(connect)),
       send: (message) => postWebhook(config.webhookUrl, message),
       now: Date.now,
       log: console,
