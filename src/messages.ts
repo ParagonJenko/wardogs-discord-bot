@@ -4,7 +4,7 @@ import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
 // seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (with a line about the team
-// in front), and when each team is close to winning. Each goes out once per match.
+// in front), and when the first team is close to winning. Each goes out once per match.
 
 export type MessageRule = { siteHost: string; scoreToWin: number };
 
@@ -59,7 +59,8 @@ const leaderLine = (scores: Score[], startedAt: number): string => {
 // Everything this match has reached so far, in the order it happens.
 export const milestones = (match: MatchState, now: number, rule: MessageRule, vip: VipRule | null): Milestone[] => {
   const { siteHost, scoreToWin } = rule;
-  const top = Math.max(0, ...match.factionScores.map((s) => s.score));
+  const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
+  const top = Math.max(0, leader?.score ?? 0);
   const nearly = Math.ceil(scoreToWin * NEARLY);
   return [
     // Only when the bot saw the match start, so the time is right.
@@ -78,12 +79,15 @@ export const milestones = (match: MatchState, now: number, rule: MessageRule, vi
           },
         ]
       : []),
-    ...match.factionScores
-      .filter((s) => s.score >= nearly)
-      .map((s) => ({
-        key: `nearly:${s.name}`,
-        text: `${s.name} has ${nearly} points! Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`,
-      })),
+    // Once per match, for the first team to get there.
+    ...(leader && leader.score >= nearly
+      ? [
+          {
+            key: 'nearly',
+            text: `${leader.name} has ${nearly} points! Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`,
+          },
+        ]
+      : []),
   ].map((m) => ({ ...m, text: fit(m.text) }));
 };
 
@@ -101,7 +105,9 @@ export const nextMessage = (
   if (previous === null || previous.match !== match.startedAt) {
     return { messages: { match: match.startedAt, sent: due.map((m) => m.key) }, send: null };
   }
-  const next = due.find((m) => !previous.sent.includes(m.key));
+  // Saved before "nearly" was once per match, it was one key per team ("nearly:Valkyra"); either counts as sent.
+  const sent = (key: string): boolean => previous.sent.some((k) => k === key || k.startsWith(`${key}:`));
+  const next = due.find((m) => !sent(m.key));
   if (next === undefined) return { messages: previous, send: null };
   return { messages: { ...previous, sent: [...previous.sent, next.key] }, send: next.text };
 };
