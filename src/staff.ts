@@ -141,6 +141,15 @@ const namedIds = (ids: string[], known: Named[]): Named[] =>
 
 const optional = async <T>(work: Promise<T>): Promise<T | null> => work.catch(() => null);
 
+// Null when the reserved list cannot be read safely, such as a settings file with the section twice.
+const isReserved = (settings: string, steamId: string): boolean | null => {
+  try {
+    return reservedIds(settings).includes(steamId);
+  } catch {
+    return null;
+  }
+};
+
 // Choices offered while staff type in an option with autocomplete.
 export const suggestStaff =
   ({ config, http, records }: Pick<StaffDeps, 'config' | 'http' | 'records'>) =>
@@ -358,7 +367,7 @@ export const runStaffCommand =
           name: inGame?.name ?? record.name ?? (player.name === player.steamId ? null : player.name),
           record,
           online: inGame,
-          reserved: serverConfig === null ? null : reservedIds(serverConfig.text).includes(player.steamId),
+          reserved: serverConfig === null ? null : isReserved(serverConfig.text, player.steamId),
           serverBan: bans === null ? undefined : (bans.find((b) => b.steamId === player.steamId) ?? null),
           days: PROFILE_DAYS,
           now: now(),

@@ -268,6 +268,15 @@ describe('runStaffCommand', () => {
     );
   });
 
+  it('/player still answers when the reserved list cannot be read safely', async () => {
+    const twice = `${settings}[/Script/WDGame.WDGameSession]\nMaxReservedSlots=2\n`;
+    const { run } = setup({ 'GET /v1/config': [200, { revision: '1', writable: true, text: twice }] });
+
+    const embed = (await run('player', { player: BO })).embeds?.[0];
+
+    expect(embed?.fields).toEqual(expect.arrayContaining([{ name: 'VIP', value: "Couldn't read the reserved list" }]));
+  });
+
   it('/player still answers when the server cannot be reached', async () => {
     const { run } = setup({
       'GET /v1/players': [500, {}],

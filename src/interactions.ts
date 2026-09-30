@@ -352,12 +352,15 @@ export const handleInteraction = async (
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
         // A broadcast or staff action that timed out may still have reached the game, so don't invite a blind retry.
+        // Staff replies are private, so they say why; public ones don't show internals.
         const content =
           name === 'broadcast'
             ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
             : ACTIONS.includes(name)
               ? `Couldn't confirm /${name} worked (${errorText(error)}). Check before trying again.`
-              : "Couldn't get that right now. Try again in a minute.";
+              : admin
+                ? `Couldn't get that right now (${errorText(error)}). Try again in a minute.`
+                : "Couldn't get that right now. Try again in a minute.";
         return { content, allowed_mentions: { parse: [] } };
       },
     );

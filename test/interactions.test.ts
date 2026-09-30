@@ -285,7 +285,7 @@ describe('handleInteraction', () => {
     });
   });
 
-  it('gives a failed /seeders the general error, not the broadcast one', async () => {
+  it('gives a failed /seeders the general error with its reason, as only staff see it', async () => {
     const { body, signature, timestamp } = await signed({ ...broadcast(String(ADMINISTRATOR)), data: { name: 'seeders' } });
     const d = deps();
     d.runCommand.mockRejectedValueOnce(new Error('storage unavailable'));
@@ -293,7 +293,7 @@ describe('handleInteraction', () => {
     await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
 
     expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
-      content: "Couldn't get that right now. Try again in a minute.",
+      content: "Couldn't get that right now (storage unavailable). Try again in a minute.",
       allowed_mentions: { parse: [] },
     });
   });
