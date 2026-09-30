@@ -58,8 +58,14 @@ describe('loadConfig', () => {
   });
 
   it('rejects an RCON URL that is not http(s)://host:port', () => {
-    expect(() => loadConfig({ ...required, RCON_URL: '203.0.113.10:7776' })).toThrow(/RCON_URL/);
+    expect(() => loadConfig({ ...required, RCON_URL: 'not an address' })).toThrow(/RCON_URL/);
     expect(() => loadConfig({ ...required, RCON_URL: 'http://203.0.113.10:7776/v1/status' })).toThrow(/RCON_URL/);
+  });
+
+  it('tidies an RCON address pasted with quotes, spaces or no http://', () => {
+    for (const pasted of ['"http://203.0.113.10:31105"', ' http://203.0.113.10:31105\n', '203.0.113.10:31105', "'203.0.113.10:31105'"]) {
+      expect(loadConfig({ ...required, RCON_URL: pasted }).rconUrl).toBe('http://203.0.113.10:31105');
+    }
   });
 
   it('accepts an https RCON URL behind a proxy', () => {

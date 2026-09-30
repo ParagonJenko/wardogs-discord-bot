@@ -28,8 +28,9 @@ Alerts and summaries go through a Discord webhook. Every 60 seconds the bot read
 
 1. **RCON address and password.** From your host's control panel (QONZER, BisectHosting, xREALM), or
    `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini`. The address is the server IP and RCON port,
-   written as a URL: `http://203.0.113.10:7776` (7776 is the default port). If your host puts RCON
-   behind HTTPS, use the `https://` address it gives you.
+   written as a URL: `http://203.0.113.10:7776` (7776 is the default port; use whatever port your host
+   gives you). No path after the port. If your host puts RCON behind HTTPS, use the `https://` address
+   it gives you. Quotes, spaces and a missing `http://` are tidied up automatically.
 2. **Webhook.** In Discord: channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
 3. **Role to ping (optional).** Enable Developer Mode (User Settings → Advanced), then Server Settings →
    Roles → right-click the role → Copy Role ID.
