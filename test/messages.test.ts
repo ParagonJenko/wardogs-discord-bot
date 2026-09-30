@@ -34,7 +34,7 @@ describe('milestones', () => {
   it('reaches ten minutes after the match went live', () => {
     expect(milestones(match(), 9 * MINUTE, rule, null)).toEqual([]);
     expect(milestones(match(), 10 * MINUTE, rule, null)).toEqual([
-      { key: 'ten-minutes', text: 'Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com' },
+      { key: 'ten-minutes', text: '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com' },
     ]);
   });
 
@@ -93,9 +93,31 @@ describe('milestones', () => {
       'Kharr has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     );
     expect(milestones(match(scores(92, 20)), 0, rule, null)[1]?.text).toBe(
-      'Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     );
     expect(milestones(match(scores(135, 20)), 0, { ...rule, scoreToWin: 150 }, null)[1]?.key).toBe('nearly');
+  });
+
+  it('has a line for whichever faction gets near the end first, whatever the server calls it', () => {
+    const nearly = (name: string, startedAt = 0) =>
+      milestones(match({ startedAt, factionScores: [{ name, score: 91 }] }), 0, rule, null)
+        .find((m) => m.key === 'nearly')
+        ?.text.split(' Where do you rank?')[0];
+
+    expect(nearly('Lonestar')).toBe('Lonestar has 90! The default pick is about to win. Clip it.');
+    expect(nearly('Lone Star', 60_000)).toBe('Lonestar has 90! Nobody wanted blue, and look at them now. Yeehaw.');
+    expect(nearly('MANTICORE')).toBe('Manticore has 90. Green about to win again. Groundbreaking.');
+    expect(nearly('Manticore', 60_000)).toBe('Manticore has 90. The shadow army is about to do it again.');
+    expect(nearly('Valkyra', 60_000)).toBe('Valkyra has 90! Greatness nearly restored.');
+  });
+
+  it('has a different joke ten minutes in from match to match, always pointing at the rules in Discord', () => {
+    const tenMinutes = (startedAt: number) =>
+      milestones(match({ startedAt, liveAt: startedAt }), startedAt + 10 * MINUTE, rule, null)[0]?.text ?? '';
+    const lines = [0, 1, 2].map((m) => tenMinutes(m * MINUTE));
+
+    expect(new Set(lines).size).toBe(3);
+    expect(lines.every((l) => l.includes('Discord') && l.includes('gaminginit.com') && l.length <= 200)).toBe(true);
   });
 
   it('keeps messages short enough for the game', () => {
@@ -126,7 +148,7 @@ describe('nextMessage', () => {
       { at: 32 * MINUTE, match: match(scores(95, 92)) },
     ]);
 
-    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Enjoying', 'Halfway', null, 'Valkyra', null, null]);
+    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, '10', 'Halfway', null, 'Valkyra', null, null]);
   });
 
   it('does not announce late what a match reached before it was first seen', () => {
@@ -152,6 +174,6 @@ describe('nextMessage', () => {
       { at: 60 * MINUTE, match: match({ startedAt: 40 * MINUTE, liveAt: 40 * MINUTE, ...scores(51, 30) }) },
     ]);
 
-    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Halfway', null, 'Enjoying']);
+    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Halfway', null, 'Still']);
   });
 });

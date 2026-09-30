@@ -131,9 +131,12 @@ const byScore = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a,
 // Each faction's own emoji: the Lonestar cowboy, the Valkyra bear and the Manticore's scorpion tail.
 const FACTION_EMOJI: Record<string, string> = { lonestar: '🤠', valkyra: '🐻', manticore: '🦂' };
 
+// How a faction is looked up, whatever the server calls it: "Lonestar", "LONESTAR" and "Lone Star" are the same.
+export const factionKey = (name: string): string => name.toLowerCase().replace(/[^a-z]/g, '');
+
 // A faction's own emoji and a space, or nothing for a faction without one.
 const factionEmoji = (name: string): string => {
-  const emoji = FACTION_EMOJI[name.trim().toLowerCase()];
+  const emoji = FACTION_EMOJI[factionKey(name)];
   return emoji ? `${emoji} ` : '';
 };
 

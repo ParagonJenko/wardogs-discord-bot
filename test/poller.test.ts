@@ -537,9 +537,9 @@ describe('in-game messages', () => {
     await run(7);
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
-      'Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com',
+      'Enjoying the chaos? Read the rules in our Discord, soldier. Leaderboard at gaminginit.com',
       'Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time. Check the leaderboard and join our Discord at gaminginit.com',
-      'Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      'Valkyra has 90! Greatness nearly restored. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     ]);
     expect(log.info).toHaveBeenCalledWith(
       'Sent in game: Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time. Check the leaderboard and join our Discord at gaminginit.com',
@@ -558,7 +558,7 @@ describe('in-game messages', () => {
     await run(4);
 
     // Halfway fails once and is not tried again; ten minutes in is a different message, due on the last check.
-    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', 'Enjoying the match']);
+    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', 'Enjoying the chaos']);
     expect(log.error).toHaveBeenCalledWith('In-game message failed: RCON request timed out after 8000ms');
   });
 

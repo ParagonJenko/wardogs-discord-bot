@@ -323,21 +323,24 @@ leaderboard, the Discord and seeding:
 
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 10 minutes after the match went live             | Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com |
+| 10 minutes after the match went live             | 10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com |
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
-| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
+| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
-- The halfway message names only the team in front, with its score and a joke about that faction. Each faction has two
-  lines and a match gets one of them, so they vary:
+- Each message has a few jokey lines and a match gets one of them (picked by when it started), so they vary. The
+  halfway and 90-point messages name only the team in front, with a joke about that faction:
 
-  | Leader    | Lines                                                                                        |
-  | --------- | -------------------------------------------------------------------------------------------- |
-  | Lonestar  | Screenshot it, this never happens. / The default pick is cooking. Yeehaw.                     |
-  | Manticore | Green winning? Shocking. Truly. / The shadow army doing shadow army things.                  |
-  | Valkyra   | Not my points, OUR points, comrade. / Restoring greatness, one point at a time.              |
+  | Leader    | Halfway                                                                    | 90 points                                                                 |
+  | --------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+  | Lonestar  | Screenshot it, this never happens. / The default pick is cooking. Yeehaw.   | The default pick is about to win. Clip it. / Nobody wanted blue, and look at them now. Yeehaw. |
+  | Manticore | Green winning? Shocking. Truly. / The shadow army doing shadow army things. | Green about to win again. Groundbreaking. / The shadow army is about to do it again. |
+  | Valkyra   | Not my points, OUR points, comrade. / Restoring greatness, one point at a time. | Victory for the motherland is in sight, comrades. / Greatness nearly restored. |
 
-  A faction without a line gets "Name leads on 52!". When the top teams are level it says "Halfway there and it's
-  neck and neck!". The lines live in `TEAM_LINES` in `src/messages.ts`.
+  Ten minutes in, it is one of: "10 minutes in and nobody has rage quit yet…", "Still alive? Impressive…" or "Enjoying
+  the chaos? Read the rules in our Discord, soldier…", each pointing at the rules in Discord and the leaderboard.
+  Factions are matched however the server spells them ("LONESTAR", "Lone Star"). A faction without lines gets a plain
+  one ("Name leads on 52!"), and level top teams get "Halfway there and it's neck and neck!". The lines live in
+  `TEAM_LINES` and `TEN_MINUTE_LINES` in `src/messages.ts`.
 - Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst. The 90-point
   message is for the first team to get there only, not one per team.
 - After the bot restarts or is deployed mid-match, milestones the match already passed are not announced late.
