@@ -504,7 +504,16 @@ describe('COMMANDS', () => {
         { name: 'reason', required: true },
       ],
     });
-    expect(find('setnextmap')).toMatchObject({ options: [{ name: 'map', autocomplete: true }] });
+    const setup = [
+      { name: 'map', required: true, autocomplete: true },
+      { name: 'mode', type: 3, required: false, autocomplete: true },
+      { name: 'infantry_only', type: 5, required: false },
+      { name: 'hardcore', type: 5, required: false },
+      { name: 'lighting', type: 3, required: false, autocomplete: true },
+      { name: 'zones', type: 3, required: false, autocomplete: true },
+    ];
+    expect(find('setnextmap')).toMatchObject({ options: setup });
+    expect(find('changemap')).toMatchObject({ options: setup });
     expect(find('vip')).toMatchObject({
       options: [
         { name: 'add', type: 1, options: [{ name: 'steam_id', autocomplete: true }, { name: 'days', type: 4, min_value: 1, max_value: 365 }] },

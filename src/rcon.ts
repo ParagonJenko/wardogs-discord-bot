@@ -46,13 +46,24 @@ export type Snapshot = { status: ServerStatus; players: Player[] };
 const RotationSchema = z.object({
   enabled: z.boolean().nullish(),
   mode: z.string().nullish(),
-  entries: z.array(z.object({ map: z.string(), status: z.string().nullish() })),
+  entries: z.array(
+    z.object({
+      map: z.string(),
+      status: z.string().nullish(),
+      experiences: z.array(z.string()).nullish(),
+      lighting: z.string().nullish(),
+      zoneAlternator: z.string().nullish(),
+    }),
+  ),
 });
+
+// A match's setup: its game mode and modifiers (`experiences`), lighting and control-zone layout.
+export type MatchSetup = { experiences?: string[]; lighting?: string; zoneAlternator?: string };
 
 export type Rotation = {
   enabled: boolean;
   mode: string;
-  entries: { map: string; status: string | null }[];
+  entries: ({ map: string; status: string | null } & MatchSetup)[];
 };
 
 export type HttpResponse = { status: number; body: string };
@@ -133,7 +144,13 @@ export const fetchRotation = async (rconUrl: string, password: string, http: Htt
   return {
     enabled: rotation.enabled ?? true,
     mode: rotation.mode ?? 'ordered',
-    entries: rotation.entries.map((entry) => ({ map: entry.map, status: entry.status ?? null })),
+    entries: rotation.entries.map((entry) => ({
+      map: entry.map,
+      status: entry.status ?? null,
+      ...(entry.experiences ? { experiences: entry.experiences } : {}),
+      ...(entry.lighting ? { lighting: entry.lighting } : {}),
+      ...(entry.zoneAlternator ? { zoneAlternator: entry.zoneAlternator } : {}),
+    })),
   };
 };
 
@@ -199,17 +216,52 @@ export const removeBan = async (rconUrl: string, password: string, steamId: stri
   }
 };
 
-const MapsSchema = z.object({ maps: z.array(z.object({ id: z.string(), displayName: z.string().nullish() })) });
+// Something from the server's catalogue: its id, and the name to show.
+export type CatalogItem = { id: string; name: string };
 
-export const fetchMaps = async (rconUrl: string, password: string, http: HttpClient): Promise<{ id: string; name: string }[]> =>
-  MapsSchema.parse(await rconRequest(rconUrl, password, '/v1/catalog/maps', http)).maps.map((m) => ({
-    id: m.id,
-    name: m.displayName ?? m.id,
+const catalog = (key: string) => z.object({ [key]: z.array(z.object({ id: z.string(), displayName: z.string().nullish() })) });
+
+const fetchCatalog = async (rconUrl: string, password: string, path: string, key: string, http: HttpClient): Promise<CatalogItem[]> =>
+  (catalog(key).parse(await rconRequest(rconUrl, password, path, http))[key] ?? []).map((item) => ({
+    id: item.id,
+    name: item.displayName ?? item.id,
   }));
 
-// Stages the map the server travels to when the current match ends. The rotation is not changed.
-export const queueMap = async (rconUrl: string, password: string, map: string, http: HttpClient) => {
-  await rconRequest(rconUrl, password, '/v1/match/map', http, json('POST', { map }));
+export const fetchMaps = (rconUrl: string, password: string, http: HttpClient): Promise<CatalogItem[]> =>
+  fetchCatalog(rconUrl, password, '/v1/catalog/maps', 'maps', http);
+
+// Game modes (such as Kavkazi_KOTH_01) and modifiers (such as KOTH_InfantryOnly), with their names.
+export const fetchExperiences = (rconUrl: string, password: string, http: HttpClient): Promise<CatalogItem[]> =>
+  fetchCatalog(rconUrl, password, '/v1/catalog/experiences', 'experiences', http);
+
+// Times of day and weather, such as DayClear.
+export const fetchLightings = (rconUrl: string, password: string, http: HttpClient): Promise<CatalogItem[]> =>
+  fetchCatalog(rconUrl, password, '/v1/catalog/lightings', 'lightings', http);
+
+// Map ids go in the path, so anything else is refused before a request is made.
+const mapPath = (map: string, what: string): string => {
+  if (!/^[A-Za-z0-9_]+$/.test(map)) throw new Error(`Not a map id: ${map}`);
+  return `/v1/catalog/maps/${map}/${what}`;
+};
+
+const MapExperiencesSchema = z.object({ experiences: z.array(z.string()) });
+
+// The experience ids a map can be played with.
+export const fetchMapExperiences = async (rconUrl: string, password: string, map: string, http: HttpClient): Promise<string[]> =>
+  MapExperiencesSchema.parse(await rconRequest(rconUrl, password, mapPath(map, 'experiences'), http)).experiences;
+
+const ZonesSchema = z.object({ alternators: z.array(z.object({ tag: z.string(), displayName: z.string().nullish() })) });
+
+// A map's control-zone layouts, by tag (such as ZoneAlternator.Bakurani.Default.Circle).
+export const fetchZones = async (rconUrl: string, password: string, map: string, http: HttpClient): Promise<CatalogItem[]> =>
+  ZonesSchema.parse(await rconRequest(rconUrl, password, mapPath(map, 'alternators'), http)).alternators.map((z) => ({
+    id: z.tag,
+    name: z.displayName ?? z.tag,
+  }));
+
+// Stages the map the server travels to when the current match ends, with its setup. The rotation is not changed.
+export const queueMap = async (rconUrl: string, password: string, map: string, http: HttpClient, setup: MatchSetup = {}) => {
+  await rconRequest(rconUrl, password, '/v1/match/map', http, json('POST', { map, ...setup }));
 };
 
 // Ends the current match now; the server travels to the staged map, or the next in the rotation.

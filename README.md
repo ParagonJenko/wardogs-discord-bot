@@ -16,8 +16,8 @@ It also posts:
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
-pop), medals for the top three players, each faction's score with a dot in its in-game colour, and match
-summaries in the winning faction's colour.
+pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
+other faction gets a dot in its in-game colour), and match summaries in the winning faction's colour.
 
 And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
 `/broadcast`, `/seeders` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
@@ -94,8 +94,8 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/switchteam`   | Staff only           | Moves a player to another team (`team`, or the other one when there are two) and respawns them |
 | `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
 | `/unban`        | Staff only           | Lifts a ban                                                        |
-| `/setnextmap`   | Staff only           | Sets the map after this match, without changing the rotation       |
-| `/changemap`    | Staff only           | Ends the current match now and changes to the map                  |
+| `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
+| `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
 | `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days                      |
 | `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days |
 
@@ -169,8 +169,10 @@ For players, staff start typing and pick from the list, which shows each player'
 in the last 30 days and players with VIP or a ban from the bot, and take any Steam ID. A name typed without picking
 works when it matches exactly one player.
 
-- **`/warn`** sends a private message in game, starting "Staff warning:", up to 180 characters.
+- **`/warn`** sends a private message in game, starting "Staff warning:", up to 140 characters.
 - **`/kick`** needs a reason; the player sees it. They can rejoin.
+- Warnings, kicks and the kick that comes with a ban tell the player where the rules are: "… | Rules: our Discord at
+  gaminginit.com" (`SITE_URL`), or "… | Rules are in our Discord" without it.
 - **`/switchteam`** lists the other teams in the match, with how many players and points each has. With two teams,
   leave `team` out to move them to the other one. Like the game's own console, the bot then kills the player so they
   respawn on the new side.
@@ -182,7 +184,20 @@ works when it matches exactly one player.
 - **`/unban`** lists the banned players. It works on any ban, however it was made.
 - **`/setnextmap`** sets the map the server goes to when this match ends (`POST /v1/match/map`). The rotation is not
   changed. **`/changemap`** does the same, then ends the current match straight away (`POST /v1/match/end`); the
-  server shows the end screen, then changes map.
+  server shows the end screen, then changes map. Both take how the map is played, all optional:
+
+  | Option          | What                                                                      |
+  | --------------- | ------------------------------------------------------------------------- |
+  | `mode`          | The game mode, from the modes that map has                                |
+  | `infantry_only` | Infantry only: on or off                                                  |
+  | `hardcore`      | Hardcore: on or off                                                       |
+  | `lighting`      | Time of day and weather                                                   |
+  | `zones`         | The control-zone layout, from the layouts that map has                    |
+
+  Anything left out is what the rotation plays that map with (for a map not in the rotation: its first mode, and the
+  server's own lighting and zones). So `/setnextmap map:Ozeti infantry_only:True` is the rotation's Ozeti, infantry
+  only. `mode` and `zones` list the choices once a map is picked. The reply says the setup, such as
+  "Next map: **Ozeti** · King of the Hill · Infantry only · Day, clear".
 - **`/vip add`** puts a player on the reserved list for the number of days given. It ends like automatic VIP: when
   the time is up, unless they have earned it by seeding by then. For a player who already has VIP from the bot, it
   sets the end to the later of the two. A reserved slot an admin added by hand in `ServerSettings.ini` is left as it
@@ -308,9 +323,9 @@ leaderboard, the Discord and seeding:
 
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 10 minutes after the match went live             | Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com |
+| 10 minutes after the match went live             | Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com |
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
-| Each team that reaches 90% of `SCORE_TO_WIN` (90) | Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
+| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
 - The halfway message names only the team in front, with its score and a joke about that faction. Each faction has two
   lines and a match gets one of them, so they vary:
@@ -323,7 +338,8 @@ leaderboard, the Discord and seeding:
 
   A faction without a line gets "Name leads on 52!". When the top teams are level it says "Halfway there and it's
   neck and neck!". The lines live in `TEAM_LINES` in `src/messages.ts`.
-- Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst.
+- Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst. The 90-point
+  message is for the first team to get there only, not one per team.
 - After the bot restarts or is deployed mid-match, milestones the match already passed are not announced late.
   The 10-minute message only goes out for a match the bot saw go live.
 - A message that fails to send is logged (`In-game message failed: …`) and not tried again.

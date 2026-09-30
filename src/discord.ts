@@ -128,12 +128,24 @@ const colourOf = (hex: string | undefined): number | null => {
 
 const byScore = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
 
-// One line per faction, highest first, the leader in bold: 🔵 **Valkyra 100**
+// Each faction's own emoji: the Lonestar cowboy, the Valkyra bear and the Manticore's scorpion tail.
+const FACTION_EMOJI: Record<string, string> = { lonestar: '🤠', valkyra: '🐻', manticore: '🦂' };
+
+// A faction's own emoji and a space, or nothing for a faction without one.
+const factionEmoji = (name: string): string => {
+  const emoji = FACTION_EMOJI[name.trim().toLowerCase()];
+  return emoji ? `${emoji} ` : '';
+};
+
+// The emoji to show before a faction's name: its own, or the dot nearest its colour for any other faction.
+export const factionBadge = (name: string, colorHex?: string): string => factionEmoji(name) || dot(colorHex);
+
+// One line per faction, highest first, the leader in bold: 🐻 **Valkyra 100**
 const scoreLines = (scores: FactionScore[]): string =>
   byScore(scores)
     .map((s, i) => {
       const text = `${escapeMarkdown(s.name)} ${s.score}`;
-      return `${dot(s.colorHex)}${i === 0 ? `**${text}**` : text}`;
+      return `${factionBadge(s.name, s.colorHex)}${i === 0 ? `**${text}**` : text}`;
     })
     .join('\n');
 
@@ -227,7 +239,7 @@ const minutes = (ms: number): string => `${Math.round(ms / 60_000)} min`;
 const headline = (scores: FactionScore[]): string | null => {
   const [first, second] = byScore(scores);
   if (!first || !second) return null;
-  return first.score === second.score ? '🤝 **Draw**' : `🏆 **${escapeMarkdown(first.name)}** won`;
+  return first.score === second.score ? '🤝 **Draw**' : `🏆 ${factionEmoji(first.name)}**${escapeMarkdown(first.name)}** won`;
 };
 
 // The embed takes the winning faction's colour.
@@ -315,12 +327,22 @@ export const buildPlayersEmbed = (players: Player[]): Embed => {
   const sorted = [...players].sort((a, b) => (b.kills ?? 0) - (a.kills ?? 0) || (a.deaths ?? 0) - (b.deaths ?? 0));
   const lines = sorted
     .slice(0, MAX_PLAYERS_LISTED)
-    .map((p) => `**${playerName(p.name)}** · ${tally(p.kills, 'kill')} · ${tally(p.deaths, 'death')}`);
+    .map(
+      (p) =>
+        `${p.faction ? factionBadge(p.faction) : ''}**${playerName(p.name)}** · ${tally(p.kills, 'kill')} · ${tally(p.deaths, 'death')}`,
+    );
   const hidden = sorted.length - MAX_PLAYERS_LISTED;
+  // How many are on each team, largest first, when the server says who is on which.
+  const teams = [...new Set(players.flatMap((p) => (p.faction ? [p.faction] : [])))]
+    .map((team) => ({ team, count: players.filter((p) => p.faction === team).length }))
+    .sort((a, b) => b.count - a.count);
   return {
     title: `👥 ${plural(players.length, 'player')} online`,
     description: ranked(lines),
     color: INFO_COLOR,
+    ...(teams.length > 0
+      ? { fields: teams.map(({ team, count }) => ({ name: `${factionBadge(team)}${shorten(team)}`, value: plural(count, 'player'), inline: true })) }
+      : {}),
     footer: { text: hidden > 0 ? `Most kills first · ${hidden} more not shown` : 'Most kills first' },
   };
 };
@@ -556,7 +578,7 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
   const t = record.totals;
   const period = `last ${days} days`;
   const here = online
-    ? `🟢 In game now${online.faction ? ` on **${escapeMarkdown(online.faction)}**` : ''}` +
+    ? `🟢 In game now${online.faction ? ` on ${factionBadge(online.faction)}**${escapeMarkdown(online.faction)}**` : ''}` +
       (online.kills === null ? '' : ` · ${tally(online.kills, 'kill')} · ${tally(online.deaths, 'death')}`)
     : '⚫ Not in game';
   return {

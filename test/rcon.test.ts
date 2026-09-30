@@ -4,8 +4,12 @@ import {
   endMatch,
   fetchBans,
   fetchConfig,
+  fetchExperiences,
+  fetchLightings,
+  fetchMapExperiences,
   fetchMaps,
   fetchPlayers,
+  fetchZones,
   kickPlayer,
   messagePlayer,
   queueMap,
@@ -131,7 +135,7 @@ describe('fetchPlayers', () => {
 });
 
 describe('fetchRotation', () => {
-  it('returns the rotation entries in order with which one is playing now', async () => {
+  it('returns the rotation entries in order with which one is playing now, and how each is played', async () => {
     const { get, requests } = respondWith(200, {
       enabled: true,
       mode: 'ordered',
@@ -146,9 +150,9 @@ describe('fetchRotation', () => {
       enabled: true,
       mode: 'ordered',
       entries: [
-        { map: 'Kavkazi', status: null },
-        { map: 'Europe', status: 'now' },
-        { map: 'NorthAmerica', status: 'next' },
+        { map: 'Kavkazi', status: null, experiences: ['Kavkazi_KOTH_01'], lighting: 'DayClear' },
+        { map: 'Europe', status: 'now', experiences: ['Europe_KOTH_01'], lighting: 'DayEarlyFog' },
+        { map: 'NorthAmerica', status: 'next', experiences: [], lighting: 'DayLateClear' },
       ],
     });
     expect(requests[0]?.url).toBe('http://203.0.113.10:7776/v1/rotation');
@@ -296,6 +300,40 @@ describe('staff actions', () => {
     const { http } = server([500, { error: 'boom' }]);
 
     await expect(removeBan(RCON, 'secret', ASH, http)).rejects.toThrow(/500/);
+  });
+
+  it('reads the catalogue of modes, lighting and zone layouts, refusing a map id it cannot put in a path', async () => {
+    const { http, requests } = server(
+      [200, { experiences: [{ id: 'Kavkazi_KOTH_01', displayName: 'King of the Hill' }, { id: 'KOTH_InfantryOnly' }] }],
+      [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }] }],
+      [200, { map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly'], count: 2 }],
+      [200, { map: 'Kavkazi', alternators: [{ index: 0, tag: 'ZoneAlternator.Bakurani.Default.Circle', displayName: 'Circle' }], count: 1 }],
+    );
+
+    await expect(fetchExperiences(RCON, 'secret', http)).resolves.toEqual([
+      { id: 'Kavkazi_KOTH_01', name: 'King of the Hill' },
+      { id: 'KOTH_InfantryOnly', name: 'KOTH_InfantryOnly' },
+    ]);
+    await expect(fetchLightings(RCON, 'secret', http)).resolves.toEqual([{ id: 'DayClear', name: 'Day, clear' }]);
+    await expect(fetchMapExperiences(RCON, 'secret', 'Kavkazi', http)).resolves.toEqual(['Kavkazi_KOTH_01', 'KOTH_InfantryOnly']);
+    await expect(fetchZones(RCON, 'secret', 'Kavkazi', http)).resolves.toEqual([
+      { id: 'ZoneAlternator.Bakurani.Default.Circle', name: 'Circle' },
+    ]);
+    await expect(fetchZones(RCON, 'secret', '../bans', http)).rejects.toThrow(/Not a map id/);
+    expect(requests.map((r) => r.path)).toEqual([
+      '/v1/catalog/experiences',
+      '/v1/catalog/lightings',
+      '/v1/catalog/maps/Kavkazi/experiences',
+      '/v1/catalog/maps/Kavkazi/alternators',
+    ]);
+  });
+
+  it('queues a map with its setup', async () => {
+    const { http, requests } = server([200, {}]);
+
+    await queueMap(RCON, 'secret', 'Europe', http, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' });
+
+    expect(requests[0]?.body).toBe(JSON.stringify({ map: 'Europe', experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' }));
   });
 
   it('lists maps, queues the next one and ends the match', async () => {

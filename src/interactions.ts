@@ -44,7 +44,17 @@ const SUBCOMMAND = 1;
 const player = (description: string) => ({ type: STRING, name: 'player', description, required: true, autocomplete: true });
 const reason = (description: string) => ({ type: STRING, name: 'reason', description, required: true, max_length: 200 });
 const steamId = (description: string) => ({ type: STRING, name: 'steam_id', description, required: true, autocomplete: true });
-const map = { type: STRING, name: 'map', description: 'Pick the map from the list', required: true, autocomplete: true };
+const BOOLEAN = 5;
+
+// The map and how it is played. Anything left out is what the rotation plays that map with.
+const matchSetup = [
+  { type: STRING, name: 'map', description: 'Pick the map from the list', required: true, autocomplete: true },
+  { type: STRING, name: 'mode', description: 'Game mode (default: as in the rotation)', required: false, autocomplete: true },
+  { type: BOOLEAN, name: 'infantry_only', description: 'Infantry only (default: as in the rotation)', required: false },
+  { type: BOOLEAN, name: 'hardcore', description: 'Hardcore (default: as in the rotation)', required: false },
+  { type: STRING, name: 'lighting', description: 'Time of day and weather (default: as in the rotation)', required: false, autocomplete: true },
+  { type: STRING, name: 'zones', description: 'Control zone layout (default: as in the rotation)', required: false, autocomplete: true },
+];
 
 export const COMMANDS = [
   { name: 'serverstatus', description: 'Show the WARDOGS server status', type: 1 },
@@ -146,15 +156,15 @@ export const COMMANDS = [
   },
   {
     name: 'setnextmap',
-    description: 'Set the map after this match, without changing the rotation (staff only)',
+    description: 'Set the map and setup after this match, without changing the rotation (staff only)',
     ...STAFF_ONLY,
-    options: [map],
+    options: matchSetup,
   },
   {
     name: 'changemap',
-    description: 'End the current match now and change map (staff only)',
+    description: 'End the current match now and change map and setup (staff only)',
     ...STAFF_ONLY,
-    options: [map],
+    options: matchSetup,
   },
   {
     name: 'vip',

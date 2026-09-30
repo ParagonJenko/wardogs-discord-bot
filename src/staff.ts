@@ -1,15 +1,21 @@
 import type { Config } from './config.ts';
-import { buildPlayerEmbed, mapName, playerName } from './discord.ts';
+import { buildPlayerEmbed, factionBadge, mapName, playerName } from './discord.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
+import { modesFor, planSetup } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
 import type { PlayerTotals } from './players.ts';
 import {
   endMatch,
   fetchBans,
   fetchConfig,
+  fetchExperiences,
+  fetchLightings,
+  fetchMapExperiences,
   fetchMaps,
   fetchPlayers,
+  fetchRotation,
   fetchStatus,
+  fetchZones,
   kickPlayer,
   messagePlayer,
   queueMap,
@@ -75,8 +81,15 @@ export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMM
 
 export const VIP_MAX_DAYS = 365;
 // The game shows a private message on one line; "Staff warning: " takes the rest of its 200 characters.
-export const WARNING_MAX_LENGTH = 180;
+// The game shows a private message on one line of up to 200 characters; the prefix and the rules note take the rest.
+export const WARNING_MAX_LENGTH = 140;
 const WARNING_PREFIX = 'Staff warning: ';
+
+// Where players find the server rules, added to what staff send them: the rules are in the Discord.
+const rulesNote = (siteUrl: string | undefined): string => {
+  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  return host ? `Rules: our Discord at ${host}` : 'Rules are in our Discord';
+};
 
 const STEAM_ID = /^\d{17}$/;
 
@@ -182,15 +195,34 @@ export const suggestStaff =
           .filter((f) => f.name !== current && f.name.toLowerCase().includes(lower))
           .map((f) => {
             const count = live.filter((p) => p.faction === f.name).length;
-            return { name: fit(`${f.name} · ${count} player${count === 1 ? '' : 's'} · ${f.score} points`), value: f.name };
+            return {
+              name: fit(`${factionBadge(f.name, f.colorHex)}${f.name} · ${count} player${count === 1 ? '' : 's'} · ${f.score} points`),
+              value: f.name,
+            };
           });
       }
+      const lower = typed.trim().toLowerCase();
+      const named = (items: { id: string; name: string }[]): Choice[] =>
+        items
+          .filter((i) => i.id.toLowerCase().includes(lower) || i.name.toLowerCase().includes(lower))
+          .map((i) => ({ name: fit(i.name), value: i.id }));
       if (focused === 'map') {
-        const lower = typed.trim().toLowerCase();
         return (await fetchMaps(rconUrl, rconPassword, http))
           .filter((m) => [m.id, m.name, mapLabel(m)].some((label) => label.toLowerCase().includes(lower)))
           .map((m) => ({ name: fit(mapLabel(m)), value: m.id }));
       }
+      if (focused === 'lighting') return named(await fetchLightings(rconUrl, rconPassword, http));
+      // Modes and zone layouts depend on the map, so they are listed once one is picked.
+      const map = options['map'] ?? '';
+      if (!/^[A-Za-z0-9_]+$/.test(map)) return [];
+      if (focused === 'mode') {
+        const [mapExperiences, experiences] = await Promise.all([
+          fetchMapExperiences(rconUrl, rconPassword, map, http),
+          optional(fetchExperiences(rconUrl, rconPassword, http)),
+        ]);
+        return named(modesFor({ mapExperiences, experiences }));
+      }
+      if (focused === 'zones') return named(await fetchZones(rconUrl, rconPassword, map, http));
       return [];
     })();
     return choices.slice(0, MAX_CHOICES);
@@ -201,7 +233,8 @@ const lengthOf = (value: string | undefined) => BAN_LENGTHS.find((l) => l.value 
 export const runStaffCommand =
   ({ config, http, records, now, log }: StaffDeps) =>
   async (name: StaffCommand, { options, userId }: CommandRequest): Promise<CommandReply> => {
-    const { rconUrl, rconPassword } = config();
+    const { rconUrl, rconPassword, siteUrl } = config();
+    const rules = rulesNote(siteUrl);
     const by = userId ?? 'unknown';
     const staff = `Discord user ${by}`;
     const online = (): Promise<Player[]> => fetchPlayers(rconUrl, rconPassword, http);
@@ -228,7 +261,7 @@ export const runStaffCommand =
       if ('problem' in target) return { content: target.problem };
       const { player } = target;
       log.info(`/warn by ${staff} to ${logged(player)}: ${JSON.stringify(message)}`);
-      await messagePlayer(rconUrl, rconPassword, player.steamId, `${WARNING_PREFIX}${message}`, http);
+      await messagePlayer(rconUrl, rconPassword, player.steamId, `${WARNING_PREFIX}${message} | ${rules}`, http);
       await records.log(player.steamId, { action: 'warn', at: now(), by, name: player.name, reason: message });
       return { content: `⚠️ Warned ${who(player)} in game: ${message}` };
     }
@@ -240,7 +273,7 @@ export const runStaffCommand =
       if ('problem' in target) return { content: target.problem };
       const { player } = target;
       log.info(`/kick by ${staff}: ${logged(player)}: ${JSON.stringify(reason)}`);
-      await kickPlayer(rconUrl, rconPassword, player.steamId, reason, http);
+      await kickPlayer(rconUrl, rconPassword, player.steamId, `${reason} | ${rules}`, http);
       await records.log(player.steamId, { action: 'kick', at: now(), by, name: player.name, reason });
       return { content: `👢 Kicked ${who(player)}: ${reason}` };
     }
@@ -271,7 +304,7 @@ export const runStaffCommand =
         name: player.name,
         detail: current ? `${current} to ${team}` : `to ${team}`,
       });
-      return { content: `🔀 Moved ${who(player)} to **${team}**. They respawn on the new side.` };
+      return { content: `🔀 Moved ${who(player)} to ${factionBadge(team)}**${team}**. They respawn on the new side.` };
     }
 
     if (name === 'ban') {
@@ -294,7 +327,7 @@ export const runStaffCommand =
       }
       // The ban keeps them out from now on; a kick removes them if they are in game.
       const kicked = live.some((p) => p.steamId === player.steamId)
-        ? await kickPlayer(rconUrl, rconPassword, player.steamId, `Banned: ${reason}`, http).then(
+        ? await kickPlayer(rconUrl, rconPassword, player.steamId, `Banned: ${reason} | ${rules}`, http).then(
             () => ' and kicked them',
             () => ", but couldn't kick them. Use /kick",
           )
@@ -314,15 +347,29 @@ export const runStaffCommand =
     }
 
     if (name === 'setnextmap' || name === 'changemap') {
-      const map = findMap(options['map'], await fetchMaps(rconUrl, rconPassword, http));
+      const [maps, rotation, experiences, lightings] = await Promise.all([
+        fetchMaps(rconUrl, rconPassword, http),
+        optional(fetchRotation(rconUrl, rconPassword, http)),
+        optional(fetchExperiences(rconUrl, rconPassword, http)),
+        optional(fetchLightings(rconUrl, rconPassword, http)),
+      ]);
+      const map = findMap(options['map'], maps);
       if (map === null) return { content: 'Pick a map from the list.' };
-      log.info(`/${name} by ${staff}: ${map.id}`);
-      await queueMap(rconUrl, rconPassword, map.id, http);
+      const [mapExperiences, zones] = await Promise.all([
+        optional(fetchMapExperiences(rconUrl, rconPassword, map.id, http)),
+        optional(fetchZones(rconUrl, rconPassword, map.id, http)),
+      ]);
+      const planned = planSetup(map.id, options, { rotation, mapExperiences, experiences, lightings, zones });
+      if ('problem' in planned) return { content: planned.problem };
+      const { setup, labels } = planned;
+      log.info(`/${name} by ${staff}: ${map.id} ${JSON.stringify(setup)}`);
+      await queueMap(rconUrl, rconPassword, map.id, http, setup);
+      const described = [`**${mapLabel(map)}**`, ...labels].join(' · ');
       if (name === 'setnextmap') {
-        return { content: `🗺️ Next map: **${mapLabel(map)}**. The server goes there when this match ends; the rotation is unchanged.` };
+        return { content: `🗺️ Next map: ${described}. The server goes there when this match ends; the rotation is unchanged.` };
       }
       await endMatch(rconUrl, rconPassword, http);
-      return { content: `🗺️ Ended the match. The server moves to **${mapLabel(map)}** after the end screen.` };
+      return { content: `🗺️ Ended the match. The server moves to ${described} after the end screen.` };
     }
 
     if (name === 'vip') {

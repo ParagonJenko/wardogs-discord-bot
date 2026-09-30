@@ -115,9 +115,31 @@ describe('runStaffCommand', () => {
 
     const reply = await run('warn', { player: BO, message: 'No spawn camping' });
 
-    expect(sent).toContain(`POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: No spawn camping' })}`);
+    expect(sent).toContain(
+      `POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: No spawn camping | Rules are in our Discord' })}`,
+    );
     expect(records.log).toHaveBeenCalledWith(BO, { action: 'warn', at: NOW, by: '42', name: 'Bo', reason: 'No spawn camping' });
     expect(reply).toEqual({ content: '⚠️ Warned **Bo** in game: No spawn camping' });
+  });
+
+  it('points warned and kicked players at the rules in the Discord, on the website when there is one', async () => {
+    const server = rcon();
+    const records = fakeRecords();
+    const run = runStaffCommand({
+      config: () => ({ ...config, siteUrl: 'https://gaminginit.com/' }),
+      http: server.http,
+      records,
+      now: () => NOW,
+      log: { info: vi.fn() },
+    });
+
+    await run('warn', { name: 'warn', options: { player: BO, message: 'Language' }, userId: '42' });
+    await run('kick', { name: 'kick', options: { player: BO, reason: 'Spam' }, userId: '42' });
+
+    expect(server.sent.filter((s) => s.startsWith('POST'))).toEqual([
+      `POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: Language | Rules: our Discord at gaminginit.com' })}`,
+      `POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Spam | Rules: our Discord at gaminginit.com' })}`,
+    ]);
   });
 
   it('only warns, kicks or moves players who are in game', async () => {
@@ -133,7 +155,7 @@ describe('runStaffCommand', () => {
 
     await expect(run('kick', { player: ASH, reason: '  ' })).resolves.toEqual({ content: 'A kick needs a reason.' });
     await expect(run('kick', { player: ASH, reason: 'Teamkilling' })).resolves.toEqual({ content: '👢 Kicked **Ash**: Teamkilling' });
-    expect(sent).toContain(`POST /v1/players/${ASH}/kick ${JSON.stringify({ reason: 'Teamkilling' })}`);
+    expect(sent).toContain(`POST /v1/players/${ASH}/kick ${JSON.stringify({ reason: 'Teamkilling | Rules are in our Discord' })}`);
     expect(records.log).toHaveBeenCalledWith(ASH, { action: 'kick', at: NOW, by: '42', name: 'Ash', reason: 'Teamkilling' });
   });
 
@@ -167,7 +189,7 @@ describe('runStaffCommand', () => {
     const reply = await run('ban', { player: 'Bo', duration: '1d', reason: 'Cheating' });
 
     expect(records.ban).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', length: '1d', reason: 'Cheating', by: '42' });
-    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned: Cheating' })}`);
+    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned: Cheating | Rules are in our Discord' })}`);
     expect(reply).toEqual({
       content: `🔨 Banned **Bo** for 1 day, until <t:${(NOW + 86_400_000) / 1000}:f> and kicked them. Reason: Cheating`,
     });
@@ -222,6 +244,50 @@ describe('runStaffCommand', () => {
     expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
       `POST /v1/match/map ${JSON.stringify({ map: 'Europe' })}`,
       `POST /v1/match/map ${JSON.stringify({ map: 'Kavkazi' })}`,
+      'POST /v1/match/end {}',
+    ]);
+  });
+
+  it('/setnextmap plays the map as the rotation does, changing only what staff asked', async () => {
+    const { run, sent } = setup({
+      'GET /v1/rotation': [
+        200,
+        { enabled: true, mode: 'ordered', entries: [{ map: 'Europe', status: 'next', experiences: ['Europe_KOTH_01'], lighting: 'DayClear' }] },
+      ],
+      'GET /v1/catalog/experiences': [200, { experiences: [{ id: 'Europe_KOTH_01', displayName: 'King of the Hill' }] }],
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }, { id: 'DayEarlyFog', displayName: 'Early fog' }] }],
+      'GET /v1/catalog/maps/Europe/experiences': [200, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'] }],
+      'GET /v1/catalog/maps/Europe/alternators': [200, { alternators: [] }],
+    });
+
+    await expect(run('setnextmap', { map: 'Europe', infantry_only: 'true', lighting: 'early fog' })).resolves.toEqual({
+      content:
+        '🗺️ Next map: **Ozeti** · King of the Hill · Infantry only · Early fog. The server goes there when this match ends; the rotation is unchanged.',
+    });
+    await expect(run('setnextmap', { map: 'Europe', mode: 'Capture' })).resolves.toEqual({
+      content: 'No game mode "Capture" on this map. Pick one from the list.',
+    });
+    expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
+      `POST /v1/match/map ${JSON.stringify({ map: 'Europe', experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayEarlyFog' })}`,
+    ]);
+  });
+
+  it('/changemap queues the map with its setup, then ends the match', async () => {
+    const { run, sent } = setup({
+      'GET /v1/rotation': [200, { enabled: true, mode: 'ordered', entries: [{ map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01'] }] }],
+      'GET /v1/catalog/maps/Kavkazi/experiences': [200, { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly', 'KOTH_Hardcore'] }],
+      'GET /v1/catalog/maps/Kavkazi/alternators': [200, { alternators: [{ tag: 'ZoneAlternator.Bakurani.Default.Circle', displayName: 'Circle' }] }],
+    });
+
+    await expect(run('changemap', { map: 'Kavkazi', infantry_only: 'true', hardcore: 'true', zones: 'circle' })).resolves.toEqual({
+      content: '🗺️ Ended the match. The server moves to **Bakurani** · Kavkazi_KOTH_01 · Infantry only · Hardcore · Circle zones after the end screen.',
+    });
+    expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
+      `POST /v1/match/map ${JSON.stringify({
+        map: 'Kavkazi',
+        experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly', 'KOTH_Hardcore'],
+        zoneAlternator: 'ZoneAlternator.Bakurani.Default.Circle',
+      })}`,
       'POST /v1/match/end {}',
     ]);
   });
@@ -331,12 +397,32 @@ describe('suggestStaff', () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'switchteam', options: { player: BO, team: '' }, focused: 'team' })).resolves.toEqual([
-      { name: 'Valkyra · 1 player · 40 points', value: 'Valkyra' },
+      { name: '🐻 Valkyra · 1 player · 40 points', value: 'Valkyra' },
     ]);
     await expect(suggest({ name: 'switchteam', options: { team: 'k' }, focused: 'team' })).resolves.toEqual([
-      { name: 'Valkyra · 1 player · 40 points', value: 'Valkyra' },
-      { name: 'Kharr · 2 players · 35 points', value: 'Kharr' },
+      { name: '🐻 Valkyra · 1 player · 40 points', value: 'Valkyra' },
+      { name: '🔴 Kharr · 2 players · 35 points', value: 'Kharr' },
     ]);
+  });
+
+  it('offers the modes and zone layouts of the map picked, and every lighting', async () => {
+    const { suggest } = setup({
+      'GET /v1/catalog/experiences': [200, { experiences: [{ id: 'Europe_KOTH_01', displayName: 'King of the Hill' }] }],
+      'GET /v1/catalog/maps/Europe/experiences': [200, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'] }],
+      'GET /v1/catalog/maps/Europe/alternators': [200, { alternators: [{ tag: 'ZoneAlternator.Ozeti.Default.Line', displayName: 'Line' }] }],
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }] }],
+    });
+
+    await expect(suggest({ name: 'setnextmap', options: { map: 'Europe', mode: '' }, focused: 'mode' })).resolves.toEqual([
+      { name: 'King of the Hill', value: 'Europe_KOTH_01' },
+    ]);
+    await expect(suggest({ name: 'changemap', options: { map: 'Europe', zones: 'li' }, focused: 'zones' })).resolves.toEqual([
+      { name: 'Line', value: 'ZoneAlternator.Ozeti.Default.Line' },
+    ]);
+    await expect(suggest({ name: 'setnextmap', options: { lighting: '' }, focused: 'lighting' })).resolves.toEqual([
+      { name: 'Day, clear', value: 'DayClear' },
+    ]);
+    await expect(suggest({ name: 'setnextmap', options: { mode: '' }, focused: 'mode' })).resolves.toEqual([]);
   });
 
   it('offers maps by the names players know', async () => {

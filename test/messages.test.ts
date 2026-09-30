@@ -34,7 +34,7 @@ describe('milestones', () => {
   it('reaches ten minutes after the match went live', () => {
     expect(milestones(match(), 9 * MINUTE, rule, null)).toEqual([]);
     expect(milestones(match(), 10 * MINUTE, rule, null)).toEqual([
-      { key: 'ten-minutes', text: 'Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com' },
+      { key: 'ten-minutes', text: 'Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com' },
     ]);
   });
 
@@ -87,16 +87,15 @@ describe('milestones', () => {
     expect(text(scores(50, 50, 12))).toBe("Halfway there and it's neck and neck!");
   });
 
-  it('reaches "nearly there" once for each team at 90% of the winning score', () => {
-    expect(milestones(match(scores(92, 90, 60)), 0, rule, null).map((m) => m.key)).toEqual([
-      'halfway',
-      'nearly:Valkyra',
-      'nearly:Kharr',
-    ]);
+  it('reaches "nearly there" once per match, for the team in front, at 90% of the winning score', () => {
+    expect(milestones(match(scores(92, 90, 60)), 0, rule, null).map((m) => m.key)).toEqual(['halfway', 'nearly']);
+    expect(milestones(match(scores(90, 94, 60)), 0, rule, null)[1]?.text).toBe(
+      'Kharr has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+    );
     expect(milestones(match(scores(92, 20)), 0, rule, null)[1]?.text).toBe(
       'Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     );
-    expect(milestones(match(scores(135, 20)), 0, { ...rule, scoreToWin: 150 }, null)[1]?.key).toBe('nearly:Valkyra');
+    expect(milestones(match(scores(135, 20)), 0, { ...rule, scoreToWin: 150 }, null)[1]?.key).toBe('nearly');
   });
 
   it('keeps messages short enough for the game', () => {
@@ -116,7 +115,7 @@ describe('nextMessage', () => {
       { messages: start, sent: [] },
     );
 
-  it('sends each message once, one per check, in order', () => {
+  it('sends each message once, one per check, in order, and "nearly there" only for the first team', () => {
     const { sent } = run([
       { at: 0, match: match() },
       { at: 10 * MINUTE, match: match(scores(55, 30)) },
@@ -127,7 +126,7 @@ describe('nextMessage', () => {
       { at: 32 * MINUTE, match: match(scores(95, 92)) },
     ]);
 
-    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Enjoying', 'Halfway', null, 'Valkyra', 'Kharr', null]);
+    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Enjoying', 'Halfway', null, 'Valkyra', null, null]);
   });
 
   it('does not announce late what a match reached before it was first seen', () => {
@@ -136,7 +135,13 @@ describe('nextMessage', () => {
       { at: 21 * MINUTE, match: match(scores(96, 91)) },
     ]);
 
-    expect(sent).toEqual([null, 'Kharr has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com']);
+    expect(sent).toEqual([null, null]);
+  });
+
+  it('counts "nearly there" as sent when a match saved before the change sent it for a team', () => {
+    const { sent } = run([{ at: 30 * MINUTE, match: match(scores(55, 92)) }], { match: 0, sent: ['ten-minutes', 'halfway', 'nearly:Valkyra'] });
+
+    expect(sent).toEqual([null]);
   });
 
   it('starts again for the next match', () => {
