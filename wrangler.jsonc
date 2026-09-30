@@ -15,7 +15,7 @@
   "vars": {
     "DISCORD_ROLE_ID": "1554801355015594025",
     // Optional: an invite link that never expires, for the member counts in /api/stats.
-    "DISCORD_INVITE": "https://discord.gg/jnsZkudxpD",
+    "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",
     // Optional: the community website. Discord posts link to it, and in-game messages point players at it.
     "SITE_URL": "https://gaminginit.com",
     // In-game messages during a match (10 minutes in, halfway, a team near winning): "on" or "off".
