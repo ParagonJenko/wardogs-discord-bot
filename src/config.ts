@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AlertRules } from './alerts.ts';
+import type { MessageRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
 // Just the listener's address; the bot adds /v1/status itself. Pasted values often carry quotes, stray
@@ -38,6 +39,8 @@ const EnvSchema = z
       .regex(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/, 'must be a Discord webhook URL'),
     DISCORD_ROLE_ID: numericId.optional(),
     DISCORD_INVITE: invite.optional(),
+    // The community website; Discord posts link to it.
+    SITE_URL: z.url({ protocol: /^https?$/ }).optional(),
     SEEDING_THRESHOLD: count(1),
     LIVE_THRESHOLD: count(20),
     LOW_POP_THRESHOLD: count(20),
@@ -47,6 +50,10 @@ const EnvSchema = z
     VIP_SEED_DAYS: z.coerce.number().int().min(0).max(7).default(0),
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
+    // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
+    MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
+    // The score a faction needs to win, for "halfway" and "nearly there" messages.
+    SCORE_TO_WIN: z.coerce.number().int().min(2).default(100),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -69,11 +76,14 @@ export type Config = {
   webhookUrl: string;
   roleId: string | undefined;
   inviteCode: string | undefined;
+  siteUrl: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
   seedMinutes: number;
   vip: VipRule | null;
+  // Null when MATCH_MESSAGES is off or there is no SITE_URL to point players at.
+  matchMessages: MessageRule | null;
 };
 
 export const loadConfig = (env: Record<string, string | undefined>): Config => {
@@ -93,6 +103,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     webhookUrl: e.DISCORD_WEBHOOK_URL,
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
+    siteUrl: e.SITE_URL,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,
     rules: {
       seeding: e.SEEDING_THRESHOLD,
@@ -104,6 +115,10 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     vip:
       e.VIP_SEED_DAYS > 0
         ? { seedDays: e.VIP_SEED_DAYS, seedMinutes: e.VIP_SEED_MINUTES, windowDays: VIP_WEEK_DAYS, lengthDays: VIP_WEEK_DAYS }
+        : null,
+    matchMessages:
+      e.MATCH_MESSAGES === 'on' && e.SITE_URL
+        ? { siteHost: new URL(e.SITE_URL).host, scoreToWin: e.SCORE_TO_WIN }
         : null,
   };
 };

@@ -9,74 +9,92 @@ import {
   buildStatusEmbed,
   buildVipMessage,
   postWebhook,
+  type DiscordMessage,
 } from '../src/discord.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
+const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
+const offer = 'Seed on 3 days in a week and get a reserved slot for a week.';
+const rule = "A seed counts when you're on for more than 10 min and the server goes live.";
+
+const embedOf = (message: DiscordMessage) => message.embeds[0];
+const field = (message: DiscordMessage, name: string) => embedOf(message)?.fields?.find((f) => f.name === name)?.value;
 
 describe('buildMessage', () => {
-  it('announces seeding with the server name and population', () => {
-    const [embed] = buildMessage('seeding', server, { lowPop: 20 }).embeds;
+  it('announces seeding with a population bar, the map and how many more it needs', () => {
+    const message = buildMessage('seeding', { ...server, map: 'Europe' }, { lowPop: 20, live: 20 });
 
-    expect(embed?.title).toMatch(/UK Wardogs #1 is seeding/);
-    expect(embed?.description).toContain('7/64');
+    expect(embedOf(message)).toMatchObject({ title: '🌱 UK Wardogs #1 is seeding', description: '**Jump in and help get it live!**', color: 0xf1c40f });
+    expect(embedOf(message)?.fields).toEqual([
+      { name: 'Players', value: '🟨⬛⬛⬛⬛⬛⬛⬛⬛⬛ **7**/64' },
+      { name: 'Map', value: 'Ozeti', inline: true },
+      { name: 'To go live', value: '**13** more', inline: true },
+    ]);
   });
 
   it('tells people what seeding earns when automatic VIP is on, only on the seeding alert', () => {
-    const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
-    const [seeding] = buildMessage('seeding', server, { lowPop: 20, vip }).embeds;
-    const [live] = buildMessage('live', { ...server, players: 20 }, { lowPop: 20, vip }).embeds;
+    const seeding = buildMessage('seeding', server, { lowPop: 20, vip });
+    const live = buildMessage('live', { ...server, players: 20 }, { lowPop: 20, vip });
 
-    expect(seeding?.description).toBe(
-      '**7/64** players. Jump in and help get it live!\n🎖️ Seed on 3 days in a week and get a reserved slot for a week. ' +
-        "A seed counts when you're on for more than 10 min and the server goes live.",
+    expect(field(seeding, '🎖️ Seeder VIP')).toBe(`${offer}\n${rule}`);
+    expect(field(live, '🎖️ Seeder VIP')).toBeUndefined();
+  });
+
+  it('announces going live, with a green bar', () => {
+    const message = buildMessage('live', { ...server, players: 32 }, { lowPop: 20 });
+
+    expect(embedOf(message)).toMatchObject({ title: '🟢 UK Wardogs #1 is live', color: 0x2ecc71 });
+    expect(field(message, 'Players')).toBe('🟩🟩🟩🟩🟩⬛⬛⬛⬛⬛ **32**/64');
+  });
+
+  it('announces a drop below the low-pop threshold, with how many it needs to stay live', () => {
+    const message = buildMessage('lowPop', { ...server, players: 18 }, { lowPop: 20 });
+
+    expect(embedOf(message)).toMatchObject({ title: '🔻 UK Wardogs #1 dropped below 20 players', color: 0xe74c3c });
+    expect(field(message, 'Players')).toBe('🟥🟥🟥⬛⬛⬛⬛⬛⬛⬛ **18**/64');
+    expect(field(message, 'To stay live')).toBe('**2** more');
+  });
+
+  it('shows at least one square for a single player', () => {
+    expect(field(buildMessage('seeding', { ...server, players: 1, maxPlayers: 100 }, { lowPop: 20 }), 'Players')).toBe(
+      '🟨⬛⬛⬛⬛⬛⬛⬛⬛⬛ **1**/100',
     );
-    expect(live?.description).not.toContain('🎖️');
-  });
-
-  it('announces going live', () => {
-    const [embed] = buildMessage('live', { ...server, players: 20 }, { lowPop: 20 }).embeds;
-
-    expect(embed?.title).toMatch(/UK Wardogs #1 is live/);
-    expect(embed?.description).toContain('20/64');
-  });
-
-  it('announces a drop below the low-pop threshold', () => {
-    const [embed] = buildMessage('lowPop', { ...server, players: 18 }, { lowPop: 20 }).embeds;
-
-    expect(embed?.title).toMatch(/UK Wardogs #1 dropped below 20 players/);
-    expect(embed?.description).toContain('18/64');
   });
 
   it('keeps the title within Discord\'s 256 character limit for long server names', () => {
     const [embed] = buildMessage('lowPop', { ...server, name: 'x'.repeat(500) }, { lowPop: 20 }).embeds;
 
     expect(embed?.title.length).toBeLessThanOrEqual(256);
-    expect(embed?.title).toMatch(/dropped below 20 players$/);
   });
 
-  it('credits the top seeders when the server goes live', () => {
-    const [embed] = buildMessage('live', { ...server, players: 20 }, {
+  it('credits the top seeders with medals when the server goes live, escaping their names', () => {
+    const message = buildMessage('live', { ...server, players: 20 }, {
       lowPop: 20,
       seeders: [
-        { name: 'Ash', minutes: 42 },
-        { name: 'b_o_b', minutes: 30 },
+        { name: 'Ash_1', minutes: 42 },
+        { name: 'Bo', minutes: 30 },
         { name: 'Cy', minutes: 12 },
       ],
-    }).embeds;
+    });
 
-    expect(embed?.fields).toEqual([
-      { name: 'Top seeders', value: '1. Ash (42 min)\n2. b\\_o\\_b (30 min)\n3. Cy (12 min)' },
-    ]);
+    expect(field(message, 'Top seeders')).toBe('🥇 Ash\\_1 · 42 min\n🥈 Bo · 30 min\n🥉 Cy · 12 min');
   });
 
   it('adds no seeder list when nobody seeded', () => {
-    const [embed] = buildMessage('live', server, { lowPop: 20, seeders: [] }).embeds;
+    expect(field(buildMessage('live', { ...server, players: 20 }, { lowPop: 20, seeders: [] }), 'Top seeders')).toBeUndefined();
+  });
 
-    expect(embed?.fields).toBeUndefined();
+  it('links the title to the website and says so in the footer, when there is one', () => {
+    const [embed] = buildMessage('seeding', server, { lowPop: 20, siteUrl: 'https://gaminginit.com' }).embeds;
+    const [plain] = buildMessage('seeding', server, { lowPop: 20 }).embeds;
+
+    expect(embed).toMatchObject({ url: 'https://gaminginit.com', footer: { text: 'Live stats and leaderboard: gaminginit.com' } });
+    expect(plain?.url).toBeUndefined();
+    expect(plain?.footer).toBeUndefined();
   });
 
   it('pings only the configured role', () => {
-    const message = buildMessage('live', server, { lowPop: 20, roleId: '999' });
+    const message = buildMessage('seeding', server, { lowPop: 20, roleId: '999' });
 
     expect(message.content).toBe('<@&999>');
     expect(message.allowed_mentions).toEqual({ parse: [], roles: ['999'] });
@@ -96,8 +114,8 @@ describe('buildMatchSummary', () => {
     durationMs: 38 * 60_000,
     peakPlayers: 64,
     factionScores: [
-      { name: 'Valkyra', score: 250 },
-      { name: 'Kharr', score: 300 },
+      { name: 'Valkyra', score: 250, colorHex: '#3366ff' },
+      { name: 'Kharr', score: 300, colorHex: '#ff3333' },
     ],
     top: [
       { name: 'Cy', kills: 12, deaths: 3 },
@@ -105,118 +123,152 @@ describe('buildMatchSummary', () => {
     ],
   };
 
-  it('names the map, winner, scores, length and peak population', () => {
-    const [embed] = buildMatchSummary(summary, 'UK Wardogs #1').embeds;
+  it('names the map and winner, in the winner’s colour, with the scores, length and peak', () => {
+    const message = buildMatchSummary(summary, 'UK Wardogs #1');
 
-    expect(embed?.title).toBe('🏁 Match over on Bakurani');
-    expect(embed?.description).toBe('**Kharr** won 300 – 250 · 38 min · peak 64 players');
+    expect(embedOf(message)).toMatchObject({
+      title: '🏁 Match over · Bakurani',
+      description: '🏆 **Kharr** won',
+      color: 0xff3333,
+      footer: { text: 'UK Wardogs #1' },
+    });
+    expect(embedOf(message)?.fields?.slice(0, 3)).toEqual([
+      { name: 'Score', value: '🔴 **Kharr 300**\n🔵 Valkyra 250', inline: true },
+      { name: 'Length', value: '38 min', inline: true },
+      { name: 'Peak', value: '64 players', inline: true },
+    ]);
   });
 
-  it('names every faction when there are three', () => {
+  it('keeps a black winner colour', () => {
+    const black = [
+      { name: 'Night', score: 100, colorHex: '#000000' },
+      { name: 'Day', score: 50, colorHex: '#ffffff' },
+    ];
+
+    expect(embedOf(buildMatchSummary({ ...summary, factionScores: black }, 'UK'))?.color).toBe(0);
+  });
+
+  it('lists every faction when there are three, and calls a draw a draw', () => {
     const three = [
-      { name: 'Kharr', score: 67 },
-      { name: 'Valkyra', score: 100 },
-      { name: 'Haldor', score: 41 },
-    ];
-    const [won] = buildMatchSummary({ ...summary, factionScores: three }, 'UK').embeds;
-    const tied = [
-      { name: 'Valkyra', score: 100 },
       { name: 'Kharr', score: 100 },
+      { name: 'Valkyra', score: 100 },
       { name: 'Haldor', score: 41 },
     ];
-    const [draw] = buildMatchSummary({ ...summary, factionScores: tied }, 'UK').embeds;
+    const message = buildMatchSummary({ ...summary, factionScores: three }, 'UK');
 
-    expect(won?.description).toBe('**Valkyra** won 100, Kharr 67, Haldor 41 · 38 min · peak 64 players');
-    expect(draw?.description).toBe('Draw: Valkyra 100, Kharr 100, Haldor 41 · 38 min · peak 64 players');
+    expect(embedOf(message)).toMatchObject({ description: '🤝 **Draw**', color: 0x5865f2 });
+    expect(field(message, 'Score')).toBe('**Kharr 100**\nValkyra 100\nHaldor 41');
   });
 
-  it('lists the top players with kills, deaths and K/D, escaping their names', () => {
-    const [embed] = buildMatchSummary(summary, 'UK Wardogs #1').embeds;
+  it('lists the top players with medals, kills, deaths and K/D, escaping their names', () => {
+    expect(field(buildMatchSummary(summary, 'UK'), 'Top players')).toBe(
+      '🥇 **Cy** · 12 kills · 3 deaths · 4.00 K/D\n🥈 **\\*\\*Ash\\*\\*** · 11 kills · 1 death · 11.00 K/D',
+    );
+  });
 
-    expect(embed?.fields).toEqual([
-      { name: 'Top players', value: '1. Cy: 12 kills, 3 deaths (4.00 K/D)\n2. \\*\\*Ash\\*\\*: 11 kills, 1 death (11.00 K/D)' },
+  it('tags the players after the top three with their rank', () => {
+    const five = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, kills: 10 - i, deaths: 1 }));
+
+    expect(field(buildMatchSummary({ ...summary, top: five }, 'UK'), 'Top players')?.split('\n').slice(3)).toEqual([
+      '`#4` **P4** · 7 kills · 1 death · 7.00 K/D',
+      '`#5` **P5** · 6 kills · 1 death · 6.00 K/D',
     ]);
   });
 
   it('keeps the player list within Discord\'s 1024 character field limit for long names', () => {
     const longNames = Array.from({ length: 5 }, (_, i) => ({ name: `${'_'.repeat(300)}${i}`, kills: 9, deaths: 9 }));
-    const [embed] = buildMatchSummary({ ...summary, top: longNames }, 'UK').embeds;
+    const value = field(buildMatchSummary({ ...summary, top: longNames }, 'UK'), 'Top players');
 
-    expect(embed?.fields?.[0]?.value.length).toBeLessThanOrEqual(1024);
-    expect(embed?.fields?.[0]?.value.split('\n')).toHaveLength(5);
+    expect(value?.length).toBeLessThanOrEqual(1024);
+    expect(value?.split('\n')).toHaveLength(5);
   });
 
   it('never pings anyone', () => {
     expect(buildMatchSummary(summary, 'UK Wardogs #1').allowed_mentions).toEqual({ parse: [], roles: [] });
   });
 
-  it('falls back to the raw map id and leaves out missing scores', () => {
-    const [embed] = buildMatchSummary({ ...summary, map: 'NewMap', factionScores: [], top: [] }, 'UK').embeds;
+  it('falls back to the raw map id and leaves out missing scores and players', () => {
+    const message = buildMatchSummary({ ...summary, map: 'NewMap', factionScores: [], top: [] }, 'UK');
 
-    expect(embed?.title).toBe('🏁 Match over on NewMap');
-    expect(embed?.description).toBe('38 min · peak 64 players');
-    expect(embed?.fields).toBeUndefined();
+    expect(embedOf(message)?.title).toBe('🏁 Match over · NewMap');
+    expect(embedOf(message)?.description).toBeUndefined();
+    expect(embedOf(message)?.fields?.map((f) => f.name)).toEqual(['Length', 'Peak']);
+  });
+
+  it('adds the website to the footer when there is one', () => {
+    expect(embedOf(buildMatchSummary(summary, 'UK', 'https://gaminginit.com/'))?.footer).toEqual({
+      text: 'UK · Live stats and leaderboard: gaminginit.com',
+    });
   });
 });
 
 describe('buildStatusEmbed', () => {
+  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 };
   const status = {
     name: 'UK Wardogs #1',
     players: 24,
     maxPlayers: 98,
     map: 'Europe',
-    rotationIndex: 2,
+    rotationIndex: 1,
     factionScores: [
-      { name: 'Valkyra', score: 120 },
-      { name: 'Kharr', score: 95 },
+      { name: 'Valkyra', score: 43, colorHex: '#3366ffff' },
+      { name: 'Kharr', score: 51, colorHex: '#f4900c' },
+      { name: 'Haldor', score: 12 },
     ],
   };
-  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 };
 
-  it('shows population, state, map and scores', () => {
+  it('shows the state, a population bar, the map and each faction’s score by colour', () => {
     expect(buildStatusEmbed(status, rules)).toEqual({
       title: 'UK Wardogs #1',
-      description: '🟢 **Live** · **24/98** players',
+      description: '🟢 **Live**',
       color: 0x2ecc71,
       fields: [
+        { name: 'Players', value: '🟩🟩⬛⬛⬛⬛⬛⬛⬛⬛ **24**/98' },
         { name: 'Map', value: 'Ozeti', inline: true },
-        { name: 'Score', value: 'Valkyra 120 – 95 Kharr', inline: true },
+        { name: 'Score', value: '🟠 **Kharr 51**\n🔵 Valkyra 43\nHaldor 12', inline: true },
       ],
     });
   });
 
-  it('shows a seeding or empty server', () => {
-    expect(buildStatusEmbed({ ...status, players: 5 }, rules).description).toBe('🌱 **Seeding** · **5/98** players');
-    expect(buildStatusEmbed({ ...status, players: 0, factionScores: [] }, rules)).toMatchObject({
-      description: '⚪ **Empty** · **0/98** players',
-      fields: [{ name: 'Map', value: 'Ozeti', inline: true }],
+  it('says how many more a seeding server needs, and shows an empty one', () => {
+    expect(buildStatusEmbed({ ...status, players: 5, factionScores: [] }, rules)).toMatchObject({
+      description: '🌱 **Seeding** · 15 more to go live',
+      color: 0xf1c40f,
     });
+    expect(buildStatusEmbed({ ...status, players: 0, map: '', factionScores: [] }, rules)).toEqual({
+      title: 'UK Wardogs #1',
+      description: '⚪ **Empty**',
+      color: 0x95a5a6,
+      fields: [{ name: 'Players', value: '⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛ **0**/98' }],
+    });
+  });
+
+  it('links to the website when there is one', () => {
+    expect(buildStatusEmbed(status, rules, 'https://gaminginit.com')).toMatchObject({ url: 'https://gaminginit.com' });
   });
 });
 
 describe('buildPlayersEmbed', () => {
-  const player = (name: string, kills: number | null, deaths: number | null) => ({ steamId: name, name, kills, deaths });
+  const p = (name: string, kills: number | null, deaths: number | null) => ({ steamId: name, name, kills, deaths });
 
-  it('lists players by kills, fewer deaths first on a tie', () => {
-    const embed = buildPlayersEmbed([player('Ash', 3, 1), player('Bo_b', 9, 4), player('Cy', 9, 2), player('Di', 1, 1)]);
-
-    expect(embed.title).toBe('👥 4 players online');
-    expect(embed.description).toBe(
-      '1. Cy: 9 kills, 2 deaths\n2. Bo\\_b: 9 kills, 4 deaths\n3. Ash: 3 kills, 1 death\n4. Di: 1 kill, 1 death',
-    );
+  it('lists players by kills, fewer deaths first on a tie, with medals', () => {
+    expect(buildPlayersEmbed([p('Low', 1, 0), p('Top', 9, 4), p('Tie', 9, 2)])).toEqual({
+      title: '👥 3 players online',
+      description: '🥇 **Tie** · 9 kills · 2 deaths\n🥈 **Top** · 9 kills · 4 deaths\n🥉 **Low** · 1 kill · 0 deaths',
+      color: 0x5865f2,
+      footer: { text: 'Most kills first' },
+    });
   });
 
   it('shows a dash for counts the server left out', () => {
-    expect(buildPlayersEmbed([player('Ash', null, null)]).description).toBe('1. Ash: – kills, – deaths');
+    expect(buildPlayersEmbed([p('New', null, null)]).description).toBe('🥇 **New** · – kills · – deaths');
   });
 
   it('lists the top 30 and counts the rest', () => {
-    const players = Array.from({ length: 40 }, (_, i) => player(`P${i}`, i, 0));
-    const lines = buildPlayersEmbed(players).description.split('\n');
+    const embed = buildPlayersEmbed(Array.from({ length: 35 }, (_, i) => p(`P${i}`, 35 - i, 0)));
 
-    expect(lines).toHaveLength(31);
-    expect(lines[0]).toBe('1. P39: 39 kills, 0 deaths');
-    expect(lines[30]).toBe('…and 10 more');
+    expect(embed.description?.split('\n')).toHaveLength(30);
+    expect(embed.footer?.text).toBe('Most kills first · 5 more not shown');
   });
 
   it('says when nobody is on', () => {
@@ -229,64 +281,70 @@ describe('buildRotationEmbed', () => {
     { map: 'Kavkazi', status: null },
     { map: 'Europe', status: 'now' },
     { map: 'NorthAmerica', status: 'next' },
-    { map: 'Kavkazi', status: null },
   ];
 
   it('lists the maps from the current one onwards, wrapping round', () => {
     expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries }).description).toBe(
-      '▶ **Ozeti** (now)\nZestafona (next)\nBakurani\nBakurani',
+      '▶️ **Ozeti** · now\n⏭️ **Zestafona** · next\n▫️ Bakurani',
     );
   });
 
-  it('only shows the next map for a random rotation', () => {
-    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries }).description).toBe(
-      '▶ **Ozeti** (now)\nZestafona (next)\n\nRandom order, so only the next map is known.',
-    );
+  it('only shows the current and next map for a random rotation, and says why', () => {
+    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries })).toMatchObject({
+      description: '▶️ **Ozeti** · now\n⏭️ **Zestafona** · next',
+      footer: { text: 'Random order, so only the next map is known.' },
+    });
   });
 
   it('puts the current map first in a random rotation even when the next one comes earlier in the list', () => {
-    const wrapped = [
+    const shuffled = [
       { map: 'NorthAmerica', status: 'next' },
+      { map: 'Kavkazi', status: null },
       { map: 'Europe', status: 'now' },
     ];
 
-    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries: wrapped }).description).toBe(
-      '▶ **Ozeti** (now)\nZestafona (next)\n\nRandom order, so only the next map is known.',
+    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries: shuffled }).description).toBe(
+      '▶️ **Ozeti** · now\n⏭️ **Zestafona** · next',
     );
   });
 
   it('says when the rotation is off', () => {
-    expect(buildRotationEmbed({ enabled: false, mode: 'ordered', entries }).description).toBe(
-      '▶ **Ozeti** (now)\n\nRotation is off, so this map repeats.',
-    );
+    expect(buildRotationEmbed({ enabled: false, mode: 'ordered', entries })).toMatchObject({
+      description: '▶️ **Ozeti** · now',
+      footer: { text: 'Rotation is off, so this map repeats.' },
+    });
   });
 
   it('says when there is no rotation', () => {
-    expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries: [] }).description).toBe(
-      'No maps in the rotation.',
-    );
+    expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries: [] }).description).toBe('No maps in the rotation.');
   });
 });
 
 describe('buildLastMatchEmbed', () => {
-  it('is the match summary with when it ended', () => {
+  it('is the match summary, with when it ended', () => {
     const embed = buildLastMatchEmbed({
       map: 'Bakurani',
       endedAt: 1_727_690_000_000,
       durationMs: 38 * 60_000,
       peakPlayers: 64,
-      factionScores: [],
+      factionScores: [
+        { name: 'Valkyra', score: 100 },
+        { name: 'Kharr', score: 80 },
+      ],
       top: [{ name: 'Cy', kills: 12, deaths: 3 }],
     });
 
-    expect(embed.title).toBe('🏁 Match over on Bakurani');
-    expect(embed.description).toBe('38 min · peak 64 players · ended <t:1727690000:R>');
-    expect(embed.fields?.[0]?.value).toBe('1. Cy: 12 kills, 3 deaths (4.00 K/D)');
+    expect(embed).toMatchObject({
+      title: '🏁 Last match · Bakurani',
+      description: '🏆 **Valkyra** won · Ended <t:1727690000:R>',
+      timestamp: '2024-09-30T09:53:20.000Z',
+    });
+    expect(embed.fields?.at(-1)).toEqual({ name: 'Top players', value: '🥇 **Cy** · 12 kills · 3 deaths · 4.00 K/D' });
   });
 });
 
 describe('buildSeedersEmbed', () => {
-  it('lists seeders with their seed days, minutes, Steam IDs and VIP', () => {
+  it('lists seeders with medals, seed days, minutes, Steam IDs and VIP, and explains it in the footer', () => {
     const embed = buildSeedersEmbed(
       [
         { steamId: '76561198000000001', name: 'Ash_1', seedingMinutes: 95, seedDays: 3, vipUntil: 1_727_690_000_000 },
@@ -294,57 +352,66 @@ describe('buildSeedersEmbed', () => {
       ],
       7,
       10,
-      null,
+      vip,
     );
 
-    expect(embed.title).toBe('🌱 Top seeders, last 7 days');
-    expect(embed.description).toBe(
-      [
-        '1. Ash\\_1: 3 seed days, 95 min · `76561198000000001` · 🎖️ VIP until <t:1727690000:f>',
-        '2. Bo: 1 seed day, 40 min · `76561198000000002`',
-        '',
-        'A seed day: on for more than 10 min while the server seeded, and it then went live. Days are UTC.',
+    expect(embed).toEqual({
+      title: '🌱 Top seeders · last 7 days',
+      description: [
+        '🥇 **Ash\\_1** · 3 seed days · 95 min',
+        '`76561198000000001` · 🎖️ VIP until <t:1727690000:f>',
+        '🥈 **Bo** · 1 seed day · 40 min',
+        '`76561198000000002`',
       ].join('\n'),
-    );
+      color: 0xf1c40f,
+      footer: {
+        text: `A seed day: on for more than 10 min while the server seeded, and it then went live. Days are UTC.\nVIP: ${offer}`,
+      },
+    });
   });
 
-  it('says so when nobody seeded, and gives the VIP rule when it is on', () => {
-    const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
-    const embed = buildSeedersEmbed([], 1, 10, vip);
-
-    expect(embed.title).toBe('🌱 Top seeders, last 1 day');
-    expect(embed.description).toMatch(/^Nobody seeded in that time\.\n\n/);
-    expect(embed.description).toContain('🎖️ Seed on 3 days in a week and get a reserved slot for a week.');
+  it('says so when nobody seeded', () => {
+    expect(buildSeedersEmbed([], 1, 10, null)).toMatchObject({
+      title: '🌱 Top seeders · last 1 day',
+      description: 'Nobody seeded in that time.',
+      footer: { text: 'A seed day: on for more than 10 min while the server seeded, and it then went live. Days are UTC.' },
+    });
   });
 });
 
 describe('buildVipMessage', () => {
-  const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
-  const offer =
-    "🎖️ Seed on 3 days in a week and get a reserved slot for a week. A seed counts when you're on for more than 10 min and the server goes live.";
+  it('thanks who earned a reserved slot, and says how to earn one', () => {
+    const message = buildVipMessage([{ name: 'Ash_1' }], [], vip, 'https://gaminginit.com');
 
-  it('names who earned a reserved slot, and says what seeding earns', () => {
-    const message = buildVipMessage([{ name: 'Ash_1' }], [], vip);
-
-    expect(message.embeds[0]).toMatchObject({ title: '🎖️ Reserved slots for seeders' });
-    expect(message.embeds[0]?.description).toBe(
-      ["**Ash\\_1** earned a reserved slot for a week by seeding.", "It starts after the server's next restart.", '', offer].join('\n'),
-    );
+    expect(embedOf(message)).toEqual({
+      title: '🎖️ Reserved slots for seeders',
+      description: '🎉 **Ash\\_1** earned a reserved slot for a week by seeding. Thank you!',
+      color: 0xf1c40f,
+      fields: [{ name: 'Earn one too', value: `${offer}\n${rule}` }],
+      url: 'https://gaminginit.com',
+      footer: { text: "Reserved slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com" },
+    });
     expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
   });
 
-  it('lists several players, and who kept theirs for another week', () => {
-    const [embed] = buildVipMessage([{ name: 'Ash' }, { name: 'Bo' }, { name: 'Cy' }], [{ name: 'Dee' }], vip).embeds;
-
-    expect(embed?.description).toMatch(
-      /^\*\*Ash, Bo and Cy\*\* earned reserved slots for a week by seeding\.\nKept for another week: Dee\.\n/,
-    );
+  it('keeps the website in the footer next to the restart note', () => {
+    expect(embedOf(buildVipMessage([{ name: 'Ash' }], [], vip, 'https://gaminginit.com'))?.footer).toEqual({
+      text: "Reserved slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com",
+    });
   });
 
-  it('keeps a long list short', () => {
+  it('lists several players, and who kept theirs for another week', () => {
+    const message = buildVipMessage([{ name: 'Ash' }, { name: 'Bo' }, { name: 'Cy' }], [{ name: 'Dee' }], vip);
+
+    expect(embedOf(message)?.description).toBe('🎉 **Ash, Bo and Cy** earned reserved slots for a week by seeding. Thank you!');
+    expect(field(message, 'Kept for another week')).toBe('Dee');
+  });
+
+  it('works for renewals alone, and keeps a long list short', () => {
     const many = Array.from({ length: 25 }, (_, i) => ({ name: `P${i}` }));
 
-    expect(buildVipMessage(many, [], vip).embeds[0]?.description).toContain('P19 and 5 more** earned');
+    expect(embedOf(buildVipMessage([], [{ name: 'Dee' }], vip))?.description).toBeUndefined();
+    expect(embedOf(buildVipMessage(many, [], vip))?.description).toContain('P19 and 5 more** earned');
   });
 });
 

@@ -9,10 +9,12 @@ const config: Config = {
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   roleId: undefined,
   inviteCode: undefined,
+  siteUrl: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
   seedMinutes: 10,
   vip: null,
+  matchMessages: null,
 };
 
 // A fake RCON server keyed by path; records what was sent.
@@ -61,7 +63,8 @@ describe('runCommand', () => {
 
     const reply = await run({ name: 'serverstatus', options: {}, userId: null });
 
-    expect(reply.embeds?.[0]).toMatchObject({ title: 'UK Wardogs #1', description: '🟢 **Live** · **24/98** players' });
+    expect(reply.embeds?.[0]).toMatchObject({ title: 'UK Wardogs #1', description: '🟢 **Live**' });
+    expect(reply.embeds?.[0]?.fields?.[0]).toEqual({ name: 'Players', value: '🟩🟩⬛⬛⬛⬛⬛⬛⬛⬛ **24**/98' });
   });
 
   it('/players lists who is online', async () => {
@@ -69,7 +72,7 @@ describe('runCommand', () => {
 
     const reply = await run({ name: 'players', options: {}, userId: null });
 
-    expect(reply.embeds?.[0]).toMatchObject({ title: '👥 1 player online', description: '1. Ash: 3 kills, 1 death' });
+    expect(reply.embeds?.[0]).toMatchObject({ title: '👥 1 player online', description: '🥇 **Ash** · 3 kills · 1 death' });
   });
 
   it('/rotation shows the rotation', async () => {
@@ -77,7 +80,7 @@ describe('runCommand', () => {
 
     const reply = await run({ name: 'rotation', options: {}, userId: null });
 
-    expect(reply.embeds?.[0]?.description).toBe('▶ **Bakurani** (now)');
+    expect(reply.embeds?.[0]?.description).toBe('▶️ **Bakurani** · now');
   });
 
   it('/lastmatch shows the most recent finished match', async () => {
@@ -86,7 +89,24 @@ describe('runCommand', () => {
 
     const reply = await run({ name: 'lastmatch', options: {}, userId: null });
 
-    expect(reply.embeds?.[0]?.title).toBe('🏁 Match over on Ozeti');
+    expect(reply.embeds?.[0]?.title).toBe('🏁 Last match · Ozeti');
+  });
+
+  it('/lastmatch links to the website when there is one, and still works when the settings do not load', async () => {
+    const match = { map: 'Ozeti', endedAt: 0, durationMs: 60_000, peakPlayers: 30, factionScores: [], top: [] };
+    const run = (settings: () => Config) =>
+      runCommand({ config: settings, http: rcon({}).http, lastMatch: async () => match, seeders: async () => [], removeMatch: async () => null, log: { info: vi.fn() } })({
+        name: 'lastmatch',
+        options: {},
+        userId: null,
+      });
+
+    expect((await run(() => ({ ...config, siteUrl: 'https://gaminginit.com' }))).embeds?.[0]?.url).toBe('https://gaminginit.com');
+    const unconfigured = await run(() => {
+      throw new Error('Invalid configuration');
+    });
+    expect(unconfigured.embeds?.[0]).toMatchObject({ title: '🏁 Last match · Ozeti' });
+    expect(unconfigured.embeds?.[0]?.url).toBeUndefined();
   });
 
   it('/lastmatch says so when no match has finished yet', async () => {
@@ -103,8 +123,8 @@ describe('runCommand', () => {
     const week = await run({ name: 'seeders', options: {}, userId: '42' });
     await run({ name: 'seeders', options: { days: '30' }, userId: '42' });
 
-    expect(week.embeds?.[0]).toMatchObject({ title: '🌱 Top seeders, last 7 days' });
-    expect(week.embeds?.[0]?.description).toContain('1. Ash: 2 seed days, 95 min · `7656`');
+    expect(week.embeds?.[0]).toMatchObject({ title: '🌱 Top seeders · last 7 days' });
+    expect(week.embeds?.[0]?.description).toBe('🥇 **Ash** · 2 seed days · 95 min\n`7656`');
     expect(seeders.mock.calls).toEqual([[7], [30]]);
     expect(sent).toEqual([]);
   });

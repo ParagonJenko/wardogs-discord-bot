@@ -15,11 +15,29 @@ describe('loadConfig', () => {
       webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123',
       roleId: undefined,
       inviteCode: undefined,
+      siteUrl: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
       seedMinutes: 10,
       vip: null,
+      matchMessages: null,
     });
+  });
+
+  it('reads the website address for links in Discord posts', () => {
+    expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com' }).siteUrl).toBe('https://gaminginit.com');
+    expect(() => loadConfig({ ...required, SITE_URL: 'gaminginit' })).toThrow(/SITE_URL/);
+    expect(() => loadConfig({ ...required, SITE_URL: 'javascript:alert(1)' })).toThrow(/SITE_URL/);
+  });
+
+  it('turns on in-game messages when there is a website to point players at, unless they are off', () => {
+    expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com/' }).matchMessages).toEqual({
+      siteHost: 'gaminginit.com',
+      scoreToWin: 100,
+    });
+    expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com', SCORE_TO_WIN: '150' }).matchMessages?.scoreToWin).toBe(150);
+    expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com', MATCH_MESSAGES: 'off' }).matchMessages).toBeNull();
+    expect(loadConfig(required).matchMessages).toBeNull();
   });
 
   it('turns on automatic VIP when VIP_SEED_DAYS is set', () => {

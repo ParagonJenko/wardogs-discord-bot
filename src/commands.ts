@@ -30,6 +30,15 @@ type CommandDeps = {
   log: { info: (message: string) => void };
 };
 
+// /lastmatch works without the RCON settings, so settings that fail to load only cost it the website link.
+const websiteOf = (config: () => Config): string | undefined => {
+  try {
+    return config().siteUrl;
+  } catch {
+    return undefined;
+  }
+};
+
 // Discord shows at most 25 choices.
 const MAX_CHOICES = 25;
 
@@ -56,7 +65,7 @@ export const runCommand =
   async ({ name, options, userId }: CommandRequest): Promise<CommandReply> => {
     if (name === 'lastmatch') {
       const match = await lastMatch();
-      return match ? { embeds: [buildLastMatchEmbed(match)] } : { content: 'No finished matches recorded yet.' };
+      return match ? { embeds: [buildLastMatchEmbed(match, websiteOf(config))] } : { content: 'No finished matches recorded yet.' };
     }
     if (name === 'removematch') {
       const endedAt = Number(options['match']);
@@ -73,8 +82,10 @@ export const runCommand =
       return { embeds: [buildSeedersEmbed(await seeders(days), days, seedMinutes, vip)] };
     }
 
-    const { rconUrl, rconPassword, rules } = config();
-    if (name === 'serverstatus') return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules)] };
+    const { rconUrl, rconPassword, rules, siteUrl } = config();
+    if (name === 'serverstatus') {
+      return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl)] };
+    }
     if (name === 'players') return { embeds: [buildPlayersEmbed(await fetchPlayers(rconUrl, rconPassword, http))] };
     if (name === 'rotation') return { embeds: [buildRotationEmbed(await fetchRotation(rconUrl, rconPassword, http))] };
 
