@@ -15,12 +15,12 @@
   "vars": {
     "DISCORD_ROLE_ID": "1554801355015594025",
     // Optional: an invite link that never expires, for the member counts in /api/stats.
-    "DISCORD_INVITE": "",
-    // Required for /broadcast: your Discord server's ID (right-click the server icon → Copy Server ID).
-    "DISCORD_GUILD_ID": "",
+    "DISCORD_INVITE": "https://discord.gg/jnsZkudxpD",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",
-    "ALERT_COOLDOWN_MINUTES": "10"
+    "ALERT_COOLDOWN_MINUTES": "10",
+    // Required for /broadcast: your Discord server's ID (right-click the server icon → Copy Server ID).
+    "DISCORD_GUILD_ID": "1552990539455144086"
   }
 }
