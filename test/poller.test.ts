@@ -537,7 +537,7 @@ describe('in-game messages', () => {
     await run(7);
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
-      'Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com',
+      'Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com',
       'Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time. Check the leaderboard and join our Discord at gaminginit.com',
       'Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     ]);

@@ -81,8 +81,15 @@ export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMM
 
 export const VIP_MAX_DAYS = 365;
 // The game shows a private message on one line; "Staff warning: " takes the rest of its 200 characters.
-export const WARNING_MAX_LENGTH = 180;
+// The game shows a private message on one line of up to 200 characters; the prefix and the rules note take the rest.
+export const WARNING_MAX_LENGTH = 140;
 const WARNING_PREFIX = 'Staff warning: ';
+
+// Where players find the server rules, added to what staff send them: the rules are in the Discord.
+const rulesNote = (siteUrl: string | undefined): string => {
+  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  return host ? `Rules: our Discord at ${host}` : 'Rules are in our Discord';
+};
 
 const STEAM_ID = /^\d{17}$/;
 
@@ -223,7 +230,8 @@ const lengthOf = (value: string | undefined) => BAN_LENGTHS.find((l) => l.value 
 export const runStaffCommand =
   ({ config, http, records, now, log }: StaffDeps) =>
   async (name: StaffCommand, { options, userId }: CommandRequest): Promise<CommandReply> => {
-    const { rconUrl, rconPassword } = config();
+    const { rconUrl, rconPassword, siteUrl } = config();
+    const rules = rulesNote(siteUrl);
     const by = userId ?? 'unknown';
     const staff = `Discord user ${by}`;
     const online = (): Promise<Player[]> => fetchPlayers(rconUrl, rconPassword, http);
@@ -250,7 +258,7 @@ export const runStaffCommand =
       if ('problem' in target) return { content: target.problem };
       const { player } = target;
       log.info(`/warn by ${staff} to ${logged(player)}: ${JSON.stringify(message)}`);
-      await messagePlayer(rconUrl, rconPassword, player.steamId, `${WARNING_PREFIX}${message}`, http);
+      await messagePlayer(rconUrl, rconPassword, player.steamId, `${WARNING_PREFIX}${message} | ${rules}`, http);
       await records.log(player.steamId, { action: 'warn', at: now(), by, name: player.name, reason: message });
       return { content: `⚠️ Warned ${who(player)} in game: ${message}` };
     }
@@ -262,7 +270,7 @@ export const runStaffCommand =
       if ('problem' in target) return { content: target.problem };
       const { player } = target;
       log.info(`/kick by ${staff}: ${logged(player)}: ${JSON.stringify(reason)}`);
-      await kickPlayer(rconUrl, rconPassword, player.steamId, reason, http);
+      await kickPlayer(rconUrl, rconPassword, player.steamId, `${reason} | ${rules}`, http);
       await records.log(player.steamId, { action: 'kick', at: now(), by, name: player.name, reason });
       return { content: `👢 Kicked ${who(player)}: ${reason}` };
     }
@@ -316,7 +324,7 @@ export const runStaffCommand =
       }
       // The ban keeps them out from now on; a kick removes them if they are in game.
       const kicked = live.some((p) => p.steamId === player.steamId)
-        ? await kickPlayer(rconUrl, rconPassword, player.steamId, `Banned: ${reason}`, http).then(
+        ? await kickPlayer(rconUrl, rconPassword, player.steamId, `Banned: ${reason} | ${rules}`, http).then(
             () => ' and kicked them',
             () => ", but couldn't kick them. Use /kick",
           )

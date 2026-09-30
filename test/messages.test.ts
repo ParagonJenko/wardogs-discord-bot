@@ -34,7 +34,7 @@ describe('milestones', () => {
   it('reaches ten minutes after the match went live', () => {
     expect(milestones(match(), 9 * MINUTE, rule, null)).toEqual([]);
     expect(milestones(match(), 10 * MINUTE, rule, null)).toEqual([
-      { key: 'ten-minutes', text: 'Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com' },
+      { key: 'ten-minutes', text: 'Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com' },
     ]);
   });
 

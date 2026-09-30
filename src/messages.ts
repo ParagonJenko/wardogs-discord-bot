@@ -64,7 +64,7 @@ export const milestones = (match: MatchState, now: number, rule: MessageRule, vi
   return [
     // Only when the bot saw the match start, so the time is right.
     ...(match.summarisable && match.liveAt !== null && now - match.liveAt >= TEN_MINUTES
-      ? [{ key: 'ten-minutes', text: `Enjoying the match? Join our Discord and see the leaderboard at ${siteHost}` }]
+      ? [{ key: 'ten-minutes', text: `Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at ${siteHost}` }]
       : []),
     ...(top >= scoreToWin / 2
       ? [

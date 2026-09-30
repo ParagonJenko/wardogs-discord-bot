@@ -115,9 +115,31 @@ describe('runStaffCommand', () => {
 
     const reply = await run('warn', { player: BO, message: 'No spawn camping' });
 
-    expect(sent).toContain(`POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: No spawn camping' })}`);
+    expect(sent).toContain(
+      `POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: No spawn camping | Rules are in our Discord' })}`,
+    );
     expect(records.log).toHaveBeenCalledWith(BO, { action: 'warn', at: NOW, by: '42', name: 'Bo', reason: 'No spawn camping' });
     expect(reply).toEqual({ content: '⚠️ Warned **Bo** in game: No spawn camping' });
+  });
+
+  it('points warned and kicked players at the rules in the Discord, on the website when there is one', async () => {
+    const server = rcon();
+    const records = fakeRecords();
+    const run = runStaffCommand({
+      config: () => ({ ...config, siteUrl: 'https://gaminginit.com/' }),
+      http: server.http,
+      records,
+      now: () => NOW,
+      log: { info: vi.fn() },
+    });
+
+    await run('warn', { name: 'warn', options: { player: BO, message: 'Language' }, userId: '42' });
+    await run('kick', { name: 'kick', options: { player: BO, reason: 'Spam' }, userId: '42' });
+
+    expect(server.sent.filter((s) => s.startsWith('POST'))).toEqual([
+      `POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: Language | Rules: our Discord at gaminginit.com' })}`,
+      `POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Spam | Rules: our Discord at gaminginit.com' })}`,
+    ]);
   });
 
   it('only warns, kicks or moves players who are in game', async () => {
@@ -133,7 +155,7 @@ describe('runStaffCommand', () => {
 
     await expect(run('kick', { player: ASH, reason: '  ' })).resolves.toEqual({ content: 'A kick needs a reason.' });
     await expect(run('kick', { player: ASH, reason: 'Teamkilling' })).resolves.toEqual({ content: '👢 Kicked **Ash**: Teamkilling' });
-    expect(sent).toContain(`POST /v1/players/${ASH}/kick ${JSON.stringify({ reason: 'Teamkilling' })}`);
+    expect(sent).toContain(`POST /v1/players/${ASH}/kick ${JSON.stringify({ reason: 'Teamkilling | Rules are in our Discord' })}`);
     expect(records.log).toHaveBeenCalledWith(ASH, { action: 'kick', at: NOW, by: '42', name: 'Ash', reason: 'Teamkilling' });
   });
 
@@ -167,7 +189,7 @@ describe('runStaffCommand', () => {
     const reply = await run('ban', { player: 'Bo', duration: '1d', reason: 'Cheating' });
 
     expect(records.ban).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', length: '1d', reason: 'Cheating', by: '42' });
-    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned: Cheating' })}`);
+    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned: Cheating | Rules are in our Discord' })}`);
     expect(reply).toEqual({
       content: `🔨 Banned **Bo** for 1 day, until <t:${(NOW + 86_400_000) / 1000}:f> and kicked them. Reason: Cheating`,
     });

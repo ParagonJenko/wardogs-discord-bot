@@ -169,8 +169,10 @@ For players, staff start typing and pick from the list, which shows each player'
 in the last 30 days and players with VIP or a ban from the bot, and take any Steam ID. A name typed without picking
 works when it matches exactly one player.
 
-- **`/warn`** sends a private message in game, starting "Staff warning:", up to 180 characters.
+- **`/warn`** sends a private message in game, starting "Staff warning:", up to 140 characters.
 - **`/kick`** needs a reason; the player sees it. They can rejoin.
+- Warnings, kicks and the kick that comes with a ban tell the player where the rules are: "… | Rules: our Discord at
+  gaminginit.com" (`SITE_URL`), or "… | Rules are in our Discord" without it.
 - **`/switchteam`** lists the other teams in the match, with how many players and points each has. With two teams,
   leave `team` out to move them to the other one. Like the game's own console, the bot then kills the player so they
   respawn on the new side.
@@ -321,7 +323,7 @@ leaderboard, the Discord and seeding:
 
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 10 minutes after the match went live             | Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com |
+| 10 minutes after the match went live             | Enjoying the match? Server rules are in our Discord. Join it and see the leaderboard at gaminginit.com |
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | Each team that reaches 90% of `SCORE_TO_WIN` (90) | Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
