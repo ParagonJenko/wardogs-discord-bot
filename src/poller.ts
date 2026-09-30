@@ -43,10 +43,10 @@ type PollerDeps = {
 };
 
 // Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
-// even if a Discord post then fails, so the site never shows a reachable server as down. `seeded` runs when the
-// server goes live, with everyone who seeded it. `matchEnded` runs before the summary is posted, so a Discord outage
-// cannot lose a match. A check that fails after these can report the same seed or match again, so the sink must
-// ignore one it already has (a match's `startedAt` identifies it).
+// even if a Discord post then fails, so the site never shows a reachable server as down; if it fails, only that is
+// lost. `seeded` runs when the server goes live, with everyone who seeded it, and `matchEnded` when a match ends,
+// both before any Discord post. If either fails, the check fails before the state moves on, so the next check reports
+// the same seed or match again. The sink must ignore one it already has (a match's `startedAt` identifies it).
 export type StatsSink = {
   check: (observation: Observation) => Promise<void>;
   seeded: (seeders: SeedCredit[], at: number) => Promise<void>;
@@ -168,9 +168,9 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       : [];
 
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
-    if (credits.length > 0) await report((sink) => sink.seeded(credits, time));
-
-    if (finished !== null) await report((sink) => sink.matchEnded(finished, time));
+    // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
+    if (credits.length > 0) await stats?.seeded(credits, time);
+    if (finished !== null) await stats?.matchEnded(finished, time);
 
     // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
     // Discord is down, and an unsent summary is kept to retry. A newer summary replaces one still waiting; that match
