@@ -11,7 +11,8 @@ import type { ConfigResult, ServerConfig } from './rcon.ts';
 export type VipGrant = { name: string; grantedAt: number; expiresAt: number };
 
 // The players the bot put on the reserved list, by Steam ID.
-export type VipState = { granted: Record<string, VipGrant>; checkedAt: number };
+// `revoked`: players staff took VIP from, by Steam ID, and until when automatic VIP must not give it back.
+export type VipState = { granted: Record<string, VipGrant>; checkedAt: number; revoked: Record<string, number> };
 
 export const VIP_CHECK_MS = 10 * 60_000;
 
@@ -20,12 +21,14 @@ const DAY_MS = 24 * 60 * 60_000;
 const VipStateSchema = z.object({
   granted: z.record(z.string(), z.object({ name: z.string(), grantedAt: z.number(), expiresAt: z.number() })),
   checkedAt: z.number(),
+  // Missing from state saved before staff could remove VIP.
+  revoked: z.record(z.string(), z.number()).default({}),
 });
 
 // Reads what a store saved. Nothing saved yet means nobody has been given VIP.
 export const parseVipState = (raw: unknown): VipState => {
   const parsed = VipStateSchema.safeParse(raw);
-  return parsed.success ? parsed.data : { granted: {}, checkedAt: 0 };
+  return parsed.success ? parsed.data : { granted: {}, checkedAt: 0, revoked: {} };
 };
 
 export const vipDue = (state: VipState, now: number): boolean => now - state.checkedAt >= VIP_CHECK_MS;
@@ -95,10 +98,15 @@ export const planVip = (
   reserved: string[],
   granted: Record<string, VipGrant>,
   now: number,
-  rule: VipRule,
+  rule: Pick<VipRule, 'lengthDays'>,
+  revoked: Record<string, number> = {},
 ): VipPlan => {
   const onList = new Set(reserved);
-  const earners = new Map(earned.filter((p) => STEAM_ID.test(p.steamId)).map((p) => [p.steamId, p.name]));
+  // Players staff took VIP from do not earn it again until their block runs out.
+  const blocked = (id: string): boolean => (revoked[id] ?? 0) > now;
+  const earners = new Map(
+    earned.filter((p) => STEAM_ID.test(p.steamId) && !blocked(p.steamId)).map((p) => [p.steamId, p.name]),
+  );
   const grant = (name: string): VipGrant => ({ name, grantedAt: now, expiresAt: now + rule.lengthDays * DAY_MS });
 
   // Someone an admin took off the list is forgotten; if they have earned VIP, they are added again below.
@@ -125,7 +133,8 @@ export const planVip = (
 };
 
 type VipDeps = {
-  rule: VipRule;
+  // Null when automatic VIP is off: nobody earns it, but VIP staff gave still ends on time.
+  rule: VipRule | null;
   // The rule's window of days, ending today.
   days: PlayerDay[];
   state: VipState;
@@ -148,6 +157,19 @@ const refused = (result: ConfigResult): string | null => {
 
 const names = (players: Named[]): string => players.map((p) => `${p.name} (${p.steamId})`).join(', ');
 
+type VipRcon = VipDeps['rcon'];
+
+// Writes the reserved list, checking the result first. Throws with the reason when the server would refuse or ignore it.
+const writeReserved = async (rcon: VipRcon, config: ServerConfig, add: string[], remove: string[]): Promise<void> => {
+  if (!config.writable) throw new Error('the server settings are read-only over RCON');
+  const text = editReserved(config.text, add, remove);
+  const problem = refused(await rcon.validate(text)) ?? refused(await rcon.put({ ...config, text }));
+  if (problem !== null) throw new Error(problem);
+};
+
+const unexpired = (revoked: Record<string, number>, now: number): Record<string, number> =>
+  Object.fromEntries(Object.entries(revoked).filter(([, until]) => until > now));
+
 // The new state to save, and who got VIP or kept it for another week, to announce.
 export type VipSync = { state: VipState; added: Named[]; renewed: Named[] };
 
@@ -155,15 +177,17 @@ export type VipSync = { state: VipState; added: Named[]; renewed: Named[] };
 // change; nothing is recorded then, so the next check tries again.
 export const syncVip = async ({ rule, days, state, now, rcon, log }: VipDeps): Promise<VipSync> => {
   const config = await rcon.fetchConfig();
-  const plan = planVip(qualified(days, rule), reservedIds(config.text), state.granted, now, rule);
-  const done = (): VipSync => ({ state: { granted: plan.granted, checkedAt: now }, added: plan.add, renewed: plan.renewed });
+  const earned = rule === null ? [] : qualified(days, rule);
+  const plan = planVip(earned, reservedIds(config.text), state.granted, now, rule ?? { lengthDays: 0 }, state.revoked);
+  const done = (): VipSync => ({
+    state: { granted: plan.granted, checkedAt: now, revoked: unexpired(state.revoked, now) },
+    added: plan.add,
+    renewed: plan.renewed,
+  });
   if (plan.renewed.length > 0) log.info(`VIP renewed for another week: ${names(plan.renewed)}.`);
   if (plan.add.length === 0 && plan.remove.length === 0) return done();
-  if (!config.writable) throw new Error('the server settings are read-only over RCON');
 
-  const text = editReserved(config.text, plan.add.map((p) => p.steamId), plan.remove);
-  const problem = refused(await rcon.validate(text)) ?? refused(await rcon.put({ ...config, text }));
-  if (problem !== null) throw new Error(problem);
+  await writeReserved(rcon, config, plan.add.map((p) => p.steamId), plan.remove);
 
   const removed = plan.remove.map((steamId) => ({ steamId, name: state.granted[steamId]?.name ?? 'unknown' }));
   log.info(
@@ -175,3 +199,45 @@ export const syncVip = async ({ rule, days, state, now, rcon, log }: VipDeps): P
   );
   return done();
 };
+
+// What staff asked for, and what happened: `already-reserved` is a player on the list without the bot's help, who keeps
+// what they have; `not-reserved` is a player who was not on the list.
+export type VipChange = {
+  state: VipState;
+  outcome: 'added' | 'extended' | 'already-reserved' | 'removed' | 'not-reserved';
+  until?: number;
+};
+
+// Gives a player VIP for `days`, as staff asked. It ends like any other: when the time is up, unless they earned it.
+export const addVip = async (
+  { steamId, name, days, now, state, rcon }: { steamId: string; name: string; days: number; now: number; state: VipState; rcon: VipRcon },
+): Promise<VipChange> => {
+  const config = await rcon.fetchConfig();
+  const onList = reservedIds(config.text).includes(steamId);
+  const current = state.granted[steamId];
+  if (onList && current === undefined) return { state, outcome: 'already-reserved' };
+  if (!onList) await writeReserved(rcon, config, [steamId], []);
+  const expiresAt = Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
+  const { [steamId]: _unblocked, ...revoked } = state.revoked;
+  return {
+    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: current?.grantedAt ?? now, expiresAt } } },
+    outcome: onList ? 'extended' : 'added',
+    until: expiresAt,
+  };
+};
+
+// Takes a player off the reserved list, whoever put them there, and keeps automatic VIP from giving it back for a week.
+export const removeVip = async (
+  { steamId, now, state, rcon }: { steamId: string; now: number; state: VipState; rcon: VipRcon },
+): Promise<VipChange> => {
+  const config = await rcon.fetchConfig();
+  const onList = reservedIds(config.text).includes(steamId);
+  if (onList) await writeReserved(rcon, config, [], [steamId]);
+  const { [steamId]: _removed, ...granted } = state.granted;
+  return {
+    state: { ...state, granted, revoked: { ...state.revoked, [steamId]: now + VIP_BLOCK_DAYS * DAY_MS } },
+    outcome: onList ? 'removed' : 'not-reserved',
+  };
+};
+
+const VIP_BLOCK_DAYS = 7;

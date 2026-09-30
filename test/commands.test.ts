@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { runCommand, suggestOptions } from '../src/commands.ts';
 import type { Config } from '../src/config.ts';
 import type { HttpClient } from '../src/rcon.ts';
+import type { StaffRecords } from '../src/staff.ts';
+
+// The staff commands' records are tested in staff.test.ts.
+const records: StaffRecords = {
+  player: vi.fn(),
+  knownPlayers: vi.fn(),
+  log: vi.fn(),
+  ban: vi.fn(),
+  unban: vi.fn(),
+  vipAdd: vi.fn(),
+  vipRemove: vi.fn(),
+};
 
 const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
@@ -38,6 +50,8 @@ const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = nul
     lastMatch: async () => lastMatch as never,
     seeders,
     removeMatch,
+    records,
+    now: () => 0,
     log,
   });
   return { run, sent: server.sent, log, seeders, removeMatch };
@@ -95,7 +109,16 @@ describe('runCommand', () => {
   it('/lastmatch links to the website when there is one, and still works when the settings do not load', async () => {
     const match = { map: 'Ozeti', endedAt: 0, durationMs: 60_000, peakPlayers: 30, factionScores: [], top: [] };
     const run = (settings: () => Config) =>
-      runCommand({ config: settings, http: rcon({}).http, lastMatch: async () => match, seeders: async () => [], removeMatch: async () => null, log: { info: vi.fn() } })({
+      runCommand({
+        config: settings,
+        http: rcon({}).http,
+        lastMatch: async () => match,
+        seeders: async () => [],
+        removeMatch: async () => null,
+        records,
+        now: () => 0,
+        log: { info: vi.fn() },
+      })({
         name: 'lastmatch',
         options: {},
         userId: null,
@@ -166,7 +189,7 @@ describe('runCommand', () => {
 
   it('suggests recent matches for /removematch, narrowed to what has been typed', async () => {
     const europe = { ...ozeti, map: 'Zestafona', endedAt: ozeti.endedAt - 3_600_000, factionScores: [] };
-    const suggest = suggestOptions({ recentMatches: async () => [ozeti, europe] });
+    const suggest = suggestOptions({ recentMatches: async () => [ozeti, europe], config: () => config, http: rcon({}).http, records });
 
     await expect(suggest({ name: 'removematch', options: { match: '' }, userId: '42' })).resolves.toEqual([
       { name: 'Ozeti · Valkyra won 70, Kharr 67, Haldor 41 · 69 min · ended 30 Sep 14:05 UTC', value: String(ozeti.endedAt) },
@@ -199,6 +222,8 @@ describe('runCommand', () => {
       lastMatch: async () => null,
       seeders: async () => [],
       removeMatch: async () => null,
+      records,
+      now: () => 0,
       log,
     });
 

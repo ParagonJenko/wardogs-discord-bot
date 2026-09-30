@@ -17,6 +17,7 @@ import {
   type CommandRequest,
 } from './interactions.ts';
 import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from './rcon.ts';
+import { isStaffCommand, runStaffCommand, suggestStaff, type StaffRecords } from './staff.ts';
 import type { RecentMatch } from './stats.ts';
 
 type CommandDeps = {
@@ -27,6 +28,8 @@ type CommandDeps = {
   seeders: (days: number) => Promise<SeederRow[]>;
   // Deletes the recent match that ended at this time, with its records; null if there is none.
   removeMatch: (endedAt: number) => Promise<{ match: RecentMatch; players: number } | null>;
+  records: StaffRecords;
+  now: () => number;
   log: { info: (message: string) => void };
 };
 
@@ -42,10 +45,15 @@ const websiteOf = (config: () => Config): string | undefined => {
 // Discord shows at most 25 choices.
 const MAX_CHOICES = 25;
 
-// Choices offered while an admin types in /removematch: the recent matches, narrowed to what has been typed.
+type SuggestDeps = Pick<CommandDeps, 'config' | 'http' | 'records'> & { recentMatches: () => Promise<RecentMatch[]> };
+
+// Choices offered while staff type: in /removematch the recent matches, narrowed to what has been typed; in the other
+// staff commands players, teams, maps and bans.
 export const suggestOptions =
-  ({ recentMatches }: { recentMatches: () => Promise<RecentMatch[]> }) =>
-  async ({ name, options }: CommandRequest): Promise<Choice[]> => {
+  ({ recentMatches, ...staff }: SuggestDeps) =>
+  async (request: CommandRequest): Promise<Choice[]> => {
+    const { name, options } = request;
+    if (isStaffCommand(name)) return suggestStaff(staff)(request);
     if (name !== 'removematch') return [];
     const typed = (options['match'] ?? '').trim().toLowerCase();
     return (await recentMatches())
@@ -61,8 +69,10 @@ const dayCount = (value: string | undefined): number => {
 };
 
 export const runCommand =
-  ({ config, http, lastMatch, seeders, removeMatch, log }: CommandDeps) =>
-  async ({ name, options, userId }: CommandRequest): Promise<CommandReply> => {
+  ({ config, http, lastMatch, seeders, removeMatch, records, now, log }: CommandDeps) =>
+  async (request: CommandRequest): Promise<CommandReply> => {
+    const { name, options, userId } = request;
+    if (isStaffCommand(name)) return runStaffCommand({ config, http, records, now, log })(name, request);
     if (name === 'lastmatch') {
       const match = await lastMatch();
       return match ? { embeds: [buildLastMatchEmbed(match, websiteOf(config))] } : { content: 'No finished matches recorded yet.' };

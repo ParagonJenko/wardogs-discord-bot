@@ -26,7 +26,7 @@
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",
     "ALERT_COOLDOWN_MINUTES": "10",
-    // Required for /broadcast: your Discord server's ID (right-click the server icon → Copy Server ID).
+    // Required for the staff commands: your Discord server's ID (right-click the server icon → Copy Server ID).
     "DISCORD_GUILD_ID": "1552990539455144086",
     // Optional: role IDs (comma-separated) that may use the admin commands as well as Administrators. Staff.
     "DISCORD_ADMIN_ROLE_IDS": "1552990722976649296",

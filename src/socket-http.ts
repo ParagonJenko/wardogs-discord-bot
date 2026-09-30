@@ -86,7 +86,7 @@ export const socketHttp =
     const payload = body === undefined ? undefined : encoder.encode(body);
     const typed = Object.keys(headers).some((name) => name.toLowerCase() === 'content-type');
     const request = [
-      `${payload ? (method ?? 'POST') : 'GET'} ${url.pathname}${url.search} HTTP/1.1`,
+      `${method ?? (payload ? 'POST' : 'GET')} ${url.pathname}${url.search} HTTP/1.1`,
       `Host: ${url.host}`,
       ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
       ...(payload ? [...(typed ? [] : ['Content-Type: application/json']), `Content-Length: ${payload.length}`] : []),
