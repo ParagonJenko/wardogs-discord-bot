@@ -553,6 +553,8 @@ describe('in-game messages', () => {
       log,
       store: memoryStore(),
       broadcast,
+      // The first line of every list, so the texts are known.
+      random: () => 0,
     });
     return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, broadcast, log };
   };
@@ -571,12 +573,12 @@ describe('in-game messages', () => {
     await run(7);
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
-      'Enjoying the chaos? Read the rules in our Discord, soldier. Leaderboard at gaminginit.com',
-      'Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time. Check the leaderboard and join our Discord at gaminginit.com',
-      'Valkyra has 90! Greatness nearly restored. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com',
+      'Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     ]);
     expect(log.info).toHaveBeenCalledWith(
-      'Sent in game: Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time. Check the leaderboard and join our Discord at gaminginit.com',
+      'Sent in game: Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
     );
   });
 
@@ -592,7 +594,7 @@ describe('in-game messages', () => {
     await run(4);
 
     // Halfway fails once and is not tried again; ten minutes in is a different message, due on the last check.
-    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', 'Enjoying the chaos']);
+    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com']);
     expect(log.error).toHaveBeenCalledWith('In-game message failed: RCON request timed out after 8000ms');
   });
 

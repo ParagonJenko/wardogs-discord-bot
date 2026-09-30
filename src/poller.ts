@@ -45,6 +45,8 @@ type PollerDeps = {
   stats?: StatsSink;
   // Sends a message to everyone in game.
   broadcast?: (message: string) => Promise<void>;
+  // Picks which line an in-game message uses.
+  random?: () => number;
 };
 
 // Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
@@ -146,7 +148,7 @@ export const memoryStore = (initial: BotState | null = null): StateStore => {
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
-export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats, broadcast }: PollerDeps) => {
+export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats, broadcast, random = Math.random }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
     if (stats === undefined) return;
@@ -204,7 +206,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried.
     const { messages, send: message } =
       config.matchMessages !== null && broadcast !== undefined && status.players > 0
-        ? nextMessage(state.messages, match, time, config.matchMessages, config.vip)
+        ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random)
         : { messages: state.messages, send: null };
     if (message !== null && broadcast !== undefined) {
       try {

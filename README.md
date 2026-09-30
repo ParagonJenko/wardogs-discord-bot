@@ -327,20 +327,13 @@ leaderboard, the Discord and seeding:
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
-- Each message has a few jokey lines and a match gets one of them (picked by when it started), so they vary. The
-  halfway and 90-point messages name only the team in front, with a joke about that faction:
-
-  | Leader    | Halfway                                                                    | 90 points                                                                 |
-  | --------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-  | Lonestar  | Screenshot it, this never happens. / The default pick is cooking. Yeehaw.   | The default pick is about to win. Clip it. / Nobody wanted blue, and look at them now. Yeehaw. |
-  | Manticore | Green winning? Shocking. Truly. / The shadow army doing shadow army things. | Green about to win again. Groundbreaking. / The shadow army is about to do it again. |
-  | Valkyra   | Not my points, OUR points, comrade. / Restoring greatness, one point at a time. | Victory for the motherland is in sight, comrades. / Greatness nearly restored. |
-
-  Ten minutes in, it is one of: "10 minutes in and nobody has rage quit yet…", "Still alive? Impressive…" or "Enjoying
-  the chaos? Read the rules in our Discord, soldier…", each pointing at the rules in Discord and the leaderboard.
-  Factions are matched however the server spells them ("LONESTAR", "Lone Star"). A faction without lines gets a plain
-  one ("Name leads on 52!"), and level top teams get "Halfway there and it's neck and neck!". The lines live in
-  `TEAM_LINES` and `TEN_MINUTE_LINES` in `src/messages.ts`.
+- Every line the bot says in game is in one list, `src/lines.ts`: the 10-minute lines, and for halfway and 90 points
+  a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any other
+  faction. Each time a message goes out, one line is picked at random from its list (for halfway and 90 points, from
+  the leading faction's list). Add, remove or reword lines there and `npm run deploy`; `{team}`, `{score}` and
+  `{site}` are filled in. The tests check every line still fits the game's 200 characters.
+- The halfway and 90-point messages name only the team in front. Factions are matched however the server spells them
+  ("LONESTAR", "Lone Star").
 - Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst. The 90-point
   message is for the first team to get there only, not one per team.
 - After the bot restarts or is deployed mid-match, milestones the match already passed are not announced late.
