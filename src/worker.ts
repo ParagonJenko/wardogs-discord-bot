@@ -299,6 +299,10 @@ export default {
         log: console,
         now: Date.now,
         adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
+        adminRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
+          .split(',')
+          .map((id) => id.trim())
+          .filter((id) => /^\d+$/.test(id)),
       },
     );
     if (result.followUp) {

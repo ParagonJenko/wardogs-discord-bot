@@ -80,9 +80,9 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/players`      | Everyone             | Who is online, with kills and deaths (top 30)                      |
 | `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
-| `/broadcast`    | Administrators only  | Sends a message (up to 200 characters) to everyone in game         |
-| `/seeders`      | Administrators only  | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
-| `/removematch`  | Administrators only  | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
+| `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
+| `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
+| `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
@@ -124,13 +124,18 @@ commands, run `npm run register` again.
   (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
   set, `/broadcast` is refused everywhere. Commands are registered globally, so without this an admin in any
   other server that added the app could broadcast into your game.
-- It is hidden from members without Discord's **Administrator** permission, and the Worker checks that
-  permission again on every use, so a server owner granting it to other roles still does not let them use it.
+- Only staff can use it: members with Discord's **Administrator** permission, or with a role listed in
+  `DISCORD_ADMIN_ROLE_IDS` in the `vars` block of `wrangler.jsonc` (comma-separated role IDs; right-click the
+  role in Server Settings → Roles → Copy Role ID). The Worker checks this on every use, so letting other roles
+  see the command in Discord still does not let them use it.
+- Discord only shows staff commands to Administrators at first. To show them to a staff role too: Server
+  Settings → Integrations → the bot → pick `/broadcast`, `/seeders` and `/removematch` (or the whole app) →
+  Add Roles or Members → the role → ✓. Do this once; it lasts across deploys and `npm run register`.
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 
 `/seeders` shows Steam IDs and `/removematch` changes the records, so they have the same limits: your server only,
-Administrators only, and a private reply.
+staff only, and a private reply.
 
 `/removematch` is for a match the bot recorded by mistake, such as part of a match it wrongly thought had ended.
 Start typing and pick the match from the list of recent matches (map, result, length and end time, UTC). It takes
