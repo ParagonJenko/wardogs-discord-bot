@@ -36,7 +36,8 @@ export class Watcher extends DurableObject<Env> {
   }
 
   async check(): Promise<void> {
-    const config = loadConfig(stringVars(this.env));
+    // The cron fires every minute whatever POLL_INTERVAL_SECONDS says, and seeding minutes are counted per check.
+    const config = { ...loadConfig(stringVars(this.env)), pollIntervalMs: 60_000 };
     const storage = this.ctx.storage;
     const minutesPerCheck = config.pollIntervalMs / 60_000;
     const poll = createPoller({
@@ -127,7 +128,6 @@ export default {
     const vars = stringVars(env);
     const publicKey = vars['DISCORD_PUBLIC_KEY'];
     if (!publicKey) return new Response('DISCORD_PUBLIC_KEY is not set', { status: 500 });
-    const config = loadConfig(vars);
 
     const result = await handleInteraction(
       await request.text(),
@@ -135,10 +135,15 @@ export default {
       request.headers.get('x-signature-timestamp'),
       {
         publicKey,
-        getStatusEmbed: async () =>
-          buildStatusEmbed(await fetchStatus(config.rconUrl, config.rconPassword, socketGet(connect)), config.rules),
+        // Config is read only when /status runs, so Discord's endpoint check (a signed PING) passes even
+        // before the RCON secrets are set.
+        getStatusEmbed: async () => {
+          const config = loadConfig(vars);
+          return buildStatusEmbed(await fetchStatus(config.rconUrl, config.rconPassword, socketGet(connect)), config.rules);
+        },
         editReply: editOriginalReply(),
         log: console,
+        now: Date.now,
       },
     );
     if (result.followUp) {

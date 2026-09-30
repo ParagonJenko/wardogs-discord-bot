@@ -13,9 +13,10 @@ beforeAll(async () => {
 });
 
 // Signs a request body the way Discord does: Ed25519 over timestamp + body.
-const signed = async (payload: unknown) => {
+const NOW_MS = 1_727_690_000_000;
+
+const signed = async (payload: unknown, timestamp = String(NOW_MS / 1000)) => {
   const body = JSON.stringify(payload);
-  const timestamp = '1727690000';
   const signature = hex(await crypto.subtle.sign('Ed25519', keys.privateKey, encoder.encode(timestamp + body)));
   return { body, signature, timestamp };
 };
@@ -28,6 +29,7 @@ const deps = () => ({
   getStatusEmbed: vi.fn(async () => embed),
   editReply: vi.fn(async () => undefined),
   log: { error: vi.fn() },
+  now: () => NOW_MS,
 });
 
 describe('handleInteraction', () => {
@@ -45,6 +47,16 @@ describe('handleInteraction', () => {
     const result = await handleInteraction('{"type":1,"application_id":"222"}', signature, timestamp, deps());
 
     expect(result.status).toBe(401);
+  });
+
+  it('rejects a correctly signed request that is more than five minutes old or ahead', async () => {
+    const old = await signed(statusCommand, String(NOW_MS / 1000 - 301));
+    const ahead = await signed(statusCommand, String(NOW_MS / 1000 + 301));
+    const d = deps();
+
+    expect((await handleInteraction(old.body, old.signature, old.timestamp, d)).status).toBe(401);
+    expect((await handleInteraction(ahead.body, ahead.signature, ahead.timestamp, d)).status).toBe(401);
+    expect(d.getStatusEmbed).not.toHaveBeenCalled();
   });
 
   it('answers Discord\'s ping so the endpoint can be saved', async () => {

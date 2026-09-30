@@ -60,6 +60,7 @@ const BotStateSchema = z.object({
       startedAt: z.number(),
       lastSeenAt: z.number(),
       liveAt: z.number().nullable(),
+      summarisable: z.boolean(),
       peakPlayers: z.number(),
       players: z.record(z.string(), z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
       factionScores: z.array(z.object({ name: z.string(), score: z.number() })),
@@ -111,7 +112,8 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     if (state === null) {
       const alerts = initialState(status.players, config.rules);
       const { match } = observeMatch(null, status, players, alerts.phase === 'live', time);
-      await store.save({ alerts, seeding: {}, match });
+      const seeding = alerts.phase === 'seeding' ? tallySeeding({}, players) : {};
+      await store.save({ alerts, seeding, match });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, phase: alerts.phase, match }));
       return;
@@ -122,11 +124,10 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     const after = result.state.phase;
     const { match, finished } = observeMatch(state.match, status, players, after === 'live', time);
 
-    // Count everyone online on every check until the server goes live; reset once it is live or empty.
-    const tally = before === 'live' ? state.seeding : tallySeeding(state.seeding, players);
+    // Count everyone online on each check while the server is seeding; reset once it is live or empty.
     const seeders =
       before !== 'live' && after === 'live'
-        ? topSeeders(tally, TOP_SEEDERS).map((s) => ({
+        ? topSeeders(state.seeding, TOP_SEEDERS).map((s) => ({
             name: s.name,
             minutes: Math.round((s.checks * config.pollIntervalMs) / 60_000),
           }))
@@ -148,7 +149,8 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
     }
     // Only save after a successful send, so a failed post is retried on the next check.
-    await store.save({ alerts: result.state, seeding: after === 'seeding' ? tally : {}, match });
+    const seeding = after === 'seeding' ? tallySeeding(state.seeding, players) : {};
+    await store.save({ alerts: result.state, seeding, match });
   };
 
   return async (): Promise<void> => {

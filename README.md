@@ -153,8 +153,9 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   19–20 players would post live / low-pop every minute.
 - `LOW_POP_THRESHOLD` can be set lower than `LIVE_THRESHOLD` (for example live at 40, warn below 30) to
   give more slack before the warning.
-- Seeding time is counted once per check (every minute) for everyone online while the server is below
-  the live threshold. It resets when the server goes live or empties.
+- Seeding time is counted once per check (every minute) for everyone online while the server is seeding.
+  The check that finds the server live does not count, so players who join at 20+ are not credited. The
+  count resets when the server goes live or empties.
 - WARDOGS RCON does not report when a match ends. The bot treats a map change, or players' kills going
   backwards (a restart on the same map), as a new match, and summarises the previous one from the last
   stats it saw. That can miss up to one minute at the end of the match. Players who left mid-match keep
@@ -173,7 +174,8 @@ bot only ever calls `GET /v1/status` and `GET /v1/players`, but:
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if
   your host offers one.
 - `/status` requests are only accepted with a valid Discord signature (checked against
-  `DISCORD_PUBLIC_KEY`), so nobody else can make the Worker call your server.
+  `DISCORD_PUBLIC_KEY`) and a timestamp within 5 minutes, so nobody else can make the Worker call your
+  server and a captured request cannot be replayed later.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.
 
 ## Development

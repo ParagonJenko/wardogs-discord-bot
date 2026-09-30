@@ -26,9 +26,13 @@ type InteractionDeps = {
   getStatusEmbed: () => Promise<Embed>;
   editReply: (applicationId: string, token: string, reply: Reply) => Promise<void>;
   log: { error: (message: string) => void };
+  now: () => number;
 };
 
 export type InteractionResult = { status: number; body: unknown; followUp?: () => Promise<void> };
+
+// A signed request older (or newer) than this is refused, so a captured one cannot be replayed later.
+const MAX_CLOCK_SKEW_SECONDS = 300;
 
 const encoder = new TextEncoder();
 
@@ -54,6 +58,9 @@ export const handleInteraction = async (
 ): Promise<InteractionResult> => {
   if (!signature || !timestamp || !(await verifySignature(deps.publicKey, signature, timestamp, body))) {
     return { status: 401, body: { error: 'invalid request signature' } };
+  }
+  if (Math.abs(deps.now() / 1000 - Number(timestamp)) > MAX_CLOCK_SKEW_SECONDS) {
+    return { status: 401, body: { error: 'stale request' } };
   }
 
   const parsed = InteractionSchema.safeParse(JSON.parse(body));

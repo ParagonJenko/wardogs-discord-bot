@@ -28,6 +28,12 @@ export const mapName = (id: string): string => MAP_NAMES[id] ?? id;
 // Player names are free text; escape Discord markdown so a name cannot restyle or break the message.
 const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>#[\]()-]/g, '\\$&');
 
+// Discord caps an embed field at 1024 characters; five escaped 40-character names stay well inside it.
+const MAX_PLAYER_NAME = 40;
+
+const playerName = (name: string): string =>
+  escapeMarkdown(name.length > MAX_PLAYER_NAME ? `${name.slice(0, MAX_PLAYER_NAME - 1)}…` : name);
+
 const numbered = (lines: string[]): string => lines.map((line, i) => `${i + 1}. ${line}`).join('\n');
 
 const fieldIf = (name: string, lines: string[]): EmbedField[] =>
@@ -59,7 +65,7 @@ const CALL_TO_ACTION: Record<AlertKind, string> = {
 };
 
 export const buildMessage = (kind: AlertKind, server: Population, options: MessageOptions): DiscordMessage => {
-  const seeders = (options.seeders ?? []).map((s) => `${escapeMarkdown(s.name)} (${s.minutes} min)`);
+  const seeders = (options.seeders ?? []).map((s) => `${playerName(s.name)} (${s.minutes} min)`);
   const fields = fieldIf('Top seeders', seeders);
   return {
     ...(options.roleId ? { content: `<@&${options.roleId}>` } : {}),
@@ -93,7 +99,7 @@ export const buildMatchSummary = (summary: MatchSummary, serverName: string): Di
   const fields = fieldIf(
     'Top players',
     summary.top.map(
-      (p) => `${escapeMarkdown(p.name)}: ${plural(p.kills, 'kill')}, ${plural(p.deaths, 'death')} (${kd(p.kills, p.deaths)} K/D)`,
+      (p) => `${playerName(p.name)}: ${plural(p.kills, 'kill')}, ${plural(p.deaths, 'death')} (${kd(p.kills, p.deaths)} K/D)`,
     ),
   );
   return {

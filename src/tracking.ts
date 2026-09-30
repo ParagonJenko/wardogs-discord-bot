@@ -25,6 +25,8 @@ export type MatchState = {
   lastSeenAt: number;
   // When the server was first seen live during this match; null while it has only been seeding.
   liveAt: number | null;
+  // False for a match that was already live when the bot started: its start was never seen.
+  summarisable: boolean;
   peakPlayers: number;
   players: Record<string, PlayerStats>;
   factionScores: FactionScore[];
@@ -45,7 +47,8 @@ const matchKey = (status: ServerStatus): string => `${status.map}#${status.rotat
 const statsWentBackwards = (match: MatchState, players: Player[]): boolean =>
   players.some((p) => {
     const before = match.players[p.steamId];
-    return before !== undefined && (p.kills < before.kills || p.deaths < before.deaths);
+    if (before === undefined) return false;
+    return (p.kills !== null && p.kills < before.kills) || (p.deaths !== null && p.deaths < before.deaths);
   });
 
 export const topPlayers = (players: Record<string, PlayerStats>, count = TOP_PLAYERS): PlayerStats[] =>
@@ -61,11 +64,12 @@ const summarise = (match: MatchState): MatchSummary => ({
   top: topPlayers(match.players),
 });
 
-const freshMatch = (status: ServerStatus, now: number): MatchState => ({
+const freshMatch = (status: ServerStatus, now: number, summarisable: boolean): MatchState => ({
   key: matchKey(status),
   startedAt: now,
   lastSeenAt: now,
   liveAt: null,
+  summarisable,
   peakPlayers: 0,
   players: {},
   factionScores: [],
@@ -80,7 +84,7 @@ export const observeMatch = (
 ): { match: MatchState; finished: MatchSummary | null } => {
   const isNew =
     previous === null || previous.key !== matchKey(status) || statsWentBackwards(previous, players);
-  const base = isNew ? freshMatch(status, now) : previous;
+  const base = isNew ? freshMatch(status, now, !(previous === null && live)) : previous;
 
   const match: MatchState = {
     ...base,
@@ -89,11 +93,17 @@ export const observeMatch = (
     peakPlayers: Math.max(base.peakPlayers, status.players),
     players: {
       ...base.players,
-      ...Object.fromEntries(players.map((p) => [p.steamId, { name: p.name, kills: p.kills, deaths: p.deaths }])),
+      ...Object.fromEntries(
+        players.map((p) => {
+          const known = base.players[p.steamId];
+          return [p.steamId, { name: p.name, kills: p.kills ?? known?.kills ?? 0, deaths: p.deaths ?? known?.deaths ?? 0 }];
+        }),
+      ),
     },
     factionScores: status.factionScores.length > 0 ? status.factionScores : base.factionScores,
   };
 
-  const finished = isNew && previous !== null && previous.liveAt !== null ? summarise(previous) : null;
+  const finished =
+    isNew && previous !== null && previous.summarisable && previous.liveAt !== null ? summarise(previous) : null;
   return { match, finished };
 };
