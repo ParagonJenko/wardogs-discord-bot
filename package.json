@@ -1,0 +1,23 @@
+{
+  "name": "wardogs-discord-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Posts Discord alerts when a WARDOGS server starts seeding, goes live, or drops below a population threshold.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.2"
+  }
+}
