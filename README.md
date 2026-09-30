@@ -260,11 +260,15 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   The check that finds the server live does not count, so players who join at 20+ are not credited. The
   count resets when the server goes live, and only starts again once it has emptied: a live server that drops
   below `LOW_POP_THRESHOLD` is not seeding.
-- WARDOGS RCON does not report when a match ends. The bot treats a map change, players' kills going
-  backwards (a restart on the same map), or the server emptying as the end of a match, and summarises it
-  from the last stats it saw. That can miss up to one minute at the end of the match. Players who left
-  mid-match keep their last stats. Length is timed from when the server went live. Matches that never went
-  live are not summarised, and neither is the match already running when the bot starts.
+- WARDOGS RCON does not report when a match ends. The bot treats a map change, a restart on the same map, or
+  the server emptying as the end of a match, and summarises it from the last stats it saw. That can miss up to
+  one minute at the end of the match. A restart means the faction scores drop and most players' kills and
+  deaths start again from 0 at once. One player's counters starting again (they rejoined or switched team)
+  is not a new match: their earlier kills and deaths are kept and the new ones added. The rotation slot
+  moving, or a reading without the map, does not end a match either. Players who left mid-match keep their
+  last stats. Length is timed from when the server went live. Matches that never went live are not
+  summarised, and neither is the match already running when the bot starts.
+- With three or more factions, the summary names them all: "**Valkyra** won 100, Kharr 67, Haldor 41".
 - If a Discord post fails, the alert is retried on the next check while it is still true. A match summary
   is retried until it posts, or until the next match ends. Matches are recorded before their summary is
   posted, so a Discord outage does not lose them. If RCON is unreachable (for example during the game's

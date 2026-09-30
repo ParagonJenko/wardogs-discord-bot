@@ -73,7 +73,19 @@ const BotStateSchema = z.object({
       liveAt: z.number().nullable(),
       summarisable: z.boolean(),
       peakPlayers: z.number(),
-      players: z.record(z.string(), z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
+      players: z.record(
+        z.string(),
+        z
+          .object({
+            name: z.string(),
+            kills: z.number(),
+            deaths: z.number(),
+            // Missing from state saved before rejoining players were tracked: their counters were their totals.
+            lastKills: z.number().optional(),
+            lastDeaths: z.number().optional(),
+          })
+          .transform((p) => ({ ...p, lastKills: p.lastKills ?? p.kills, lastDeaths: p.lastDeaths ?? p.deaths })),
+      ),
       factionScores: Scores,
     })
     .nullable(),

@@ -14,10 +14,15 @@ export const topSeeders = (tally: SeedingTally, count: number): { name: string; 
     .sort((a, b) => b.checks - a.checks)
     .slice(0, count);
 
-// Matches: WARDOGS RCON does not report when a match ends, so a new match is recognised by the map or
-// rotation slot changing, by a player's kills or deaths going backwards (a restart on the same map), or by the
-// server emptying. The summary uses the last stats seen before that, so it can miss up to one check of the final minute.
+// Matches: WARDOGS RCON does not report when a match ends, so a new match is recognised by the map changing, by a
+// restart on the same map (the faction scores drop and most players' counters start again from 0), or by the server
+// emptying. One player's counters starting again (they rejoined) is not a new match. The summary uses the last stats
+// seen before that, so it can miss up to one check of the final minute.
 export type PlayerStats = { name: string; kills: number; deaths: number };
+
+// A player's totals for the match, and the counters RCON last reported for them. The counters start again from 0
+// when a player rejoins, so the totals only ever add what is new since the last reading.
+export type TrackedPlayer = PlayerStats & { lastKills: number; lastDeaths: number };
 
 export type MatchState = {
   key: string;
@@ -28,7 +33,7 @@ export type MatchState = {
   // False for a match that was already live when the bot started: its start was never seen.
   summarisable: boolean;
   peakPlayers: number;
-  players: Record<string, PlayerStats>;
+  players: Record<string, TrackedPlayer>;
   factionScores: FactionScore[];
 };
 
@@ -44,20 +49,58 @@ const TOP_PLAYERS = 5;
 
 const matchKey = (status: ServerStatus): string => `${status.map}#${status.rotationIndex ?? ''}`;
 
-const statsWentBackwards = (match: MatchState, players: Player[]): boolean =>
-  players.some((p) => {
-    const before = match.players[p.steamId];
-    if (before === undefined) return false;
-    return (p.kills !== null && p.kills < before.kills) || (p.deaths !== null && p.deaths < before.deaths);
+const keyMap = (key: string): string => key.slice(0, key.lastIndexOf('#'));
+
+// Only the map counts: the rotation slot can move when an admin edits the rotation, and a reading can leave the map out.
+const mapChanged = (match: MatchState, status: ServerStatus): boolean => {
+  const before = keyMap(match.key);
+  return status.map !== '' && before !== '' && status.map !== before;
+};
+
+const totalScore = (scores: FactionScore[]): number => scores.reduce((sum, s) => sum + s.score, 0);
+
+// A restart on the same map: most players' counters start again from 0, and the faction scores (which only go up
+// during a match) drop. Either alone is one player rejoining, or a bad reading.
+const restarted = (match: MatchState, status: ServerStatus, players: Player[]): boolean => {
+  const compared = players.flatMap((p) => {
+    const known = match.players[p.steamId];
+    if (known === undefined || p.kills === null || p.deaths === null || known.lastKills + known.lastDeaths === 0) return [];
+    return [p.kills < known.lastKills || p.deaths < known.lastDeaths];
   });
+  const reset = compared.filter(Boolean).length;
+  if (reset === 0 || reset * 2 <= compared.length) return false;
+  const before = totalScore(match.factionScores);
+  const scoresDropped = status.factionScores.length > 0 && before > 0 && totalScore(status.factionScores) < before / 2;
+  return scoresDropped || status.factionScores.length === 0 || match.factionScores.length === 0;
+};
+
+// Adds what is new since the last reading; a counter below the last one has started again from 0.
+const counted = (total: number, last: number, now: number | null): number =>
+  now === null ? total : now >= last ? total + now - last : total + now;
+
+const track = (known: TrackedPlayer | undefined, p: Player): TrackedPlayer => {
+  if (known === undefined) {
+    const kills = p.kills ?? 0;
+    const deaths = p.deaths ?? 0;
+    return { name: p.name, kills, deaths, lastKills: kills, lastDeaths: deaths };
+  }
+  return {
+    name: p.name,
+    kills: counted(known.kills, known.lastKills, p.kills),
+    deaths: counted(known.deaths, known.lastDeaths, p.deaths),
+    lastKills: p.kills ?? known.lastKills,
+    lastDeaths: p.deaths ?? known.lastDeaths,
+  };
+};
 
 export const topPlayers = (players: Record<string, PlayerStats>, count = TOP_PLAYERS): PlayerStats[] =>
   Object.values(players)
     .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
-    .slice(0, count);
+    .slice(0, count)
+    .map(({ name, kills, deaths }) => ({ name, kills, deaths }));
 
 export const summarise = (match: MatchState): MatchSummary => ({
-  map: match.key.split('#')[0] ?? '',
+  map: keyMap(match.key),
   durationMs: match.lastSeenAt - (match.liveAt ?? match.lastSeenAt),
   peakPlayers: match.peakPlayers,
   factionScores: match.factionScores,
@@ -89,13 +132,15 @@ export const observeMatch = (
 ): { match: MatchState; finished: MatchState | null } => {
   const isNew =
     previous === null ||
-    previous.key !== matchKey(status) ||
-    statsWentBackwards(previous, players) ||
+    mapChanged(previous, status) ||
+    restarted(previous, status, players) ||
     emptied(previous, status, players);
   const base = isNew ? freshMatch(status, now, !(previous === null && live)) : previous;
 
   const match: MatchState = {
     ...base,
+    // Keeps the latest map and slot, but not a reading that left the map out.
+    key: status.map === '' ? base.key : matchKey(status),
     // A match starts when someone is first seen in it, not while the server sits empty on the map.
     startedAt: base.peakPlayers === 0 ? now : base.startedAt,
     lastSeenAt: now,
@@ -104,10 +149,7 @@ export const observeMatch = (
     players: {
       ...base.players,
       ...Object.fromEntries(
-        players.map((p) => {
-          const known = base.players[p.steamId];
-          return [p.steamId, { name: p.name, kills: p.kills ?? known?.kills ?? 0, deaths: p.deaths ?? known?.deaths ?? 0 }];
-        }),
+        players.map((p) => [p.steamId, track(base.players[p.steamId], p)]),
       ),
     },
     factionScores: status.factionScores.length > 0 ? status.factionScores : base.factionScores,

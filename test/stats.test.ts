@@ -41,8 +41,8 @@ const match: MatchState = {
   summarisable: true,
   peakPlayers: 30,
   players: {
-    '76561198000000001': { name: 'Ash', kills: 4, deaths: 1 },
-    '76561198000000002': { name: 'Bo', kills: 9, deaths: 3 },
+    '76561198000000001': { name: 'Ash', kills: 4, deaths: 1, lastKills: 4, lastDeaths: 1 },
+    '76561198000000002': { name: 'Bo', kills: 9, deaths: 3, lastKills: 9, lastDeaths: 3 },
   },
   factionScores: [],
 };

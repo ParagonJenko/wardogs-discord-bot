@@ -111,6 +111,24 @@ describe('buildMatchSummary', () => {
     expect(embed?.description).toBe('**Kharr** won 300 – 250 · 38 min · peak 64 players');
   });
 
+  it('names every faction when there are three', () => {
+    const three = [
+      { name: 'Kharr', score: 67 },
+      { name: 'Valkyra', score: 100 },
+      { name: 'Haldor', score: 41 },
+    ];
+    const [won] = buildMatchSummary({ ...summary, factionScores: three }, 'UK').embeds;
+    const tied = [
+      { name: 'Valkyra', score: 100 },
+      { name: 'Kharr', score: 100 },
+      { name: 'Haldor', score: 41 },
+    ];
+    const [draw] = buildMatchSummary({ ...summary, factionScores: tied }, 'UK').embeds;
+
+    expect(won?.description).toBe('**Valkyra** won 100, Kharr 67, Haldor 41 · 38 min · peak 64 players');
+    expect(draw?.description).toBe('Draw: Valkyra 100, Kharr 100, Haldor 41 · 38 min · peak 64 players');
+  });
+
   it('lists the top players with kills, deaths and K/D, escaping their names', () => {
     const [embed] = buildMatchSummary(summary, 'UK Wardogs #1').embeds;
 

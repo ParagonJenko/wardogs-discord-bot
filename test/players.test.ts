@@ -41,8 +41,8 @@ const match: MatchState = {
   summarisable: true,
   peakPlayers: 30,
   players: {
-    a: { name: 'Ash', kills: 12, deaths: 3 },
-    b: { name: 'Bo', kills: 4, deaths: 9 },
+    a: { name: 'Ash', kills: 12, deaths: 3, lastKills: 12, lastDeaths: 3 },
+    b: { name: 'Bo', kills: 4, deaths: 9, lastKills: 4, lastDeaths: 9 },
   },
   factionScores: [
     { name: 'Valkyra', score: 300 },
