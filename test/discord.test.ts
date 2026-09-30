@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildMatchSummary, buildMessage, buildStatusEmbed, postWebhook } from '../src/discord.ts';
+import {
+  buildLastMatchEmbed,
+  buildMatchSummary,
+  buildMessage,
+  buildPlayersEmbed,
+  buildRotationEmbed,
+  buildStatusEmbed,
+  postWebhook,
+} from '../src/discord.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 
@@ -151,6 +159,97 @@ describe('buildStatusEmbed', () => {
       description: '⚪ **Empty** · **0/98** players',
       fields: [{ name: 'Map', value: 'Ozeti', inline: true }],
     });
+  });
+});
+
+describe('buildPlayersEmbed', () => {
+  const player = (name: string, kills: number | null, deaths: number | null) => ({ steamId: name, name, kills, deaths });
+
+  it('lists players by kills, fewer deaths first on a tie', () => {
+    const embed = buildPlayersEmbed([player('Ash', 3, 1), player('Bo_b', 9, 4), player('Cy', 9, 2), player('Di', 1, 1)]);
+
+    expect(embed.title).toBe('👥 4 players online');
+    expect(embed.description).toBe(
+      '1. Cy: 9 kills, 2 deaths\n2. Bo\\_b: 9 kills, 4 deaths\n3. Ash: 3 kills, 1 death\n4. Di: 1 kill, 1 death',
+    );
+  });
+
+  it('shows a dash for counts the server left out', () => {
+    expect(buildPlayersEmbed([player('Ash', null, null)]).description).toBe('1. Ash: – kills, – deaths');
+  });
+
+  it('lists the top 30 and counts the rest', () => {
+    const players = Array.from({ length: 40 }, (_, i) => player(`P${i}`, i, 0));
+    const lines = buildPlayersEmbed(players).description.split('\n');
+
+    expect(lines).toHaveLength(31);
+    expect(lines[0]).toBe('1. P39: 39 kills, 0 deaths');
+    expect(lines[30]).toBe('…and 10 more');
+  });
+
+  it('says when nobody is on', () => {
+    expect(buildPlayersEmbed([])).toMatchObject({ title: '👥 Nobody is on the server' });
+  });
+});
+
+describe('buildRotationEmbed', () => {
+  const entries = [
+    { map: 'Kavkazi', status: null },
+    { map: 'Europe', status: 'now' },
+    { map: 'NorthAmerica', status: 'next' },
+    { map: 'Kavkazi', status: null },
+  ];
+
+  it('lists the maps from the current one onwards, wrapping round', () => {
+    expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries }).description).toBe(
+      '▶ **Ozeti** (now)\nZestafona (next)\nBakurani\nBakurani',
+    );
+  });
+
+  it('only shows the next map for a random rotation', () => {
+    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries }).description).toBe(
+      '▶ **Ozeti** (now)\nZestafona (next)\n\nRandom order, so only the next map is known.',
+    );
+  });
+
+  it('puts the current map first in a random rotation even when the next one comes earlier in the list', () => {
+    const wrapped = [
+      { map: 'NorthAmerica', status: 'next' },
+      { map: 'Europe', status: 'now' },
+    ];
+
+    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries: wrapped }).description).toBe(
+      '▶ **Ozeti** (now)\nZestafona (next)\n\nRandom order, so only the next map is known.',
+    );
+  });
+
+  it('says when the rotation is off', () => {
+    expect(buildRotationEmbed({ enabled: false, mode: 'ordered', entries }).description).toBe(
+      '▶ **Ozeti** (now)\n\nRotation is off, so this map repeats.',
+    );
+  });
+
+  it('says when there is no rotation', () => {
+    expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries: [] }).description).toBe(
+      'No maps in the rotation.',
+    );
+  });
+});
+
+describe('buildLastMatchEmbed', () => {
+  it('is the match summary with when it ended', () => {
+    const embed = buildLastMatchEmbed({
+      map: 'Bakurani',
+      endedAt: 1_727_690_000_000,
+      durationMs: 38 * 60_000,
+      peakPlayers: 64,
+      factionScores: [],
+      top: [{ name: 'Cy', kills: 12, deaths: 3 }],
+    });
+
+    expect(embed.title).toBe('🏁 Match over on Bakurani');
+    expect(embed.description).toBe('38 min · peak 64 players · ended <t:1727690000:R>');
+    expect(embed.fields?.[0]?.value).toBe('1. Cy: 12 kills, 3 deaths (4.00 K/D)');
   });
 });
 

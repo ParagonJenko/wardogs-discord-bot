@@ -1,4 +1,4 @@
-import type { HttpGet, HttpResponse } from './rcon.ts';
+import type { HttpClient, HttpResponse } from './rcon.ts';
 
 // Cloudflare Workers' fetch() cannot reach a bare IP address or a custom port such as 7776,
 // which is how game hosts hand out RCON. Raw TCP sockets can, so this speaks just enough HTTP/1.1.
@@ -75,18 +75,20 @@ const withTimeout = <T>(work: Promise<T>, timeoutMs: number): Promise<T> =>
     work.then(resolve, reject).finally(() => clearTimeout(timer));
   });
 
-export const socketGet =
-  (connect: Connect, timeoutMs = 8_000): HttpGet =>
-  async (url, headers) => {
+export const socketHttp =
+  (connect: Connect, timeoutMs = 8_000): HttpClient =>
+  async (url, headers, body) => {
     const secure = url.protocol === 'https:';
     const socket = connect(
       { hostname: url.hostname.replace(/^\[|\]$/g, ''), port: Number(url.port) || (secure ? 443 : 80) },
       { secureTransport: secure ? 'on' : 'off', allowHalfOpen: false },
     );
+    const payload = body === undefined ? undefined : encoder.encode(body);
     const request = [
-      `GET ${url.pathname}${url.search} HTTP/1.1`,
+      `${payload ? 'POST' : 'GET'} ${url.pathname}${url.search} HTTP/1.1`,
       `Host: ${url.host}`,
       ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+      ...(payload ? ['Content-Type: application/json', `Content-Length: ${payload.length}`] : []),
       'Connection: close',
       '',
       '',
@@ -95,6 +97,7 @@ export const socketGet =
     const exchange = async (): Promise<HttpResponse> => {
       const writer = socket.writable.getWriter();
       await writer.write(encoder.encode(request));
+      if (payload) await writer.write(payload);
       writer.releaseLock();
       // "Connection: close" makes the server close the socket after the response, so read to the end.
       return parseResponse(new Uint8Array(await new Response(socket.readable).arrayBuffer()));

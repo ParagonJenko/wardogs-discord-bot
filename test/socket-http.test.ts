@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { socketGet, type Connect } from '../src/socket-http.ts';
+import { socketHttp, type Connect } from '../src/socket-http.ts';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -34,11 +34,11 @@ const fakeServer = (chunks: string[] | 'hang') => {
 
 const url = new URL('http://203.0.113.10:7776/v1/status');
 
-describe('socketGet', () => {
+describe('socketHttp', () => {
   it('connects to the host and port and sends a GET with the given headers', async () => {
     const server = fakeServer(['HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}']);
 
-    await socketGet(server.connect)(url, { Authorization: 'Bearer secret' });
+    await socketHttp(server.connect)(url, { Authorization: 'Bearer secret' });
 
     expect(server.calls).toEqual([{ address: { hostname: '203.0.113.10', port: 7776 }, secureTransport: 'off' }]);
     const request = server.written.join('');
@@ -53,19 +53,32 @@ describe('socketGet', () => {
     const body = JSON.stringify({ players: { current: 3, max: 98 } });
     const server = fakeServer([`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Len`, `gth: ${body.length}\r\n\r\n${body.slice(0, 5)}`, body.slice(5)]);
 
-    await expect(socketGet(server.connect)(url, {})).resolves.toEqual({ status: 200, body });
+    await expect(socketHttp(server.connect)(url, {})).resolves.toEqual({ status: 200, body });
   });
 
   it('decodes a chunked response', async () => {
     const server = fakeServer(['HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{"er\r\n', 'a\r\nror":"no"}\r\n0\r\n\r\n']);
 
-    await expect(socketGet(server.connect)(url, {})).resolves.toEqual({ status: 401, body: '{"error":"no"}' });
+    await expect(socketHttp(server.connect)(url, {})).resolves.toEqual({ status: 401, body: '{"error":"no"}' });
+  });
+
+  it('sends a POST with a JSON body and its length in bytes when given a body', async () => {
+    const server = fakeServer(['HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}']);
+    const body = JSON.stringify({ message: 'Café night: all in!' });
+
+    await socketHttp(server.connect)(new URL('http://203.0.113.10:7776/v1/broadcast'), {}, body);
+
+    const request = server.written.join('');
+    expect(request).toMatch(/^POST \/v1\/broadcast HTTP\/1\.1\r\n/);
+    expect(request).toContain('Content-Type: application/json\r\n');
+    expect(request).toContain(`Content-Length: ${new TextEncoder().encode(body).length}\r\n`);
+    expect(request.endsWith(`\r\n\r\n${body}`)).toBe(true);
   });
 
   it('uses TLS and port 443 for https URLs', async () => {
     const server = fakeServer(['HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n']);
 
-    await socketGet(server.connect)(new URL('https://rcon.example.com/v1/status'), {});
+    await socketHttp(server.connect)(new URL('https://rcon.example.com/v1/status'), {});
 
     expect(server.calls).toEqual([{ address: { hostname: 'rcon.example.com', port: 443 }, secureTransport: 'on' }]);
   });
@@ -73,13 +86,13 @@ describe('socketGet', () => {
   it('gives up and closes the socket when the server never answers', async () => {
     const server = fakeServer('hang');
 
-    await expect(socketGet(server.connect, 20)(url, {})).rejects.toThrow(/timed out/);
+    await expect(socketHttp(server.connect, 20)(url, {})).rejects.toThrow(/timed out/);
     expect(server.isClosed()).toBe(true);
   });
 
   it('rejects a response that is not HTTP', async () => {
     const server = fakeServer(['SSH-2.0-OpenSSH_9.6\r\n']);
 
-    await expect(socketGet(server.connect)(url, {})).rejects.toThrow(/HTTP/);
+    await expect(socketHttp(server.connect)(url, {})).rejects.toThrow(/HTTP/);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fetchPlayers, fetchStatus, type HttpGet } from '../src/rcon.ts';
+import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from '../src/rcon.ts';
 
 const statusBody = {
   serverName: 'UK Wardogs #1',
@@ -16,9 +16,9 @@ const statusBody = {
 };
 
 const respondWith = (status: number, body: unknown) => {
-  const requests: { url: string; headers: Record<string, string> }[] = [];
-  const get: HttpGet = async (url, headers) => {
-    requests.push({ url: url.href, headers });
+  const requests: { url: string; headers: Record<string, string>; body?: string }[] = [];
+  const get: HttpClient = async (url, headers, sent) => {
+    requests.push({ url: url.href, headers, ...(sent === undefined ? {} : { body: sent }) });
     return { status, body: typeof body === 'string' ? body : JSON.stringify(body) };
   };
   return { get, requests };
@@ -109,5 +109,58 @@ describe('fetchPlayers', () => {
     await expect(fetchPlayers('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual([
       { steamId: '1', name: 'Ash', kills: null, deaths: null },
     ]);
+  });
+});
+
+describe('fetchRotation', () => {
+  it('returns the rotation entries in order with which one is playing now', async () => {
+    const { get, requests } = respondWith(200, {
+      enabled: true,
+      mode: 'ordered',
+      entries: [
+        { index: 0, map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01'], lighting: 'DayClear', status: null, denied: false },
+        { index: 1, map: 'Europe', experiences: ['Europe_KOTH_01'], lighting: 'DayEarlyFog', status: 'now', denied: false },
+        { index: 2, map: 'NorthAmerica', experiences: [], lighting: 'DayLateClear', status: 'next', denied: false },
+      ],
+    });
+
+    await expect(fetchRotation('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual({
+      enabled: true,
+      mode: 'ordered',
+      entries: [
+        { map: 'Kavkazi', status: null },
+        { map: 'Europe', status: 'now' },
+        { map: 'NorthAmerica', status: 'next' },
+      ],
+    });
+    expect(requests[0]?.url).toBe('http://203.0.113.10:7776/v1/rotation');
+  });
+});
+
+describe('sendBroadcast', () => {
+  it('posts the message to /v1/broadcast', async () => {
+    const { get, requests } = respondWith(200, { message: 'Broadcast sent.' });
+
+    await sendBroadcast('http://203.0.113.10:7776', 'secret', 'Seeding now, jump in!', get);
+
+    expect(requests).toEqual([
+      {
+        url: 'http://203.0.113.10:7776/v1/broadcast',
+        headers: expect.objectContaining({ Authorization: 'Bearer secret' }),
+        body: JSON.stringify({ message: 'Seeding now, jump in!' }),
+      },
+    ]);
+  });
+
+  it('accepts an empty success reply', async () => {
+    const { get } = respondWith(204, '');
+
+    await expect(sendBroadcast('http://203.0.113.10:7776', 'secret', 'hi', get)).resolves.toBeUndefined();
+  });
+
+  it('throws when the server refuses it', async () => {
+    const { get } = respondWith(400, { error: { code: 'bad_request', message: 'Message too long' } });
+
+    await expect(sendBroadcast('http://203.0.113.10:7776', 'secret', 'x', get)).rejects.toThrow(/400/);
   });
 });

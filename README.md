@@ -14,8 +14,8 @@ It also posts:
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
-And it answers **`/serverstatus`** in Discord with the current population, state, map and score
-(Cloudflare only; see [Slash command](#slash-command-serverstatus)).
+And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
+`/broadcast` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the current and recent matches, and Discord member counts
@@ -69,9 +69,17 @@ To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` agai
 Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
 socket to the RCON listener and sends the HTTP request itself.
 
-## Slash command: /serverstatus
+## Slash commands
 
-`/serverstatus` needs a Discord application, because webhooks cannot receive commands. Discord sends each
+| Command         | Who                  | What                                                               |
+| --------------- | -------------------- | ------------------------------------------------------------------ |
+| `/serverstatus` | Everyone             | Population, state (empty / seeding / live), map and score          |
+| `/players`      | Everyone             | Who is online, with kills and deaths (top 30)                      |
+| `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
+| `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
+| `/broadcast`    | Administrators only  | Sends a message (up to 200 characters) to everyone in game         |
+
+Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → New Application.
@@ -101,10 +109,22 @@ command to the Worker's URL; nothing has to stay connected.
 6. Add the app to your Discord server by opening this link:
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
-`/serverstatus` replies publicly in the channel. If the game server cannot be reached, it says so, and the
-reason is in the Worker logs.
+Commands reply publicly in the channel, except `/broadcast`, whose reply only the sender sees. If the game
+server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
+commands, run `npm run register` again.
 
-The Node/Docker version does not support `/serverstatus`, because Discord needs a public HTTPS URL to send
+`/broadcast` uses the RCON password's write access, so it is locked down:
+
+- It only works in your own Discord server. Set `DISCORD_GUILD_ID` in the `vars` block of `wrangler.jsonc`
+  (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
+  set, `/broadcast` is refused everywhere. Commands are registered globally, so without this an admin in any
+  other server that added the app could broadcast into your game.
+- It is hidden from members without Discord's **Administrator** permission, and the Worker checks that
+  permission again on every use, so a server owner granting it to other roles still does not let them use it.
+- Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
+  Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
+
+The Node/Docker version does not support slash commands, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.
 
 ## Website stats
@@ -179,7 +199,8 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 ## Security
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). The
-bot only ever calls `GET /v1/status` and `GET /v1/players`, but:
+bot reads `GET /v1/status`, `/v1/players` and `/v1/rotation`, and only writes through `/broadcast`
+(`POST /v1/broadcast`), but:
 
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if

@@ -40,25 +40,46 @@ export type Player = { steamId: string; name: string; kills: number | null; deat
 
 export type Snapshot = { status: ServerStatus; players: Player[] };
 
-export type HttpResponse = { status: number; body: string };
-export type HttpGet = (url: URL, headers: Record<string, string>) => Promise<HttpResponse>;
+const RotationSchema = z.object({
+  enabled: z.boolean().nullish(),
+  mode: z.string().nullish(),
+  entries: z.array(z.object({ map: z.string(), status: z.string().nullish() })),
+});
 
-const rconGet = async (rconUrl: string, password: string, path: string, get: HttpGet): Promise<unknown> => {
-  const response = await get(new URL(path, rconUrl), {
-    Authorization: `Bearer ${password}`,
-    Accept: 'application/json',
-  });
+export type Rotation = {
+  enabled: boolean;
+  mode: string;
+  entries: { map: string; status: string | null }[];
+};
+
+export type HttpResponse = { status: number; body: string };
+// Sends a GET, or a POST with a JSON body when `body` is given.
+export type HttpClient = (url: URL, headers: Record<string, string>, body?: string) => Promise<HttpResponse>;
+
+const rconRequest = async (
+  rconUrl: string,
+  password: string,
+  path: string,
+  http: HttpClient,
+  body?: unknown,
+): Promise<unknown> => {
+  const response = await http(
+    new URL(path, rconUrl),
+    { Authorization: `Bearer ${password}`, Accept: 'application/json' },
+    body === undefined ? undefined : JSON.stringify(body),
+  );
   if (response.status === 401 || response.status === 403) {
     throw new Error(`RCON rejected the password (${response.status})`);
   }
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`RCON request failed: ${path} ${response.status}`);
   }
-  return JSON.parse(response.body);
+  // A write may succeed with an empty body (e.g. 204); reads still fail their schema check on null.
+  return response.body.trim() === '' ? null : JSON.parse(response.body);
 };
 
-export const fetchStatus = async (rconUrl: string, password: string, get: HttpGet): Promise<ServerStatus> => {
-  const status = StatusSchema.parse(await rconGet(rconUrl, password, '/v1/status', get));
+export const fetchStatus = async (rconUrl: string, password: string, get: HttpClient): Promise<ServerStatus> => {
+  const status = StatusSchema.parse(await rconRequest(rconUrl, password, '/v1/status', get));
   return {
     name: status.serverName,
     players: status.players.current,
@@ -69,8 +90,8 @@ export const fetchStatus = async (rconUrl: string, password: string, get: HttpGe
   };
 };
 
-export const fetchPlayers = async (rconUrl: string, password: string, get: HttpGet): Promise<Player[]> => {
-  const { players } = PlayersSchema.parse(await rconGet(rconUrl, password, '/v1/players', get));
+export const fetchPlayers = async (rconUrl: string, password: string, get: HttpClient): Promise<Player[]> => {
+  const { players } = PlayersSchema.parse(await rconRequest(rconUrl, password, '/v1/players', get));
   return players.map((player) => ({
     steamId: player.steamId,
     name: player.name,
@@ -79,15 +100,33 @@ export const fetchPlayers = async (rconUrl: string, password: string, get: HttpG
   }));
 };
 
-export const fetchSnapshot = async (rconUrl: string, password: string, get: HttpGet): Promise<Snapshot> => ({
+export const fetchSnapshot = async (rconUrl: string, password: string, get: HttpClient): Promise<Snapshot> => ({
   status: await fetchStatus(rconUrl, password, get),
   players: await fetchPlayers(rconUrl, password, get),
 });
 
+export const fetchRotation = async (rconUrl: string, password: string, http: HttpClient): Promise<Rotation> => {
+  const rotation = RotationSchema.parse(await rconRequest(rconUrl, password, '/v1/rotation', http));
+  return {
+    enabled: rotation.enabled ?? true,
+    mode: rotation.mode ?? 'ordered',
+    entries: rotation.entries.map((entry) => ({ map: entry.map, status: entry.status ?? null })),
+  };
+};
+
+export const sendBroadcast = async (rconUrl: string, password: string, message: string, http: HttpClient) => {
+  await rconRequest(rconUrl, password, '/v1/broadcast', http, { message });
+};
+
 // For Node, where fetch can reach an IP address and any port.
-export const fetchGet =
-  (timeoutMs = 8_000): HttpGet =>
-  async (url, headers) => {
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+export const fetchHttp =
+  (timeoutMs = 8_000): HttpClient =>
+  async (url, headers, body) => {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      ...(body === undefined
+        ? { headers }
+        : { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body }),
+    });
     return { status: response.status, body: await response.text() };
   };
