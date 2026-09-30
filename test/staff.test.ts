@@ -397,11 +397,11 @@ describe('suggestStaff', () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'switchteam', options: { player: BO, team: '' }, focused: 'team' })).resolves.toEqual([
-      { name: 'Valkyra · 1 player · 40 points', value: 'Valkyra' },
+      { name: '🐻 Valkyra · 1 player · 40 points', value: 'Valkyra' },
     ]);
     await expect(suggest({ name: 'switchteam', options: { team: 'k' }, focused: 'team' })).resolves.toEqual([
-      { name: 'Valkyra · 1 player · 40 points', value: 'Valkyra' },
-      { name: 'Kharr · 2 players · 35 points', value: 'Kharr' },
+      { name: '🐻 Valkyra · 1 player · 40 points', value: 'Valkyra' },
+      { name: '🔴 Kharr · 2 players · 35 points', value: 'Kharr' },
     ]);
   });
 

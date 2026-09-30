@@ -135,7 +135,7 @@ describe('buildMatchSummary', () => {
       footer: { text: 'UK Wardogs #1' },
     });
     expect(embedOf(message)?.fields?.slice(0, 3)).toEqual([
-      { name: 'Score', value: '🔴 **Kharr 300**\n🔵 Valkyra 250', inline: true },
+      { name: 'Score', value: '🔴 **Kharr 300**\n🐻 Valkyra 250', inline: true },
       { name: 'Length', value: '38 min', inline: true },
       { name: 'Peak', value: '64 players', inline: true },
     ]);
@@ -159,7 +159,7 @@ describe('buildMatchSummary', () => {
     const message = buildMatchSummary({ ...summary, factionScores: three }, 'UK');
 
     expect(embedOf(message)).toMatchObject({ description: '🤝 **Draw**', color: 0x5865f2 });
-    expect(field(message, 'Score')).toBe('**Kharr 100**\nValkyra 100\nHaldor 41');
+    expect(field(message, 'Score')).toBe('**Kharr 100**\n🐻 Valkyra 100\nHaldor 41');
   });
 
   it('lists the top players with medals, kills, deaths and K/D, escaping their names', () => {
@@ -227,7 +227,7 @@ describe('buildStatusEmbed', () => {
       fields: [
         { name: 'Players', value: '🟩🟩⬛⬛⬛⬛⬛⬛⬛⬛ **24**/98' },
         { name: 'Map', value: 'Ozeti', inline: true },
-        { name: 'Score', value: '🟠 **Kharr 51**\n🔵 Valkyra 43\nHaldor 12', inline: true },
+        { name: 'Score', value: '🟠 **Kharr 51**\n🐻 Valkyra 43\nHaldor 12', inline: true },
       ],
     });
   });
@@ -275,6 +275,48 @@ describe('buildPlayersEmbed', () => {
 
   it('says when nobody is on', () => {
     expect(buildPlayersEmbed([])).toMatchObject({ title: '👥 Nobody is on the server' });
+  });
+});
+
+describe('faction emojis', () => {
+  it('shows each player with their team, and how many are on each team', () => {
+    const embed = buildPlayersEmbed([
+      { steamId: '1', name: 'Ash', kills: 5, deaths: 1, faction: 'Manticore' },
+      { steamId: '2', name: 'Bo', kills: 3, deaths: 2, faction: 'Lonestar' },
+      { steamId: '3', name: 'Cy', kills: 1, deaths: 0, faction: 'Manticore' },
+      { steamId: '4', name: 'Di', kills: 0, deaths: 0 },
+    ]);
+
+    expect(embed.description?.split('\n')[0]).toBe('🥇 🦂 **Ash** · 5 kills · 1 death');
+    expect(embed.description?.split('\n')[3]).toBe('`#4` **Di** · 0 kills · 0 deaths');
+    expect(embed.fields).toEqual([
+      { name: '🦂 Manticore', value: '2 players', inline: true },
+      { name: '🤠 Lonestar', value: '1 player', inline: true },
+    ]);
+  });
+
+  it('gives Lonestar, Valkyra and Manticore their own emoji in the score and the result', () => {
+    const status = {
+      name: 'gaminginit #1',
+      players: 60,
+      maxPlayers: 98,
+      map: 'Europe',
+      rotationIndex: 0,
+      factionScores: [
+        { name: 'Lonestar', score: 20, colorHex: '#3366ff' },
+        { name: 'Valkyra', score: 52, colorHex: '#ff3333' },
+        { name: 'MANTICORE', score: 40, colorHex: '#33ff33' },
+      ],
+    };
+    const summary = buildMatchSummary(
+      { map: 'Europe', durationMs: 60_000, peakPlayers: 60, factionScores: status.factionScores, top: [] },
+      'gaminginit #1',
+    );
+
+    expect(buildStatusEmbed(status, { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 }).fields?.find((f) => f.name === 'Score')?.value).toBe(
+      '🐻 **Valkyra 52**\n🦂 MANTICORE 40\n🤠 Lonestar 20',
+    );
+    expect(embedOf(summary)?.description).toBe('🏆 🐻 **Valkyra** won');
   });
 });
 
@@ -338,7 +380,7 @@ describe('buildLastMatchEmbed', () => {
 
     expect(embed).toMatchObject({
       title: '🏁 Last match · Bakurani',
-      description: '🏆 **Valkyra** won · Ended <t:1727690000:R>',
+      description: '🏆 🐻 **Valkyra** won · Ended <t:1727690000:R>',
       timestamp: '2024-09-30T09:53:20.000Z',
     });
     expect(embed.fields?.at(-1)).toEqual({ name: 'Top players', value: '🥇 **Cy** · 12 kills · 3 deaths · 4.00 K/D' });

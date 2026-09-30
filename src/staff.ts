@@ -1,5 +1,5 @@
 import type { Config } from './config.ts';
-import { buildPlayerEmbed, mapName, playerName } from './discord.ts';
+import { buildPlayerEmbed, factionBadge, mapName, playerName } from './discord.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
 import { modesFor, planSetup } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
@@ -195,7 +195,10 @@ export const suggestStaff =
           .filter((f) => f.name !== current && f.name.toLowerCase().includes(lower))
           .map((f) => {
             const count = live.filter((p) => p.faction === f.name).length;
-            return { name: fit(`${f.name} · ${count} player${count === 1 ? '' : 's'} · ${f.score} points`), value: f.name };
+            return {
+              name: fit(`${factionBadge(f.name, f.colorHex)}${f.name} · ${count} player${count === 1 ? '' : 's'} · ${f.score} points`),
+              value: f.name,
+            };
           });
       }
       const lower = typed.trim().toLowerCase();
@@ -301,7 +304,7 @@ export const runStaffCommand =
         name: player.name,
         detail: current ? `${current} to ${team}` : `to ${team}`,
       });
-      return { content: `🔀 Moved ${who(player)} to **${team}**. They respawn on the new side.` };
+      return { content: `🔀 Moved ${who(player)} to ${factionBadge(team)}**${team}**. They respawn on the new side.` };
     }
 
     if (name === 'ban') {
