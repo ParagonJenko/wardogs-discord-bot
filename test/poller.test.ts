@@ -538,10 +538,12 @@ describe('in-game messages', () => {
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
       'Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com',
-      'Halfway there! Check the leaderboard and join our Discord at gaminginit.com',
+      'Halfway there! Valkyra leads Kharr 52 to 30. Check the leaderboard and join our Discord at gaminginit.com',
       'Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     ]);
-    expect(log.info).toHaveBeenCalledWith('Sent in game: Halfway there! Check the leaderboard and join our Discord at gaminginit.com');
+    expect(log.info).toHaveBeenCalledWith(
+      'Sent in game: Halfway there! Valkyra leads Kharr 52 to 30. Check the leaderboard and join our Discord at gaminginit.com',
+    );
   });
 
   it('logs a failed message and does not send it again', async () => {

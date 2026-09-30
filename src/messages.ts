@@ -3,8 +3,8 @@ import type { VipRule } from './config.ts';
 import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
-// seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning, and when each team is
-// close to winning. Each goes out once per match.
+// seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (saying who is ahead), and
+// when each team is close to winning. Each goes out once per match.
 
 export type MessageRule = { siteHost: string; scoreToWin: number };
 
@@ -25,6 +25,21 @@ const days = (count: number): string => `${count} day${count === 1 ? '' : 's'}`;
 
 type Milestone = { key: string; text: string };
 
+type Score = MatchState['factionScores'][number];
+
+// Who is winning at halfway: "Valkyra leads Kharr 52 to 40.", "Valkyra leads on 52, Kharr 40, Haldor 20." or, when
+// the top teams are level, "It's level: Valkyra 50, Kharr 50."
+const standing = (scores: Score[]): string => {
+  const [first, ...others] = [...scores].sort((a, b) => b.score - a.score);
+  const [second] = others;
+  const list = (teams: Score[]): string => teams.map((s) => `${s.name} ${s.score}`).join(', ');
+  if (!first) return '';
+  if (!second) return ` ${first.name} is on ${first.score}.`;
+  if (first.score === second.score) return ` It's level: ${list([first, ...others])}.`;
+  if (others.length === 1) return ` ${first.name} leads ${second.name} ${first.score} to ${second.score}.`;
+  return ` ${first.name} leads on ${first.score}, ${list(others)}.`;
+};
+
 // Everything this match has reached so far, in the order it happens.
 export const milestones = (match: MatchState, now: number, rule: MessageRule, vip: VipRule | null): Milestone[] => {
   const { siteHost, scoreToWin } = rule;
@@ -39,9 +54,11 @@ export const milestones = (match: MatchState, now: number, rule: MessageRule, vi
       ? [
           {
             key: 'halfway',
-            text: vip
-              ? `Halfway there! Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}`
-              : `Halfway there! Check the leaderboard and join our Discord at ${siteHost}`,
+            text:
+              `Halfway there!${standing(match.factionScores)} ` +
+              (vip
+                ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}`
+                : `Check the leaderboard and join our Discord at ${siteHost}`),
           },
         ]
       : []),

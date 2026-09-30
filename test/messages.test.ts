@@ -43,13 +43,34 @@ describe('milestones', () => {
     expect(milestones(match({ liveAt: null }), 30 * MINUTE, rule, null)).toEqual([]);
   });
 
-  it('reaches halfway when a team has half the winning score, mentioning seeding when VIP is on', () => {
+  it('reaches halfway when a team has half the winning score, saying who is ahead, and mentions seeding when VIP is on', () => {
+    const two = (valkyra: number, kharr: number) => ({
+      factionScores: [
+        { name: 'Valkyra', score: valkyra },
+        { name: 'Kharr', score: kharr },
+      ],
+    });
+
     expect(milestones(match(scores(49, 20)), 0, rule, null)).toEqual([]);
-    expect(milestones(match(scores(50, 20)), 0, rule, null)).toEqual([
-      { key: 'halfway', text: 'Halfway there! Check the leaderboard and join our Discord at gaminginit.com' },
+    expect(milestones(match(two(50, 20)), 0, rule, null)).toEqual([
+      {
+        key: 'halfway',
+        text: 'Halfway there! Valkyra leads Kharr 50 to 20. Check the leaderboard and join our Discord at gaminginit.com',
+      },
     ]);
-    expect(milestones(match(scores(20, 50)), 0, rule, vip)[0]?.text).toBe(
-      'Halfway there! Seed on 3 days in a week and get a reserved slot. How at gaminginit.com',
+    expect(milestones(match(two(20, 50)), 0, rule, vip)[0]?.text).toBe(
+      'Halfway there! Kharr leads Valkyra 50 to 20. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com',
+    );
+  });
+
+  it('names every team at halfway when there are three, and says when the leaders are level', () => {
+    const text = (s: ReturnType<typeof scores>) => milestones(match(s), 0, rule, null)[0]?.text;
+
+    expect(text(scores(30, 50, 12))).toBe(
+      'Halfway there! Kharr leads on 50, Valkyra 30, Haldor 12. Check the leaderboard and join our Discord at gaminginit.com',
+    );
+    expect(text(scores(50, 50, 12))).toBe(
+      "Halfway there! It's level: Valkyra 50, Kharr 50, Haldor 12. Check the leaderboard and join our Discord at gaminginit.com",
     );
   });
 
