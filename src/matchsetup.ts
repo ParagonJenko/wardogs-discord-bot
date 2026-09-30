@@ -26,10 +26,11 @@ export type PlannedSetup = { setup: MatchSetup; labels: string[] };
 
 const nameOf = (id: string, items: CatalogItem[] | null): string => items?.find((i) => i.id === id)?.name ?? id;
 
-// The id for what staff typed or picked: an id, or a name, ignoring case.
+// The id for what staff typed or picked: an id, or a name, ignoring case. A list that could not be read (null) lets
+// it through as typed; a list the server gave, even an empty one, is the only thing allowed.
 const pick = (typed: string, items: CatalogItem[] | null): string | null => {
   const lower = typed.trim().toLowerCase();
-  if (items === null || items.length === 0) return typed.trim();
+  if (items === null) return typed.trim();
   return items.find((i) => i.id.toLowerCase() === lower || i.name.toLowerCase() === lower)?.id ?? null;
 };
 
@@ -44,10 +45,10 @@ export const planSetup = (
 ): PlannedSetup | { problem: string } => {
   const entry = catalog.rotation?.entries.find((e) => e.map === map);
   const rotationMode = entry?.experiences?.find((id) => !isModifier(id));
-  const modes = modesFor(catalog);
+  const modes = catalog.mapExperiences === null ? null : modesFor(catalog);
 
   const typedMode = options['mode']?.trim();
-  const mode = typedMode ? pick(typedMode, modes) : (rotationMode ?? modes[0]?.id);
+  const mode = typedMode ? pick(typedMode, modes) : (rotationMode ?? modes?.[0]?.id);
   if (mode === null) return { problem: `No game mode "${typedMode}" on this map. Pick one from the list.` };
 
   // Each modifier: on or off when staff said so, otherwise as the rotation has it.

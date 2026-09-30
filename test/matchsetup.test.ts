@@ -74,6 +74,19 @@ describe('planSetup', () => {
     });
   });
 
+  it('refuses what staff typed when the server lists nothing for it, unlike when it could not be read', () => {
+    const empty: SetupCatalog = { ...catalog, rotation: null, mapExperiences: [], lightings: [], zones: [] };
+
+    expect(planSetup('Kavkazi', { zones: 'Circle' }, empty)).toEqual({
+      problem: 'No zone layout "Circle" on this map. Pick one from the list.',
+    });
+    expect(planSetup('Kavkazi', { mode: 'Kavkazi_KOTH_01' }, empty)).toEqual({
+      problem: 'No game mode "Kavkazi_KOTH_01" on this map. Pick one from the list.',
+    });
+    expect(planSetup('Kavkazi', { lighting: 'DayClear' }, empty)).toEqual({ problem: 'No lighting "DayClear". Pick one from the list.' });
+    expect(planSetup('Kavkazi', {}, empty)).toEqual({ setup: {}, labels: [] });
+  });
+
   it('sends what staff typed as it is when the catalogue could not be read', () => {
     const unknown: SetupCatalog = { rotation: null, mapExperiences: null, experiences: null, lightings: null, zones: null };
 
