@@ -376,6 +376,9 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 - An empty server that jumps straight to 20+ gets a live alert only.
 - Each alert type has a cooldown (`ALERT_COOLDOWN_MINUTES`, default 10). Without it, a server sitting at
   19–20 players would post live / low-pop every minute.
+- A drop only counts once it has lasted `DROP_GRACE_MINUTES` (default 5). If a live server crashes or restarts and
+  fills again within that time, there is no low-pop alert, no seeding alert and no live alert, and nobody gets
+  seeding credit for rejoining. A drop that lasts longer gets its low-pop alert then. `0` alerts straight away.
 - `LOW_POP_THRESHOLD` can be set lower than `LIVE_THRESHOLD` (for example live at 40, warn below 30) to
   give more slack before the warning.
 - Seeding time is counted once per check (every minute) for everyone online while the server is seeding.

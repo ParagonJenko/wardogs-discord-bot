@@ -46,6 +46,8 @@ const EnvSchema = z
     LOW_POP_THRESHOLD: count(20),
     POLL_INTERVAL_SECONDS: z.coerce.number().int().min(10).default(60),
     ALERT_COOLDOWN_MINUTES: z.coerce.number().int().min(0).default(10),
+    // A drop in players only counts (low-pop alert, seeding re-armed) once it has lasted this long.
+    DROP_GRACE_MINUTES: z.coerce.number().int().min(0).default(5),
     // Automatic VIP: days with a successful seed needed in a week. 0 turns it off.
     VIP_SEED_DAYS: z.coerce.number().int().min(0).max(7).default(0),
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
@@ -110,6 +112,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       live: e.LIVE_THRESHOLD,
       lowPop: e.LOW_POP_THRESHOLD,
       cooldownMs: e.ALERT_COOLDOWN_MINUTES * 60_000,
+      graceMs: e.DROP_GRACE_MINUTES * 60_000,
     },
     seedMinutes: e.VIP_SEED_MINUTES,
     vip:

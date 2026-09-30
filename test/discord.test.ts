@@ -205,7 +205,7 @@ describe('buildMatchSummary', () => {
 });
 
 describe('buildStatusEmbed', () => {
-  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 };
+  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 };
   const status = {
     name: 'UK Wardogs #1',
     players: 24,
@@ -313,7 +313,7 @@ describe('faction emojis', () => {
       'gaminginit #1',
     );
 
-    expect(buildStatusEmbed(status, { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 }).fields?.find((f) => f.name === 'Score')?.value).toBe(
+    expect(buildStatusEmbed(status, { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 }).fields?.find((f) => f.name === 'Score')?.value).toBe(
       '🐻 **Valkyra 52**\n🦂 MANTICORE 40\n🤠 Lonestar 20',
     );
     expect(embedOf(summary)?.description).toBe('🏆 🐻 **Valkyra** won');
