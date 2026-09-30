@@ -3,7 +3,7 @@ import type { Embed } from './discord.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
-const COMMAND_NAMES = ['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast'] as const;
+const COMMAND_NAMES = ['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders'] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
 const isCommandName = (name: string | undefined): name is CommandName =>
@@ -12,9 +12,12 @@ const isCommandName = (name: string | undefined): name is CommandName =>
 // Discord permission bit for "Administrator".
 const ADMINISTRATOR = 1n << 3n;
 
-// Admin commands change things in game, so they are hidden from, and refused to, anyone who is not an Administrator.
-// Their replies are only shown to the person who ran them.
-const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast'];
+// Admin commands change things in game or show Steam IDs, so they are hidden from, and refused to, anyone who is not
+// an Administrator. Their replies are only shown to the person who ran them.
+const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders'];
+
+export const SEEDERS_DEFAULT_DAYS = 7;
+export const SEEDERS_MAX_DAYS = 90;
 
 export const COMMANDS = [
   { name: 'serverstatus', description: 'Show the WARDOGS server status', type: 1 },
@@ -29,6 +32,23 @@ export const COMMANDS = [
     contexts: [0],
     options: [
       { type: 3, name: 'message', description: 'What to show in game (up to 200 characters)', required: true, max_length: 200 },
+    ],
+  },
+  {
+    name: 'seeders',
+    description: 'Who seeded the most, with Steam IDs for VIP (Administrators only)',
+    type: 1,
+    default_member_permissions: String(ADMINISTRATOR),
+    contexts: [0],
+    options: [
+      {
+        type: 4,
+        name: 'days',
+        description: `How many days to count, including today (default ${SEEDERS_DEFAULT_DAYS})`,
+        required: false,
+        min_value: 1,
+        max_value: SEEDERS_MAX_DAYS,
+      },
     ],
   },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
@@ -149,9 +169,10 @@ export const handleInteraction = async (
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
         // A broadcast that timed out may still have reached the game, so don't invite a blind retry.
-        const content = admin
-          ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
-          : "Couldn't get that right now. Try again in a minute.";
+        const content =
+          name === 'broadcast'
+            ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
+            : "Couldn't get that right now. Try again in a minute.";
         return { content, allowed_mentions: { parse: [] } };
       },
     );

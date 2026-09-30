@@ -50,7 +50,9 @@ const match: MatchState = {
 const observation = (at: number, players: number, phase: Observation['phase'] = 'live'): Observation => ({
   at,
   status: status(players),
+  players: [],
   phase,
+  seeding: phase === 'seeding',
   match,
 });
 
@@ -179,13 +181,17 @@ describe('parseStats', () => {
 });
 
 describe('publicStats', () => {
-  it('adds the time and the thresholds the site draws on its chart', () => {
+  it('adds the time, the thresholds the site draws on its chart, the leaderboard and what seeding earns', () => {
     const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 };
+    const leaderboard = { days: 30, kdMinMatches: 3, kills: [], kd: [], playtime: [], seeding: [] };
+    const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
 
-    expect(publicStats(emptyStats(), rules, MIDNIGHT)).toEqual({
+    expect(publicStats(emptyStats(), rules, MIDNIGHT, { leaderboard, vip })).toEqual({
       ...emptyStats(),
       generatedAt: MIDNIGHT,
       thresholds: { seeding: 1, live: 20 },
+      leaderboard,
+      vip,
     });
   });
 });

@@ -77,18 +77,19 @@ const withTimeout = <T>(work: Promise<T>, timeoutMs: number): Promise<T> =>
 
 export const socketHttp =
   (connect: Connect, timeoutMs = 8_000): HttpClient =>
-  async (url, headers, body) => {
+  async (url, headers, body, method) => {
     const secure = url.protocol === 'https:';
     const socket = connect(
       { hostname: url.hostname.replace(/^\[|\]$/g, ''), port: Number(url.port) || (secure ? 443 : 80) },
       { secureTransport: secure ? 'on' : 'off', allowHalfOpen: false },
     );
     const payload = body === undefined ? undefined : encoder.encode(body);
+    const typed = Object.keys(headers).some((name) => name.toLowerCase() === 'content-type');
     const request = [
-      `${payload ? 'POST' : 'GET'} ${url.pathname}${url.search} HTTP/1.1`,
+      `${payload ? (method ?? 'POST') : 'GET'} ${url.pathname}${url.search} HTTP/1.1`,
       `Host: ${url.host}`,
       ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
-      ...(payload ? ['Content-Type: application/json', `Content-Length: ${payload.length}`] : []),
+      ...(payload ? [...(typed ? [] : ['Content-Type: application/json']), `Content-Length: ${payload.length}`] : []),
       'Connection: close',
       '',
       '',

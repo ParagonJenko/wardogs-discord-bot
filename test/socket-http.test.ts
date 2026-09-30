@@ -75,6 +75,17 @@ describe('socketHttp', () => {
     expect(request.endsWith(`\r\n\r\n${body}`)).toBe(true);
   });
 
+  it('sends another method and content type when asked, without adding JSON', async () => {
+    const server = fakeServer(['HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}']);
+
+    await socketHttp(server.connect)(new URL('http://203.0.113.10:7776/v1/config'), { 'Content-Type': 'text/plain' }, '[A]\n', 'PUT');
+
+    const request = server.written.join('');
+    expect(request).toMatch(/^PUT \/v1\/config HTTP\/1\.1\r\n/);
+    expect(request).toContain('Content-Type: text/plain\r\n');
+    expect(request).not.toContain('application/json');
+  });
+
   it('uses TLS and port 443 for https URLs', async () => {
     const server = fakeServer(['HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n']);
 

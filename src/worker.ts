@@ -5,8 +5,23 @@ import { runCommand } from './commands.ts';
 import { postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
+import type { Config } from './config.ts';
+import type { SeederRow } from './discord.ts';
+import {
+  leaderboard,
+  matchRecord,
+  matchRecordKey,
+  parsePlayerDay,
+  playerDayKey,
+  rankSeeders,
+  recentDayKeys,
+  recordActivity,
+  recordMatchPlayers,
+  recordSeed,
+  type SeedCredit,
+} from './players.ts';
 import { createPoller, parseState } from './poller.ts';
-import { fetchSnapshot } from './rcon.ts';
+import { fetchConfig, fetchSnapshot, putConfig, validateConfig } from './rcon.ts';
 import { socketHttp } from './socket-http.ts';
 import {
   discordDue,
@@ -15,9 +30,12 @@ import {
   recordDiscord,
   recordMatch,
   recordObservation,
+  type Observation,
   type PublicStats,
   type SiteStats,
 } from './stats.ts';
+import { summarise, type MatchState } from './tracking.ts';
+import { parseVipState, syncVip, vipDue } from './vip.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -29,11 +47,52 @@ const stringVars = (env: Env): Record<string, string> =>
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
 
+const SEEDERS_LISTED = 25;
+const LEADERBOARD_DAYS = 30;
+const LEADERBOARD_SIZE = 10;
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
+// Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
+// records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
+// and 'vip' (who the bot put on the reserved list, and until when).
 export class Watcher extends DurableObject<Env> {
   private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {
     const storage = this.ctx.storage;
     await storage.put('stats', change(parseStats(await storage.get('stats'))));
+  }
+
+  // One write for the site's stats and today's player totals.
+  private async recordCheck(observation: Observation, minutes: number): Promise<void> {
+    const dayKey = playerDayKey(observation.at);
+    const stored = await this.ctx.storage.get(['stats', dayKey]);
+    const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes);
+    if (observation.phase === 'empty' || observation.players.length === 0) {
+      await this.ctx.storage.put('stats', stats);
+      return;
+    }
+    const kind = observation.seeding ? 'seeding' : 'live';
+    const day = recordActivity(parsePlayerDay(stored.get(dayKey)), observation.players, kind, minutes);
+    await this.ctx.storage.put({ stats, [dayKey]: day });
+  }
+
+  private async recordSeed(seeders: SeedCredit[], at: number, minMinutes: number): Promise<void> {
+    const dayKey = playerDayKey(at);
+    await this.ctx.storage.put(dayKey, recordSeed(parsePlayerDay(await this.ctx.storage.get(dayKey)), seeders, minMinutes));
+  }
+
+  // The match, the recent matches list and the players' totals are written together, and only once per match.
+  private async recordMatchEnd(match: MatchState, at: number): Promise<void> {
+    const key = matchRecordKey(match.startedAt);
+    const dayKey = playerDayKey(at);
+    const stored = await this.ctx.storage.get([key, 'stats', dayKey]);
+    if (stored.has(key)) return;
+    await this.ctx.storage.put({
+      [key]: matchRecord(match, at),
+      stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at),
+      [dayKey]: recordMatchPlayers(parsePlayerDay(stored.get(dayKey)), match),
+    });
   }
 
   async check(): Promise<void> {
@@ -52,11 +111,13 @@ export class Watcher extends DurableObject<Env> {
         save: (state) => storage.put('state', state),
       },
       stats: {
-        check: (observation) => this.updateStats((stats) => recordObservation(stats, observation, minutesPerCheck)),
-        matchEnded: (summary, at) => this.updateStats((stats) => recordMatch(stats, summary, at)),
+        check: (observation) => this.recordCheck(observation, minutesPerCheck),
+        seeded: (seeders, at) => this.recordSeed(seeders, at, config.seedMinutes),
+        matchEnded: (match, at) => this.recordMatchEnd(match, at),
       },
     });
     await poll();
+    await this.updateVip(config);
 
     const { inviteCode } = config;
     if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
@@ -69,9 +130,61 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
+  // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their week is up.
+  private async updateVip(config: Config): Promise<void> {
+    const rule = config.vip;
+    if (rule === null) return;
+    const storage = this.ctx.storage;
+    const now = Date.now();
+    const state = parseVipState(await storage.get('vip'));
+    if (!vipDue(state, now)) return;
+    const keys = recentDayKeys(now, rule.windowDays);
+    const stored = await storage.get(keys);
+    const http = socketHttp(connect);
+    try {
+      const next = await syncVip({
+        rule,
+        days: keys.map((key) => parsePlayerDay(stored.get(key))),
+        state,
+        now,
+        rcon: {
+          fetchConfig: () => fetchConfig(config.rconUrl, config.rconPassword, http),
+          validate: (text) => validateConfig(config.rconUrl, config.rconPassword, text, http),
+          put: (serverConfig) => putConfig(config.rconUrl, config.rconPassword, serverConfig, http),
+        },
+        log: console,
+      });
+      await storage.put('vip', next);
+    } catch (error) {
+      console.error(`VIP update failed: ${errorText(error)}`);
+      // Try again at the next 10-minute mark rather than on every check.
+      await storage.put('vip', { ...state, checkedAt: now });
+    }
+  }
+
   async stats(): Promise<PublicStats> {
     const config = loadConfig(stringVars(this.env));
-    return publicStats(parseStats(await this.ctx.storage.get('stats')), config.rules, Date.now());
+    const now = Date.now();
+    const keys = recentDayKeys(now, LEADERBOARD_DAYS);
+    const stored = await this.ctx.storage.get(['stats', ...keys]);
+    return publicStats(parseStats(stored.get('stats')), config.rules, now, {
+      leaderboard: leaderboard(keys.map((key) => parsePlayerDay(stored.get(key))), LEADERBOARD_DAYS, LEADERBOARD_SIZE),
+      vip: config.vip,
+    });
+  }
+
+  // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
+  async seeders(days: number): Promise<SeederRow[]> {
+    const keys = recentDayKeys(Date.now(), days);
+    const stored = await this.ctx.storage.get([...keys, 'vip']);
+    const { granted } = parseVipState(stored.get('vip'));
+    return rankSeeders(keys.map((key) => parsePlayerDay(stored.get(key))), SEEDERS_LISTED).map((p) => ({
+      steamId: p.steamId,
+      name: p.name,
+      seedingMinutes: p.seedingMinutes,
+      seedDays: p.seedDays,
+      vipUntil: granted[p.steamId]?.expiresAt ?? null,
+    }));
   }
 }
 
@@ -140,6 +253,7 @@ export default {
           config: () => loadConfig(vars),
           http: socketHttp(connect),
           lastMatch: async () => (await env.WATCHER.get(env.WATCHER.idFromName('watcher')).stats()).matches[0] ?? null,
+          seeders: (days) => env.WATCHER.get(env.WATCHER.idFromName('watcher')).seeders(days),
           log: console,
         }),
         editReply: editOriginalReply(),

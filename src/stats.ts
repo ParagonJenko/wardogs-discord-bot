@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { AlertRules, Phase } from './alerts.ts';
+import type { VipRule } from './config.ts';
 import { mapName } from './discord.ts';
-import type { FactionScore, ServerStatus } from './rcon.ts';
+import type { Leaderboard } from './players.ts';
+import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 import { topPlayers, type MatchState, type MatchSummary, type PlayerStats } from './tracking.ts';
 
 // Numbers for the community website, served by the Worker at GET /api/stats. Anyone can read them, so they
@@ -46,7 +48,11 @@ export type SiteStats = {
 export type Observation = {
   at: number;
   status: ServerStatus;
+  // Who is online, for the private player records. Never copied into the public stats.
+  players: Player[];
   phase: Phase;
+  // True while the server seeds before it first goes live. Once it has been live, it is not seeding until it empties.
+  seeding: boolean;
   match: MatchState;
 };
 
@@ -114,7 +120,7 @@ export const parseStats = (raw: unknown): SiteStats => {
 };
 
 // Days are UTC dates, so every visitor sees the same boundaries.
-const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
+export const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
 // Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
 const recordDay = (days: DayStats[], at: number, players: number, liveMinutes: number): DayStats[] => {
@@ -164,13 +170,18 @@ export const discordDue = (stats: SiteStats, now: number): boolean =>
 
 export const recordDiscord = (stats: SiteStats, discord: DiscordCounts): SiteStats => ({ ...stats, discord });
 
-export type PublicStats = SiteStats & {
-  generatedAt: number;
-  thresholds: { seeding: number; live: number };
-};
+// The leaderboard (names only) and what seeding earns come from the player records, which are read separately.
+export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null };
 
-export const publicStats = (stats: SiteStats, rules: AlertRules, now: number): PublicStats => ({
+export type PublicStats = SiteStats &
+  PublicExtras & {
+    generatedAt: number;
+    thresholds: { seeding: number; live: number };
+  };
+
+export const publicStats = (stats: SiteStats, rules: AlertRules, now: number, extras: PublicExtras): PublicStats => ({
   generatedAt: now,
   thresholds: { seeding: rules.seeding, live: rules.live },
   ...stats,
+  ...extras,
 });

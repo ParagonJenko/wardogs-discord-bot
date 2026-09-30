@@ -1,4 +1,5 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
+import type { VipRule } from './config.ts';
 import type { FactionScore, Player, Rotation, ServerStatus } from './rcon.ts';
 import type { RecentMatch } from './stats.ts';
 import type { MatchSummary } from './tracking.ts';
@@ -17,7 +18,7 @@ type Population = Pick<ServerStatus, 'name' | 'players' | 'maxPlayers'>;
 
 export type Seeder = { name: string; minutes: number };
 
-type MessageOptions = { lowPop: number; roleId?: string; seeders?: Seeder[] };
+type MessageOptions = { lowPop: number; roleId?: string; seeders?: Seeder[]; vip?: VipRule | null };
 
 const NO_PINGS = { parse: [], roles: [] };
 
@@ -65,15 +66,23 @@ const CALL_TO_ACTION: Record<AlertKind, string> = {
   lowPop: 'Jump in to keep it going!',
 };
 
+const span = (days: number): string => (days === 7 ? 'a week' : plural(days, 'day'));
+
+// What seeding earns, for the seeding alert and /seeders.
+export const vipOffer = (vip: VipRule): string =>
+  `🎖️ Seed on ${plural(vip.seedDays, 'day')} in ${span(vip.windowDays)} and get a reserved slot for ${span(vip.lengthDays)}. ` +
+  `A seed counts when you're on for more than ${vip.seedMinutes} min and the server goes live.`;
+
 export const buildMessage = (kind: AlertKind, server: Population, options: MessageOptions): DiscordMessage => {
   const seeders = (options.seeders ?? []).map((s) => `${playerName(s.name)} (${s.minutes} min)`);
   const fields = fieldIf('Top seeders', seeders);
+  const offer = kind === 'seeding' && options.vip ? `\n${vipOffer(options.vip)}` : '';
   return {
     ...(options.roleId ? { content: `<@&${options.roleId}>` } : {}),
     embeds: [
       {
         title: title(kind, server, options.lowPop),
-        description: `**${server.players}/${server.maxPlayers}** players. ${CALL_TO_ACTION[kind]}`,
+        description: `**${server.players}/${server.maxPlayers}** players. ${CALL_TO_ACTION[kind]}${offer}`,
         color: COLORS[kind],
         ...(fields.length > 0 ? { fields } : {}),
       },
@@ -205,6 +214,28 @@ export const buildRotationEmbed = (rotation: Rotation): Embed => {
     return fromNow.map((entry) => (entry ? rotationLine(entry) : ''));
   })();
   return { title, description: shown.join('\n'), color: INFO_COLOR };
+};
+
+export type SeederRow = { steamId: string; name: string; seedingMinutes: number; seedDays: number; vipUntil: number | null };
+
+// For admins, so it shows Steam IDs; the reply is only visible to the admin who asked.
+export const buildSeedersEmbed = (seeders: SeederRow[], days: number, seedMinutes: number, vip: VipRule | null): Embed => {
+  const title = `🌱 Top seeders, last ${plural(days, 'day')}`;
+  const notes = [
+    `A seed day: on for more than ${seedMinutes} min while the server seeded, and it then went live. Days are UTC.`,
+    ...(vip ? [vipOffer(vip)] : []),
+  ];
+  if (seeders.length === 0) {
+    return { title, description: ['Nobody seeded in that time.', '', ...notes].join('\n'), color: COLORS.seeding };
+  }
+  const lines = seeders.map((s) =>
+    [
+      `${playerName(s.name)}: ${plural(s.seedDays, 'seed day')}, ${s.seedingMinutes} min`,
+      `\`${s.steamId.replace(/`/g, '')}\``,
+      ...(s.vipUntil === null ? [] : [`🎖️ VIP until <t:${Math.floor(s.vipUntil / 1000)}:f>`]),
+    ].join(' · '),
+  );
+  return { title, description: [numbered(lines), '', ...notes].join('\n'), color: COLORS.seeding };
 };
 
 export const buildLastMatchEmbed = (match: RecentMatch): Embed => {

@@ -2,10 +2,12 @@ import { z } from 'zod';
 import { initialState, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
+import type { SeedCredit } from './players.ts';
 import type { Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
 import {
   observeMatch,
+  summarise,
   tallySeeding,
   topSeeders,
   type MatchState,
@@ -19,6 +21,10 @@ export type BotState = {
   alerts: MonitorState;
   seeding: SeedingTally;
   match: MatchState | null;
+  // A match summary Discord has not accepted yet; posting it is retried on each check.
+  unsentSummary: MatchSummary | null;
+  // Whether the server has been live since it last emptied. Until it has, time online counts as seeding.
+  liveSinceEmpty: boolean;
 };
 
 export type StateStore = {
@@ -36,12 +42,15 @@ type PollerDeps = {
   stats?: StatsSink;
 };
 
-// Feeds the website's stats. `check` runs once for every check that reached the server, even if a Discord post
-// then fails, so the site never shows a reachable server as down. `matchEnded` runs once the summary is saved,
-// so a retried alert cannot record the same match twice.
+// Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
+// even if a Discord post then fails, so the site never shows a reachable server as down. `seeded` runs when the
+// server goes live, with everyone who seeded it. `matchEnded` runs before the summary is posted, so a Discord outage
+// cannot lose a match. A check that fails after these can report the same seed or match again, so the sink must
+// ignore one it already has (a match's `startedAt` identifies it).
 export type StatsSink = {
   check: (observation: Observation) => Promise<void>;
-  matchEnded: (summary: MatchSummary, at: number) => Promise<void>;
+  seeded: (seeders: SeedCredit[], at: number) => Promise<void>;
+  matchEnded: (match: MatchState, at: number) => Promise<void>;
 };
 
 const TOP_SEEDERS = 3;
@@ -50,6 +59,8 @@ const AlertsSchema = z.object({
   phase: z.enum(['empty', 'seeding', 'live']),
   lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop']), z.number()),
 });
+
+const Scores = z.array(z.object({ name: z.string(), score: z.number() }));
 
 const BotStateSchema = z.object({
   alerts: AlertsSchema,
@@ -63,15 +74,30 @@ const BotStateSchema = z.object({
       summarisable: z.boolean(),
       peakPlayers: z.number(),
       players: z.record(z.string(), z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
-      factionScores: z.array(z.object({ name: z.string(), score: z.number() })),
+      factionScores: Scores,
     })
     .nullable(),
+  // Missing from state saved before summaries were retried this way.
+  unsentSummary: z
+    .object({
+      map: z.string(),
+      durationMs: z.number(),
+      peakPlayers: z.number(),
+      factionScores: Scores,
+      top: z.array(z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
+    })
+    .nullable()
+    .default(null),
+  // Missing from state saved before seeding stopped at the first live.
+  liveSinceEmpty: z.boolean().default(false),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
 const StoredStateSchema = z.union([
   BotStateSchema,
-  AlertsSchema.transform((alerts): BotState => ({ alerts, seeding: {}, match: null })),
+  AlertsSchema.transform(
+    (alerts): BotState => ({ alerts, seeding: {}, match: null, unsentSummary: null, liveSinceEmpty: alerts.phase === 'live' }),
+  ),
 ]);
 
 // Reads what a store saved. Anything unrecognisable starts fresh instead of failing every check.
@@ -112,10 +138,12 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     if (state === null) {
       const alerts = initialState(status.players, config.rules);
       const { match } = observeMatch(null, status, players, alerts.phase === 'live', time);
-      const seeding = alerts.phase === 'seeding' ? tallySeeding({}, players) : {};
-      await store.save({ alerts, seeding, match });
+      const seedingNow = alerts.phase === 'seeding';
+      const seeding = seedingNow ? tallySeeding({}, players) : {};
+      const liveSinceEmpty = alerts.phase === 'live';
+      await store.save({ alerts, seeding, match, unsentSummary: null, liveSinceEmpty });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
-      await report((sink) => sink.check({ at: time, status, phase: alerts.phase, match }));
+      await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
     }
 
@@ -123,34 +151,57 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     const before = state.alerts.phase;
     const after = result.state.phase;
     const { match, finished } = observeMatch(state.match, status, players, after === 'live', time);
+    // Seeding is the time from empty until the server first goes live. A live server that drops below the low-pop
+    // threshold is not seeding again until it has emptied.
+    const liveSinceEmpty = after !== 'empty' && (state.liveSinceEmpty || before === 'live' || after === 'live');
+    const seedingNow = after === 'seeding' && !liveSinceEmpty;
+    const tallied = seedingNow ? tallySeeding(state.seeding, players) : null;
+    const minutes = (checks: number): number => Math.round((checks * config.pollIntervalMs) / 60_000);
 
     // Count everyone online on each check while the server is seeding; reset once it is live or empty.
-    const seeders =
-      before !== 'live' && after === 'live'
-        ? topSeeders(state.seeding, TOP_SEEDERS).map((s) => ({
-            name: s.name,
-            minutes: Math.round((s.checks * config.pollIntervalMs) / 60_000),
-          }))
-        : [];
+    const wentLive = before !== 'live' && after === 'live';
+    const seeders = wentLive
+      ? topSeeders(state.seeding, TOP_SEEDERS).map((s) => ({ name: s.name, minutes: minutes(s.checks) }))
+      : [];
+    const credits = wentLive
+      ? Object.entries(state.seeding).map(([steamId, s]) => ({ steamId, name: s.name, minutes: minutes(s.checks) }))
+      : [];
 
-    await report((sink) => sink.check({ at: time, status, phase: after, match }));
+    await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
+    if (credits.length > 0) await report((sink) => sink.seeded(credits, time));
 
-    if (finished !== null) {
-      await send(buildMatchSummary(finished, status.name));
-      // Save straight away so a failed alert below does not post the summary a second time.
-      await store.save({ ...state, match });
-      log.info(`Sent match summary for ${finished.map}`);
-      await report((sink) => sink.matchEnded(finished, time));
+    if (finished !== null) await report((sink) => sink.matchEnded(finished, time));
+
+    // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
+    // Discord is down, and an unsent summary is kept to retry. A newer summary replaces one still waiting; that match
+    // is already recorded. While live, the seeding count is kept so a retried live alert can still name the seeders.
+    let tracked: BotState = {
+      ...state,
+      seeding: tallied ?? (after === 'live' ? state.seeding : {}),
+      match,
+      liveSinceEmpty,
+      unsentSummary: finished === null ? state.unsentSummary : summarise(finished),
+    };
+    try {
+      const summary = tracked.unsentSummary;
+      if (summary !== null) {
+        await send(buildMatchSummary(summary, status.name));
+        // So a failed alert below does not post the summary a second time.
+        tracked = { ...tracked, unsentSummary: null };
+        log.info(`Sent match summary for ${summary.map}`);
+      }
+      if (result.alert !== null) {
+        await send(
+          buildMessage(result.alert, status, { lowPop: config.rules.lowPop, roleId: config.roleId, seeders, vip: config.vip }),
+        );
+        log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
+      }
+    } catch (error) {
+      await store.save(tracked);
+      throw error;
     }
-    if (result.alert !== null) {
-      await send(
-        buildMessage(result.alert, status, { lowPop: config.rules.lowPop, roleId: config.roleId, seeders }),
-      );
-      log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
-    }
-    // Only save after a successful send, so a failed post is retried on the next check.
-    const seeding = after === 'seeding' ? tallySeeding(state.seeding, players) : {};
-    await store.save({ alerts: result.state, seeding, match });
+    // The alert state is only saved after a successful send, so a failed alert is retried on the next check.
+    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, liveSinceEmpty });
   };
 
   return async (): Promise<void> => {

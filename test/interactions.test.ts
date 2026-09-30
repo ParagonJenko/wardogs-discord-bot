@@ -174,6 +174,38 @@ describe('handleInteraction', () => {
     });
   });
 
+  it('treats /seeders as an admin command, replying privately', async () => {
+    const seeders = { ...broadcast(String(ADMINISTRATOR)), data: { name: 'seeders', options: [{ name: 'days', type: 4, value: 30 }] } };
+    const outsider = { ...seeders, member: { user: { id: '42' }, permissions: String(1 << 5) } };
+    const d = deps();
+    const run = async (payload: unknown) => {
+      const { body, signature, timestamp } = await signed(payload);
+      return handleInteraction(body, signature, timestamp, d);
+    };
+
+    const allowed = await run(seeders);
+    await allowed.followUp?.();
+    const refused = await run(outsider);
+
+    expect(allowed.body).toEqual({ type: 5, data: { flags: 64 } });
+    expect(d.runCommand).toHaveBeenCalledWith({ name: 'seeders', options: { days: '30' }, userId: '42' });
+    expect(refused.body).toMatchObject({ type: 4, data: { flags: 64 } });
+    expect(d.runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a failed /seeders the general error, not the broadcast one', async () => {
+    const { body, signature, timestamp } = await signed({ ...broadcast(String(ADMINISTRATOR)), data: { name: 'seeders' } });
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('storage unavailable'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
+      content: "Couldn't get that right now. Try again in a minute.",
+      allowed_mentions: { parse: [] },
+    });
+  });
+
   it('answers an unknown command privately', async () => {
     const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name: 'other' } });
 
@@ -226,8 +258,12 @@ describe('editOriginalReply', () => {
 });
 
 describe('COMMANDS', () => {
-  it('registers every command, with /broadcast limited to Administrators', () => {
-    expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast']);
+  it('registers every command, with /broadcast and /seeders limited to Administrators', () => {
+    expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders']);
+    expect(COMMANDS.find((c) => c.name === 'seeders')).toMatchObject({
+      default_member_permissions: '8',
+      options: [{ name: 'days', type: 4, required: false, min_value: 1, max_value: 90 }],
+    });
     expect(COMMANDS.find((c) => c.name === 'broadcast')).toMatchObject({
       default_member_permissions: '8',
       options: [{ name: 'message', type: 3, required: true, max_length: 200 }],

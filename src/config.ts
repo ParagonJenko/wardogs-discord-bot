@@ -43,6 +43,10 @@ const EnvSchema = z
     LOW_POP_THRESHOLD: count(20),
     POLL_INTERVAL_SECONDS: z.coerce.number().int().min(10).default(60),
     ALERT_COOLDOWN_MINUTES: z.coerce.number().int().min(0).default(10),
+    // Automatic VIP: days with a successful seed needed in a week. 0 turns it off.
+    VIP_SEED_DAYS: z.coerce.number().int().min(0).max(7).default(0),
+    // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
+    VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -53,6 +57,12 @@ const EnvSchema = z
     message: 'must not be above LIVE_THRESHOLD',
   });
 
+// Seed on `seedDays` days within `windowDays` and get a reserved slot for `lengthDays`. A day counts when the player
+// was on for more than `seedMinutes` while the server seeded, and it then went live.
+export type VipRule = { seedDays: number; seedMinutes: number; windowDays: number; lengthDays: number };
+
+export const VIP_WEEK_DAYS = 7;
+
 export type Config = {
   rconUrl: string;
   rconPassword: string;
@@ -61,6 +71,9 @@ export type Config = {
   inviteCode: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
+  // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
+  seedMinutes: number;
+  vip: VipRule | null;
 };
 
 export const loadConfig = (env: Record<string, string | undefined>): Config => {
@@ -87,5 +100,10 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       lowPop: e.LOW_POP_THRESHOLD,
       cooldownMs: e.ALERT_COOLDOWN_MINUTES * 60_000,
     },
+    seedMinutes: e.VIP_SEED_MINUTES,
+    vip:
+      e.VIP_SEED_DAYS > 0
+        ? { seedDays: e.VIP_SEED_DAYS, seedMinutes: e.VIP_SEED_MINUTES, windowDays: VIP_WEEK_DAYS, lengthDays: VIP_WEEK_DAYS }
+        : null,
   };
 };
