@@ -50,7 +50,8 @@ export type Observation = {
   match: MatchState;
 };
 
-export const HISTORY_MS = 24 * 60 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
+export const HISTORY_MS = DAY_MS;
 export const DAYS_KEPT = 14;
 export const MATCHES_KEPT = 10;
 export const DISCORD_REFRESH_MS = 10 * 60_000;
@@ -115,13 +116,13 @@ export const parseStats = (raw: unknown): SiteStats => {
 // Days are UTC dates, so every visitor sees the same boundaries.
 const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
+// Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
 const recordDay = (days: DayStats[], at: number, players: number, liveMinutes: number): DayStats[] => {
   const day = dayOf(at);
+  const oldest = dayOf(at - (DAYS_KEPT - 1) * DAY_MS);
   const today = days.find((d) => d.day === day) ?? { day, peak: 0, liveMinutes: 0 };
   const updated = { day, peak: Math.max(today.peak, players), liveMinutes: today.liveMinutes + liveMinutes };
-  return [...days.filter((d) => d.day !== day), updated]
-    .sort((a, b) => a.day.localeCompare(b.day))
-    .slice(-DAYS_KEPT);
+  return [...days.filter((d) => d.day !== day && d.day >= oldest), updated].sort((a, b) => a.day.localeCompare(b.day));
 };
 
 const currentMatch = (match: MatchState, status: ServerStatus): CurrentMatch | null =>

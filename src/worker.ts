@@ -74,17 +74,28 @@ export class Watcher extends DurableObject<Env> {
 }
 
 // The stats only change once a minute. Each Worker instance keeps the last answer for a short while so a busy
-// page does not wake the Durable Object on every request.
+// page does not wake the Durable Object on every request. Requests that arrive while a refresh is in flight wait
+// for that one instead of starting their own.
 const STATS_CACHE_MS = 30_000;
-let cachedStats: { body: string; at: number } | null = null;
+let cachedStats: { body: Promise<string>; at: number } | null = null;
 
-const serveStats = async (env: Env): Promise<Response> => {
+const serveStats = async (env: Env, ctx: ExecutionContext): Promise<Response> => {
   const now = Date.now();
   if (cachedStats === null || now - cachedStats.at >= STATS_CACHE_MS) {
-    const stats = await env.WATCHER.get(env.WATCHER.idFromName('watcher')).stats();
-    cachedStats = { body: JSON.stringify(stats), at: now };
+    const body = env.WATCHER.get(env.WATCHER.idFromName('watcher'))
+      .stats()
+      .then((stats) => JSON.stringify(stats));
+    const entry = { body, at: now };
+    cachedStats = entry;
+    // Other requests may be waiting on this refresh, so it must finish even if this request is cancelled.
+    // A failed refresh is dropped so the next request tries again.
+    ctx.waitUntil(
+      body.catch(() => {
+        if (cachedStats === entry) cachedStats = null;
+      }),
+    );
   }
-  return new Response(cachedStats.body, {
+  return new Response(await cachedStats.body, {
     headers: {
       'content-type': 'application/json; charset=utf-8',
       // Public, read-only numbers, so any site may show them.
@@ -103,7 +114,7 @@ export default {
   async fetch(request, env, ctx) {
     if (request.method === 'GET' && new URL(request.url).pathname === '/api/stats') {
       try {
-        return await serveStats(env);
+        return await serveStats(env, ctx);
       } catch (error) {
         console.error(`/api/stats failed: ${error instanceof Error ? error.message : String(error)}`);
         return Response.json(

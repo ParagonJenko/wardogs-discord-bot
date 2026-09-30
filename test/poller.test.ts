@@ -199,6 +199,16 @@ describe('poller stats', () => {
     ]);
   });
 
+  it('records the check even when the Discord post fails, so the site still sees the server', async () => {
+    const stats = sink();
+    const { run, send } = setup([snapshot([]), snapshot(crowd(1)), snapshot(crowd(2))], memoryStore(), stats);
+    send.mockRejectedValue(new Error('Discord webhook failed: 404'));
+
+    await run(3);
+
+    expect(stats.check.mock.calls.map(([o]) => o.status.players)).toEqual([0, 1, 2]);
+  });
+
   it('records a finished match once, even when the alert after it is retried', async () => {
     const stats = sink();
     const { run, send } = setup(

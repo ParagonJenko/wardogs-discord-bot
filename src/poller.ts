@@ -36,7 +36,9 @@ type PollerDeps = {
   stats?: StatsSink;
 };
 
-// Feeds the website's stats. Each call comes after the state it describes is saved, so nothing is recorded twice.
+// Feeds the website's stats. `check` runs once for every check that reached the server, even if a Discord post
+// then fails, so the site never shows a reachable server as down. `matchEnded` runs once the summary is saved,
+// so a retried alert cannot record the same match twice.
 export type StatsSink = {
   check: (observation: Observation) => Promise<void>;
   matchEnded: (summary: MatchSummary, at: number) => Promise<void>;
@@ -130,6 +132,8 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
           }))
         : [];
 
+    await report((sink) => sink.check({ at: time, status, phase: after, match }));
+
     if (finished !== null) {
       await send(buildMatchSummary(finished, status.name));
       // Save straight away so a failed alert below does not post the summary a second time.
@@ -145,7 +149,6 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     }
     // Only save after a successful send, so a failed post is retried on the next check.
     await store.save({ alerts: result.state, seeding: after === 'seeding' ? tally : {}, match });
-    await report((sink) => sink.check({ at: time, status, phase: after, match }));
   };
 
   return async (): Promise<void> => {

@@ -106,6 +106,15 @@ describe('recordObservation', () => {
     ]);
   });
 
+  it('drops days from before a long outage', () => {
+    const stats = [observation(MIDNIGHT, 30), observation(MIDNIGHT + 30 * DAY, 5)].reduce(
+      (acc, obs) => recordObservation(acc, obs, 1),
+      emptyStats(),
+    );
+
+    expect(stats.days.map((d) => d.day)).toEqual(['2026-10-30']);
+  });
+
   it(`keeps the last ${DAYS_KEPT} days`, () => {
     const stats = Array.from({ length: DAYS_KEPT + 3 }, (_, i) => observation(MIDNIGHT + i * DAY, i)).reduce(
       (acc, obs) => recordObservation(acc, obs, 1),
