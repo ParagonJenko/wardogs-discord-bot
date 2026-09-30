@@ -43,14 +43,48 @@ describe('milestones', () => {
     expect(milestones(match({ liveAt: null }), 30 * MINUTE, rule, null)).toEqual([]);
   });
 
-  it('reaches halfway when a team has half the winning score, mentioning seeding when VIP is on', () => {
+  it('reaches halfway when a team has half the winning score, and mentions seeding when VIP is on', () => {
     expect(milestones(match(scores(49, 20)), 0, rule, null)).toEqual([]);
     expect(milestones(match(scores(50, 20)), 0, rule, null)).toEqual([
-      { key: 'halfway', text: 'Halfway there! Check the leaderboard and join our Discord at gaminginit.com' },
+      {
+        key: 'halfway',
+        text: 'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
+      },
     ]);
-    expect(milestones(match(scores(20, 50)), 0, rule, vip)[0]?.text).toBe(
-      'Halfway there! Seed on 3 days in a week and get a reserved slot. How at gaminginit.com',
+    expect(milestones(match(scores(50, 20)), 0, rule, vip)[0]?.text).toBe(
+      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com',
     );
+  });
+
+  it('has a line for whichever of the three factions leads at halfway, which changes from match to match', () => {
+    const halfway = (leader: string, startedAt = 0) =>
+      milestones(
+        match({
+          startedAt,
+          factionScores: [
+            { name: 'Lonestar', score: leader === 'Lonestar' ? 52 : 10 },
+            { name: 'Valkyra', score: leader === 'Valkyra' ? 52 : 20 },
+            { name: 'MANTICORE', score: leader === 'MANTICORE' ? 52 : 30 },
+          ],
+        }),
+        0,
+        rule,
+        null,
+      )[0]?.text.split(' Check the')[0];
+
+    expect(halfway('Lonestar')).toBe('Halfway there! Lonestar leads on 52! Screenshot it, this never happens.');
+    expect(halfway('Lonestar', 60_000)).toBe('Halfway there! Lonestar leads on 52! The default pick is cooking. Yeehaw.');
+    expect(halfway('MANTICORE')).toBe('Halfway there! Manticore leads on 52. Green winning? Shocking. Truly.');
+    expect(halfway('MANTICORE', 60_000)).toBe('Halfway there! Manticore leads on 52. The shadow army doing shadow army things.');
+    expect(halfway('Valkyra')).toBe('Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade.');
+    expect(halfway('Valkyra', 60_000)).toBe('Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time.');
+  });
+
+  it('names only the leader, plainly for a team it has no line for, and nobody when the top teams are level', () => {
+    const text = (s: ReturnType<typeof scores>) => milestones(match(s), 0, rule, null)[0]?.text.split(' Check the')[0];
+
+    expect(text(scores(30, 50, 12))).toBe('Halfway there! Kharr leads on 50!');
+    expect(text(scores(50, 50, 12))).toBe("Halfway there and it's neck and neck!");
   });
 
   it('reaches "nearly there" once for each team at 90% of the winning score', () => {

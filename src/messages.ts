@@ -3,8 +3,8 @@ import type { VipRule } from './config.ts';
 import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
-// seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning, and when each team is
-// close to winning. Each goes out once per match.
+// seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (with a line about the team
+// in front), and when each team is close to winning. Each goes out once per match.
 
 export type MessageRule = { siteHost: string; scoreToWin: number };
 
@@ -25,6 +25,37 @@ const days = (count: number): string => `${count} day${count === 1 ? '' : 's'}`;
 
 type Milestone = { key: string; text: string };
 
+type Score = MatchState['factionScores'][number];
+
+// A line for the team leading at halfway, in the spirit of what players say about each faction: Lonestar is the
+// default pick that usually loses, the developers say Manticore (green) wins most of the time, and Valkyra's story is
+// restoring the Soviet People's Republic to greatness. Which line a match gets depends on when it started, so it
+// changes from match to match.
+const TEAM_LINES: Record<string, ((score: number) => string)[]> = {
+  lonestar: [
+    (n) => `Lonestar leads on ${n}! Screenshot it, this never happens.`,
+    (n) => `Lonestar leads on ${n}! The default pick is cooking. Yeehaw.`,
+  ],
+  manticore: [
+    (n) => `Manticore leads on ${n}. Green winning? Shocking. Truly.`,
+    (n) => `Manticore leads on ${n}. The shadow army doing shadow army things.`,
+  ],
+  valkyra: [
+    (n) => `Valkyra leads on ${n}. Not my points, OUR points, comrade.`,
+    (n) => `Valkyra leads on ${n}. Restoring greatness, one point at a time.`,
+  ],
+};
+
+// Only the team in front is named; when the top teams are level, nobody is.
+const leaderLine = (scores: Score[], startedAt: number): string => {
+  const [first, second] = [...scores].sort((a, b) => b.score - a.score);
+  if (!first) return 'Halfway there!';
+  if (second && second.score === first.score) return "Halfway there and it's neck and neck!";
+  const lines = TEAM_LINES[first.name.trim().toLowerCase()] ?? [(n: number) => `${first.name} leads on ${n}!`];
+  const line = lines[Math.floor(startedAt / 60_000) % lines.length];
+  return line ? `Halfway there! ${line(first.score)}` : 'Halfway there!';
+};
+
 // Everything this match has reached so far, in the order it happens.
 export const milestones = (match: MatchState, now: number, rule: MessageRule, vip: VipRule | null): Milestone[] => {
   const { siteHost, scoreToWin } = rule;
@@ -39,9 +70,11 @@ export const milestones = (match: MatchState, now: number, rule: MessageRule, vi
       ? [
           {
             key: 'halfway',
-            text: vip
-              ? `Halfway there! Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}`
-              : `Halfway there! Check the leaderboard and join our Discord at ${siteHost}`,
+            text:
+              `${leaderLine(match.factionScores, match.startedAt)} ` +
+              (vip
+                ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}`
+                : `Check the leaderboard and join our Discord at ${siteHost}`),
           },
         ]
       : []),

@@ -309,9 +309,20 @@ leaderboard, the Discord and seeding:
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
 | 10 minutes after the match went live             | Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com |
-| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
+| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | Each team that reaches 90% of `SCORE_TO_WIN` (90) | Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
+- The halfway message names only the team in front, with its score and a joke about that faction. Each faction has two
+  lines and a match gets one of them, so they vary:
+
+  | Leader    | Lines                                                                                        |
+  | --------- | -------------------------------------------------------------------------------------------- |
+  | Lonestar  | Screenshot it, this never happens. / The default pick is cooking. Yeehaw.                     |
+  | Manticore | Green winning? Shocking. Truly. / The shadow army doing shadow army things.                  |
+  | Valkyra   | Not my points, OUR points, comrade. / Restoring greatness, one point at a time.              |
+
+  A faction without a line gets "Name leads on 52!". When the top teams are level it says "Halfway there and it's
+  neck and neck!". The lines live in `TEAM_LINES` in `src/messages.ts`.
 - Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst.
 - After the bot restarts or is deployed mid-match, milestones the match already passed are not announced late.
   The 10-minute message only goes out for a match the bot saw go live.
