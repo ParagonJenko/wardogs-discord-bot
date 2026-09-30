@@ -461,6 +461,11 @@ describe('buildPlayerEmbed', () => {
     expect(field(buildPlayerEmbed({ ...profile, reserved: true, record: { ...record, vip } }), 'VIP')).toBe(
       `🎖️ Reserved slot until ${t(NOW + 7 * DAY, 'f')}`,
     );
+    expect(field(buildPlayerEmbed({ ...profile, reserved: null, record: { ...record, vip } }), 'VIP')).toBe(
+      `🎖️ Reserved slot until ${t(NOW + 7 * DAY, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`,
+    );
+    expect(field(buildPlayerEmbed({ ...profile, reserved: null }), 'VIP')).toBe("Couldn't read the reserved list");
+    expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, vip } }), 'VIP')).toBe('None');
     expect(field(buildPlayerEmbed({ ...profile, record: { ...record, vipBlockedUntil: NOW + DAY } }), 'VIP')).toBe(
       `None\nStaff removed VIP: automatic VIP is off for them until ${t(NOW + DAY, 'f')}`,
     );
