@@ -83,6 +83,15 @@ describe('low population alert', () => {
     ]);
   });
 
+  it('does not announce seeding after a drop from live with a higher seeding threshold', () => {
+    expect(run(30, [4, 5, 8], { ...rules, seeding: 5 })).toEqual(['lowPop', null, null]);
+  });
+
+  it('re-arms seeding once the server has emptied', () => {
+    expect(run(0, [5, 2, 5], { ...rules, seeding: 5, cooldownMs: 0 })).toEqual(['seeding', null, null]);
+    expect(run(0, [5, 0, 5], { ...rules, seeding: 5, cooldownMs: 0 })).toEqual(['seeding', null, 'seeding']);
+  });
+
   it('does not re-announce seeding after a drop from live', () => {
     expect(run(30, [10, 5])).toEqual(['lowPop', null]);
   });

@@ -48,4 +48,13 @@ describe('fetchServer', () => {
 
     await expect(fetchServer('123', fetchFn)).rejects.toThrow();
   });
+
+  it('gives up on a request that stalls', async () => {
+    const stalled = (_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+
+    await expect(fetchServer('123', stalled, 10)).rejects.toThrow();
+  });
 });

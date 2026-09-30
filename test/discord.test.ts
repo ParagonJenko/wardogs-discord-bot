@@ -26,6 +26,13 @@ describe('buildMessage', () => {
     expect(embed?.description).toContain('18/64');
   });
 
+  it('keeps the title within Discord\'s 256 character limit for long server names', () => {
+    const [embed] = buildMessage('lowPop', { ...server, name: 'x'.repeat(500) }, { lowPop: 20 }).embeds;
+
+    expect(embed?.title.length).toBeLessThanOrEqual(256);
+    expect(embed?.title).toMatch(/dropped below 20 players$/);
+  });
+
   it('pings only the configured role', () => {
     const message = buildMessage('live', server, { lowPop: 20, roleId: '999' });
 
@@ -65,5 +72,14 @@ describe('postWebhook', () => {
     await expect(postWebhook('https://discord.com/api/webhooks/1/abc', message, fetchFn)).rejects.toThrow(
       /404/,
     );
+  });
+
+  it('gives up on a request that stalls', async () => {
+    const stalled = (_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+
+    await expect(postWebhook('https://discord.com/api/webhooks/1/abc', message, stalled, 10)).rejects.toThrow();
   });
 });

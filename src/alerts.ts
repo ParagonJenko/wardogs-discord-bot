@@ -32,8 +32,14 @@ const transitionAlert = (from: Phase, to: Phase): AlertKind | null => {
 };
 
 // Once live, the server stays live until it drops below lowPop, which may be lower than live.
-const nextPhase = (from: Phase, players: number, rules: AlertRules): Phase =>
-  from === 'live' && players >= rules.lowPop ? 'live' : phaseFor(players, rules);
+// Seeding is only re-armed by an empty server, so dropping from live to a few players never announces seeding.
+const nextPhase = (from: Phase, players: number, rules: AlertRules): Phase => {
+  if (from === 'live' && players >= rules.lowPop) return 'live';
+  if (players >= rules.live) return 'live';
+  if (players === 0) return 'empty';
+  if (from === 'empty' && players < rules.seeding) return 'empty';
+  return 'seeding';
+};
 
 // The first reading only establishes where the server is; it never alerts.
 export const initialState = (players: number, rules: AlertRules): MonitorState => ({

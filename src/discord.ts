@@ -15,10 +15,17 @@ const COLORS: Record<AlertKind, number> = {
   lowPop: 0xe74c3c,
 };
 
+// Discord rejects embed titles over 256 characters; this leaves room for the longest suffix.
+const MAX_NAME_LENGTH = 200;
+
+const shorten = (name: string): string =>
+  name.length > MAX_NAME_LENGTH ? `${name.slice(0, MAX_NAME_LENGTH - 1)}…` : name;
+
 const title = (kind: AlertKind, server: ServerStatus, lowPop: number): string => {
-  if (kind === 'seeding') return `🌱 ${server.name} is seeding`;
-  if (kind === 'live') return `🟢 ${server.name} is live`;
-  return `🔻 ${server.name} dropped below ${lowPop} players`;
+  const name = shorten(server.name);
+  if (kind === 'seeding') return `🌱 ${name} is seeding`;
+  if (kind === 'live') return `🟢 ${name} is live`;
+  return `🔻 ${name} dropped below ${lowPop} players`;
 };
 
 const CALL_TO_ACTION: Record<AlertKind, string> = {
@@ -45,8 +52,10 @@ export const postWebhook = async (
   webhookUrl: string,
   message: DiscordMessage,
   fetchFn: typeof fetch = fetch,
+  timeoutMs = 8_000,
 ): Promise<void> => {
   const response = await fetchFn(webhookUrl, {
+    signal: AbortSignal.timeout(timeoutMs),
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(message),

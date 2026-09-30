@@ -19,8 +19,14 @@ export type ServerStatus = {
   maxPlayers: number;
 };
 
-export const fetchServer = async (serverId: string, fetchFn: typeof fetch = fetch): Promise<ServerStatus> => {
-  const response = await fetchFn(`https://api.battlemetrics.com/servers/${serverId}`);
+export const fetchServer = async (
+  serverId: string,
+  fetchFn: typeof fetch = fetch,
+  timeoutMs = 8_000,
+): Promise<ServerStatus> => {
+  const response = await fetchFn(`https://api.battlemetrics.com/servers/${serverId}`, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   if (!response.ok) {
     throw new Error(`BattleMetrics request failed: ${response.status} ${response.statusText}`);
   }

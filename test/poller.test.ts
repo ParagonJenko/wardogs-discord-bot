@@ -67,6 +67,17 @@ describe('poller', () => {
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('500'));
   });
 
+  it('drops a failed alert that is no longer true by the next check', async () => {
+    const { tick, send } = setup([0, 20, 0]);
+    send.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+    await tick();
+    await tick();
+    await tick();
+
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps going when BattleMetrics is unreachable', async () => {
     const { tick, sent, log } = setup([0, new Error('fetch failed'), 1]);
 
