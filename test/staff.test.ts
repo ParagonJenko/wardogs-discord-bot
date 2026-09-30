@@ -235,10 +235,10 @@ describe('runStaffCommand', () => {
     const { run, sent } = setup();
 
     await expect(run('setnextmap', { map: 'Europe' })).resolves.toEqual({
-      content: '🗺️ Next map: **Ozeti**. The server goes there when this match ends; the rotation is unchanged.',
+      content: '🗺️ Next map: 🟦 **Ozeti**. The server goes there when this match ends; the rotation is unchanged.',
     });
     await expect(run('changemap', { map: 'bakurani' })).resolves.toEqual({
-      content: '🗺️ Ended the match. The server moves to **Bakurani** after the end screen.',
+      content: '🗺️ Ended the match. The server moves to 🟧 **Bakurani** after the end screen.',
     });
     await expect(run('changemap', { map: 'Moon' })).resolves.toEqual({ content: 'Pick a map from the list.' });
     expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
@@ -262,7 +262,7 @@ describe('runStaffCommand', () => {
 
     await expect(run('setnextmap', { map: 'Europe', infantry_only: 'true', lighting: 'early fog' })).resolves.toEqual({
       content:
-        '🗺️ Next map: **Ozeti** · King of the Hill · Infantry only · Early fog. The server goes there when this match ends; the rotation is unchanged.',
+        '🗺️ Next map: 🟦 **Ozeti** · King of the Hill · Infantry only · Early fog. The server goes there when this match ends; the rotation is unchanged.',
     });
     await expect(run('setnextmap', { map: 'Europe', mode: 'Capture' })).resolves.toEqual({
       content: 'No game mode "Capture" on this map. Pick one from the list.',
@@ -280,7 +280,7 @@ describe('runStaffCommand', () => {
     });
 
     await expect(run('changemap', { map: 'Kavkazi', infantry_only: 'true', hardcore: 'true', zones: 'circle' })).resolves.toEqual({
-      content: '🗺️ Ended the match. The server moves to **Bakurani** · Kavkazi_KOTH_01 · Infantry only · Hardcore · Circle zones after the end screen.',
+      content: '🗺️ Ended the match. The server moves to 🟧 **Bakurani** · Kavkazi_KOTH_01 · Infantry only · Hardcore · Circle zones after the end screen.',
     });
     expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
       `POST /v1/match/map ${JSON.stringify({
@@ -429,9 +429,9 @@ describe('suggestStaff', () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'changemap', options: { map: '' }, focused: 'map' })).resolves.toEqual([
-      { name: 'Bakurani', value: 'Kavkazi' },
-      { name: 'Ozeti', value: 'Europe' },
+      { name: '🟧 Bakurani', value: 'Kavkazi' },
+      { name: '🟦 Ozeti', value: 'Europe' },
     ]);
-    await expect(suggest({ name: 'setnextmap', options: { map: 'oze' }, focused: 'map' })).resolves.toEqual([{ name: 'Ozeti', value: 'Europe' }]);
+    await expect(suggest({ name: 'setnextmap', options: { map: 'oze' }, focused: 'map' })).resolves.toEqual([{ name: '🟦 Ozeti', value: 'Europe' }]);
   });
 });
