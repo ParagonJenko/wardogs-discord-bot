@@ -3,7 +3,9 @@ import type { Embed } from './discord.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
-export const COMMANDS = [{ name: 'status', description: 'Show the WARDOGS server status', type: 1 }];
+const STATUS_COMMAND = 'serverstatus';
+
+export const COMMANDS = [{ name: STATUS_COMMAND, description: 'Show the WARDOGS server status', type: 1 }];
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
@@ -69,14 +71,14 @@ export const handleInteraction = async (
 
   if (interaction.type === PING) return { status: 200, body: { type: PONG } };
 
-  if (interaction.type === APPLICATION_COMMAND && interaction.data?.name === 'status' && interaction.token) {
+  if (interaction.type === APPLICATION_COMMAND && interaction.data?.name === STATUS_COMMAND && interaction.token) {
     const token = interaction.token;
     // Discord allows 3 seconds for the first response and RCON can be slower, so defer and edit later.
     const followUp = async (): Promise<void> => {
       const reply: Reply = await deps.getStatusEmbed().then(
         (embed) => ({ embeds: [embed], allowed_mentions: { parse: [] } }),
         (error: unknown) => {
-          deps.log.error(`/status failed: ${errorText(error)}`);
+          deps.log.error(`/serverstatus failed: ${errorText(error)}`);
           return { content: "Couldn't reach the game server right now. Try again in a minute.", allowed_mentions: { parse: [] } };
         },
       );
@@ -97,5 +99,5 @@ export const editOriginalReply =
       body: JSON.stringify(reply),
       signal: AbortSignal.timeout(8_000),
     });
-    if (!response.ok) throw new Error(`Discord rejected the /status reply: ${response.status}`);
+    if (!response.ok) throw new Error(`Discord rejected the /serverstatus reply: ${response.status}`);
   };
