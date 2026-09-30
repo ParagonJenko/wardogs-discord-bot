@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fetchStatus, type HttpGet } from '../src/rcon.ts';
+import { fetchPlayers, fetchStatus, type HttpGet } from '../src/rcon.ts';
 
 const statusBody = {
   serverName: 'UK Wardogs #1',
@@ -8,7 +8,10 @@ const statusBody = {
   lighting: 'DayClear',
   scoreTick: { current: 20, min: 18, max: 30 },
   players: { current: 14, max: 98 },
-  factionScores: [],
+  factionScores: [
+    { name: 'Valkyra', colorHex: '#3366ff', score: 412 },
+    { name: 'Kharr', colorHex: '#ff3333', score: 388 },
+  ],
   rotation: { nowIndex: 0, nextIndex: 1 },
 };
 
@@ -22,13 +25,32 @@ const respondWith = (status: number, body: unknown) => {
 };
 
 describe('fetchStatus', () => {
-  it('returns the server name and population from /v1/status', async () => {
+  it('returns the server name, population, map and scores from /v1/status', async () => {
     const { get } = respondWith(200, statusBody);
 
     await expect(fetchStatus('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual({
       name: 'UK Wardogs #1',
       players: 14,
       maxPlayers: 98,
+      map: 'Kavkazi',
+      rotationIndex: 0,
+      factionScores: [
+        { name: 'Valkyra', score: 412 },
+        { name: 'Kharr', score: 388 },
+      ],
+    });
+  });
+
+  it('copes with a live build that leaves out the optional fields', async () => {
+    const { get } = respondWith(200, { serverName: 'Bare', players: { current: 0, max: 98 } });
+
+    await expect(fetchStatus('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual({
+      name: 'Bare',
+      players: 0,
+      maxPlayers: 98,
+      map: '',
+      rotationIndex: null,
+      factionScores: [],
     });
   });
 
@@ -61,5 +83,23 @@ describe('fetchStatus', () => {
     const { get } = respondWith(200, '<html>not rcon</html>');
 
     await expect(fetchStatus('http://203.0.113.10:7776', 'secret', get)).rejects.toThrow();
+  });
+});
+
+describe('fetchPlayers', () => {
+  it('returns each player with their kills and deaths from /v1/players', async () => {
+    const { get, requests } = respondWith(200, {
+      players: [
+        { name: 'Ash', steamId: '76561198000000001', faction: 'Valkyra', kills: 12, deaths: 3, cash: 900, pingMs: 40 },
+        { name: 'Bo', steamId: '76561198000000002', faction: 'Kharr', kills: 0, deaths: 1, cash: 100, pingMs: 60 },
+      ],
+      count: 2,
+    });
+
+    await expect(fetchPlayers('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual([
+      { steamId: '76561198000000001', name: 'Ash', kills: 12, deaths: 3 },
+      { steamId: '76561198000000002', name: 'Bo', kills: 0, deaths: 1 },
+    ]);
+    expect(requests[0]?.url).toBe('http://203.0.113.10:7776/v1/players');
   });
 });

@@ -8,8 +8,17 @@ Watches a WARDOGS server through its RCON API and posts to a Discord channel whe
 | 🟢 Live      | The server reaches `LIVE_THRESHOLD` players                | 20 players  |
 | 🔻 Low pop   | A live server drops below `LOW_POP_THRESHOLD` players      | below 20    |
 
-It posts through a Discord webhook, so there is no bot account or token to set up. It reads
-`GET /v1/status` from the server's RCON listener every 60 seconds.
+It also posts:
+
+- **Top seeders** on the live alert: the 3 players who were online longest while the server seeded.
+- **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
+  length, peak population, and the top 5 players by kills with deaths and K/D.
+
+And it answers **`/status`** in Discord with the current population, state, map and score
+(Cloudflare only; see [Slash command](#slash-command-status)).
+
+Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
+`GET /v1/players` from the server's RCON listener.
 
 ## Setup
 
@@ -42,6 +51,8 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    ```bash
    npm run deploy
    ```
+   Wrangler prints the Worker's URL, like `https://wardogs-discord-bot.<you>.workers.dev`. You need it
+   for `/status`.
 
 Logs are under Workers & Pages → wardogs-discord-bot → Logs in the Cloudflare dashboard. The first run
 logs `Watching "<server name>": N/M players`. `RCON rejected the password (401)` means the password
@@ -52,6 +63,34 @@ To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` agai
 
 Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
 socket to the RCON listener and sends the HTTP request itself.
+
+## Slash command: /status
+
+`/status` needs a Discord application, because webhooks cannot receive commands. Discord sends each
+command to the Worker's URL; nothing has to stay connected.
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → New Application.
+2. On **General Information**, copy the **Application ID** and **Public Key**. Store the public key:
+   ```bash
+   npx wrangler secret put DISCORD_PUBLIC_KEY
+   npm run deploy
+   ```
+3. Still on **General Information**, set **Interactions Endpoint URL** to the Worker's URL and save.
+   Discord checks the endpoint straight away; if saving fails, the public key is wrong or not deployed.
+4. On **Bot**, click **Reset Token** and copy the token. It is only used to register the command, so
+   it does not need to be stored anywhere.
+5. Register the command:
+   ```bash
+   DISCORD_APPLICATION_ID=<application id> DISCORD_BOT_TOKEN=<token> npm run register
+   ```
+6. Add the app to your Discord server by opening this link:
+   `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
+
+`/status` replies publicly in the channel. If the game server cannot be reached, it says so, and the
+reason is in the Worker logs.
+
+The Node/Docker version does not support `/status`, because Discord needs a public HTTPS URL to send
+commands to. Alerts, top seeders and match summaries work in both.
 
 ## Run with Node or Docker
 
@@ -80,6 +119,13 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   19–20 players would post live / low-pop every minute.
 - `LOW_POP_THRESHOLD` can be set lower than `LIVE_THRESHOLD` (for example live at 40, warn below 30) to
   give more slack before the warning.
+- Seeding time is counted once per check (every minute) for everyone online while the server is below
+  the live threshold. It resets when the server goes live or empties.
+- WARDOGS RCON does not report when a match ends. The bot treats a map change, or players' kills going
+  backwards (a restart on the same map), as a new match, and summarises the previous one from the last
+  stats it saw. That can miss up to one minute at the end of the match. Players who left mid-match keep
+  their last stats. Length is timed from when the server went live. Matches that never went live are
+  not summarised, and neither is the match already running when the bot starts.
 - If a Discord post fails, the alert is retried on the next check while it is still true. If RCON is
   unreachable (for example during the game's daily restart), the check is skipped and logged; no alert
   is sent for the outage itself.
@@ -87,11 +133,14 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 ## Security
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). The
-bot only ever calls `GET /v1/status`, but:
+bot only ever calls `GET /v1/status` and `GET /v1/players`, but:
 
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if
   your host offers one.
+- `/status` requests are only accepted with a valid Discord signature (checked against
+  `DISCORD_PUBLIC_KEY`), so nobody else can make the Worker call your server.
+- Player names in posts are escaped, and posts never ping anyone except the configured role.
 
 ## Development
 

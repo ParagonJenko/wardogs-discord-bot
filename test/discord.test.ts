@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMessage, postWebhook } from '../src/discord.ts';
+import { buildMatchSummary, buildMessage, buildStatusEmbed, postWebhook } from '../src/discord.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 
@@ -32,6 +32,27 @@ describe('buildMessage', () => {
     expect(embed?.title).toMatch(/dropped below 20 players$/);
   });
 
+  it('credits the top seeders when the server goes live', () => {
+    const [embed] = buildMessage('live', { ...server, players: 20 }, {
+      lowPop: 20,
+      seeders: [
+        { name: 'Ash', minutes: 42 },
+        { name: 'b_o_b', minutes: 30 },
+        { name: 'Cy', minutes: 12 },
+      ],
+    }).embeds;
+
+    expect(embed?.fields).toEqual([
+      { name: 'Top seeders', value: '1. Ash (42 min)\n2. b\\_o\\_b (30 min)\n3. Cy (12 min)' },
+    ]);
+  });
+
+  it('adds no seeder list when nobody seeded', () => {
+    const [embed] = buildMessage('live', server, { lowPop: 20, seeders: [] }).embeds;
+
+    expect(embed?.fields).toBeUndefined();
+  });
+
   it('pings only the configured role', () => {
     const message = buildMessage('live', server, { lowPop: 20, roleId: '999' });
 
@@ -44,6 +65,84 @@ describe('buildMessage', () => {
 
     expect(message.content).toBeUndefined();
     expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+});
+
+describe('buildMatchSummary', () => {
+  const summary = {
+    map: 'Kavkazi',
+    durationMs: 38 * 60_000,
+    peakPlayers: 64,
+    factionScores: [
+      { name: 'Valkyra', score: 250 },
+      { name: 'Kharr', score: 300 },
+    ],
+    top: [
+      { name: 'Cy', kills: 12, deaths: 3 },
+      { name: '**Ash**', kills: 11, deaths: 1 },
+    ],
+  };
+
+  it('names the map, winner, scores, length and peak population', () => {
+    const [embed] = buildMatchSummary(summary, 'UK Wardogs #1').embeds;
+
+    expect(embed?.title).toBe('🏁 Match over on Bakurani');
+    expect(embed?.description).toBe('**Kharr** won 300 – 250 · 38 min · peak 64 players');
+  });
+
+  it('lists the top players with kills, deaths and K/D, escaping their names', () => {
+    const [embed] = buildMatchSummary(summary, 'UK Wardogs #1').embeds;
+
+    expect(embed?.fields).toEqual([
+      { name: 'Top players', value: '1. Cy: 12 kills, 3 deaths (4.00 K/D)\n2. \\*\\*Ash\\*\\*: 11 kills, 1 death (11.00 K/D)' },
+    ]);
+  });
+
+  it('never pings anyone', () => {
+    expect(buildMatchSummary(summary, 'UK Wardogs #1').allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+
+  it('falls back to the raw map id and leaves out missing scores', () => {
+    const [embed] = buildMatchSummary({ ...summary, map: 'NewMap', factionScores: [], top: [] }, 'UK').embeds;
+
+    expect(embed?.title).toBe('🏁 Match over on NewMap');
+    expect(embed?.description).toBe('38 min · peak 64 players');
+    expect(embed?.fields).toBeUndefined();
+  });
+});
+
+describe('buildStatusEmbed', () => {
+  const status = {
+    name: 'UK Wardogs #1',
+    players: 24,
+    maxPlayers: 98,
+    map: 'Europe',
+    rotationIndex: 2,
+    factionScores: [
+      { name: 'Valkyra', score: 120 },
+      { name: 'Kharr', score: 95 },
+    ],
+  };
+  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 };
+
+  it('shows population, state, map and scores', () => {
+    expect(buildStatusEmbed(status, rules)).toEqual({
+      title: 'UK Wardogs #1',
+      description: '🟢 **Live** · **24/98** players',
+      color: 0x2ecc71,
+      fields: [
+        { name: 'Map', value: 'Ozeti', inline: true },
+        { name: 'Score', value: 'Valkyra 120 – 95 Kharr', inline: true },
+      ],
+    });
+  });
+
+  it('shows a seeding or empty server', () => {
+    expect(buildStatusEmbed({ ...status, players: 5 }, rules).description).toBe('🌱 **Seeding** · **5/98** players');
+    expect(buildStatusEmbed({ ...status, players: 0, factionScores: [] }, rules)).toMatchObject({
+      description: '⚪ **Empty** · **0/98** players',
+      fields: [{ name: 'Map', value: 'Ozeti', inline: true }],
+    });
   });
 });
 
