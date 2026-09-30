@@ -295,7 +295,7 @@ describe('poller stats', () => {
       ['Kavkazi#0', 60_000, 180_000],
       ['Europe#0', 180_000, 300_000],
     ]);
-    expect(stats.matchEnded.mock.calls[1]?.[0].players['b']).toEqual({ name: 'Pb', kills: 6, deaths: 0 });
+    expect(stats.matchEnded.mock.calls[1]?.[0].players['b']).toMatchObject({ name: 'Pb', kills: 6, deaths: 0 });
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('404'));
   });
 

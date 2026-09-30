@@ -130,7 +130,7 @@ export const matchRecord = (match: MatchState, endedAt: number): MatchRecord => 
     durationMs: summary.durationMs,
     peakPlayers: summary.peakPlayers,
     factionScores: summary.factionScores,
-    players: Object.entries(match.players).map(([steamId, p]) => ({ steamId, ...p })),
+    players: Object.entries(match.players).map(([steamId, p]) => ({ steamId, name: p.name, kills: p.kills, deaths: p.deaths })),
   };
 };
 

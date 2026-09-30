@@ -82,20 +82,74 @@ describe('match tracking', () => {
     const { finished } = observe([
       { status: status(), players: [player('a', 5), player('b', 20)] },
       { status: status(), players: [player('a', 6)] },
-      { status: status({ rotationIndex: 1 }), players: [] },
+      { status: status({ map: 'Europe', rotationIndex: 1 }), players: [] },
     ]);
 
     expect(finished).toMatchObject([{ top: [{ name: 'Pb', kills: 20 }, { name: 'Pa', kills: 6 }] }]);
   });
 
-  it('treats kills going backwards as a restarted match on the same map', () => {
+  it('treats a restart on the same map as a new match: scores drop and most counters start again', () => {
+    const restart = status({ factionScores: [{ name: 'Valkyra', score: 2 }, { name: 'Kharr', score: 1 }] });
     const { finished } = observe([
-      { status: status(), players: [player('a', 5)] },
-      { status: status(), players: [player('a', 8)] },
-      { status: status(), players: [player('a', 0)] },
+      { status: status(), players: [player('a', 5), player('b', 2), player('c', 1)] },
+      { status: status(), players: [player('a', 8), player('b', 3), player('c', 1)] },
+      { status: restart, players: [player('a', 0), player('b', 0), player('c', 1)] },
     ]);
 
-    expect(finished).toMatchObject([{ top: [{ name: 'Pa', kills: 8 }] }]);
+    expect(finished).toMatchObject([{ top: [{ name: 'Pa', kills: 8 }, { name: 'Pb', kills: 3 }, { name: 'Pc', kills: 1 }] }]);
+  });
+
+  it('keeps one match when a player rejoins and their counters start again, adding up their kills', () => {
+    const { finished } = observe([
+      { status: status(), players: [player('a', 5, 1), player('b', 3), player('c', 2)] },
+      { status: status(), players: [player('a', 8, 2), player('b', 4), player('c', 2)] },
+      { status: status(), players: [player('a', 0, 0), player('b', 6), player('c', 3)] },
+      { status: status(), players: [player('a', 3, 1), player('b', 6), player('c', 3)] },
+      { status: status({ map: 'Europe', rotationIndex: 1 }), players: [] },
+    ]);
+
+    expect(finished).toEqual([
+      expect.objectContaining({
+        top: [
+          { name: 'Pa', kills: 11, deaths: 3 },
+          { name: 'Pb', kills: 6, deaths: 0 },
+          { name: 'Pc', kills: 3, deaths: 0 },
+        ],
+      }),
+    ]);
+  });
+
+  it('keeps one match when the rotation slot moves or a reading leaves out the map', () => {
+    const { finished } = observe([
+      { status: status(), players: [player('a', 1)] },
+      { status: status({ rotationIndex: 4 }), players: [player('a', 2)] },
+      { status: status({ map: '', rotationIndex: null }), players: [player('a', 3)] },
+      { status: status(), players: [player('a', 4)] },
+      { status: status({ map: 'Europe', rotationIndex: 1 }), players: [] },
+    ]);
+
+    expect(finished).toEqual([expect.objectContaining({ map: 'Kavkazi', top: [{ name: 'Pa', kills: 4, deaths: 0 }] })]);
+  });
+
+  it('keeps one match when the scores drop but the players’ counters do not (a bad reading)', () => {
+    const { finished } = observe([
+      { status: status(), players: [player('a', 5), player('b', 2)] },
+      { status: status({ factionScores: [{ name: 'Valkyra', score: 0 }, { name: 'Kharr', score: 0 }] }), players: [player('a', 6), player('b', 2)] },
+      { status: status(), players: [player('a', 7), player('b', 3)] },
+      { status: status({ map: 'Europe', rotationIndex: 1 }), players: [] },
+    ]);
+
+    expect(finished).toEqual([expect.objectContaining({ top: [{ name: 'Pa', kills: 7, deaths: 0 }, { name: 'Pb', kills: 3, deaths: 0 }] })]);
+  });
+
+  it('treats most counters starting again as a restart when the server reports no scores', () => {
+    const noScores = status({ factionScores: [] });
+    const { finished } = observe([
+      { status: noScores, players: [player('a', 5), player('b', 2)] },
+      { status: noScores, players: [player('a', 0), player('b', 0)] },
+    ]);
+
+    expect(finished).toMatchObject([{ top: [{ name: 'Pa', kills: 5 }, { name: 'Pb', kills: 2 }] }]);
   });
 
   it('lists at most five players, most kills first and fewer deaths breaking ties', () => {

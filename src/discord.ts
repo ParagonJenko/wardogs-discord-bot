@@ -95,10 +95,20 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
 const byScore = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
 
 const result = (scores: FactionScore[]): string[] => {
-  const [first, second] = byScore(scores);
+  const ranked = byScore(scores);
+  const [first, second, ...rest] = ranked;
   if (!first || !second) return [];
-  if (first.score === second.score) return [`Draw ${first.score} – ${second.score}`];
-  return [`**${escapeMarkdown(first.name)}** won ${first.score} – ${second.score}`];
+  const draw = first.score === second.score;
+  if (rest.length === 0) {
+    return [draw ? `Draw ${first.score} – ${second.score}` : `**${escapeMarkdown(first.name)}** won ${first.score} – ${second.score}`];
+  }
+  // Three or more factions: name them all, so it is clear who came second and third.
+  const others = ranked.slice(1).map((s) => `${escapeMarkdown(s.name)} ${s.score}`);
+  return [
+    draw
+      ? `Draw: ${escapeMarkdown(first.name)} ${first.score}, ${others.join(', ')}`
+      : `**${escapeMarkdown(first.name)}** won ${first.score}, ${others.join(', ')}`,
+  ];
 };
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
