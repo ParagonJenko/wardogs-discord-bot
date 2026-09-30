@@ -18,7 +18,7 @@ export type StepResult = {
   alert: AlertKind | null;
 };
 
-const phaseFor = (players: number, rules: AlertRules): Phase => {
+export const phaseFor = (players: number, rules: AlertRules): Phase => {
   if (players >= rules.live) return 'live';
   if (players >= rules.seeding) return 'seeding';
   return 'empty';
