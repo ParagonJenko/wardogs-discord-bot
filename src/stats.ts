@@ -165,6 +165,12 @@ export const recordMatch = (stats: SiteStats, summary: MatchSummary, at: number)
   matches: [{ ...summary, map: mapName(summary.map), endedAt: at }, ...stats.matches].slice(0, MATCHES_KEPT),
 });
 
+// Takes a match off the recent matches, as when it was recorded by mistake. A match is picked by when it ended.
+export const removeRecentMatch = (stats: SiteStats, endedAt: number): { stats: SiteStats; removed: RecentMatch | null } => {
+  const removed = stats.matches.find((m) => m.endedAt === endedAt) ?? null;
+  return { stats: { ...stats, matches: stats.matches.filter((m) => m !== removed) }, removed };
+};
+
 export const discordDue = (stats: SiteStats, now: number): boolean =>
   stats.discord === null || now - stats.discord.fetchedAt >= DISCORD_REFRESH_MS;
 

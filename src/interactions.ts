@@ -3,7 +3,7 @@ import type { Embed } from './discord.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
-const COMMAND_NAMES = ['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders'] as const;
+const COMMAND_NAMES = ['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders', 'removematch'] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
 const isCommandName = (name: string | undefined): name is CommandName =>
@@ -12,9 +12,9 @@ const isCommandName = (name: string | undefined): name is CommandName =>
 // Discord permission bit for "Administrator".
 const ADMINISTRATOR = 1n << 3n;
 
-// Admin commands change things in game or show Steam IDs, so they are hidden from, and refused to, anyone who is not
-// an Administrator. Their replies are only shown to the person who ran them.
-const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders'];
+// Admin commands change things in game or in the records, or show Steam IDs, so they are hidden from, and refused to,
+// anyone who is not an Administrator. Their replies are only shown to the person who ran them.
+const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'removematch'];
 
 export const SEEDERS_DEFAULT_DAYS = 7;
 export const SEEDERS_MAX_DAYS = 90;
@@ -51,13 +51,23 @@ export const COMMANDS = [
       },
     ],
   },
+  {
+    name: 'removematch',
+    description: 'Delete a wrongly recorded match and its leaderboard counts (Administrators only)',
+    type: 1,
+    default_member_permissions: String(ADMINISTRATOR),
+    contexts: [0],
+    options: [{ type: 3, name: 'match', description: 'Pick the match from the list', required: true, autocomplete: true }],
+  },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
+const AUTOCOMPLETE = 4;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
+const AUTOCOMPLETE_RESULT = 8;
 const EPHEMERAL = 64;
 
 const InteractionSchema = z.object({
@@ -78,12 +88,16 @@ const InteractionSchema = z.object({
 
 export type CommandRequest = { name: CommandName; options: Record<string, string>; userId: string | null };
 export type CommandReply = { content?: string; embeds?: Embed[] };
+// An option value offered while someone types, such as a match to pick.
+export type Choice = { name: string; value: string };
 
 type Reply = CommandReply & { allowed_mentions: { parse: never[] } };
 
 type InteractionDeps = {
   publicKey: string;
   runCommand: (request: CommandRequest) => Promise<CommandReply>;
+  // What to offer for an option with autocomplete; the request holds what has been typed so far.
+  suggest: (request: CommandRequest) => Promise<Choice[]>;
   editReply: (applicationId: string, token: string, reply: Reply) => Promise<void>;
   log: { error: (message: string) => void };
   now: () => number;
@@ -143,6 +157,29 @@ export const handleInteraction = async (
   if (interaction.type === PING) return { status: 200, body: { type: PONG } };
 
   const name = interaction.data?.name;
+  const toRequest = (command: CommandName): CommandRequest => ({
+    name: command,
+    options: Object.fromEntries((interaction.data?.options ?? []).map((o) => [o.name, String(o.value)])),
+    userId: interaction.member?.user?.id ?? null,
+  });
+
+  // Suggestions while someone types. Nobody who could not run the command gets any.
+  if (interaction.type === AUTOCOMPLETE) {
+    const allowed =
+      isCommandName(name) &&
+      (!ADMIN_COMMANDS.includes(name) ||
+        (deps.adminGuildId !== undefined &&
+          interaction.guild_id === deps.adminGuildId &&
+          isAdministrator(interaction.member?.permissions)));
+    const choices = allowed
+      ? await deps.suggest(toRequest(name)).catch((error: unknown) => {
+          deps.log.error(`/${name} suggestions failed: ${errorText(error)}`);
+          return [];
+        })
+      : [];
+    return { status: 200, body: { type: AUTOCOMPLETE_RESULT, data: { choices } } };
+  }
+
   if (interaction.type !== APPLICATION_COMMAND || !isCommandName(name) || !interaction.token) {
     return { status: 200, body: privateMessage('Unknown command.') };
   }
@@ -157,11 +194,7 @@ export const handleInteraction = async (
   }
 
   const token = interaction.token;
-  const request: CommandRequest = {
-    name,
-    options: Object.fromEntries((interaction.data?.options ?? []).map((o) => [o.name, String(o.value)])),
-    userId: interaction.member?.user?.id ?? null,
-  };
+  const request = toRequest(name);
   // Discord allows 3 seconds for the first response and RCON can be slower, so defer and edit later.
   const followUp = async (): Promise<void> => {
     const reply: Reply = await deps.runCommand(request).then(

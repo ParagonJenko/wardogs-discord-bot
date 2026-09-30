@@ -1,7 +1,7 @@
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config.ts';
-import { runCommand } from './commands.ts';
+import { runCommand, suggestOptions } from './commands.ts';
 import { postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
@@ -11,6 +11,7 @@ import {
   leaderboard,
   matchRecord,
   matchRecordKey,
+  parseMatchRecord,
   parsePlayerDay,
   playerDayKey,
   rankSeeders,
@@ -18,6 +19,7 @@ import {
   recordActivity,
   recordMatchPlayers,
   recordSeed,
+  unrecordMatchPlayers,
   type SeedCredit,
 } from './players.ts';
 import { createPoller, parseState } from './poller.ts';
@@ -30,8 +32,10 @@ import {
   recordDiscord,
   recordMatch,
   recordObservation,
+  removeRecentMatch,
   type Observation,
   type PublicStats,
+  type RecentMatch,
   type SiteStats,
 } from './stats.ts';
 import { summarise, type MatchState } from './tracking.ts';
@@ -48,6 +52,8 @@ const stringVars = (env: Env): Record<string, string> =>
   );
 
 const SEEDERS_LISTED = 25;
+// Recent matches are the last 10, so their records are among the newest few.
+const MATCH_RECORDS_SEARCHED = 50;
 const LEADERBOARD_DAYS = 30;
 const LEADERBOARD_SIZE = 10;
 
@@ -173,6 +179,31 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
+  // Recent matches, newest first, to pick from in /removematch.
+  async recentMatches(): Promise<RecentMatch[]> {
+    return parseStats(await this.ctx.storage.get('stats')).matches;
+  }
+
+  // Deletes a match recorded by mistake: from the recent matches, its private record, and its players' totals for
+  // the day it was credited to. Returns null if no recent match ended at that time.
+  async removeMatch(endedAt: number): Promise<{ match: RecentMatch; players: number } | null> {
+    const storage = this.ctx.storage;
+    const { stats, removed } = removeRecentMatch(parseStats(await storage.get('stats')), endedAt);
+    if (removed === null) return null;
+    const records = await storage.list({ prefix: 'match:', reverse: true, limit: MATCH_RECORDS_SEARCHED });
+    const found = [...records].find(([, value]) => parseMatchRecord(value)?.endedAt === endedAt);
+    const record = found === undefined ? null : parseMatchRecord(found[1]);
+    if (found === undefined || record === null) {
+      await storage.put('stats', stats);
+      return { match: removed, players: 0 };
+    }
+    const dayKey = playerDayKey(endedAt);
+    const day = unrecordMatchPlayers(parsePlayerDay(await storage.get(dayKey)), record.players);
+    // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
+    await Promise.all([storage.put({ stats, [dayKey]: day }), storage.delete(found[0])]);
+    return { match: removed, players: record.players.length };
+  }
+
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
   async seeders(days: number): Promise<SeederRow[]> {
     const keys = recentDayKeys(Date.now(), days);
@@ -254,8 +285,10 @@ export default {
           http: socketHttp(connect),
           lastMatch: async () => (await env.WATCHER.get(env.WATCHER.idFromName('watcher')).stats()).matches[0] ?? null,
           seeders: (days) => env.WATCHER.get(env.WATCHER.idFromName('watcher')).seeders(days),
+          removeMatch: (endedAt) => env.WATCHER.get(env.WATCHER.idFromName('watcher')).removeMatch(endedAt),
           log: console,
         }),
+        suggest: suggestOptions({ recentMatches: () => env.WATCHER.get(env.WATCHER.idFromName('watcher')).recentMatches() }),
         editReply: editOriginalReply(),
         log: console,
         now: Date.now,

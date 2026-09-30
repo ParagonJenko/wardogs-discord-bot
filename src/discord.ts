@@ -94,20 +94,21 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
 
 const byScore = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
 
-const result = (scores: FactionScore[]): string[] => {
+// `markdown` escapes names and bolds the winner, for embeds; without it the text is plain, for a menu.
+const result = (scores: FactionScore[], markdown = true): string[] => {
   const ranked = byScore(scores);
   const [first, second, ...rest] = ranked;
   if (!first || !second) return [];
+  const name = (s: FactionScore): string => (markdown ? escapeMarkdown(s.name) : s.name);
+  const winner = markdown ? `**${name(first)}**` : name(first);
   const draw = first.score === second.score;
   if (rest.length === 0) {
-    return [draw ? `Draw ${first.score} – ${second.score}` : `**${escapeMarkdown(first.name)}** won ${first.score} – ${second.score}`];
+    return [draw ? `Draw ${first.score} – ${second.score}` : `${winner} won ${first.score} – ${second.score}`];
   }
   // Three or more factions: name them all, so it is clear who came second and third.
-  const others = ranked.slice(1).map((s) => `${escapeMarkdown(s.name)} ${s.score}`);
+  const others = ranked.slice(1).map((s) => `${name(s)} ${s.score}`);
   return [
-    draw
-      ? `Draw: ${escapeMarkdown(first.name)} ${first.score}, ${others.join(', ')}`
-      : `**${escapeMarkdown(first.name)}** won ${first.score}, ${others.join(', ')}`,
+    draw ? `Draw: ${name(first)} ${first.score}, ${others.join(', ')}` : `${winner} won ${first.score}, ${others.join(', ')}`,
   ];
 };
 
@@ -247,6 +248,37 @@ export const buildSeedersEmbed = (seeders: SeederRow[], days: number, seedMinute
   );
   return { title, description: [numbered(lines), '', ...notes].join('\n'), color: COLORS.seeding };
 };
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const utcTime = (at: number): string => {
+  const d = new Date(at);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+};
+
+// Discord caps a menu choice's name at 100 characters.
+const MAX_CHOICE_NAME = 100;
+
+// A recent match as a choice in /removematch. The value is when it ended, which identifies it.
+export const matchChoice = (match: RecentMatch): { name: string; value: string } => {
+  const name = [
+    mapName(match.map) || 'Unknown map',
+    ...result(match.factionScores, false),
+    `${Math.round(match.durationMs / 60_000)} min`,
+    `ended ${utcTime(match.endedAt)}`,
+  ].join(' · ');
+  return { name: name.length > MAX_CHOICE_NAME ? `${name.slice(0, MAX_CHOICE_NAME - 1)}…` : name, value: String(match.endedAt) };
+};
+
+export const removedMatchText = (match: RecentMatch, players: number): string =>
+  [
+    `🗑️ Removed the ${mapName(match.map) || 'unknown map'} match that ended <t:${Math.floor(match.endedAt / 1000)}:f>` +
+      ` (${[...result(match.factionScores), `${Math.round(match.durationMs / 60_000)} min`].join(' · ')}).`,
+    players > 0
+      ? `Its match, kills and deaths came off ${players === 1 ? "1 player's" : `${players} players'`} totals.`
+      : 'It had no player records to take off.',
+  ].join(' ');
 
 export const buildLastMatchEmbed = (match: RecentMatch): Embed => {
   const [summary] = buildMatchSummary(match, '').embeds;

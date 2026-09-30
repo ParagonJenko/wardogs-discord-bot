@@ -109,6 +109,28 @@ export const recordSeed = (day: PlayerDay, seeders: SeedCredit[], minMinutes: nu
     seeders.filter((s) => s.minutes > minMinutes).map((s) => [s.steamId, s.name, () => ({ seedDays: 1 })]),
   );
 
+// Takes a match back off the totals of everyone who played in it, for the day it was credited to. Used when a match
+// was recorded by mistake.
+export const unrecordMatchPlayers = (day: PlayerDay, players: MatchPlayer[]): PlayerDay =>
+  update(
+    day,
+    players.flatMap((p) => {
+      const known = day[p.steamId];
+      if (known === undefined) return [];
+      return [
+        [
+          p.steamId,
+          known.name,
+          (t: PlayerTotals) => ({
+            matches: Math.max(0, t.matches - 1),
+            kills: Math.max(0, t.kills - p.kills),
+            deaths: Math.max(0, t.deaths - p.deaths),
+          }),
+        ] as const,
+      ];
+    }),
+  );
+
 // Credits a finished match to everyone who played in it, on the day it ended.
 export const recordMatchPlayers = (day: PlayerDay, match: MatchState): PlayerDay =>
   update(
@@ -132,6 +154,22 @@ export const matchRecord = (match: MatchState, endedAt: number): MatchRecord => 
     factionScores: summary.factionScores,
     players: Object.entries(match.players).map(([steamId, p]) => ({ steamId, name: p.name, kills: p.kills, deaths: p.deaths })),
   };
+};
+
+const MatchRecordSchema = z.object({
+  map: z.string(),
+  startedAt: z.number(),
+  liveAt: z.number(),
+  endedAt: z.number(),
+  durationMs: z.number(),
+  peakPlayers: z.number(),
+  factionScores: z.array(z.object({ name: z.string(), score: z.number() })),
+  players: z.array(z.object({ steamId: z.string(), name: z.string(), kills: z.number(), deaths: z.number() })),
+});
+
+export const parseMatchRecord = (raw: unknown): MatchRecord | null => {
+  const parsed = MatchRecordSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 };
 
 // Adds up days, oldest first, so each player keeps the name they used most recently.
