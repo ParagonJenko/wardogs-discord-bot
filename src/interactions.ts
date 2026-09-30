@@ -162,7 +162,7 @@ export const COMMANDS = [
   },
   {
     name: 'changemap',
-    description: 'End the current match now and change map (staff only)',
+    description: 'End the current match now and change map and setup (staff only)',
     ...STAFF_ONLY,
     options: matchSetup,
   },

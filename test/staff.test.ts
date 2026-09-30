@@ -250,6 +250,26 @@ describe('runStaffCommand', () => {
     ]);
   });
 
+  it('/changemap queues the map with its setup, then ends the match', async () => {
+    const { run, sent } = setup({
+      'GET /v1/rotation': [200, { enabled: true, mode: 'ordered', entries: [{ map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01'] }] }],
+      'GET /v1/catalog/maps/Kavkazi/experiences': [200, { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly', 'KOTH_Hardcore'] }],
+      'GET /v1/catalog/maps/Kavkazi/alternators': [200, { alternators: [{ tag: 'ZoneAlternator.Bakurani.Default.Circle', displayName: 'Circle' }] }],
+    });
+
+    await expect(run('changemap', { map: 'Kavkazi', infantry_only: 'true', hardcore: 'true', zones: 'circle' })).resolves.toEqual({
+      content: '🗺️ Ended the match. The server moves to **Bakurani** · Kavkazi_KOTH_01 · Infantry only · Hardcore · Circle zones after the end screen.',
+    });
+    expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
+      `POST /v1/match/map ${JSON.stringify({
+        map: 'Kavkazi',
+        experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly', 'KOTH_Hardcore'],
+        zoneAlternator: 'ZoneAlternator.Bakurani.Default.Circle',
+      })}`,
+      'POST /v1/match/end {}',
+    ]);
+  });
+
   it('/vip add and /vip remove go through the records', async () => {
     const { run, records } = setup();
 
