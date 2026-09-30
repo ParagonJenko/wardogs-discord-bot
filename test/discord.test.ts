@@ -7,6 +7,7 @@ import {
   buildRotationEmbed,
   buildSeedersEmbed,
   buildStatusEmbed,
+  buildVipMessage,
   postWebhook,
 } from '../src/discord.ts';
 
@@ -314,6 +315,36 @@ describe('buildSeedersEmbed', () => {
     expect(embed.title).toBe('🌱 Top seeders, last 1 day');
     expect(embed.description).toMatch(/^Nobody seeded in that time\.\n\n/);
     expect(embed.description).toContain('🎖️ Seed on 3 days in a week and get a reserved slot for a week.');
+  });
+});
+
+describe('buildVipMessage', () => {
+  const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
+  const offer =
+    "🎖️ Seed on 3 days in a week and get a reserved slot for a week. A seed counts when you're on for more than 10 min and the server goes live.";
+
+  it('names who earned a reserved slot, and says what seeding earns', () => {
+    const message = buildVipMessage([{ name: 'Ash_1' }], [], vip);
+
+    expect(message.embeds[0]).toMatchObject({ title: '🎖️ Reserved slots for seeders' });
+    expect(message.embeds[0]?.description).toBe(
+      ["**Ash\\_1** earned a reserved slot for a week by seeding.", "It starts after the server's next restart.", '', offer].join('\n'),
+    );
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+
+  it('lists several players, and who kept theirs for another week', () => {
+    const [embed] = buildVipMessage([{ name: 'Ash' }, { name: 'Bo' }, { name: 'Cy' }], [{ name: 'Dee' }], vip).embeds;
+
+    expect(embed?.description).toMatch(
+      /^\*\*Ash, Bo and Cy\*\* earned reserved slots for a week by seeding\.\nKept for another week: Dee\.\n/,
+    );
+  });
+
+  it('keeps a long list short', () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ name: `P${i}` }));
+
+    expect(buildVipMessage(many, [], vip).embeds[0]?.description).toContain('P19 and 5 more** earned');
   });
 });
 

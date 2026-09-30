@@ -227,6 +227,36 @@ export const buildRotationEmbed = (rotation: Rotation): Embed => {
   return { title, description: shown.join('\n'), color: INFO_COLOR };
 };
 
+// Discord caps an embed description at 4096 characters; this many names stays well inside it.
+const MAX_NAMES_ANNOUNCED = 20;
+
+const nameList = (names: string[]): string => {
+  const shown = names.slice(0, MAX_NAMES_ANNOUNCED).map(playerName);
+  const more = names.length - shown.length;
+  const all = more > 0 ? [...shown, `${more} more`] : shown;
+  return all.length > 1 ? `${all.slice(0, -1).join(', ')} and ${all.at(-1)}` : (all[0] ?? '');
+};
+
+// Posted when seeders get a reserved slot, or keep one for another week, so everyone sees what seeding earns.
+export const buildVipMessage = (added: { name: string }[], renewed: { name: string }[], vip: VipRule): DiscordMessage => {
+  const lines = [
+    ...(added.length > 0
+      ? [
+          `**${nameList(added.map((p) => p.name))}** earned ${added.length === 1 ? 'a reserved slot' : 'reserved slots'} ` +
+            `for ${span(vip.lengthDays)} by seeding.`,
+        ]
+      : []),
+    ...(renewed.length > 0 ? [`Kept for another ${vip.lengthDays === 7 ? 'week' : span(vip.lengthDays)}: ${nameList(renewed.map((p) => p.name))}.`] : []),
+    "It starts after the server's next restart.",
+    '',
+    vipOffer(vip),
+  ];
+  return {
+    embeds: [{ title: '🎖️ Reserved slots for seeders', description: lines.join('\n'), color: COLORS.seeding }],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
 export type SeederRow = { steamId: string; name: string; seedingMinutes: number; seedDays: number; vipUntil: number | null };
 
 // For admins, so it shows Steam IDs; the reply is only visible to the admin who asked.

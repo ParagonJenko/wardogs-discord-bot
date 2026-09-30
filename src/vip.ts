@@ -85,7 +85,10 @@ export const editReserved = (text: string, add: string[], remove: string[]): str
   return [...lines.slice(0, start + 1), ...section, ...lines.slice(end)].join(eol);
 };
 
-export type VipPlan = { add: { steamId: string; name: string }[]; remove: string[]; granted: Record<string, VipGrant> };
+type Named = { steamId: string; name: string };
+
+// `renewed` are players whose week was up but who earned it again, so they keep it for another week.
+export type VipPlan = { add: Named[]; remove: string[]; renewed: Named[]; granted: Record<string, VipGrant> };
 
 export const planVip = (
   earned: { steamId: string; name: string }[],
@@ -100,10 +103,13 @@ export const planVip = (
 
   // Someone an admin took off the list is forgotten; if they have earned VIP, they are added again below.
   const current = Object.entries(granted).filter(([id]) => onList.has(id));
+  const renewed: Named[] = [];
   const stays = current.flatMap(([id, g]): [string, VipGrant][] => {
     if (now < g.expiresAt) return [[id, g]];
     const name = earners.get(id);
-    return name === undefined ? [] : [[id, grant(name)]];
+    if (name === undefined) return [];
+    renewed.push({ steamId: id, name });
+    return [[id, grant(name)]];
   });
   const kept = new Set(stays.map(([id]) => id));
   const remove = current.map(([id]) => id).filter((id) => !kept.has(id));
@@ -113,6 +119,7 @@ export const planVip = (
   return {
     add,
     remove,
+    renewed,
     granted: Object.fromEntries([...stays, ...add.map((p): [string, VipGrant] => [p.steamId, grant(p.name)])]),
   };
 };
@@ -139,15 +146,19 @@ const refused = (result: ConfigResult): string | null => {
   return null;
 };
 
-const names = (players: { steamId: string; name: string }[]): string =>
-  players.map((p) => `${p.name} (${p.steamId})`).join(', ');
+const names = (players: Named[]): string => players.map((p) => `${p.name} (${p.steamId})`).join(', ');
+
+// The new state to save, and who got VIP or kept it for another week, to announce.
+export type VipSync = { state: VipState; added: Named[]; renewed: Named[] };
 
 // Brings the reserved list in line with who has earned VIP. Throws if the server cannot be read or refuses the
 // change; nothing is recorded then, so the next check tries again.
-export const syncVip = async ({ rule, days, state, now, rcon, log }: VipDeps): Promise<VipState> => {
+export const syncVip = async ({ rule, days, state, now, rcon, log }: VipDeps): Promise<VipSync> => {
   const config = await rcon.fetchConfig();
   const plan = planVip(qualified(days, rule), reservedIds(config.text), state.granted, now, rule);
-  if (plan.add.length === 0 && plan.remove.length === 0) return { granted: plan.granted, checkedAt: now };
+  const done = (): VipSync => ({ state: { granted: plan.granted, checkedAt: now }, added: plan.add, renewed: plan.renewed });
+  if (plan.renewed.length > 0) log.info(`VIP renewed for another week: ${names(plan.renewed)}.`);
+  if (plan.add.length === 0 && plan.remove.length === 0) return done();
   if (!config.writable) throw new Error('the server settings are read-only over RCON');
 
   const text = editReserved(config.text, plan.add.map((p) => p.steamId), plan.remove);
@@ -162,5 +173,5 @@ export const syncVip = async ({ rule, days, state, now, rcon, log }: VipDeps): P
       'The server uses the new reserved list after its next restart.',
     ].join(' '),
   );
-  return { granted: plan.granted, checkedAt: now };
+  return done();
 };

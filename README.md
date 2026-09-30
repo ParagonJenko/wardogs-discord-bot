@@ -210,6 +210,9 @@ Players who seed get a reserved slot, so they skip the queue when the server is 
   another week.
 - The bot checks every 10 minutes. The game server only reads the reserved list when it restarts, so VIP starts
   (and ends) at the server's next restart, usually its daily one.
+- When players get a reserved slot, or keep one for another week, the bot posts it to the Discord channel
+  ("🎖️ Reserved slots for seeders: **Ash and Bo** earned reserved slots for a week by seeding.") with what seeding
+  earns. It never pings anyone. If the post fails it is logged, not retried, so nobody is announced twice.
 
 Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
 
