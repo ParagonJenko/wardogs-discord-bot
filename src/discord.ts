@@ -497,13 +497,16 @@ const when = (at: number, style: 'f' | 'd' | 'R'): string => `<t:${Math.floor(at
 const cut = (text: string): string => (text.length > MAX_REASON_SHOWN ? `${text.slice(0, MAX_REASON_SHOWN - 1)}…` : text);
 
 const vipText = ({ record, reserved, now }: PlayerProfile): string => {
+  // The reserved list is the truth when it can be read; otherwise the bot's record is shown as only that.
   const lines = [
-    record.vip !== null && reserved !== false
-      ? `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}`
-      : reserved === true
-        ? '🎖️ Reserved slot added by hand, no end date'
-        : reserved === null
-          ? "Couldn't read the reserved list"
+    reserved === null
+      ? record.vip === null
+        ? "Couldn't read the reserved list"
+        : `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`
+      : record.vip !== null && reserved
+        ? `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}`
+        : reserved
+          ? '🎖️ Reserved slot added by hand, no end date'
           : 'None',
     ...(record.vipBlockedUntil !== null && record.vipBlockedUntil > now
       ? [`Staff removed VIP: automatic VIP is off for them until ${when(record.vipBlockedUntil, 'f')}`]
