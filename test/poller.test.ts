@@ -402,6 +402,39 @@ describe('poller stats', () => {
     ]);
   });
 
+  it('records a finished match on the next check if recording it failed, then posts the summary once', async () => {
+    const stats = sink();
+    stats.matchEnded.mockRejectedValueOnce(new Error('storage unavailable'));
+    const { run, send, log } = setup(
+      [snapshot(crowd(5)), snapshot(crowd(22, [player('a', 4)])), snapshot(crowd(22), 'Europe'), snapshot(crowd(22), 'Europe')],
+      memoryStore(),
+      stats,
+    );
+
+    await run(4);
+
+    expect(log.error).toHaveBeenCalledWith('Check failed: storage unavailable');
+    expect(stats.matchEnded.mock.calls.map(([m, at]) => [m.key, m.players['a']?.kills, at])).toEqual([
+      ['Kavkazi#0', 4, 180_000],
+      ['Kavkazi#0', 4, 240_000],
+    ]);
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over on Bakurani']);
+  });
+
+  it('credits seeders on the next check if recording the seed failed', async () => {
+    const stats = sink();
+    stats.seeded.mockRejectedValueOnce(new Error('storage unavailable'));
+    const a = player('a');
+    const { run } = setup([snapshot([]), snapshot([a]), snapshot(crowd(20, [a])), snapshot(crowd(20, [a]))], memoryStore(), stats);
+
+    await run(4);
+
+    expect(stats.seeded.mock.calls.map(([seeders]) => seeders)).toEqual([
+      [{ steamId: 'a', name: 'Pa', minutes: 1 }],
+      [{ steamId: 'a', name: 'Pa', minutes: 1 }],
+    ]);
+  });
+
   it('posts a summary Discord rejected on a later check, once', async () => {
     const { run, send } = setup([
       snapshot(crowd(5)),
