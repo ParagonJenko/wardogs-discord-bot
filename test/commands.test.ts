@@ -94,7 +94,7 @@ describe('runCommand', () => {
 
     const reply = await run({ name: 'rotation', options: {}, userId: null });
 
-    expect(reply.embeds?.[0]?.description).toBe('▶️ **Bakurani** · now');
+    expect(reply.embeds?.[0]?.description).toBe('▶️ 🟧 **Bakurani** · now');
   });
 
   it('/lastmatch shows the most recent finished match', async () => {
@@ -103,7 +103,7 @@ describe('runCommand', () => {
 
     const reply = await run({ name: 'lastmatch', options: {}, userId: null });
 
-    expect(reply.embeds?.[0]?.title).toBe('🏁 Last match · Ozeti');
+    expect(reply.embeds?.[0]?.title).toBe('🏁 Last match · 🟦 Ozeti');
   });
 
   it('/lastmatch links to the website when there is one, and still works when the settings do not load', async () => {
@@ -128,7 +128,7 @@ describe('runCommand', () => {
     const unconfigured = await run(() => {
       throw new Error('Invalid configuration');
     });
-    expect(unconfigured.embeds?.[0]).toMatchObject({ title: '🏁 Last match · Ozeti' });
+    expect(unconfigured.embeds?.[0]).toMatchObject({ title: '🏁 Last match · 🟦 Ozeti' });
     expect(unconfigured.embeds?.[0]?.url).toBeUndefined();
   });
 
@@ -168,7 +168,7 @@ describe('runCommand', () => {
     expect(removeMatch).toHaveBeenCalledWith(ozeti.endedAt);
     expect(reply).toEqual({
       content:
-        '🗑️ Removed the Ozeti match that ended <t:1790777100:f> (**Valkyra** won 70, Kharr 67, Haldor 41 · 69 min). ' +
+        '🗑️ Removed the 🟦 Ozeti match that ended <t:1790777100:f> (**Valkyra** won 70, Kharr 67, Haldor 41 · 69 min). ' +
         "Its match, kills and deaths came off 96 players' totals.",
     });
     expect(log.info).toHaveBeenCalledWith('/removematch by Discord user 42: Ozeti ended 2026-09-30T14:05:00.000Z');
@@ -192,8 +192,8 @@ describe('runCommand', () => {
     const suggest = suggestOptions({ recentMatches: async () => [ozeti, europe], config: () => config, http: rcon({}).http, records });
 
     await expect(suggest({ name: 'removematch', options: { match: '' }, userId: '42' })).resolves.toEqual([
-      { name: 'Ozeti · Valkyra won 70, Kharr 67, Haldor 41 · 69 min · ended 30 Sep 14:05 UTC', value: String(ozeti.endedAt) },
-      { name: 'Zestafona · 69 min · ended 30 Sep 13:05 UTC', value: String(europe.endedAt) },
+      { name: '🟦 Ozeti · Valkyra won 70, Kharr 67, Haldor 41 · 69 min · ended 30 Sep 14:05 UTC', value: String(ozeti.endedAt) },
+      { name: '🟪 Zestafona · 69 min · ended 30 Sep 13:05 UTC', value: String(europe.endedAt) },
     ]);
     await expect(suggest({ name: 'removematch', options: { match: 'zest' }, userId: '42' })).resolves.toHaveLength(1);
     await expect(suggest({ name: 'seeders', options: {}, userId: '42' })).resolves.toEqual([]);

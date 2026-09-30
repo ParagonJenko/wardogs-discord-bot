@@ -144,7 +144,7 @@ describe('poller', () => {
 
     await run(4);
 
-    expect(titles(sent)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · Bakurani']);
+    expect(titles(sent)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · 🟧 Bakurani']);
     expect(field(sent[1], 'Top players')).toMatch(/^🥇 \*\*Pa\*\* · 9 kills/);
   });
 
@@ -173,7 +173,7 @@ describe('poller', () => {
 
     expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual([
       '🟢 UK Wardogs #1 is live',
-      '🏁 Match over · Bakurani',
+      '🏁 Match over · 🟧 Bakurani',
       '🔻 UK Wardogs #1 dropped below 20 players',
       '🔻 UK Wardogs #1 dropped below 20 players',
     ]);
@@ -196,7 +196,7 @@ describe('poller', () => {
     await run(3);
 
     // The live alert is not retried; the match that was live for that minute is still summarised once it empties.
-    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · Bakurani']);
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · 🟧 Bakurani']);
   });
 
   it('keeps going when RCON is unreachable', async () => {
@@ -456,7 +456,7 @@ describe('poller stats', () => {
       ['Kavkazi#0', 4, 180_000],
       ['Kavkazi#0', 4, 240_000],
     ]);
-    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · Bakurani']);
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · 🟧 Bakurani']);
   });
 
   it('credits seeders on the next check if recording the seed failed', async () => {
@@ -489,8 +489,8 @@ describe('poller stats', () => {
 
     expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual([
       '🟢 UK Wardogs #1 is live',
-      '🏁 Match over · Bakurani',
-      '🏁 Match over · Bakurani',
+      '🏁 Match over · 🟧 Bakurani',
+      '🏁 Match over · 🟧 Bakurani',
     ]);
   });
 

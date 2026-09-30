@@ -1,5 +1,5 @@
 import type { Config } from './config.ts';
-import { buildPlayerEmbed, factionBadge, mapName, playerName } from './discord.ts';
+import { buildPlayerEmbed, factionBadge, mapEmoji, mapName, playerName } from './discord.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
 import { modesFor, planSetup } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
@@ -209,7 +209,7 @@ export const suggestStaff =
       if (focused === 'map') {
         return (await fetchMaps(rconUrl, rconPassword, http))
           .filter((m) => [m.id, m.name, mapLabel(m)].some((label) => label.toLowerCase().includes(lower)))
-          .map((m) => ({ name: fit(mapLabel(m)), value: m.id }));
+          .map((m) => ({ name: fit(`${mapEmoji(m.id)}${mapLabel(m)}`), value: m.id }));
       }
       if (focused === 'lighting') return named(await fetchLightings(rconUrl, rconPassword, http));
       // Modes and zone layouts depend on the map, so they are listed once one is picked.
@@ -364,7 +364,7 @@ export const runStaffCommand =
       const { setup, labels } = planned;
       log.info(`/${name} by ${staff}: ${map.id} ${JSON.stringify(setup)}`);
       await queueMap(rconUrl, rconPassword, map.id, http, setup);
-      const described = [`**${mapLabel(map)}**`, ...labels].join(' · ');
+      const described = [`${mapEmoji(map.id)}**${mapLabel(map)}**`, ...labels].join(' · ');
       if (name === 'setnextmap') {
         return { content: `🗺️ Next map: ${described}. The server goes there when this match ends; the rotation is unchanged.` };
       }

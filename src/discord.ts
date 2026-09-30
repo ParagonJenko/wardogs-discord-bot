@@ -43,9 +43,26 @@ type MessageOptions = {
 const NO_PINGS = { parse: [], roles: [] };
 
 // Map ids as RCON reports them, and the names players see in game.
-const MAP_NAMES: Record<string, string> = { Kavkazi: 'Bakurani', Europe: 'Ozeti', NorthAmerica: 'Zestafona' };
+// Each map also has its own colour, the same as on the website, so they can be told apart at a glance.
+const MAPS: Record<string, { name: string; emoji: string; colour: number }> = {
+  Kavkazi: { name: 'Bakurani', emoji: '🟧', colour: 0xe67e22 },
+  Europe: { name: 'Ozeti', emoji: '🟦', colour: 0x3498db },
+  NorthAmerica: { name: 'Zestafona', emoji: '🟪', colour: 0x9b59b6 },
+};
 
-export const mapName = (id: string): string => MAP_NAMES[id] ?? id;
+export const mapName = (id: string): string => MAPS[id]?.name ?? id;
+
+// A map by its id, or by the name players see (records keep the name).
+const mapStyle = (idOrName: string) => MAPS[idOrName] ?? Object.values(MAPS).find((m) => m.name === idOrName);
+
+// The map's colour square and a space, or nothing for a map without one.
+export const mapEmoji = (idOrName: string): string => {
+  const style = mapStyle(idOrName);
+  return style ? `${style.emoji} ` : '';
+};
+
+// "🟦 Ozeti": the map's name as players know it, with its colour.
+export const mapTitle = (idOrName: string): string => `${mapEmoji(idOrName)}${mapName(idOrName)}`;
 
 // Player names are free text; escape Discord markdown so a name cannot restyle or break the message.
 const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>#[\]()-]/g, '\\$&');
@@ -196,7 +213,7 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
   const seeders = (options.seeders ?? []).map((s) => `${playerName(s.name)} · ${s.minutes} min`);
   const fields: EmbedField[] = [
     { name: 'Players', value: population(server.players, server.maxPlayers, kind) },
-    ...(server.map ? [{ name: 'Map', value: mapName(server.map), inline: true }] : []),
+    ...(server.map ? [{ name: 'Map', value: mapTitle(server.map), inline: true }] : []),
     ...needed(kind, server, options),
     ...(seeders.length > 0 ? [{ name: 'Top seeders', value: ranked(seeders) }] : []),
     ...(kind === 'seeding' && options.vip
@@ -268,7 +285,7 @@ export const buildMatchSummary = (summary: MatchSummary, serverName: string, sit
   return {
     embeds: [
       {
-        title: `🏁 Match over · ${mapName(summary.map) || 'unknown map'}`,
+        title: `🏁 Match over · ${mapTitle(summary.map) || 'unknown map'}`,
         ...(description ? { description } : {}),
         color: winnerColour(summary.factionScores),
         fields,
@@ -295,7 +312,7 @@ export const buildStatusEmbed = (status: ServerStatus, rules: AlertRules, siteUr
     color: PHASE_LABELS[phase].color,
     fields: [
       { name: 'Players', value: population(status.players, status.maxPlayers, phase) },
-      ...(status.map ? [{ name: 'Map', value: mapName(status.map), inline: true }] : []),
+      ...(status.map ? [{ name: 'Map', value: mapTitle(status.map), inline: true }] : []),
       ...(status.factionScores.length > 0 ? [{ name: 'Score', value: scoreLines(status.factionScores), inline: true }] : []),
     ],
     ...site(siteUrl),
@@ -354,9 +371,10 @@ const ROTATION_SHOWN = 5;
 
 const rotationLine = (entry: Rotation['entries'][number]): string => {
   const name = mapName(entry.map);
-  if (entry.status === 'now') return `▶️ **${name}** · now`;
-  if (entry.status === 'next') return `⏭️ **${name}** · next`;
-  return `▫️ ${name}`;
+  const colour = mapEmoji(entry.map);
+  if (entry.status === 'now') return `▶️ ${colour}**${name}** · now`;
+  if (entry.status === 'next') return `⏭️ ${colour}**${name}** · next`;
+  return `▫️ ${colour}${name}`;
 };
 
 export const buildRotationEmbed = (rotation: Rotation): Embed => {
@@ -375,7 +393,10 @@ export const buildRotationEmbed = (rotation: Rotation): Embed => {
     }
     return { lines: fromNow.flatMap((e) => (e ? [rotationLine(e)] : [])) };
   })();
-  return { title, description: lines.join('\n'), color: INFO_COLOR, ...(note ? { footer: { text: note } } : {}) };
+  // In the colour of the map being played.
+  const playing = entries.find((e) => e.status === 'now');
+  const color = (playing && mapStyle(playing.map)?.colour) ?? INFO_COLOR;
+  return { title, description: lines.join('\n'), color, ...(note ? { footer: { text: note } } : {}) };
 };
 
 // Discord caps an embed description at 4096 characters; this many names stays well inside it.
@@ -456,7 +477,7 @@ const MAX_CHOICE_NAME = 100;
 // A recent match as a choice in /removematch. The value is when it ended, which identifies it.
 export const matchChoice = (match: RecentMatch): { name: string; value: string } => {
   const name = [
-    mapName(match.map) || 'Unknown map',
+    mapTitle(match.map) || 'Unknown map',
     ...result(match.factionScores, false),
     `${Math.round(match.durationMs / 60_000)} min`,
     `ended ${utcTime(match.endedAt)}`,
@@ -466,7 +487,7 @@ export const matchChoice = (match: RecentMatch): { name: string; value: string }
 
 export const removedMatchText = (match: RecentMatch, players: number): string =>
   [
-    `🗑️ Removed the ${mapName(match.map) || 'unknown map'} match that ended <t:${Math.floor(match.endedAt / 1000)}:f>` +
+    `🗑️ Removed the ${mapTitle(match.map) || 'unknown map'} match that ended <t:${Math.floor(match.endedAt / 1000)}:f>` +
       ` (${[...result(match.factionScores), `${Math.round(match.durationMs / 60_000)} min`].join(' · ')}).`,
     players > 0
       ? `Its match, kills and deaths came off ${players === 1 ? "1 player's" : `${players} players'`} totals.`
@@ -479,7 +500,7 @@ export const buildLastMatchEmbed = (match: RecentMatch, siteUrl?: string): Embed
   return summary
     ? {
         ...summary,
-        title: `🏁 Last match · ${mapName(match.map) || 'unknown map'}`,
+        title: `🏁 Last match · ${mapTitle(match.map) || 'unknown map'}`,
         description: [summary.description, ended].filter(Boolean).join(' · '),
         timestamp: new Date(match.endedAt).toISOString(),
       }

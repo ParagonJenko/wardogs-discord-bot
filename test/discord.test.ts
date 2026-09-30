@@ -29,7 +29,7 @@ describe('buildMessage', () => {
     expect(embedOf(message)).toMatchObject({ title: '🌱 UK Wardogs #1 is seeding', description: '**Jump in and help get it live!**', color: 0xf1c40f });
     expect(embedOf(message)?.fields).toEqual([
       { name: 'Players', value: '🟨⬛⬛⬛⬛⬛⬛⬛⬛⬛ **7**/64' },
-      { name: 'Map', value: 'Ozeti', inline: true },
+      { name: 'Map', value: '🟦 Ozeti', inline: true },
       { name: 'To go live', value: '**13** more', inline: true },
     ]);
   });
@@ -129,7 +129,7 @@ describe('buildMatchSummary', () => {
     const message = buildMatchSummary(summary, 'UK Wardogs #1');
 
     expect(embedOf(message)).toMatchObject({
-      title: '🏁 Match over · Bakurani',
+      title: '🏁 Match over · 🟧 Bakurani',
       description: '🏆 **Kharr** won',
       color: 0xff3333,
       footer: { text: 'UK Wardogs #1' },
@@ -226,7 +226,7 @@ describe('buildStatusEmbed', () => {
       color: 0x2ecc71,
       fields: [
         { name: 'Players', value: '🟩🟩⬛⬛⬛⬛⬛⬛⬛⬛ **24**/98' },
-        { name: 'Map', value: 'Ozeti', inline: true },
+        { name: 'Map', value: '🟦 Ozeti', inline: true },
         { name: 'Score', value: '🟠 **Kharr 51**\n🐻 Valkyra 43\nHaldor 12', inline: true },
       ],
     });
@@ -329,13 +329,24 @@ describe('buildRotationEmbed', () => {
 
   it('lists the maps from the current one onwards, wrapping round', () => {
     expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries }).description).toBe(
-      '▶️ **Ozeti** · now\n⏭️ **Zestafona** · next\n▫️ Bakurani',
+      '▶️ 🟦 **Ozeti** · now\n⏭️ 🟪 **Zestafona** · next\n▫️ 🟧 Bakurani',
+    );
+  });
+
+  it('gives each map its own colour, and the embed the colour of the map being played', () => {
+    const colour = (map: string) =>
+      buildRotationEmbed({ enabled: true, mode: 'ordered', entries: [{ map, status: 'now' }] }).color;
+
+    expect([colour('Kavkazi'), colour('Europe'), colour('NorthAmerica')]).toEqual([0xe67e22, 0x3498db, 0x9b59b6]);
+    expect(colour('SomewhereNew')).toBe(0x5865f2);
+    expect(buildRotationEmbed({ enabled: true, mode: 'ordered', entries: [{ map: 'SomewhereNew', status: 'now' }] }).description).toBe(
+      '▶️ **SomewhereNew** · now',
     );
   });
 
   it('only shows the current and next map for a random rotation, and says why', () => {
     expect(buildRotationEmbed({ enabled: true, mode: 'random', entries })).toMatchObject({
-      description: '▶️ **Ozeti** · now\n⏭️ **Zestafona** · next',
+      description: '▶️ 🟦 **Ozeti** · now\n⏭️ 🟪 **Zestafona** · next',
       footer: { text: 'Random order, so only the next map is known.' },
     });
   });
@@ -348,13 +359,13 @@ describe('buildRotationEmbed', () => {
     ];
 
     expect(buildRotationEmbed({ enabled: true, mode: 'random', entries: shuffled }).description).toBe(
-      '▶️ **Ozeti** · now\n⏭️ **Zestafona** · next',
+      '▶️ 🟦 **Ozeti** · now\n⏭️ 🟪 **Zestafona** · next',
     );
   });
 
   it('says when the rotation is off', () => {
     expect(buildRotationEmbed({ enabled: false, mode: 'ordered', entries })).toMatchObject({
-      description: '▶️ **Ozeti** · now',
+      description: '▶️ 🟦 **Ozeti** · now',
       footer: { text: 'Rotation is off, so this map repeats.' },
     });
   });
@@ -379,7 +390,7 @@ describe('buildLastMatchEmbed', () => {
     });
 
     expect(embed).toMatchObject({
-      title: '🏁 Last match · Bakurani',
+      title: '🏁 Last match · 🟧 Bakurani',
       description: '🏆 🐻 **Valkyra** won · Ended <t:1727690000:R>',
       timestamp: '2024-09-30T09:53:20.000Z',
     });
