@@ -1,9 +1,20 @@
 import { z } from 'zod';
 import type { Embed } from './discord.ts';
+import { BAN_LENGTHS } from './moderation.ts';
+import { STAFF_COMMANDS, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
-const COMMAND_NAMES = ['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders', 'removematch'] as const;
+const COMMAND_NAMES = [
+  'serverstatus',
+  'players',
+  'lastmatch',
+  'rotation',
+  'broadcast',
+  'seeders',
+  'removematch',
+  ...STAFF_COMMANDS,
+] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
 const isCommandName = (name: string | undefined): name is CommandName =>
@@ -15,10 +26,25 @@ const ADMINISTRATOR = 1n << 3n;
 // Admin commands change things in game or in the records, or show Steam IDs, so they are hidden from, and refused to,
 // anyone who has neither Discord's Administrator permission nor one of the admin roles. Their replies are only shown
 // to the person who ran them.
-const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'removematch'];
+const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'removematch', ...STAFF_COMMANDS];
+
+// Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
+const ACTIONS: readonly CommandName[] = ['warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
 
 export const SEEDERS_DEFAULT_DAYS = 7;
 export const SEEDERS_MAX_DAYS = 90;
+
+// Hidden from everyone but Administrators until a server gives other roles access, and only usable in a server.
+const STAFF_ONLY = { type: 1, default_member_permissions: String(ADMINISTRATOR), contexts: [0] };
+
+const STRING = 3;
+const INTEGER = 4;
+const SUBCOMMAND = 1;
+
+const player = (description: string) => ({ type: STRING, name: 'player', description, required: true, autocomplete: true });
+const reason = (description: string) => ({ type: STRING, name: 'reason', description, required: true, max_length: 200 });
+const steamId = (description: string) => ({ type: STRING, name: 'steam_id', description, required: true, autocomplete: true });
+const map = { type: STRING, name: 'map', description: 'Pick the map from the list', required: true, autocomplete: true };
 
 export const COMMANDS = [
   { name: 'serverstatus', description: 'Show the WARDOGS server status', type: 1 },
@@ -60,6 +86,98 @@ export const COMMANDS = [
     contexts: [0],
     options: [{ type: 3, name: 'match', description: 'Pick the match from the list', required: true, autocomplete: true }],
   },
+  {
+    name: 'warn',
+    description: 'Send a player a private warning in game (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      player('Who to warn: pick from the players in game'),
+      { type: STRING, name: 'message', description: 'The warning', required: true, max_length: WARNING_MAX_LENGTH },
+    ],
+  },
+  {
+    name: 'player',
+    description: "A player's Steam ID, playtime, seeding, VIP, bans and staff history (staff only)",
+    ...STAFF_ONLY,
+    options: [player('Pick the player, or type a name or Steam ID')],
+  },
+  {
+    name: 'kick',
+    description: 'Remove a player from the server; they can rejoin (staff only)',
+    ...STAFF_ONLY,
+    options: [player('Who to kick: pick from the players in game'), reason('Why; the player sees this')],
+  },
+  {
+    name: 'switchteam',
+    description: 'Move a player to another team (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      player('Who to move: pick from the players in game'),
+      {
+        type: STRING,
+        name: 'team',
+        description: 'The team to move them to (with two teams, leave it out for the other one)',
+        required: false,
+        autocomplete: true,
+      },
+    ],
+  },
+  {
+    name: 'ban',
+    description: 'Ban a player for a set time or for good (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      player('Pick the player, or type a name or Steam ID'),
+      {
+        type: STRING,
+        name: 'duration',
+        description: 'How long',
+        required: true,
+        choices: BAN_LENGTHS.map(({ name, value }) => ({ name, value })),
+      },
+      reason('Why; kept with the ban'),
+    ],
+  },
+  {
+    name: 'unban',
+    description: 'Lift a ban (staff only)',
+    ...STAFF_ONLY,
+    options: [steamId('Pick from the banned players, or type a Steam ID')],
+  },
+  {
+    name: 'setnextmap',
+    description: 'Set the map after this match, without changing the rotation (staff only)',
+    ...STAFF_ONLY,
+    options: [map],
+  },
+  {
+    name: 'changemap',
+    description: 'End the current match now and change map (staff only)',
+    ...STAFF_ONLY,
+    options: [map],
+  },
+  {
+    name: 'vip',
+    description: 'Give or take away a reserved slot (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      {
+        type: SUBCOMMAND,
+        name: 'add',
+        description: 'Give a player a reserved slot for a number of days',
+        options: [
+          steamId('Pick the player, or type a name or Steam ID'),
+          { type: INTEGER, name: 'days', description: 'How many days', required: true, min_value: 1, max_value: VIP_MAX_DAYS },
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'remove',
+        description: 'Take a player off the reserved list; automatic VIP skips them for 7 days',
+        options: [steamId('Pick from the reserved list, or type a Steam ID')],
+      },
+    ],
+  },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
 
 const PING = 1;
@@ -71,6 +189,13 @@ const DEFERRED_CHANNEL_MESSAGE = 5;
 const AUTOCOMPLETE_RESULT = 8;
 const EPHEMERAL = 64;
 
+const OptionSchema = z.object({
+  name: z.string(),
+  type: z.number().optional(),
+  value: z.unknown().optional(),
+  focused: z.boolean().optional(),
+});
+
 const InteractionSchema = z.object({
   type: z.number(),
   application_id: z.string(),
@@ -78,7 +203,8 @@ const InteractionSchema = z.object({
   data: z
     .object({
       name: z.string(),
-      options: z.array(z.object({ name: z.string(), value: z.unknown() })).optional(),
+      // A subcommand, such as /vip add, arrives as an option holding its own options.
+      options: z.array(OptionSchema.extend({ options: z.array(OptionSchema).optional() })).optional(),
     })
     .optional(),
   member: z
@@ -91,7 +217,8 @@ const InteractionSchema = z.object({
   guild_id: z.string().optional(),
 });
 
-export type CommandRequest = { name: CommandName; options: Record<string, string>; userId: string | null };
+// A subcommand's name is in `options.subcommand`. `focused` is the option being typed in, for suggestions.
+export type CommandRequest = { name: CommandName; options: Record<string, string>; userId: string | null; focused?: string };
 export type CommandReply = { content?: string; embeds?: Embed[] };
 // An option value offered while someone types, such as a match to pick.
 export type Choice = { name: string; value: string };
@@ -169,11 +296,21 @@ export const handleInteraction = async (
   if (interaction.type === PING) return { status: 200, body: { type: PONG } };
 
   const name = interaction.data?.name;
-  const toRequest = (command: CommandName): CommandRequest => ({
-    name: command,
-    options: Object.fromEntries((interaction.data?.options ?? []).map((o) => [o.name, String(o.value)])),
-    userId: interaction.member?.user?.id ?? null,
-  });
+  const toRequest = (command: CommandName): CommandRequest => {
+    const top = interaction.data?.options ?? [];
+    const subcommand = top.find((o) => o.type === SUBCOMMAND);
+    const options = subcommand?.options ?? top;
+    const focused = options.find((o) => o.focused)?.name;
+    return {
+      name: command,
+      options: Object.fromEntries([
+        ...(subcommand ? [['subcommand', subcommand.name]] : []),
+        ...options.flatMap((o) => (o.value === undefined ? [] : [[o.name, String(o.value)]])),
+      ]),
+      userId: interaction.member?.user?.id ?? null,
+      ...(focused === undefined ? {} : { focused }),
+    };
+  };
 
   // Suggestions while someone types. Nobody who could not run the command gets any.
   if (interaction.type === AUTOCOMPLETE) {
@@ -214,11 +351,13 @@ export const handleInteraction = async (
       (result) => ({ ...result, allowed_mentions: { parse: [] } }),
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
-        // A broadcast that timed out may still have reached the game, so don't invite a blind retry.
+        // A broadcast or staff action that timed out may still have reached the game, so don't invite a blind retry.
         const content =
           name === 'broadcast'
             ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
-            : "Couldn't get that right now. Try again in a minute.";
+            : ACTIONS.includes(name)
+              ? `Couldn't confirm /${name} worked (${errorText(error)}). Check before trying again.`
+              : "Couldn't get that right now. Try again in a minute.";
         return { content, allowed_mentions: { parse: [] } };
       },
     );

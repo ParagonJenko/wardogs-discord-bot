@@ -86,6 +86,16 @@ describe('socketHttp', () => {
     expect(request).not.toContain('application/json');
   });
 
+  it('sends a method without a body, such as DELETE, with no body headers', async () => {
+    const server = fakeServer(['HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n']);
+
+    await socketHttp(server.connect)(new URL('http://203.0.113.10:7776/v1/bans/76561198000000001'), {}, undefined, 'DELETE');
+
+    const request = server.written.join('');
+    expect(request).toMatch(/^DELETE \/v1\/bans\/76561198000000001 HTTP\/1\.1\r\n/);
+    expect(request).not.toContain('Content-Length');
+  });
+
   it('uses TLS and port 443 for https URLs', async () => {
     const server = fakeServer(['HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n']);
 

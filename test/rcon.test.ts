@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addBan,
+  endMatch,
+  fetchBans,
   fetchConfig,
+  fetchMaps,
   fetchPlayers,
+  kickPlayer,
+  messagePlayer,
+  queueMap,
+  removeBan,
+  switchFaction,
   fetchRotation,
   fetchStatus,
   putConfig,
@@ -106,8 +115,8 @@ describe('fetchPlayers', () => {
     });
 
     await expect(fetchPlayers('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual([
-      { steamId: '76561198000000001', name: 'Ash', kills: 12, deaths: 3 },
-      { steamId: '76561198000000002', name: 'Bo', kills: 0, deaths: 1 },
+      { steamId: '76561198000000001', name: 'Ash', kills: 12, deaths: 3, faction: 'Valkyra' },
+      { steamId: '76561198000000002', name: 'Bo', kills: 0, deaths: 1, faction: 'Kharr' },
     ]);
     expect(requests[0]?.url).toBe('http://203.0.113.10:7776/v1/players');
   });
@@ -217,5 +226,92 @@ describe('server config', () => {
     const { http } = recorder(412, { error: 'revision mismatch' });
 
     await expect(putConfig('http://203.0.113.10:7776', 'secret', { revision: '"abc"', writable: true, text: ini }, http)).rejects.toThrow(/412/);
+  });
+});
+
+describe('staff actions', () => {
+  const RCON = 'http://203.0.113.10:7776';
+  const ASH = '76561198000000001';
+  // Answers each request in turn with the next status and body, recording what was sent.
+  const server = (...replies: [number, unknown][]) => {
+    const requests: { method: string; path: string; body?: string }[] = [];
+    const http: HttpClient = async (url, _headers, sent, method) => {
+      requests.push({ method: method ?? (sent === undefined ? 'GET' : 'POST'), path: url.pathname, ...(sent === undefined ? {} : { body: sent }) });
+      const [status, body] = replies[Math.min(requests.length, replies.length) - 1] ?? [200, {}];
+      return { status, body: typeof body === 'string' ? body : JSON.stringify(body) };
+    };
+    return { http, requests };
+  };
+
+  it('messages, kicks and moves a player by Steam ID', async () => {
+    const { http, requests } = server([200, {}]);
+
+    await messagePlayer(RCON, 'secret', ASH, 'Staff warning: stop', http);
+    await kickPlayer(RCON, 'secret', ASH, 'Spawn camping', http);
+    await switchFaction(RCON, 'secret', ASH, 'Kharr', http);
+
+    expect(requests).toEqual([
+      { method: 'POST', path: `/v1/players/${ASH}/message`, body: JSON.stringify({ message: 'Staff warning: stop' }) },
+      { method: 'POST', path: `/v1/players/${ASH}/kick`, body: JSON.stringify({ reason: 'Spawn camping' }) },
+      { method: 'PATCH', path: `/v1/players/${ASH}`, body: JSON.stringify({ faction: 'Kharr' }) },
+      { method: 'POST', path: `/v1/players/${ASH}/kill`, body: '{}' },
+    ]);
+  });
+
+  it('still moves a player whose respawn fails, but not one the server refuses to move', async () => {
+    const dead = server([200, {}], [409, { error: 'no pawn' }]);
+    await expect(switchFaction(RCON, 'secret', ASH, 'Kharr', dead.http)).resolves.toBeUndefined();
+
+    const refused = server([400, { error: 'unknown faction' }]);
+    await expect(switchFaction(RCON, 'secret', ASH, 'Nobody', refused.http)).rejects.toThrow(/400/);
+    expect(refused.requests).toHaveLength(1);
+  });
+
+  it('refuses anything that is not a Steam ID before sending', async () => {
+    const { http, requests } = server([200, {}]);
+
+    await expect(kickPlayer(RCON, 'secret', '../config', 'x', http)).rejects.toThrow(/Steam ID/);
+    await expect(addBan(RCON, 'secret', 'Ash', 'x', http)).rejects.toThrow(/Steam ID/);
+    await expect(removeBan(RCON, 'secret', '1', http)).rejects.toThrow(/Steam ID/);
+    expect(requests).toEqual([]);
+  });
+
+  it('lists, adds and removes bans, saying when there was no ban', async () => {
+    const { http, requests } = server([200, { bans: [{ steamId: ASH, reason: 'Cheating', bannedBy: null }] }], [201, ''], [204, ''], [404, { error: { code: 'ban_not_found' } }]);
+
+    await expect(fetchBans(RCON, 'secret', http)).resolves.toEqual([{ steamId: ASH, reason: 'Cheating', bannedBy: null }]);
+    await addBan(RCON, 'secret', ASH, 'Cheating', http);
+    await expect(removeBan(RCON, 'secret', ASH, http)).resolves.toBe(true);
+    await expect(removeBan(RCON, 'secret', ASH, http)).resolves.toBe(false);
+
+    expect(requests.map((r) => [r.method, r.path, r.body])).toEqual([
+      ['GET', '/v1/bans', undefined],
+      ['POST', '/v1/bans', JSON.stringify({ steamId: ASH, reason: 'Cheating' })],
+      ['DELETE', `/v1/bans/${ASH}`, undefined],
+      ['DELETE', `/v1/bans/${ASH}`, undefined],
+    ]);
+  });
+
+  it('still throws when removing a ban fails for another reason', async () => {
+    const { http } = server([500, { error: 'boom' }]);
+
+    await expect(removeBan(RCON, 'secret', ASH, http)).rejects.toThrow(/500/);
+  });
+
+  it('lists maps, queues the next one and ends the match', async () => {
+    const { http, requests } = server([200, { maps: [{ id: 'Kavkazi', displayName: 'Kavkazi Pass' }, { id: 'Europe' }] }], [200, {}]);
+
+    await expect(fetchMaps(RCON, 'secret', http)).resolves.toEqual([
+      { id: 'Kavkazi', name: 'Kavkazi Pass' },
+      { id: 'Europe', name: 'Europe' },
+    ]);
+    await queueMap(RCON, 'secret', 'Europe', http);
+    await endMatch(RCON, 'secret', http);
+
+    expect(requests.map((r) => [r.method, r.path, r.body])).toEqual([
+      ['GET', '/v1/catalog/maps', undefined],
+      ['POST', '/v1/match/map', JSON.stringify({ map: 'Europe' })],
+      ['POST', '/v1/match/end', '{}'],
+    ]);
   });
 });

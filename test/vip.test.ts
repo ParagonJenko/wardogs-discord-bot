@@ -2,7 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import type { VipRule } from '../src/config.ts';
 import type { PlayerDay, PlayerTotals } from '../src/players.ts';
 import type { ConfigResult, ServerConfig } from '../src/rcon.ts';
-import { editReserved, parseVipState, planVip, qualified, reservedIds, syncVip, vipDue, type VipGrant } from '../src/vip.ts';
+import {
+  addVip,
+  editReserved,
+  parseVipState,
+  planVip,
+  qualified,
+  removeVip,
+  reservedIds,
+  syncVip,
+  vipDue,
+  type VipGrant,
+} from '../src/vip.ts';
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.UTC(2026, 8, 30, 12);
@@ -130,13 +141,21 @@ describe('planVip', () => {
   it('ignores anything that is not a Steam ID', () => {
     expect(planVip([{ steamId: 'bot-1', name: 'Bot' }], [], {}, NOW, rule).add).toEqual([]);
   });
+
+  it('does not give VIP back to a player staff took it from until their block runs out', () => {
+    const earned = [{ steamId: ASH, name: 'Ash' }];
+
+    expect(planVip(earned, [], {}, NOW, rule, { [ASH]: NOW + DAY }).add).toEqual([]);
+    expect(planVip(earned, [], {}, NOW, rule, { [ASH]: NOW }).add).toEqual(earned);
+  });
 });
 
 describe('vipDue and parseVipState', () => {
   it('checks every 10 minutes, starting straight away', () => {
     const state = parseVipState(undefined);
 
-    expect(state).toEqual({ granted: {}, checkedAt: 0 });
+    expect(state).toEqual({ granted: {}, checkedAt: 0, revoked: {} });
+    expect(parseVipState({ granted: {}, checkedAt: 5 })).toEqual({ granted: {}, checkedAt: 5, revoked: {} });
     expect(vipDue(state, NOW)).toBe(true);
     expect(vipDue({ ...state, checkedAt: NOW - 9 * 60_000 }, NOW)).toBe(false);
   });
@@ -160,7 +179,7 @@ describe('syncVip', () => {
     const result = await syncVip({ rule, days: earned, state: parseVipState(undefined), now: NOW, rcon, log });
 
     expect(result).toEqual({
-      state: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY } }, checkedAt: NOW },
+      state: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY } }, checkedAt: NOW, revoked: {} },
       added: [{ steamId: ASH, name: 'Ash' }],
       renewed: [],
     });
@@ -175,24 +194,42 @@ describe('syncVip', () => {
   it('takes a player off the list once their week is up, if they did not earn it again', async () => {
     const onList = editReserved(settings, [ASH], []);
     const rcon = server(onList);
-    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: NOW - 600_000 };
+    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: NOW - 600_000, revoked: {} };
 
     const result = await syncVip({ rule, days: [{ [ASH]: row('Ash', 2) }], state, now: NOW, rcon, log });
 
     expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings });
-    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW }, added: [], renewed: [] });
+    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {} }, added: [], renewed: [] });
     expect(log.info).toHaveBeenCalledWith(`VIP ended: Ash (${ASH}). The server uses the new reserved list after its next restart.`);
   });
 
   it('keeps a player on the list for another week if they earned it again, without writing', async () => {
     const rcon = server(editReserved(settings, [ASH], []));
-    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: 0 };
+    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: 0, revoked: {} };
 
     const result = await syncVip({ rule, days: earned, state, now: NOW, rcon, log });
 
     expect(rcon.put).not.toHaveBeenCalled();
     expect(result.renewed).toEqual([{ steamId: ASH, name: 'Ash' }]);
     expect(result.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY });
+  });
+
+  it('forgets blocks that have run out', async () => {
+    const state = { ...parseVipState(undefined), revoked: { [ASH]: NOW - 1, [BO]: NOW + DAY } };
+
+    const result = await syncVip({ rule, days: [], state, now: NOW, rcon: server(), log });
+
+    expect(result.state.revoked).toEqual({ [BO]: NOW + DAY });
+  });
+
+  it('ends VIP staff gave on time even when automatic VIP is off', async () => {
+    const rcon = server(editReserved(settings, [ASH], []));
+    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 30 * DAY, expiresAt: NOW - 1 } }, checkedAt: 0, revoked: {} };
+
+    const result = await syncVip({ rule: null, days: [{ [ASH]: row('Ash', 7) }], state, now: NOW, rcon, log });
+
+    expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings });
+    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {} }, added: [], renewed: [] });
   });
 
   it('writes nothing when nothing changed', async () => {
@@ -219,5 +256,88 @@ describe('syncVip', () => {
       await expect(syncVip({ rule, days: earned, state: parseVipState(undefined), now: NOW, rcon, log })).rejects.toThrow(message);
       expect(rcon.put).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('addVip and removeVip', () => {
+  const server = (text = settings) => {
+    const accepted: ConfigResult = { ok: true, errors: [], ignored: [] };
+    return {
+      fetchConfig: vi.fn(async (): Promise<ServerConfig> => ({ revision: '4', writable: true, text })),
+      validate: vi.fn(async (_text: string) => accepted),
+      put: vi.fn(async (_config: ServerConfig) => accepted),
+    };
+  };
+  const empty = parseVipState(undefined);
+
+  it('adds a player for the days asked, lifting any block', async () => {
+    const rcon = server();
+    const state = { ...empty, revoked: { [ASH]: NOW + DAY } };
+
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: 30, now: NOW, state, rcon });
+
+    expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: editReserved(settings, [ASH], []) });
+    expect(result).toEqual({
+      state: { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 30 * DAY } } },
+      outcome: 'added',
+      until: NOW + 30 * DAY,
+    });
+  });
+
+  it('extends a player the bot already gave VIP, never shortening it', async () => {
+    const rcon = server(editReserved(settings, [ASH], []));
+    const state = { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY } } };
+
+    const longer = await addVip({ steamId: ASH, name: 'Ash', days: 30, now: NOW, state, rcon });
+    const shorter = await addVip({ steamId: ASH, name: 'Ash', days: 1, now: NOW, state, rcon });
+
+    expect(rcon.put).not.toHaveBeenCalled();
+    expect(longer).toMatchObject({ outcome: 'extended', until: NOW + 30 * DAY });
+    expect(longer.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 30 * DAY });
+    expect(shorter).toMatchObject({ outcome: 'extended', until: NOW + 6 * DAY });
+  });
+
+  it('leaves a player an admin reserved by hand alone, but lifts a block from /vip remove', async () => {
+    const rcon = server();
+    const blocked = { ...empty, revoked: { [ADMIN]: NOW + DAY } };
+
+    expect(await addVip({ steamId: ADMIN, name: 'Admin', days: 7, now: NOW, state: empty, rcon })).toEqual({
+      state: empty,
+      outcome: 'already-reserved',
+    });
+    expect(await addVip({ steamId: ADMIN, name: 'Admin', days: 7, now: NOW, state: blocked, rcon })).toEqual({
+      state: empty,
+      outcome: 'already-reserved',
+    });
+    expect(rcon.put).not.toHaveBeenCalled();
+  });
+
+  it('removes a player from the list and blocks automatic VIP for a week', async () => {
+    const rcon = server(editReserved(settings, [ASH], []));
+    const state = { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY } } };
+
+    const result = await removeVip({ steamId: ASH, now: NOW, state, rcon });
+
+    expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings });
+    expect(result).toEqual({ state: { ...empty, revoked: { [ASH]: NOW + 7 * DAY } }, outcome: 'removed' });
+  });
+
+  it('removes an admin’s VIP too, and still blocks a player who was not on the list', async () => {
+    const admin = server();
+    const nobody = server();
+
+    expect((await removeVip({ steamId: ADMIN, now: NOW, state: empty, rcon: admin })).outcome).toBe('removed');
+    expect(admin.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings.replace(`+DefaultReservedPlayerIds=${ADMIN}\n`, '') });
+    const result = await removeVip({ steamId: BO, now: NOW, state: empty, rcon: nobody });
+    expect(result).toEqual({ state: { ...empty, revoked: { [BO]: NOW + 7 * DAY } }, outcome: 'not-reserved' });
+    expect(nobody.put).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing when the server refuses the write', async () => {
+    const rcon = server();
+    rcon.validate.mockResolvedValueOnce({ ok: false, errors: ['bad value'], ignored: [] });
+
+    await expect(addVip({ steamId: ASH, name: 'Ash', days: 7, now: NOW, state: empty, rcon })).rejects.toThrow(/refused/);
+    expect(rcon.put).not.toHaveBeenCalled();
   });
 });

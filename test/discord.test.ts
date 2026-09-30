@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { banReason } from '../src/moderation.ts';
 import {
   buildLastMatchEmbed,
+  buildPlayerEmbed,
   buildMatchSummary,
   buildMessage,
   buildPlayersEmbed,
@@ -412,6 +414,73 @@ describe('buildVipMessage', () => {
 
     expect(embedOf(buildVipMessage([], [{ name: 'Dee' }], vip))?.description).toBeUndefined();
     expect(embedOf(buildVipMessage(many, [], vip))?.description).toContain('P19 and 5 more** earned');
+  });
+});
+
+describe('buildPlayerEmbed', () => {
+  const NOW = Date.UTC(2026, 8, 30, 12);
+  const DAY = 86_400_000;
+  const ID = '76561198000000001';
+  const record = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, log: [], ban: null };
+  const profile = { steamId: ID, name: 'Ash_*', record, online: null, reserved: false, serverBan: null, days: 90, now: NOW };
+  const field = (embed: ReturnType<typeof buildPlayerEmbed>, name: string) => embed.fields?.find((f) => f.name === name)?.value;
+  const t = (at: number, style: string) => `<t:${at / 1000}:${style}>`;
+
+  it('shows the Steam ID with a profile link, and says when the bot has not seen them', () => {
+    const embed = buildPlayerEmbed(profile);
+
+    expect(embed.title).toBe('👤 Ash\\_\\*');
+    expect(embed.description).toBe(`\`${ID}\` · [Steam profile](https://steamcommunity.com/profiles/${ID})\n⚫ Not in game`);
+    expect(field(embed, 'Time · last 90 days')).toBe('Not seen on the server.');
+    expect(field(embed, 'Staff history')).toBe('Nothing through the bot yet.');
+  });
+
+  it('shows a ban the bot made, and trusts the server when the ban was lifted or replaced by hand', () => {
+    const ban = { name: 'Ash', until: NOW + DAY, reason: 'Cheating', serverReason: banReason('Cheating', NOW + DAY), by: '42', at: NOW };
+    const botBan = { steamId: ID, reason: banReason('Cheating', NOW + DAY), bannedBy: 'rcon' };
+    const banned = buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: botBan });
+    const bots = `🔨 Banned until ${t(NOW + DAY, 'f')} (${t(NOW + DAY, 'R')}) by <@42>: Cheating`;
+
+    expect(field(banned, 'Ban')).toBe(bots);
+    expect(banned.color).toBe(0xe74c3c);
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, ban } }), 'Ban')).toBe('Not banned');
+    expect(
+      field(buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: { steamId: ID, reason: 'Abuse', bannedBy: 'console' } }), 'Ban'),
+    ).toBe('🔨 Banned on the server: Abuse');
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: undefined }), 'Ban')).toBe(
+      `${bots}\n(Couldn't check the server's ban list.)`,
+    );
+    expect(field(buildPlayerEmbed({ ...profile, serverBan: { steamId: ID, reason: null, bannedBy: 'config' } }), 'Ban')).toBe(
+      '🔨 Banned on the server',
+    );
+  });
+
+  it('shows VIP from the bot, and when staff blocked automatic VIP', () => {
+    const vip = { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY };
+
+    expect(field(buildPlayerEmbed({ ...profile, reserved: true, record: { ...record, vip } }), 'VIP')).toBe(
+      `🎖️ Reserved slot until ${t(NOW + 7 * DAY, 'f')}`,
+    );
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, vipBlockedUntil: NOW + DAY } }), 'VIP')).toBe(
+      `None\nStaff removed VIP: automatic VIP is off for them until ${t(NOW + DAY, 'f')}`,
+    );
+  });
+
+  it('lists the newest staff actions first, with counts', () => {
+    const log = [
+      { action: 'warn' as const, at: NOW - 2 * DAY, by: '42', reason: 'Language' },
+      { action: 'switchteam' as const, at: NOW - DAY, by: '43', detail: 'Valkyra to Kharr' },
+      { action: 'unban' as const, at: NOW, by: 'bot', reason: 'The ban ran out' },
+    ];
+
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, log } }), 'Staff history')).toBe(
+      [
+        '1 warning',
+        `${t(NOW, 'd')} **Unban** by the bot: The ban ran out`,
+        `${t(NOW - DAY, 'd')} **Team move** (Valkyra to Kharr) by <@43>`,
+        `${t(NOW - 2 * DAY, 'd')} **Warning** by <@42>: Language`,
+      ].join('\n'),
+    );
   });
 });
 

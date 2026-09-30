@@ -226,6 +226,65 @@ describe('handleInteraction', () => {
     expect(d.runCommand).toHaveBeenCalledTimes(1);
   });
 
+  it('reads a subcommand and its options, as /vip add sends them', async () => {
+    const vip = {
+      ...broadcast(String(ADMINISTRATOR)),
+      data: {
+        name: 'vip',
+        options: [
+          {
+            name: 'add',
+            type: 1,
+            options: [
+              { name: 'steam_id', type: 3, value: '76561198000000001' },
+              { name: 'days', type: 4, value: 30 },
+            ],
+          },
+        ],
+      },
+    };
+    const { body, signature, timestamp } = await signed(vip);
+    const d = deps();
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.runCommand).toHaveBeenCalledWith({
+      name: 'vip',
+      options: { subcommand: 'add', steam_id: '76561198000000001', days: '30' },
+      userId: '42',
+    });
+  });
+
+  it.each(['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'])(
+    'keeps /%s to Administrators and staff, replying privately',
+    async (name) => {
+      const allowed = { ...broadcast('0'), member: { user: { id: '42' }, permissions: '0', roles: ['555'] }, data: { name } };
+      const outsider = { ...allowed, member: { user: { id: '43' }, permissions: '0', roles: ['999'] } };
+      const d = deps();
+      const run = async (payload: unknown) => {
+        const { body, signature, timestamp } = await signed(payload);
+        return handleInteraction(body, signature, timestamp, d);
+      };
+
+      expect((await run(allowed)).body).toEqual({ type: 5, data: { flags: 64 } });
+      expect((await run(outsider)).body).toMatchObject({ type: 4, data: { flags: 64 } });
+      expect((await run({ ...allowed, guild_id: '888' })).body).toMatchObject({ type: 4, data: { flags: 64 } });
+    },
+  );
+
+  it('tells staff to check before retrying an action that failed, with the reason', async () => {
+    const { body, signature, timestamp } = await signed({ ...broadcast(String(ADMINISTRATOR)), data: { name: 'kick' } });
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
+      content: "Couldn't confirm /kick worked (RCON request timed out after 8000ms). Check before trying again.",
+      allowed_mentions: { parse: [] },
+    });
+  });
+
   it('gives a failed /seeders the general error, not the broadcast one', async () => {
     const { body, signature, timestamp } = await signed({ ...broadcast(String(ADMINISTRATOR)), data: { name: 'seeders' } });
     const d = deps();
@@ -255,8 +314,39 @@ describe('handleInteraction', () => {
       const result = await handleInteraction(body, signature, timestamp, d);
 
       expect(result.body).toEqual({ type: 8, data: { choices: [{ name: 'Ozeti · 69 min', value: '1790776000000' }] } });
-      expect(d.suggest).toHaveBeenCalledWith({ name: 'removematch', options: { match: 'oze' }, userId: '42' });
+      expect(d.suggest).toHaveBeenCalledWith({ name: 'removematch', options: { match: 'oze' }, userId: '42', focused: 'match' });
       expect(d.runCommand).not.toHaveBeenCalled();
+    });
+
+    it('says which option is being typed in, inside a subcommand too', async () => {
+      const vip = {
+        ...typing(String(ADMINISTRATOR)),
+        data: {
+          name: 'vip',
+          options: [{ name: 'remove', type: 1, options: [{ name: 'steam_id', type: 3, value: 'ash', focused: true }] }],
+        },
+      };
+      const team = {
+        ...typing(String(ADMINISTRATOR)),
+        data: {
+          name: 'switchteam',
+          options: [
+            { name: 'player', type: 3, value: '76561198000000001' },
+            { name: 'team', type: 3, value: 'kh', focused: true },
+          ],
+        },
+      };
+      const d = deps();
+
+      for (const payload of [vip, team]) {
+        const { body, signature, timestamp } = await signed(payload);
+        await handleInteraction(body, signature, timestamp, d);
+      }
+
+      expect(d.suggest.mock.calls).toEqual([
+        [{ name: 'vip', options: { subcommand: 'remove', steam_id: 'ash' }, userId: '42', focused: 'steam_id' }],
+        [{ name: 'switchteam', options: { player: '76561198000000001', team: 'kh' }, userId: '42', focused: 'team' }],
+      ]);
     });
 
     it('offers choices to staff too', async () => {
@@ -346,8 +436,30 @@ describe('editOriginalReply', () => {
 });
 
 describe('COMMANDS', () => {
-  it('registers every command, with /broadcast and /seeders limited to Administrators', () => {
-    expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders', 'removematch']);
+  it('registers every command, with the staff ones limited to Administrators until a server allows other roles', () => {
+    expect(COMMANDS.map((c) => c.name)).toEqual([
+      'serverstatus',
+      'players',
+      'lastmatch',
+      'rotation',
+      'broadcast',
+      'seeders',
+      'removematch',
+      'warn',
+      'player',
+      'kick',
+      'switchteam',
+      'ban',
+      'unban',
+      'setnextmap',
+      'changemap',
+      'vip',
+    ]);
+    for (const command of COMMANDS.slice(4)) {
+      expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
+      expect(command.description).toMatch(/\(staff only\)$/);
+      expect(command.description.length).toBeLessThanOrEqual(100);
+    }
     expect(COMMANDS.find((c) => c.name === 'removematch')).toMatchObject({
       default_member_permissions: '8',
       options: [{ name: 'match', type: 3, required: true, autocomplete: true }],
@@ -360,5 +472,48 @@ describe('COMMANDS', () => {
       default_member_permissions: '8',
       options: [{ name: 'message', type: 3, required: true, max_length: 200 }],
     });
+  });
+
+  it('lets staff pick players, teams, maps and bans from lists, and ban lengths from fixed choices', () => {
+    const find = (name: string) => COMMANDS.find((c) => c.name === name);
+
+    expect(find('kick')).toMatchObject({
+      options: [
+        { name: 'player', type: 3, required: true, autocomplete: true },
+        { name: 'reason', type: 3, required: true, max_length: 200 },
+      ],
+    });
+    expect(find('switchteam')).toMatchObject({
+      options: [{ name: 'player', autocomplete: true }, { name: 'team', required: false, autocomplete: true }],
+    });
+    expect(find('ban')).toMatchObject({
+      options: [
+        { name: 'player', autocomplete: true },
+        {
+          name: 'duration',
+          required: true,
+          choices: [
+            { name: '1 hour', value: '1h' },
+            { name: '1 day', value: '1d' },
+            { name: '3 days', value: '3d' },
+            { name: '7 days', value: '7d' },
+            { name: '30 days', value: '30d' },
+            { name: 'Permanent', value: 'permanent' },
+          ],
+        },
+        { name: 'reason', required: true },
+      ],
+    });
+    expect(find('setnextmap')).toMatchObject({ options: [{ name: 'map', autocomplete: true }] });
+    expect(find('vip')).toMatchObject({
+      options: [
+        { name: 'add', type: 1, options: [{ name: 'steam_id', autocomplete: true }, { name: 'days', type: 4, min_value: 1, max_value: 365 }] },
+        { name: 'remove', type: 1, options: [{ name: 'steam_id', autocomplete: true }] },
+      ],
+    });
+    // Discord caps option descriptions at 100 characters.
+    type Described = { description: string; options?: Described[] };
+    const all = (list: Described[]): Described[] => list.flatMap((o) => [o, ...all(o.options ?? [])]);
+    expect(all(COMMANDS as Described[]).every((o) => o.description.length <= 100)).toBe(true);
   });
 });

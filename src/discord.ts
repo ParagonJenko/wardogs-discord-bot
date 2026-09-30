@@ -1,6 +1,8 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
-import type { FactionScore, Player, Rotation, ServerStatus } from './rcon.ts';
+import { isBotBan, type BanRecord, type ModAction } from './moderation.ts';
+import type { Ban, FactionScore, Player, Rotation, ServerStatus } from './rcon.ts';
+import type { PlayerRecord } from './staff.ts';
 import type { RecentMatch } from './stats.ts';
 import type { MatchSummary } from './tracking.ts';
 
@@ -51,7 +53,7 @@ const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>#[\]()-]
 // Discord caps an embed field at 1024 characters; five escaped 40-character names stay well inside it.
 const MAX_PLAYER_NAME = 40;
 
-const playerName = (name: string): string =>
+export const playerName = (name: string): string =>
   escapeMarkdown(name.length > MAX_PLAYER_NAME ? `${name.slice(0, MAX_PLAYER_NAME - 1)}…` : name);
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -457,4 +459,119 @@ export const buildLastMatchEmbed = (match: RecentMatch, siteUrl?: string): Embed
         timestamp: new Date(match.endedAt).toISOString(),
       }
     : { title: '🏁 Last match', description: ended, color: INFO_COLOR };
+};
+
+export type PlayerProfile = {
+  steamId: string;
+  name: string | null;
+  record: PlayerRecord;
+  online: Player | null;
+  // null when the server could not be read.
+  reserved: boolean | null;
+  // undefined when the server could not be read; null when it has no ban for them.
+  serverBan: Ban | null | undefined;
+  days: number;
+  now: number;
+};
+
+const ACTION_NAMES: Record<ModAction, string> = {
+  warn: 'Warning',
+  kick: 'Kick',
+  ban: 'Ban',
+  unban: 'Unban',
+  switchteam: 'Team move',
+  'vip-add': 'VIP added',
+  'vip-remove': 'VIP removed',
+};
+
+const HISTORY_SHOWN = 5;
+const MAX_REASON_SHOWN = 100;
+
+const hoursAndMinutes = (total: number): string => {
+  const hours = Math.floor(total / 60);
+  return hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
+};
+
+const when = (at: number, style: 'f' | 'd' | 'R'): string => `<t:${Math.floor(at / 1000)}:${style}>`;
+
+const cut = (text: string): string => (text.length > MAX_REASON_SHOWN ? `${text.slice(0, MAX_REASON_SHOWN - 1)}…` : text);
+
+const vipText = ({ record, reserved, now }: PlayerProfile): string => {
+  const lines = [
+    record.vip !== null && reserved !== false
+      ? `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}`
+      : reserved === true
+        ? '🎖️ Reserved slot added by hand, no end date'
+        : reserved === null
+          ? "Couldn't read the reserved list"
+          : 'None',
+    ...(record.vipBlockedUntil !== null && record.vipBlockedUntil > now
+      ? [`Staff removed VIP: automatic VIP is off for them until ${when(record.vipBlockedUntil, 'f')}`]
+      : []),
+  ];
+  return lines.join('\n');
+};
+
+const banText = ({ record, serverBan }: PlayerProfile): string => {
+  // The server is the truth when it can be read: a ban lifted by hand is gone even if the bot still has a record, and
+  // a ban made some other way since is not described as the bot's.
+  if (serverBan === null) return 'Not banned';
+  const ban = record.ban;
+  const bots = (b: BanRecord): string => {
+    const until = b.until === null ? 'permanently' : `until ${when(b.until, 'f')} (${when(b.until, 'R')})`;
+    return `🔨 Banned ${until} by <@${b.by}>: ${cut(b.reason)}`;
+  };
+  if (serverBan === undefined) return ban === null ? "Couldn't read the ban list" : `${bots(ban)}\n(Couldn't check the server's ban list.)`;
+  if (ban !== null && isBotBan(serverBan.reason, ban)) return bots(ban);
+  return `🔨 Banned on the server${serverBan.reason ? `: ${cut(serverBan.reason)}` : ''}`;
+};
+
+// Red while the player is banned, as far as can be told.
+const isBanned = ({ record, serverBan }: PlayerProfile): boolean => (serverBan === undefined ? record.ban !== null : serverBan !== null);
+
+const historyText = (record: PlayerRecord): string => {
+  if (record.log.length === 0) return 'Nothing through the bot yet.';
+  const count = (action: ModAction, word: string): string[] => {
+    const n = record.log.filter((e) => e.action === action).length;
+    return n > 0 ? [plural(n, word)] : [];
+  };
+  const counts = [...count('warn', 'warning'), ...count('kick', 'kick'), ...count('ban', 'ban')];
+  const entries = [...record.log]
+    .reverse()
+    .slice(0, HISTORY_SHOWN)
+    .map((e) => {
+      const by = e.by === 'bot' ? 'the bot' : `<@${e.by}>`;
+      const detail = e.detail ? ` (${escapeMarkdown(e.detail)})` : '';
+      return `${when(e.at, 'd')} **${ACTION_NAMES[e.action]}**${detail} by ${by}${e.reason ? `: ${cut(e.reason)}` : ''}`;
+    });
+  return [...(counts.length > 0 ? [counts.join(' · ')] : []), ...entries].join('\n');
+};
+
+// For staff: who a player is, their time on the server, VIP, bans and what staff did through the bot.
+export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
+  const { steamId, name, record, online, days } = profile;
+  const t = record.totals;
+  const period = `last ${days} days`;
+  const here = online
+    ? `🟢 In game now${online.faction ? ` on **${escapeMarkdown(online.faction)}**` : ''}` +
+      (online.kills === null ? '' : ` · ${tally(online.kills, 'kill')} · ${tally(online.deaths, 'death')}`)
+    : '⚫ Not in game';
+  return {
+    title: `👤 ${name === null ? 'Unknown player' : playerName(name)}`,
+    description: [`\`${steamId}\` · [Steam profile](https://steamcommunity.com/profiles/${steamId})`, here].join('\n'),
+    color: isBanned(profile) ? COLORS.lowPop : INFO_COLOR,
+    fields: [
+      ...(t === null
+        ? [{ name: `Time · ${period}`, value: 'Not seen on the server.' }]
+        : [
+            { name: `Playtime · ${period}`, value: hoursAndMinutes(t.seedingMinutes + t.liveMinutes), inline: true },
+            { name: 'Seeding', value: `${hoursAndMinutes(t.seedingMinutes)} · ${plural(t.seedDays, 'seed day')}`, inline: true },
+            { name: 'Matches', value: `${t.matches} · ${plural(t.kills, 'kill')} · ${kd(t.kills, t.deaths)} K/D`, inline: true },
+          ]),
+      { name: 'VIP', value: vipText(profile) },
+      { name: 'Ban', value: banText(profile) },
+      { name: 'Staff history', value: historyText(record) },
+    ],
+    footer: { text: 'Staff history only covers what staff did through the bot.' },
+  };
 };

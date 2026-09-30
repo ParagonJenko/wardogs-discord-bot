@@ -88,6 +88,18 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
 | `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
 | `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
+| `/warn`         | Staff only           | Sends a player in game a private message: "Staff warning: …"       |
+| `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), VIP, ban and staff history |
+| `/kick`         | Staff only           | Removes a player from the server, with a reason they see; they can rejoin |
+| `/switchteam`   | Staff only           | Moves a player to another team (`team`, or the other one when there are two) and respawns them |
+| `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
+| `/unban`        | Staff only           | Lifts a ban                                                        |
+| `/setnextmap`   | Staff only           | Sets the map after this match, without changing the rotation       |
+| `/changemap`    | Staff only           | Ends the current match now and changes to the map                  |
+| `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days                      |
+| `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days |
+
+Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
@@ -112,35 +124,33 @@ command to the Worker's URL; nothing has to stay connected.
    ```bash
    npm run register
    ```
-   It prints `Registered: /serverstatus`. A 401 means the token is wrong: it must come from **Bot →
+   It prints `Registered: /serverstatus, /players, …`. A 401 means the token is wrong: it must come from **Bot →
    Reset Token**, not the Public Key or the OAuth2 Client Secret.
    This replaces the app's whole command list, so running it again after an update also removes
    commands that no longer exist (such as the old `/status`).
 6. Add the app to your Discord server by opening this link:
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
-Commands reply publicly in the channel, except `/broadcast`, `/seeders` and `/removematch`, whose replies only the sender sees. If the game
+Commands reply publicly in the channel, except the staff commands, whose replies only the sender sees. If the game
 server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
 commands, run `npm run register` again.
 
-`/broadcast` uses the RCON password's write access, so it is locked down:
+Staff commands use the RCON password's write access, change the records or show Steam IDs, so they are locked down:
 
 - It only works in your own Discord server. Set `DISCORD_GUILD_ID` in the `vars` block of `wrangler.jsonc`
   (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
-  set, `/broadcast` is refused everywhere. Commands are registered globally, so without this an admin in any
-  other server that added the app could broadcast into your game.
-- Only staff can use it: members with Discord's **Administrator** permission, or with a role listed in
+  set, staff commands are refused everywhere. Commands are registered globally, so without this an admin in any
+  other server that added the app could control your game server.
+- Only staff can use them: members with Discord's **Administrator** permission, or with a role listed in
   `DISCORD_ADMIN_ROLE_IDS` in the `vars` block of `wrangler.jsonc` (comma-separated role IDs; right-click the
   role in Server Settings → Roles → Copy Role ID). The Worker checks this on every use, so letting other roles
-  see the command in Discord still does not let them use it.
+  see the commands in Discord still does not let them use them.
 - Discord only shows staff commands to Administrators at first. To show them to a staff role too: Server
-  Settings → Integrations → the bot → pick `/broadcast`, `/seeders` and `/removematch` (or the whole app) →
-  Add Roles or Members → the role → ✓. Do this once; it lasts across deploys and `npm run register`.
+  Settings → Integrations → the bot → pick each staff command (or the whole app) → Add Roles or Members → the
+  role → ✓. It lasts across deploys and `npm run register`, but new commands need it once each.
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 
-`/seeders` shows Steam IDs and `/removematch` changes the records, so they have the same limits: your server only,
-staff only, and a private reply.
 
 `/removematch` is for a match the bot recorded by mistake, such as part of a match it wrongly thought had ended.
 Start typing and pick the match from the list of recent matches (map, result, length and end time, UTC). It takes
@@ -151,6 +161,42 @@ full kills and deaths.
 
 The Node/Docker version does not support slash commands, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.
+
+## Staff commands
+
+For players, staff start typing and pick from the list, which shows each player's name, team and Steam ID.
+`/warn`, `/kick` and `/switchteam` list the players in game. `/player`, `/ban` and `/vip add` also list players seen
+in the last 30 days and players with VIP or a ban from the bot, and take any Steam ID. A name typed without picking
+works when it matches exactly one player.
+
+- **`/warn`** sends a private message in game, starting "Staff warning:", up to 180 characters.
+- **`/kick`** needs a reason; the player sees it. They can rejoin.
+- **`/switchteam`** lists the other teams in the match, with how many players and points each has. With two teams,
+  leave `team` out to move them to the other one. Like the game's own console, the bot then kills the player so they
+  respawn on the new side.
+- **`/ban`** needs a length and a reason. The server's own bans are permanent (they go into `ServerSettings.ini`), so
+  for a timed ban the bot writes when it ends into the reason, remembers it, and lifts the ban itself at the first
+  check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly
+  the one it wrote: if someone lifted it and banned the player again some other way, that ban stays. A player in
+  game is kicked too. A player who is already banned is left as they are; to change a ban, `/unban` them first.
+- **`/unban`** lists the banned players. It works on any ban, however it was made.
+- **`/setnextmap`** sets the map the server goes to when this match ends (`POST /v1/match/map`). The rotation is not
+  changed. **`/changemap`** does the same, then ends the current match straight away (`POST /v1/match/end`); the
+  server shows the end screen, then changes map.
+- **`/vip add`** puts a player on the reserved list for the number of days given. It ends like automatic VIP: when
+  the time is up, unless they have earned it by seeding by then. For a player who already has VIP from the bot, it
+  sets the end to the later of the two. A reserved slot an admin added by hand in `ServerSettings.ini` is left as it
+  is. **`/vip remove`** takes a player off the list, however they got there, and automatic VIP does not give it back
+  for 7 days (`/vip add` lifts that). Both take effect at the server's next restart, like automatic VIP.
+- **`/player`** shows the Steam ID with a link to the Steam profile, whether they are in game, their playtime,
+  seeding and matches over the last 90 days, VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
+  unbans, team moves and VIP changes, with who did each.
+
+The staff history only covers what staff do through the bot, from the deploy with these commands on. Each action is
+also logged in the Worker logs with the staff member's Discord user ID. If a reply says an action could not be
+confirmed, check in game before trying again: it may have gone through.
+
+There is no chat log command: the game's RCON API has no way to read chat.
 
 ## Website stats
 
@@ -194,6 +240,8 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | ---------------------------- | -------------------------------------------------------------------------------------- |
 | Each finished match          | Map, start, live and end times, length, peak, faction scores, and every player's Steam ID, name, kills and deaths |
 | Each player, each UTC day    | Name, seeding minutes, live minutes, whether they had a successful seed, matches played, kills, deaths |
+| Each player's staff history  | The last 50 warnings, kicks, bans, unbans, team moves and VIP changes made through the bot: when, by whom (Discord user ID), and why |
+| Bans the bot made            | Name, reason, who made it, and when a timed ban ends                                    |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
@@ -247,8 +295,10 @@ How it changes the server:
 - `MaxReservedSlots` in the same section sets how many slots are held back for reserved players. The bot does not
   change it.
 - Each change is logged (`VIP added: …`, `VIP ended: …`), and `/seeders` shows who has VIP from the bot and until when.
+- Staff can give or take away VIP by hand with [`/vip add` and `/vip remove`](#staff-commands).
 
-Turning it off (`VIP_SEED_DAYS` `"0"`) stops changes; players already on the list stay until an admin removes them.
+Turning it off (`VIP_SEED_DAYS` `"0"`) stops players earning it. VIP the bot already gave, by seeding or through
+`/vip add`, still ends on time.
 Automatic VIP is Cloudflare only.
 
 ## In-game messages
@@ -318,10 +368,11 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 
 ## Security
 
-The RCON password gives full admin control of the server (kick, ban, end match, change settings). The
-bot reads `GET /v1/status`, `/v1/players` and `/v1/rotation`, and only writes through `/broadcast` and the
-[in-game messages](#in-game-messages) (`POST /v1/broadcast`) and, with automatic VIP on, the reserved list in `ServerSettings.ini`
-(`PUT /v1/config`, see [Automatic VIP](#automatic-vip)), but:
+The RCON password gives full admin control of the server (kick, ban, end match, change settings). On its own
+the bot only reads the server, sends the [in-game messages](#in-game-messages) (`POST /v1/broadcast`), changes the
+reserved list in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`) and lifts timed bans
+when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
+[staff command](#staff-commands). Still:
 
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if
