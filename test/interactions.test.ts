@@ -117,4 +117,29 @@ describe('editOriginalReply', () => {
     expect(calls[0]?.init?.method).toBe('PATCH');
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ content: 'hi' });
   });
+
+  it('retries when Discord has not saved the deferred reply yet (404)', async () => {
+    const statuses = [404, 404, 200];
+    const fetchFn = vi.fn(async () => new Response('{}', { status: statuses.shift() ?? 200 }));
+
+    await editOriginalReply(fetchFn, [0, 0, 0])('111', 'tok', { content: 'hi' });
+
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up after the last retry and reports what Discord said', async () => {
+    const fetchFn = vi.fn(async () => new Response('{"message": "Unknown Message", "code": 10008}', { status: 404 }));
+
+    await expect(editOriginalReply(fetchFn, [0, 0, 0])('111', 'tok', {})).rejects.toThrow(
+      /404 .*Unknown Message/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry other errors', async () => {
+    const fetchFn = vi.fn(async () => new Response('{"message": "Invalid Form Body"}', { status: 400 }));
+
+    await expect(editOriginalReply(fetchFn, [0, 0, 0])('111', 'tok', {})).rejects.toThrow(/400 .*Invalid Form Body/);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
 });

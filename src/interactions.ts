@@ -90,14 +90,34 @@ export const handleInteraction = async (
   return { status: 200, body: { type: CHANNEL_MESSAGE, data: { content: 'Unknown command.', flags: EPHEMERAL } } };
 };
 
+// The edit races the deferred "thinking…" response: if RCON answers (or fails) quickly, Discord may not have
+// saved that message yet and answers 404. Waiting briefly and trying again fixes it.
+const RETRY_DELAYS_MS = [500, 1_500, 3_000];
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 export const editOriginalReply =
-  (fetchFn: typeof fetch = fetch) =>
+  (fetchFn: typeof fetch = fetch, retryDelaysMs: number[] = RETRY_DELAYS_MS) =>
   async (applicationId: string, token: string, reply: unknown): Promise<void> => {
-    const response = await fetchFn(`https://discord.com/api/v10/webhooks/${applicationId}/${token}/messages/@original`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(reply),
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!response.ok) throw new Error(`Discord rejected the /serverstatus reply: ${response.status}`);
+    const url = `https://discord.com/api/v10/webhooks/${applicationId}/${token}/messages/@original`;
+    const attempt = (): Promise<Response> =>
+      fetchFn(url, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(reply),
+        signal: AbortSignal.timeout(8_000),
+      });
+
+    const response = await retryDelaysMs.reduce<Promise<Response>>(
+      async (previous, delay) => {
+        const last = await previous;
+        if (last.status !== 404) return last;
+        await sleep(delay);
+        return attempt();
+      },
+      attempt(),
+    );
+    if (!response.ok) {
+      throw new Error(`Discord rejected the /serverstatus reply: ${response.status} ${await response.text()}`);
+    }
   };
