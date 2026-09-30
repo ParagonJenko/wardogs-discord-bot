@@ -26,13 +26,15 @@ const rcon = (responses: Record<string, unknown>) => {
 const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = null) => {
   const server = rcon(responses);
   const log = { info: vi.fn() };
+  const seeders = vi.fn(async (_days: number) => [{ steamId: '7656', name: 'Ash', seedingMinutes: 95, liveMinutes: 0, matches: 0, kills: 0, deaths: 0 }]);
   const run = runCommand({
     config: () => config,
     http: server.http,
     lastMatch: async () => lastMatch as never,
+    seeders,
     log,
   });
-  return { run, sent: server.sent, log };
+  return { run, sent: server.sent, log, seeders };
 };
 
 describe('runCommand', () => {
@@ -77,6 +79,26 @@ describe('runCommand', () => {
     });
   });
 
+  it('/seeders lists the top seeders over the days asked for, a week by default', async () => {
+    const { run, sent, seeders } = setup();
+
+    const week = await run({ name: 'seeders', options: {}, userId: '42' });
+    await run({ name: 'seeders', options: { days: '30' }, userId: '42' });
+
+    expect(week.embeds?.[0]).toMatchObject({ title: '🌱 Top seeders, last 7 days' });
+    expect(week.embeds?.[0]?.description).toContain('1. Ash: 95 min · `7656`');
+    expect(seeders.mock.calls).toEqual([[7], [30]]);
+    expect(sent).toEqual([]);
+  });
+
+  it('/seeders keeps the number of days in range', async () => {
+    const { run, seeders } = setup();
+
+    for (const days of ['0', '500', 'lots']) await run({ name: 'seeders', options: { days }, userId: '42' });
+
+    expect(seeders.mock.calls).toEqual([[1], [90], [7]]);
+  });
+
   it('/broadcast sends the message in game and logs the attempt and the result', async () => {
     const { run, sent, log } = setup();
 
@@ -98,6 +120,7 @@ describe('runCommand', () => {
         throw new Error('RCON request timed out after 8000ms');
       },
       lastMatch: async () => null,
+      seeders: async () => [],
       log,
     });
 

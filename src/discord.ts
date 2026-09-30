@@ -207,6 +207,20 @@ export const buildRotationEmbed = (rotation: Rotation): Embed => {
   return { title, description: shown.join('\n'), color: INFO_COLOR };
 };
 
+type SeederTotal = { steamId: string; name: string; seedingMinutes: number };
+
+// For admins handing out VIP, so it shows Steam IDs; the reply is only visible to the admin who asked.
+export const buildSeedersEmbed = (seeders: SeederTotal[], days: number): Embed => {
+  const title = `🌱 Top seeders, last ${plural(days, 'day')}`;
+  if (seeders.length === 0) return { title, description: 'Nobody seeded in that time.', color: COLORS.seeding };
+  const lines = seeders.map((s) => `${playerName(s.name)}: ${s.seedingMinutes} min · \`${s.steamId.replace(/`/g, '')}\``);
+  return {
+    title,
+    description: [numbered(lines), '', 'Minutes online while the server was seeding. Days are UTC.'].join('\n'),
+    color: COLORS.seeding,
+  };
+};
+
 export const buildLastMatchEmbed = (match: RecentMatch): Embed => {
   const [summary] = buildMatchSummary(match, '').embeds;
   const ended = `ended <t:${Math.floor(match.endedAt / 1000)}:R>`;

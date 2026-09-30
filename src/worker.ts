@@ -5,6 +5,17 @@ import { runCommand } from './commands.ts';
 import { postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
+import {
+  matchRecord,
+  matchRecordKey,
+  parsePlayerDay,
+  playerDayKey,
+  rankSeeders,
+  recentDayKeys,
+  recordActivity,
+  recordMatchPlayers,
+  type RankedPlayer,
+} from './players.ts';
 import { createPoller, parseState } from './poller.ts';
 import { fetchSnapshot } from './rcon.ts';
 import { socketHttp } from './socket-http.ts';
@@ -15,9 +26,11 @@ import {
   recordDiscord,
   recordMatch,
   recordObservation,
+  type Observation,
   type PublicStats,
   type SiteStats,
 } from './stats.ts';
+import { summarise, type MatchState } from './tracking.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -29,11 +42,41 @@ const stringVars = (env: Env): Record<string, string> =>
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
 
+const SEEDERS_LISTED = 25;
+
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
+// Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), and the private
+// player records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match).
 export class Watcher extends DurableObject<Env> {
   private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {
     const storage = this.ctx.storage;
     await storage.put('stats', change(parseStats(await storage.get('stats'))));
+  }
+
+  // One write for the site's stats and today's player totals.
+  private async recordCheck(observation: Observation, minutes: number): Promise<void> {
+    const dayKey = playerDayKey(observation.at);
+    const stored = await this.ctx.storage.get(['stats', dayKey]);
+    const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes);
+    if (observation.phase === 'empty' || observation.players.length === 0) {
+      await this.ctx.storage.put('stats', stats);
+      return;
+    }
+    const day = recordActivity(parsePlayerDay(stored.get(dayKey)), observation.players, observation.phase, minutes);
+    await this.ctx.storage.put({ stats, [dayKey]: day });
+  }
+
+  // The match, the recent matches list and the players' totals are written together, and only once per match.
+  private async recordMatchEnd(match: MatchState, at: number): Promise<void> {
+    const key = matchRecordKey(match.startedAt);
+    const dayKey = playerDayKey(at);
+    const stored = await this.ctx.storage.get([key, 'stats', dayKey]);
+    if (stored.has(key)) return;
+    await this.ctx.storage.put({
+      [key]: matchRecord(match, at),
+      stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at),
+      [dayKey]: recordMatchPlayers(parsePlayerDay(stored.get(dayKey)), match),
+    });
   }
 
   async check(): Promise<void> {
@@ -52,8 +95,8 @@ export class Watcher extends DurableObject<Env> {
         save: (state) => storage.put('state', state),
       },
       stats: {
-        check: (observation) => this.updateStats((stats) => recordObservation(stats, observation, minutesPerCheck)),
-        matchEnded: (summary, at) => this.updateStats((stats) => recordMatch(stats, summary, at)),
+        check: (observation) => this.recordCheck(observation, minutesPerCheck),
+        matchEnded: (match, at) => this.recordMatchEnd(match, at),
       },
     });
     await poll();
@@ -72,6 +115,13 @@ export class Watcher extends DurableObject<Env> {
   async stats(): Promise<PublicStats> {
     const config = loadConfig(stringVars(this.env));
     return publicStats(parseStats(await this.ctx.storage.get('stats')), config.rules, Date.now());
+  }
+
+  // The players who seeded longest over the last `days` UTC days, including today.
+  async seeders(days: number): Promise<RankedPlayer[]> {
+    const keys = recentDayKeys(Date.now(), days);
+    const stored = await this.ctx.storage.get(keys);
+    return rankSeeders(keys.map((key) => parsePlayerDay(stored.get(key))), SEEDERS_LISTED);
   }
 }
 
@@ -140,6 +190,7 @@ export default {
           config: () => loadConfig(vars),
           http: socketHttp(connect),
           lastMatch: async () => (await env.WATCHER.get(env.WATCHER.idFromName('watcher')).stats()).matches[0] ?? null,
+          seeders: (days) => env.WATCHER.get(env.WATCHER.idFromName('watcher')).seeders(days),
           log: console,
         }),
         editReply: editOriginalReply(),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Player, ServerStatus } from '../src/rcon.ts';
-import { observeMatch, tallySeeding, topSeeders, type MatchState } from '../src/tracking.ts';
+import { observeMatch, summarise, tallySeeding, topSeeders, type MatchState } from '../src/tracking.ts';
 
 const player = (steamId: string, kills = 0, deaths = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths });
 
@@ -46,7 +46,7 @@ const observe = (steps: { status: ServerStatus; players: Player[]; live?: boolea
   steps.reduce<{ match: MatchState | null; finished: unknown[] }>(
     (acc, s, i) => {
       const result = observeMatch(acc.match, s.status, s.players, s.live ?? true, (i + 1) * 60_000);
-      return { match: result.match, finished: result.finished ? [...acc.finished, result.finished] : acc.finished };
+      return { match: result.match, finished: result.finished ? [...acc.finished, summarise(result.finished)] : acc.finished };
     },
     { match: steps[0] ? observeMatch(null, steps[0].status, [], false, 0).match : null, finished: [] },
   );
@@ -145,6 +145,34 @@ describe('match tracking', () => {
     const live = observeMatch(first.match, status(), [player('a', 2)], true, 60_000);
 
     expect(observeMatch(live.match, status({ map: 'Europe' }), [], true, 120_000).finished).not.toBeNull();
+  });
+
+  it('ends the match when the server empties, so a quiet night is not counted as match time', () => {
+    const { finished } = observe([
+      { status: status(), players: [player('a', 4)] },
+      { status: status(), players: [player('a', 9)] },
+      { status: status({ players: 0 }), players: [], live: false },
+      { status: status({ players: 0 }), players: [], live: false },
+      { status: status(), players: [player('b', 2)] },
+      { status: status({ map: 'Europe' }), players: [] },
+    ]);
+
+    expect(finished).toEqual([
+      expect.objectContaining({ map: 'Kavkazi', durationMs: 60_000, top: [{ name: 'Pa', kills: 9, deaths: 0 }] }),
+      expect.objectContaining({ map: 'Kavkazi', durationMs: 0, top: [{ name: 'Pb', kills: 2, deaths: 0 }] }),
+    ]);
+  });
+
+  it('starts the next match when someone joins, not when the server emptied', () => {
+    const live = observeMatch(observeMatch(null, status(), [player('a')], false, 0).match, status(), [player('a', 3)], true, 60_000);
+    const empty = observeMatch(live.match, status({ players: 0 }), [], false, 120_000);
+    const stillEmpty = observeMatch(empty.match, status({ players: 0 }), [], false, 10 * 60_000);
+    const joined = observeMatch(stillEmpty.match, status({ players: 1 }), [player('b')], false, 11 * 60_000);
+
+    expect(empty.finished).toMatchObject({ startedAt: 0, liveAt: 60_000 });
+    expect(stillEmpty.finished).toBeNull();
+    expect(joined.finished).toBeNull();
+    expect(joined.match).toMatchObject({ startedAt: 11 * 60_000, liveAt: null, peakPlayers: 1 });
   });
 
   it('keeps the last known kills when a reading leaves them out, without treating it as a restart', () => {

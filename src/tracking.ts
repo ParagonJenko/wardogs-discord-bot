@@ -15,8 +15,8 @@ export const topSeeders = (tally: SeedingTally, count: number): { name: string; 
     .slice(0, count);
 
 // Matches: WARDOGS RCON does not report when a match ends, so a new match is recognised by the map or
-// rotation slot changing, or by a player's kills or deaths going backwards (a restart on the same map).
-// The summary uses the last stats seen before that, so it can miss up to one check of the final minute.
+// rotation slot changing, by a player's kills or deaths going backwards (a restart on the same map), or by the
+// server emptying. The summary uses the last stats seen before that, so it can miss up to one check of the final minute.
 export type PlayerStats = { name: string; kills: number; deaths: number };
 
 export type MatchState = {
@@ -56,7 +56,7 @@ export const topPlayers = (players: Record<string, PlayerStats>, count = TOP_PLA
     .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
     .slice(0, count);
 
-const summarise = (match: MatchState): MatchSummary => ({
+export const summarise = (match: MatchState): MatchSummary => ({
   map: match.key.split('#')[0] ?? '',
   durationMs: match.lastSeenAt - (match.liveAt ?? match.lastSeenAt),
   peakPlayers: match.peakPlayers,
@@ -75,19 +75,29 @@ const freshMatch = (status: ServerStatus, now: number, summarisable: boolean): M
   factionScores: [],
 });
 
+// Without this, a server left empty overnight on the same map would carry on the evening's match the next day.
+const emptied = (match: MatchState, status: ServerStatus, players: Player[]): boolean =>
+  match.peakPlayers > 0 && status.players === 0 && players.length === 0;
+
+// `finished` is the match that just ended, when it went live and the bot saw it start.
 export const observeMatch = (
   previous: MatchState | null,
   status: ServerStatus,
   players: Player[],
   live: boolean,
   now: number,
-): { match: MatchState; finished: MatchSummary | null } => {
+): { match: MatchState; finished: MatchState | null } => {
   const isNew =
-    previous === null || previous.key !== matchKey(status) || statsWentBackwards(previous, players);
+    previous === null ||
+    previous.key !== matchKey(status) ||
+    statsWentBackwards(previous, players) ||
+    emptied(previous, status, players);
   const base = isNew ? freshMatch(status, now, !(previous === null && live)) : previous;
 
   const match: MatchState = {
     ...base,
+    // A match starts when someone is first seen in it, not while the server sits empty on the map.
+    startedAt: base.peakPlayers === 0 ? now : base.startedAt,
     lastSeenAt: now,
     liveAt: base.liveAt ?? (live ? now : null),
     peakPlayers: Math.max(base.peakPlayers, status.players),
@@ -103,7 +113,6 @@ export const observeMatch = (
     factionScores: status.factionScores.length > 0 ? status.factionScores : base.factionScores,
   };
 
-  const finished =
-    isNew && previous !== null && previous.summarisable && previous.liveAt !== null ? summarise(previous) : null;
+  const finished = isNew && previous !== null && previous.summarisable && previous.liveAt !== null ? previous : null;
   return { match, finished };
 };

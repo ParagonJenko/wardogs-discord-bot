@@ -6,6 +6,7 @@ import type { Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
 import {
   observeMatch,
+  summarise,
   tallySeeding,
   topSeeders,
   type MatchState,
@@ -19,6 +20,8 @@ export type BotState = {
   alerts: MonitorState;
   seeding: SeedingTally;
   match: MatchState | null;
+  // A match summary Discord has not accepted yet; posting it is retried on each check.
+  unsentSummary: MatchSummary | null;
 };
 
 export type StateStore = {
@@ -36,12 +39,13 @@ type PollerDeps = {
   stats?: StatsSink;
 };
 
-// Feeds the website's stats. `check` runs once for every check that reached the server, even if a Discord post
-// then fails, so the site never shows a reachable server as down. `matchEnded` runs once the summary is saved,
-// so a retried alert cannot record the same match twice.
+// Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
+// even if a Discord post then fails, so the site never shows a reachable server as down. `matchEnded` runs before
+// the summary is posted, so a Discord outage cannot lose a match. A check that fails after it can report the same
+// match again, so the sink must ignore a match it already has (`startedAt` identifies it).
 export type StatsSink = {
   check: (observation: Observation) => Promise<void>;
-  matchEnded: (summary: MatchSummary, at: number) => Promise<void>;
+  matchEnded: (match: MatchState, at: number) => Promise<void>;
 };
 
 const TOP_SEEDERS = 3;
@@ -50,6 +54,8 @@ const AlertsSchema = z.object({
   phase: z.enum(['empty', 'seeding', 'live']),
   lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop']), z.number()),
 });
+
+const Scores = z.array(z.object({ name: z.string(), score: z.number() }));
 
 const BotStateSchema = z.object({
   alerts: AlertsSchema,
@@ -63,15 +69,26 @@ const BotStateSchema = z.object({
       summarisable: z.boolean(),
       peakPlayers: z.number(),
       players: z.record(z.string(), z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
-      factionScores: z.array(z.object({ name: z.string(), score: z.number() })),
+      factionScores: Scores,
     })
     .nullable(),
+  // Missing from state saved before summaries were retried this way.
+  unsentSummary: z
+    .object({
+      map: z.string(),
+      durationMs: z.number(),
+      peakPlayers: z.number(),
+      factionScores: Scores,
+      top: z.array(z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
+    })
+    .nullable()
+    .default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
 const StoredStateSchema = z.union([
   BotStateSchema,
-  AlertsSchema.transform((alerts): BotState => ({ alerts, seeding: {}, match: null })),
+  AlertsSchema.transform((alerts): BotState => ({ alerts, seeding: {}, match: null, unsentSummary: null })),
 ]);
 
 // Reads what a store saved. Anything unrecognisable starts fresh instead of failing every check.
@@ -113,9 +130,9 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       const alerts = initialState(status.players, config.rules);
       const { match } = observeMatch(null, status, players, alerts.phase === 'live', time);
       const seeding = alerts.phase === 'seeding' ? tallySeeding({}, players) : {};
-      await store.save({ alerts, seeding, match });
+      await store.save({ alerts, seeding, match, unsentSummary: null });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
-      await report((sink) => sink.check({ at: time, status, phase: alerts.phase, match }));
+      await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, match }));
       return;
     }
 
@@ -133,24 +150,35 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
           }))
         : [];
 
-    await report((sink) => sink.check({ at: time, status, phase: after, match }));
+    await report((sink) => sink.check({ at: time, status, players, phase: after, match }));
 
-    if (finished !== null) {
-      await send(buildMatchSummary(finished, status.name));
-      // Save straight away so a failed alert below does not post the summary a second time.
-      await store.save({ ...state, match });
-      log.info(`Sent match summary for ${finished.map}`);
-      await report((sink) => sink.matchEnded(finished, time));
+    if (finished !== null) await report((sink) => sink.matchEnded(finished, time));
+
+    // If a Discord post fails, the match is still saved, so matches keep being tracked while Discord is down, and an
+    // unsent summary is kept to retry. A newer summary replaces one still waiting; that match is already recorded.
+    let tracked: BotState = { ...state, match, unsentSummary: finished === null ? state.unsentSummary : summarise(finished) };
+    try {
+      const summary = tracked.unsentSummary;
+      if (summary !== null) {
+        await send(buildMatchSummary(summary, status.name));
+        // So a failed alert below does not post the summary a second time.
+        tracked = { ...tracked, unsentSummary: null };
+        log.info(`Sent match summary for ${summary.map}`);
+      }
+      if (result.alert !== null) {
+        await send(
+          buildMessage(result.alert, status, { lowPop: config.rules.lowPop, roleId: config.roleId, seeders }),
+        );
+        log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
+      }
+    } catch (error) {
+      await store.save(tracked);
+      throw error;
     }
-    if (result.alert !== null) {
-      await send(
-        buildMessage(result.alert, status, { lowPop: config.rules.lowPop, roleId: config.roleId, seeders }),
-      );
-      log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
-    }
-    // Only save after a successful send, so a failed post is retried on the next check.
+    // The alert state and seeding tally are only saved after a successful send, so a failed alert is retried on
+    // the next check.
     const seeding = after === 'seeding' ? tallySeeding(state.seeding, players) : {};
-    await store.save({ alerts: result.state, seeding, match });
+    await store.save({ alerts: result.state, seeding, match, unsentSummary: null });
   };
 
   return async (): Promise<void> => {

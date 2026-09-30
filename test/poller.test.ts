@@ -4,7 +4,7 @@ import type { DiscordMessage } from '../src/discord.ts';
 import { createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
 import type { Observation } from '../src/stats.ts';
-import type { MatchSummary } from '../src/tracking.ts';
+import type { MatchState } from '../src/tracking.ts';
 
 const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
@@ -187,7 +187,8 @@ describe('poller', () => {
 
     await run(3);
 
-    expect(send).toHaveBeenCalledTimes(1);
+    // The live alert is not retried; the match that was live for that minute is still summarised once it empties.
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over on Bakurani']);
   });
 
   it('keeps going when RCON is unreachable', async () => {
@@ -202,7 +203,12 @@ describe('poller', () => {
   });
 
   it('picks up from saved state instead of starting over', async () => {
-    const saved: BotState = { alerts: { phase: 'live', lastAlertAt: { live: 0 } }, seeding: {}, match: null };
+    const saved: BotState = {
+      alerts: { phase: 'live', lastAlertAt: { live: 0 } },
+      seeding: {},
+      match: null,
+      unsentSummary: null,
+    };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
 
@@ -216,7 +222,7 @@ describe('poller', () => {
 describe('poller stats', () => {
   const sink = () => ({
     check: vi.fn(async (_observation: Observation) => {}),
-    matchEnded: vi.fn(async (_summary: MatchSummary, _at: number) => {}),
+    matchEnded: vi.fn(async (_match: MatchState, _at: number) => {}),
   });
 
   it('reports every check that reached the server', async () => {
@@ -258,7 +264,70 @@ describe('poller stats', () => {
 
     expect(send).toHaveBeenCalledTimes(4);
     expect(stats.matchEnded).toHaveBeenCalledTimes(1);
-    expect(stats.matchEnded).toHaveBeenCalledWith(expect.objectContaining({ map: 'Kavkazi', peakPlayers: 22 }), 180_000);
+    expect(stats.matchEnded).toHaveBeenCalledWith(expect.objectContaining({ key: 'Kavkazi#0', peakPlayers: 22 }), 180_000);
+  });
+
+  it('records a finished match even when Discord rejects its summary, and keeps tracking the next one', async () => {
+    const stats = sink();
+    const { run, send, log } = setup(
+      [
+        snapshot(crowd(5)),
+        snapshot(crowd(22, [player('a', 3)])),
+        snapshot(crowd(22, [player('b', 1)]), 'Europe'),
+        snapshot(crowd(22, [player('b', 6)]), 'Europe'),
+        snapshot(crowd(22), 'Zestafona'),
+      ],
+      memoryStore(),
+      stats,
+    );
+    send.mockImplementation(async (message: DiscordMessage) => {
+      if (message.embeds[0]?.title.startsWith('🏁')) throw new Error('Discord webhook failed: 404');
+    });
+
+    await run(5);
+
+    expect(stats.matchEnded.mock.calls.map(([m, at]) => [m.key, m.startedAt, at])).toEqual([
+      ['Kavkazi#0', 60_000, 180_000],
+      ['Europe#0', 180_000, 300_000],
+    ]);
+    expect(stats.matchEnded.mock.calls[1]?.[0].players['b']).toEqual({ name: 'Pb', kills: 6, deaths: 0 });
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('404'));
+  });
+
+  it('records a match that went live while every Discord post was failing', async () => {
+    const stats = sink();
+    const { run, send } = setup(
+      [snapshot(crowd(5)), snapshot(crowd(22, [player('a', 2)])), snapshot(crowd(22, [player('a', 7)])), snapshot(crowd(22), 'Europe')],
+      memoryStore(),
+      stats,
+    );
+    send.mockRejectedValue(new Error('Discord webhook failed: 404'));
+
+    await run(4);
+
+    expect(stats.matchEnded).toHaveBeenCalledTimes(1);
+    expect(stats.matchEnded.mock.calls[0]?.[0]).toMatchObject({ key: 'Kavkazi#0', liveAt: 120_000, players: { a: { kills: 7 } } });
+  });
+
+  it('posts a summary Discord rejected on a later check, once', async () => {
+    const { run, send } = setup([
+      snapshot(crowd(5)),
+      snapshot(crowd(22)),
+      snapshot(crowd(22), 'Europe'),
+      snapshot(crowd(22), 'Europe'),
+      snapshot(crowd(22), 'Europe'),
+    ]);
+    send
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+    await run(5);
+
+    expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual([
+      '🟢 UK Wardogs #1 is live',
+      '🏁 Match over on Bakurani',
+      '🏁 Match over on Bakurani',
+    ]);
   });
 
   it('still sends alerts and saves state when the stats update fails', async () => {
@@ -281,7 +350,14 @@ describe('parseState', () => {
       alerts: { phase: 'live', lastAlertAt: { live: 5 } },
       seeding: {},
       match: null,
+      unsentSummary: null,
     });
+  });
+
+  it('reads state saved before unsent summaries were kept', () => {
+    const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
+
+    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null });
   });
 
   it('starts fresh when nothing or something unrecognisable was saved', () => {

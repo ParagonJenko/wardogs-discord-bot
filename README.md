@@ -15,11 +15,12 @@ It also posts:
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
 And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
-`/broadcast` (Cloudflare only; see [Slash commands](#slash-commands)).
+`/broadcast` and `/seeders` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the current and recent matches, and Discord member counts
-(see [Website stats](#website-stats)).
+(see [Website stats](#website-stats)). And it keeps [player records](#player-records) for leaderboards and
+seeder rewards: every finished match's full scoreboard, and each player's seeding time, play time, kills and deaths.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
@@ -78,6 +79,7 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/broadcast`    | Administrators only  | Sends a message (up to 200 characters) to everyone in game         |
+| `/seeders`      | Administrators only  | Top 25 seeders over the last 7 days (or `days`: 1–90), with Steam IDs, for VIP |
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
@@ -109,7 +111,7 @@ command to the Worker's URL; nothing has to stay connected.
 6. Add the app to your Discord server by opening this link:
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
-Commands reply publicly in the channel, except `/broadcast`, whose reply only the sender sees. If the game
+Commands reply publicly in the channel, except `/broadcast` and `/seeders`, whose replies only the sender sees. If the game
 server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
 commands, run `npm run register` again.
 
@@ -123,6 +125,8 @@ commands, run `npm run register` again.
   permission again on every use, so a server owner granting it to other roles still does not let them use it.
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
+
+`/seeders` shows Steam IDs, so it has the same limits: your server only, Administrators only, and a private reply.
 
 The Node/Docker version does not support slash commands, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.
@@ -157,6 +161,29 @@ gaminginit site only polls once a minute while its tab is visible, which is plen
 
 The Node/Docker version does not serve `/api/stats`.
 
+## Player records
+
+On Cloudflare, the bot also keeps records for leaderboards and seeder rewards (such as VIP). They are keyed by
+Steam ID, so they are private: `/api/stats` never includes them. Admins can see the top seeders with `/seeders`.
+
+| Record                       | What                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| Each finished match          | Map, start, live and end times, length, peak, faction scores, and every player's Steam ID, name, kills and deaths |
+| Each player, each UTC day    | Name, minutes online while seeding, minutes online while live, matches played, kills, deaths |
+
+- A match counts the same way as the match summary: only matches that went live, and not the one already running
+  when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
+  only seeded it and left.
+- Seeding minutes follow the top seeders rule: each check (every minute) while the server is seeding adds a minute
+  for everyone online. The check that finds the server live counts as live. A server that drops below
+  `LOW_POP_THRESHOLD` after being live counts as seeding again, so time spent keeping it going counts too.
+- Records are kept for good. They start from the first deploy with this feature; older matches only have the
+  public top 5, without Steam IDs.
+- Both are stored in the same Durable Object as the bot's state, so they are covered by the free plan: a check
+  writes one row for the day's totals, however many players are online.
+
+The Node/Docker version does not keep player records.
+
 ## Run with Node or Docker
 
 With Node 22.18 or newer, copy `.env.example` to `.env`, fill it in, then:
@@ -187,14 +214,15 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 - Seeding time is counted once per check (every minute) for everyone online while the server is seeding.
   The check that finds the server live does not count, so players who join at 20+ are not credited. The
   count resets when the server goes live or empties.
-- WARDOGS RCON does not report when a match ends. The bot treats a map change, or players' kills going
-  backwards (a restart on the same map), as a new match, and summarises the previous one from the last
-  stats it saw. That can miss up to one minute at the end of the match. Players who left mid-match keep
-  their last stats. Length is timed from when the server went live. Matches that never went live are
-  not summarised, and neither is the match already running when the bot starts.
-- If a Discord post fails, the alert is retried on the next check while it is still true. If RCON is
-  unreachable (for example during the game's daily restart), the check is skipped and logged; no alert
-  is sent for the outage itself.
+- WARDOGS RCON does not report when a match ends. The bot treats a map change, players' kills going
+  backwards (a restart on the same map), or the server emptying as the end of a match, and summarises it
+  from the last stats it saw. That can miss up to one minute at the end of the match. Players who left
+  mid-match keep their last stats. Length is timed from when the server went live. Matches that never went
+  live are not summarised, and neither is the match already running when the bot starts.
+- If a Discord post fails, the alert is retried on the next check while it is still true. A match summary
+  is retried until it posts, or until the next match ends. Matches are recorded before their summary is
+  posted, so a Discord outage does not lose them. If RCON is unreachable (for example during the game's
+  daily restart), the check is skipped and logged; no alert is sent for the outage itself.
 
 ## Security
 

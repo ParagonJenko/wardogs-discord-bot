@@ -5,6 +5,7 @@ import {
   buildMessage,
   buildPlayersEmbed,
   buildRotationEmbed,
+  buildSeedersEmbed,
   buildStatusEmbed,
   postWebhook,
 } from '../src/discord.ts';
@@ -250,6 +251,32 @@ describe('buildLastMatchEmbed', () => {
     expect(embed.title).toBe('🏁 Match over on Bakurani');
     expect(embed.description).toBe('38 min · peak 64 players · ended <t:1727690000:R>');
     expect(embed.fields?.[0]?.value).toBe('1. Cy: 12 kills, 3 deaths (4.00 K/D)');
+  });
+});
+
+describe('buildSeedersEmbed', () => {
+  it('lists seeders with their minutes and Steam IDs', () => {
+    const embed = buildSeedersEmbed(
+      [
+        { steamId: '76561198000000001', name: 'Ash_1', seedingMinutes: 95 },
+        { steamId: '76561198000000002', name: 'Bo', seedingMinutes: 40 },
+      ],
+      7,
+    );
+
+    expect(embed.title).toBe('🌱 Top seeders, last 7 days');
+    expect(embed.description).toBe(
+      [
+        '1. Ash\\_1: 95 min · `76561198000000001`',
+        '2. Bo: 40 min · `76561198000000002`',
+        '',
+        'Minutes online while the server was seeding. Days are UTC.',
+      ].join('\n'),
+    );
+  });
+
+  it('says so when nobody seeded', () => {
+    expect(buildSeedersEmbed([], 1)).toMatchObject({ title: '🌱 Top seeders, last 1 day', description: 'Nobody seeded in that time.' });
   });
 });
 

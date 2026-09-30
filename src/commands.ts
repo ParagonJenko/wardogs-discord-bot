@@ -1,6 +1,13 @@
 import type { Config } from './config.ts';
-import { buildLastMatchEmbed, buildPlayersEmbed, buildRotationEmbed, buildStatusEmbed } from './discord.ts';
-import type { CommandReply, CommandRequest } from './interactions.ts';
+import {
+  buildLastMatchEmbed,
+  buildPlayersEmbed,
+  buildRotationEmbed,
+  buildSeedersEmbed,
+  buildStatusEmbed,
+} from './discord.ts';
+import { SEEDERS_DEFAULT_DAYS, SEEDERS_MAX_DAYS, type CommandReply, type CommandRequest } from './interactions.ts';
+import type { RankedPlayer } from './players.ts';
 import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from './rcon.ts';
 import type { RecentMatch } from './stats.ts';
 
@@ -9,15 +16,26 @@ type CommandDeps = {
   config: () => Config;
   http: HttpClient;
   lastMatch: () => Promise<RecentMatch | null>;
+  seeders: (days: number) => Promise<RankedPlayer[]>;
   log: { info: (message: string) => void };
 };
 
+// Discord enforces the option's range; this also covers a missing or odd value.
+const dayCount = (value: string | undefined): number => {
+  const days = Math.trunc(Number(value ?? SEEDERS_DEFAULT_DAYS));
+  return Number.isFinite(days) ? Math.min(SEEDERS_MAX_DAYS, Math.max(1, days)) : SEEDERS_DEFAULT_DAYS;
+};
+
 export const runCommand =
-  ({ config, http, lastMatch, log }: CommandDeps) =>
+  ({ config, http, lastMatch, seeders, log }: CommandDeps) =>
   async ({ name, options, userId }: CommandRequest): Promise<CommandReply> => {
     if (name === 'lastmatch') {
       const match = await lastMatch();
       return match ? { embeds: [buildLastMatchEmbed(match)] } : { content: 'No finished matches recorded yet.' };
+    }
+    if (name === 'seeders') {
+      const days = dayCount(options['days']);
+      return { embeds: [buildSeedersEmbed(await seeders(days), days)] };
     }
 
     const { rconUrl, rconPassword, rules } = config();

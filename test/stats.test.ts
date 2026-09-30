@@ -50,6 +50,7 @@ const match: MatchState = {
 const observation = (at: number, players: number, phase: Observation['phase'] = 'live'): Observation => ({
   at,
   status: status(players),
+  players: [],
   phase,
   match,
 });

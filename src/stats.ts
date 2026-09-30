@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AlertRules, Phase } from './alerts.ts';
 import { mapName } from './discord.ts';
-import type { FactionScore, ServerStatus } from './rcon.ts';
+import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 import { topPlayers, type MatchState, type MatchSummary, type PlayerStats } from './tracking.ts';
 
 // Numbers for the community website, served by the Worker at GET /api/stats. Anyone can read them, so they
@@ -46,6 +46,8 @@ export type SiteStats = {
 export type Observation = {
   at: number;
   status: ServerStatus;
+  // Who is online, for the private player records. Never copied into the public stats.
+  players: Player[];
   phase: Phase;
   match: MatchState;
 };
@@ -114,7 +116,7 @@ export const parseStats = (raw: unknown): SiteStats => {
 };
 
 // Days are UTC dates, so every visitor sees the same boundaries.
-const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
+export const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
 // Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
 const recordDay = (days: DayStats[], at: number, players: number, liveMinutes: number): DayStats[] => {
