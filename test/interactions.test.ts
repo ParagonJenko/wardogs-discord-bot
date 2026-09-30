@@ -14,6 +14,8 @@ beforeAll(async () => {
 
 // Signs a request body the way Discord does: Ed25519 over timestamp + body.
 const NOW_MS = 1_727_690_000_000;
+// Discord's Administrator permission bit.
+const ADMINISTRATOR = 1 << 3;
 
 const signed = async (payload: unknown, timestamp = String(NOW_MS / 1000)) => {
   const body = JSON.stringify(payload);
@@ -112,8 +114,8 @@ describe('handleInteraction', () => {
     member: { user: { id: '42' }, ...(permissions === undefined ? {} : { permissions }) },
   });
 
-  it('runs /broadcast for someone with Manage Server, replying privately', async () => {
-    const { body, signature, timestamp } = await signed(broadcast(String(1 << 5)));
+  it('runs /broadcast for an Administrator, replying privately', async () => {
+    const { body, signature, timestamp } = await signed(broadcast(String(ADMINISTRATOR)));
     const d = deps();
 
     const result = await handleInteraction(body, signature, timestamp, d);
@@ -123,10 +125,10 @@ describe('handleInteraction', () => {
     expect(d.runCommand).toHaveBeenCalledWith({ name: 'broadcast', options: { message: 'Seeding now!' }, userId: '42' });
   });
 
-  it('refuses /broadcast from someone without Manage Server, even if Discord let the command through', async () => {
+  it('refuses /broadcast from anyone who is not an Administrator, Manage Server included, even if Discord let it through', async () => {
     const d = deps();
     const results = await Promise.all(
-      [String(1 << 11), undefined].map(async (permissions) => {
+      [String(1 << 5), String(1 << 11), undefined].map(async (permissions) => {
         const { body, signature, timestamp } = await signed(broadcast(permissions));
         return handleInteraction(body, signature, timestamp, d);
       }),
@@ -148,7 +150,7 @@ describe('handleInteraction', () => {
     const d = deps();
     const results = await Promise.all(
       cases.map(async ([guildId, adminGuildId]) => {
-        const { body, signature, timestamp } = await signed(broadcast(String(1 << 5), guildId));
+        const { body, signature, timestamp } = await signed(broadcast(String(ADMINISTRATOR), guildId));
         return handleInteraction(body, signature, timestamp, { ...d, adminGuildId });
       }),
     );
@@ -160,7 +162,7 @@ describe('handleInteraction', () => {
   });
 
   it('tells an admin a failed /broadcast may still have been delivered', async () => {
-    const { body, signature, timestamp } = await signed(broadcast(String(1 << 5)));
+    const { body, signature, timestamp } = await signed(broadcast(String(ADMINISTRATOR)));
     const d = deps();
     d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
 
@@ -224,10 +226,10 @@ describe('editOriginalReply', () => {
 });
 
 describe('COMMANDS', () => {
-  it('registers every command, with /broadcast limited to Manage Server', () => {
+  it('registers every command, with /broadcast limited to Administrators', () => {
     expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast']);
     expect(COMMANDS.find((c) => c.name === 'broadcast')).toMatchObject({
-      default_member_permissions: '32',
+      default_member_permissions: '8',
       options: [{ name: 'message', type: 3, required: true, max_length: 200 }],
     });
   });

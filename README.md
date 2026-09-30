@@ -77,7 +77,7 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/players`      | Everyone             | Who is online, with kills and deaths (top 30)                      |
 | `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
-| `/broadcast`    | Manage Server only   | Sends a message (up to 200 characters) to everyone in game         |
+| `/broadcast`    | Administrators only  | Sends a message (up to 200 characters) to everyone in game         |
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
@@ -119,8 +119,8 @@ commands, run `npm run register` again.
   (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
   set, `/broadcast` is refused everywhere. Commands are registered globally, so without this an admin in any
   other server that added the app could broadcast into your game.
-- It is hidden from members without **Manage Server**, and the Worker checks that permission again on every
-  use.
+- It is hidden from members without Discord's **Administrator** permission, and the Worker checks that
+  permission again on every use, so a server owner granting it to other roles still does not let them use it.
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 

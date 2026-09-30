@@ -9,10 +9,10 @@ export type CommandName = (typeof COMMAND_NAMES)[number];
 const isCommandName = (name: string | undefined): name is CommandName =>
   COMMAND_NAMES.some((command) => command === name);
 
-// Discord permission bit for "Manage Server".
-const MANAGE_GUILD = 1n << 5n;
+// Discord permission bit for "Administrator".
+const ADMINISTRATOR = 1n << 3n;
 
-// Admin commands change things in game, so they are hidden from, and refused to, anyone without Manage Server.
+// Admin commands change things in game, so they are hidden from, and refused to, anyone who is not an Administrator.
 // Their replies are only shown to the person who ran them.
 const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast'];
 
@@ -23,9 +23,9 @@ export const COMMANDS = [
   { name: 'rotation', description: 'The current map and what is coming next', type: 1 },
   {
     name: 'broadcast',
-    description: 'Send a message to everyone in game (Manage Server only)',
+    description: 'Send a message to everyone in game (Administrators only)',
     type: 1,
-    default_member_permissions: String(MANAGE_GUILD),
+    default_member_permissions: String(ADMINISTRATOR),
     contexts: [0],
     options: [
       { type: 3, name: 'message', description: 'What to show in game (up to 200 characters)', required: true, max_length: 200 },
@@ -93,9 +93,9 @@ const verifySignature = async (publicKey: string, signature: string, timestamp: 
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-const hasManageGuild = (permissions: string | undefined): boolean => {
+const isAdministrator = (permissions: string | undefined): boolean => {
   try {
-    return permissions !== undefined && (BigInt(permissions) & MANAGE_GUILD) === MANAGE_GUILD;
+    return permissions !== undefined && (BigInt(permissions) & ADMINISTRATOR) === ADMINISTRATOR;
   } catch {
     return false;
   }
@@ -132,8 +132,8 @@ export const handleInteraction = async (
     return { status: 200, body: privateMessage('This command can only be used in the Discord server that runs this bot.') };
   }
   // Discord hides admin commands from other members, but server owners can override that, so check again.
-  if (admin && !hasManageGuild(interaction.member?.permissions)) {
-    return { status: 200, body: privateMessage('Only members with the Manage Server permission can use this.') };
+  if (admin && !isAdministrator(interaction.member?.permissions)) {
+    return { status: 200, body: privateMessage('Only server Administrators can use this.') };
   }
 
   const token = interaction.token;
