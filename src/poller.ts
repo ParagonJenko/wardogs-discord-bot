@@ -63,6 +63,7 @@ const TOP_SEEDERS = 3;
 const AlertsSchema = z.object({
   phase: z.enum(['empty', 'seeding', 'live']),
   lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop']), z.number()),
+  lowSince: z.number().optional(),
 });
 
 const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() }));

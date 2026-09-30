@@ -195,7 +195,7 @@ describe('parseStats', () => {
 
 describe('publicStats', () => {
   it('adds the time, the thresholds the site draws on its chart, the leaderboard and what seeding earns', () => {
-    const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0 };
+    const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 };
     const leaderboard = { days: 30, kdMinMatches: 3, kills: [], kd: [], playtime: [], seeding: [] };
     const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
 

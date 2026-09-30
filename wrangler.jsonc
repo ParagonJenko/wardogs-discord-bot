@@ -26,6 +26,8 @@
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",
     "ALERT_COOLDOWN_MINUTES": "10",
+    // A drop in players only counts once it lasts this long, so a crash or restart that fills again quickly pings nobody.
+    "DROP_GRACE_MINUTES": "5",
     // Required for the staff commands: your Discord server's ID (right-click the server icon → Copy Server ID).
     "DISCORD_GUILD_ID": "1552990539455144086",
     // Optional: role IDs (comma-separated) that may use the admin commands as well as Administrators. Staff.

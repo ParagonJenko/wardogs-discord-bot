@@ -6,11 +6,16 @@ export type AlertRules = {
   live: number;
   lowPop: number;
   cooldownMs: number;
+  // How long a drop must last before it counts. A server that crashes or restarts and fills again within this time
+  // keeps its phase, so a blip pings nobody.
+  graceMs: number;
 };
 
 export type MonitorState = {
   phase: Phase;
   lastAlertAt: Partial<Record<AlertKind, number>>;
+  // When the player count first fell below what keeps the current phase, while that drop is still within the grace time.
+  lowSince?: number;
 };
 
 export type StepResult = {
@@ -47,17 +52,25 @@ export const initialState = (players: number, rules: AlertRules): MonitorState =
   lastAlertAt: {},
 });
 
+const RANK: Record<Phase, number> = { empty: 0, seeding: 1, live: 2 };
+
 export const step = (state: MonitorState, players: number, now: number, rules: AlertRules): StepResult => {
   const phase = nextPhase(state.phase, players, rules);
+  // A drop waits out the grace time first: if the players come back in time, it never happened.
+  if (RANK[phase] < RANK[state.phase]) {
+    const lowSince = state.lowSince ?? now;
+    if (now - lowSince < rules.graceMs) return { state: { ...state, lowSince }, alert: null };
+  }
+  const { lowSince: _over, ...settled } = state;
   const candidate = transitionAlert(state.phase, phase);
   const lastSent = candidate === null ? undefined : state.lastAlertAt[candidate];
   const coolingDown = lastSent !== undefined && now - lastSent < rules.cooldownMs;
 
   if (candidate === null || coolingDown) {
-    return { state: { ...state, phase }, alert: null };
+    return { state: { ...settled, phase }, alert: null };
   }
   return {
-    state: { phase, lastAlertAt: { ...state.lastAlertAt, [candidate]: now } },
+    state: { phase, lastAlertAt: { ...settled.lastAlertAt, [candidate]: now } },
     alert: candidate,
   };
 };

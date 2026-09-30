@@ -3,7 +3,7 @@ import { initialState, step, type AlertKind, type AlertRules, type MonitorState 
 
 const MINUTE = 60_000;
 
-const rules: AlertRules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 10 * MINUTE };
+const rules: AlertRules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 10 * MINUTE, graceMs: 0 };
 
 // Feeds a sequence of player counts (one per minute) and returns the alerts that fired.
 const run = (start: number, counts: number[], r: AlertRules = rules): (AlertKind | null)[] => {
@@ -94,5 +94,30 @@ describe('low population alert', () => {
 
   it('does not re-announce seeding after a drop from live', () => {
     expect(run(30, [10, 5])).toEqual(['lowPop', null]);
+  });
+});
+
+describe('grace for drops', () => {
+  const grace = { ...rules, graceMs: 5 * MINUTE };
+
+  it('pings nobody when a live server drops for a couple of minutes, such as a crash or restart', () => {
+    expect(run(60, [0, 0, 5, 30, 60], grace)).toEqual([null, null, null, null, null]);
+  });
+
+  it('sends the low-pop alert once the drop has lasted the grace time', () => {
+    expect(run(60, [0, 0, 0, 0, 0, 0], grace)).toEqual([null, null, null, null, null, 'lowPop']);
+    expect(run(60, [0, 10, 10, 10, 10, 10], grace)).toEqual([null, null, null, null, null, 'lowPop']);
+  });
+
+  it('does not treat a seeding server that empties for a moment as a new seed', () => {
+    expect(run(0, [3, 0, 0, 4], { ...grace, cooldownMs: 0 })).toEqual(['seeding', null, null, null]);
+    // Empty for the whole five minutes: it has emptied, so the next player starts a new seed.
+    expect(run(0, [3, 0, 0, 0, 0, 0, 0, 4], { ...grace, cooldownMs: 0 })).toEqual([
+      'seeding', null, null, null, null, null, null, 'seeding',
+    ]);
+  });
+
+  it('starts the grace time again after the players come back', () => {
+    expect(run(60, [0, 0, 60, 0, 0, 60, 0, 0], grace)).toEqual(Array(8).fill(null));
   });
 });

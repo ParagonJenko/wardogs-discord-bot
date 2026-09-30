@@ -15,7 +15,7 @@ const config: Config = {
   inviteCode: undefined,
   siteUrl: undefined,
   pollIntervalMs: 60_000,
-  rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
+  rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0 },
   seedMinutes: 10,
   vip: null,
   matchMessages: null,
@@ -226,6 +226,40 @@ describe('poller', () => {
 
     expect(titles(sent)).toEqual(['🔻 UK Wardogs #1 dropped below 20 players']);
     await expect(store.load()).resolves.toMatchObject({ alerts: { phase: 'seeding' } });
+  });
+});
+
+describe('poller with a grace time for drops', () => {
+  it('pings nobody, and counts nobody as seeding, when a live server restarts and fills again', async () => {
+    const queue: (Snapshot | Error)[] = [
+      snapshot(crowd(60)),
+      snapshot(crowd(0)),
+      new Error('RCON request timed out after 8000ms'),
+      snapshot(crowd(5)),
+      snapshot(crowd(30)),
+      snapshot(crowd(60)),
+    ];
+    const send = vi.fn(async (_message: DiscordMessage) => {});
+    const seeded = vi.fn(async () => {});
+    let clock = 0;
+    const tick = createPoller({
+      config: { ...config, rules: { ...config.rules, graceMs: 5 * 60_000 } },
+      fetchSnapshot: async () => {
+        const next = queue.shift() ?? snapshot([]);
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      send,
+      now: () => (clock += 60_000),
+      log: { info: vi.fn(), error: vi.fn() },
+      store: memoryStore(),
+      stats: { check: vi.fn(async () => {}), seeded, matchEnded: vi.fn(async () => {}) },
+    });
+
+    for (let i = 0; i < 6; i++) await tick();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(seeded).not.toHaveBeenCalled();
   });
 });
 
