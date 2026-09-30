@@ -84,10 +84,18 @@ command to the Worker's URL; nothing has to stay connected.
    Discord checks the endpoint straight away; if saving fails, the public key is wrong or not deployed.
 4. On **Bot**, click **Reset Token** and copy the token. It is only used to register the command, so
    it does not need to be stored anywhere.
-5. Register the command:
-   ```bash
-   DISCORD_APPLICATION_ID=<application id> DISCORD_BOT_TOKEN=<token> npm run register
+5. Register the command. Put both values in `.env` (it is git-ignored; no quotes needed), which works the
+   same on Windows, macOS and Linux:
    ```
+   DISCORD_APPLICATION_ID=123456789012345678
+   DISCORD_BOT_TOKEN=<token from the Bot page>
+   ```
+   then run:
+   ```bash
+   npm run register
+   ```
+   It prints `Registered: /serverstatus`. A 401 means the token is wrong: it must come from **Bot →
+   Reset Token**, not the Public Key or the OAuth2 Client Secret.
    This replaces the app's whole command list, so running it again after an update also removes
    commands that no longer exist (such as the old `/status`).
 6. Add the app to your Discord server by opening this link:
