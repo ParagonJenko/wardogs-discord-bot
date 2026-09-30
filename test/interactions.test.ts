@@ -21,7 +21,7 @@ const signed = async (payload: unknown, timestamp = String(NOW_MS / 1000)) => {
   return { body, signature, timestamp };
 };
 
-const statusCommand = { type: 2, application_id: '111', token: 'tok', data: { name: 'status' } };
+const statusCommand = { type: 2, application_id: '111', token: 'tok', data: { name: 'serverstatus' } };
 const embed = { title: 'UK Wardogs #1', description: '🟢 **Live** · **24/98** players', color: 1 };
 
 const deps = () => ({
@@ -68,7 +68,7 @@ describe('handleInteraction', () => {
     });
   });
 
-  it('defers /status, then edits the reply with the status embed', async () => {
+  it('defers /serverstatus, then edits the reply with the status embed', async () => {
     const { body, signature, timestamp } = await signed(statusCommand);
     const d = deps();
 

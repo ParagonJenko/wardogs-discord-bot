@@ -56,7 +56,7 @@ export default {
       request.headers.get('x-signature-timestamp'),
       {
         publicKey,
-        // Config is read only when /status runs, so Discord's endpoint check (a signed PING) passes even
+        // Config is read only when /serverstatus runs, so Discord's endpoint check (a signed PING) passes even
         // before the RCON secrets are set.
         getStatusEmbed: async () => {
           const config = loadConfig(vars);
@@ -68,7 +68,7 @@ export default {
       },
     );
     if (result.followUp) {
-      ctx.waitUntil(result.followUp().catch((error: unknown) => console.error(`/status reply failed: ${String(error)}`)));
+      ctx.waitUntil(result.followUp().catch((error: unknown) => console.error(`/serverstatus reply failed: ${String(error)}`)));
     }
     return Response.json(result.body, { status: result.status });
   },

@@ -14,8 +14,8 @@ It also posts:
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
-And it answers **`/status`** in Discord with the current population, state, map and score
-(Cloudflare only; see [Slash command](#slash-command-status)).
+And it answers **`/serverstatus`** in Discord with the current population, state, map and score
+(Cloudflare only; see [Slash command](#slash-command-serverstatus)).
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
@@ -52,7 +52,7 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    npm run deploy
    ```
    Wrangler prints the Worker's URL, like `https://wardogs-discord-bot.<you>.workers.dev`. You need it
-   for `/status`.
+   for `/serverstatus`.
 
 Logs are under Workers & Pages → wardogs-discord-bot → Logs in the Cloudflare dashboard. The first run
 logs `Watching "<server name>": N/M players`. `RCON rejected the password (401)` means the password
@@ -64,9 +64,9 @@ To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` agai
 Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
 socket to the RCON listener and sends the HTTP request itself.
 
-## Slash command: /status
+## Slash command: /serverstatus
 
-`/status` needs a Discord application, because webhooks cannot receive commands. Discord sends each
+`/serverstatus` needs a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → New Application.
@@ -83,13 +83,15 @@ command to the Worker's URL; nothing has to stay connected.
    ```bash
    DISCORD_APPLICATION_ID=<application id> DISCORD_BOT_TOKEN=<token> npm run register
    ```
+   This replaces the app's whole command list, so running it again after an update also removes
+   commands that no longer exist (such as the old `/status`).
 6. Add the app to your Discord server by opening this link:
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
-`/status` replies publicly in the channel. If the game server cannot be reached, it says so, and the
+`/serverstatus` replies publicly in the channel. If the game server cannot be reached, it says so, and the
 reason is in the Worker logs.
 
-The Node/Docker version does not support `/status`, because Discord needs a public HTTPS URL to send
+The Node/Docker version does not support `/serverstatus`, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.
 
 ## Run with Node or Docker
@@ -139,7 +141,7 @@ bot only ever calls `GET /v1/status` and `GET /v1/players`, but:
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if
   your host offers one.
-- `/status` requests are only accepted with a valid Discord signature (checked against
+- `/serverstatus` requests are only accepted with a valid Discord signature (checked against
   `DISCORD_PUBLIC_KEY`) and a timestamp within 5 minutes, so nobody else can make the Worker call your
   server and a captured request cannot be replayed later.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.
