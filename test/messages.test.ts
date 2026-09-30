@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as lines from '../src/lines.ts';
 import { milestones, nextMessage, type MatchMessages } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
@@ -30,10 +31,13 @@ const scores = (valkyra: number, kharr: number, haldor = 0) => ({
   ],
 });
 
+// The first line of every list, so the texts are known.
+const first = () => 0;
+
 describe('milestones', () => {
   it('reaches ten minutes after the match went live', () => {
-    expect(milestones(match(), 9 * MINUTE, rule, null)).toEqual([]);
-    expect(milestones(match(), 10 * MINUTE, rule, null)).toEqual([
+    expect(milestones(match(), 9 * MINUTE, rule, null, first)).toEqual([]);
+    expect(milestones(match(), 10 * MINUTE, rule, null, first)).toEqual([
       { key: 'ten-minutes', text: '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com' },
     ]);
   });
@@ -45,43 +49,32 @@ describe('milestones', () => {
 
   it('reaches halfway when a team has half the winning score, and mentions seeding when VIP is on', () => {
     expect(milestones(match(scores(49, 20)), 0, rule, null)).toEqual([]);
-    expect(milestones(match(scores(50, 20)), 0, rule, null)).toEqual([
+    expect(milestones(match(scores(50, 20)), 0, rule, null, first)).toEqual([
       {
         key: 'halfway',
         text: 'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
       },
     ]);
-    expect(milestones(match(scores(50, 20)), 0, rule, vip)[0]?.text).toBe(
+    expect(milestones(match(scores(50, 20)), 0, rule, vip, first)[0]?.text).toBe(
       'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com',
     );
   });
 
-  it('has a line for whichever of the three factions leads at halfway, which changes from match to match', () => {
-    const halfway = (leader: string, startedAt = 0) =>
-      milestones(
-        match({
-          startedAt,
-          factionScores: [
-            { name: 'Lonestar', score: leader === 'Lonestar' ? 52 : 10 },
-            { name: 'Valkyra', score: leader === 'Valkyra' ? 52 : 20 },
-            { name: 'MANTICORE', score: leader === 'MANTICORE' ? 52 : 30 },
-          ],
-        }),
-        0,
-        rule,
-        null,
-      )[0]?.text.split(' Check the')[0];
+  it("picks at random from the leading faction's own list, whatever the server calls it", () => {
+    const halfway = (leader: string, random: () => number) =>
+      milestones(match({ factionScores: [{ name: leader, score: 52 }, { name: 'Other', score: 10 }] }), 0, rule, null, random)[0]?.text.split(
+        ' Check the',
+      )[0];
 
-    expect(halfway('Lonestar')).toBe('Halfway there! Lonestar leads on 52! Screenshot it, this never happens.');
-    expect(halfway('Lonestar', 60_000)).toBe('Halfway there! Lonestar leads on 52! The default pick is cooking. Yeehaw.');
-    expect(halfway('MANTICORE')).toBe('Halfway there! Manticore leads on 52. Green winning? Shocking. Truly.');
-    expect(halfway('MANTICORE', 60_000)).toBe('Halfway there! Manticore leads on 52. The shadow army doing shadow army things.');
-    expect(halfway('Valkyra')).toBe('Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade.');
-    expect(halfway('Valkyra', 60_000)).toBe('Halfway there! Valkyra leads on 52. Restoring greatness, one point at a time.');
+    for (const [name, key] of [['Lonestar', 'lonestar'], ['MANTICORE', 'manticore'], ['Valkyra', 'valkyra'], ['Lone Star', 'lonestar']] as const) {
+      const list = lines.HALFWAY[key] ?? [];
+      const picked = list.map((_, i) => halfway(name, () => i / list.length));
+      expect(picked).toEqual(list.map((line) => `Halfway there! ${line.replace('{score}', '52')}`));
+    }
   });
 
-  it('names only the leader, plainly for a team it has no line for, and nobody when the top teams are level', () => {
-    const text = (s: ReturnType<typeof scores>) => milestones(match(s), 0, rule, null)[0]?.text.split(' Check the')[0];
+  it('names only the leader, plainly for a team without a list, and nobody when the top teams are level', () => {
+    const text = (s: ReturnType<typeof scores>) => milestones(match(s), 0, rule, null, first)[0]?.text.split(' Check the')[0];
 
     expect(text(scores(30, 50, 12))).toBe('Halfway there! Kharr leads on 50!');
     expect(text(scores(50, 50, 12))).toBe("Halfway there and it's neck and neck!");
@@ -89,35 +82,25 @@ describe('milestones', () => {
 
   it('reaches "nearly there" once per match, for the team in front, at 90% of the winning score', () => {
     expect(milestones(match(scores(92, 90, 60)), 0, rule, null).map((m) => m.key)).toEqual(['halfway', 'nearly']);
-    expect(milestones(match(scores(90, 94, 60)), 0, rule, null)[1]?.text).toBe(
+    expect(milestones(match(scores(90, 94, 60)), 0, rule, null, first)[1]?.text).toBe(
       'Kharr has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     );
-    expect(milestones(match(scores(92, 20)), 0, rule, null)[1]?.text).toBe(
+    expect(milestones(match(scores(92, 20)), 0, rule, null, first)[1]?.text).toBe(
       'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
     );
     expect(milestones(match(scores(135, 20)), 0, { ...rule, scoreToWin: 150 }, null)[1]?.key).toBe('nearly');
   });
 
-  it('has a line for whichever faction gets near the end first, whatever the server calls it', () => {
-    const nearly = (name: string, startedAt = 0) =>
-      milestones(match({ startedAt, factionScores: [{ name, score: 91 }] }), 0, rule, null)
-        .find((m) => m.key === 'nearly')
-        ?.text.split(' Where do you rank?')[0];
+  it("picks the 90-point line at random from the leading faction's own list", () => {
+    const list = lines.NEARLY['manticore'] ?? [];
+    const picked = list.map(
+      (_, i) =>
+        milestones(match({ factionScores: [{ name: 'Manticore', score: 91 }] }), 0, rule, null, () => i / list.length)
+          .find((m) => m.key === 'nearly')
+          ?.text.split(' Where do you rank?')[0],
+    );
 
-    expect(nearly('Lonestar')).toBe('Lonestar has 90! The default pick is about to win. Clip it.');
-    expect(nearly('Lone Star', 60_000)).toBe('Lonestar has 90! Nobody wanted blue, and look at them now. Yeehaw.');
-    expect(nearly('MANTICORE')).toBe('Manticore has 90. Green about to win again. Groundbreaking.');
-    expect(nearly('Manticore', 60_000)).toBe('Manticore has 90. The shadow army is about to do it again.');
-    expect(nearly('Valkyra', 60_000)).toBe('Valkyra has 90! Greatness nearly restored.');
-  });
-
-  it('has a different joke ten minutes in from match to match, always pointing at the rules in Discord', () => {
-    const tenMinutes = (startedAt: number) =>
-      milestones(match({ startedAt, liveAt: startedAt }), startedAt + 10 * MINUTE, rule, null)[0]?.text ?? '';
-    const lines = [0, 1, 2].map((m) => tenMinutes(m * MINUTE));
-
-    expect(new Set(lines).size).toBe(3);
-    expect(lines.every((l) => l.includes('Discord') && l.includes('gaminginit.com') && l.length <= 200)).toBe(true);
+    expect(picked).toEqual(list.map((line) => line.replace('{score}', '90')));
   });
 
   it('keeps messages short enough for the game', () => {
@@ -127,11 +110,48 @@ describe('milestones', () => {
   });
 });
 
+describe('the lines', () => {
+  const all = [
+    ...lines.TEN_MINUTES,
+    ...Object.values(lines.HALFWAY).flat(),
+    ...lines.HALFWAY_LEVEL,
+    ...Object.values(lines.NEARLY).flat(),
+    ...lines.HALFWAY_OTHER,
+    ...lines.NEARLY_OTHER,
+  ];
+
+  it('has something in every list, for all three factions', () => {
+    for (const list of [lines.TEN_MINUTES, lines.HALFWAY_LEVEL, lines.HALFWAY_OTHER, lines.NEARLY_OTHER]) expect(list.length).toBeGreaterThan(0);
+    for (const faction of ['lonestar', 'manticore', 'valkyra']) {
+      expect(lines.HALFWAY[faction]?.length).toBeGreaterThan(0);
+      expect(lines.NEARLY[faction]?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('only uses {team}, {score} and {site}', () => {
+    const used = all.flatMap((line) => [...line.matchAll(/\{(\w+)\}/g)].map((m) => m[1]));
+
+    expect(used.every((name) => ['team', 'score', 'site'].includes(name ?? ''))).toBe(true);
+    expect(lines.TEN_MINUTES.every((line) => line.includes('Discord') && line.includes('{site}'))).toBe(true);
+  });
+
+  it('fits every message in the game with its call to action, without cutting it', () => {
+    const texts = [0, 0.25, 0.5, 0.75, 0.99].flatMap((r) => [
+      ...milestones(match({ factionScores: [{ name: 'Manticore', score: 95 }] }), 10 * MINUTE, rule, vip, () => r),
+      ...milestones(match({ factionScores: [{ name: 'Lonestar', score: 95 }] }), 0, rule, vip, () => r),
+      ...milestones(match({ factionScores: [{ name: 'Valkyra', score: 95 }] }), 0, rule, vip, () => r),
+      ...milestones(match({ factionScores: [{ name: 'Valkyra', score: 60 }, { name: 'Kharr', score: 60 }] }), 0, rule, vip, () => r),
+    ]);
+
+    expect(texts.every((m) => m.text.length <= 200 && !m.text.endsWith('…'))).toBe(true);
+  });
+});
+
 describe('nextMessage', () => {
   const run = (steps: { at: number; match: MatchState }[], start: MatchMessages | null = null) =>
     steps.reduce<{ messages: MatchMessages | null; sent: (string | null)[] }>(
       (acc, step) => {
-        const { messages, send } = nextMessage(acc.messages, step.match, step.at, rule, null);
+        const { messages, send } = nextMessage(acc.messages, step.match, step.at, rule, null, first);
         return { messages, sent: [...acc.sent, send] };
       },
       { messages: start, sent: [] },
@@ -174,6 +194,6 @@ describe('nextMessage', () => {
       { at: 60 * MINUTE, match: match({ startedAt: 40 * MINUTE, liveAt: 40 * MINUTE, ...scores(51, 30) }) },
     ]);
 
-    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Halfway', null, 'Still']);
+    expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Halfway', null, '10']);
   });
 });

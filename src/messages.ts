@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
+import * as lines from './lines.ts';
 import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
@@ -28,75 +29,33 @@ type Milestone = { key: string; text: string };
 
 type Score = MatchState['factionScores'][number];
 
-type Line = (score: number) => string;
-
-// Lines for the team in front at halfway and near the end, in the spirit of what players say about each faction:
-// Lonestar is the default pick that usually loses, the developers say Manticore (green) wins most of the time, and
-// Valkyra's story is restoring the Soviet People's Republic to greatness. Which line a match gets depends on when it
-// started, so it changes from match to match.
-const TEAM_LINES: Record<string, { halfway: Line[]; nearly: Line[] }> = {
-  lonestar: {
-    halfway: [
-      (n) => `Lonestar leads on ${n}! Screenshot it, this never happens.`,
-      (n) => `Lonestar leads on ${n}! The default pick is cooking. Yeehaw.`,
-    ],
-    nearly: [
-      (n) => `Lonestar has ${n}! The default pick is about to win. Clip it.`,
-      (n) => `Lonestar has ${n}! Nobody wanted blue, and look at them now. Yeehaw.`,
-    ],
-  },
-  manticore: {
-    halfway: [
-      (n) => `Manticore leads on ${n}. Green winning? Shocking. Truly.`,
-      (n) => `Manticore leads on ${n}. The shadow army doing shadow army things.`,
-    ],
-    nearly: [
-      (n) => `Manticore has ${n}. Green about to win again. Groundbreaking.`,
-      (n) => `Manticore has ${n}. The shadow army is about to do it again.`,
-    ],
-  },
-  valkyra: {
-    halfway: [
-      (n) => `Valkyra leads on ${n}. Not my points, OUR points, comrade.`,
-      (n) => `Valkyra leads on ${n}. Restoring greatness, one point at a time.`,
-    ],
-    nearly: [
-      (n) => `Valkyra has ${n}! Victory for the motherland is in sight, comrades.`,
-      (n) => `Valkyra has ${n}! Greatness nearly restored.`,
-    ],
-  },
+// A random line from a list, with its placeholders filled in.
+const pickLine = (list: string[], values: Record<string, string | number>, random: () => number): string => {
+  const line = list[Math.floor(random() * list.length)] ?? list[0] ?? '';
+  return line.replace(/\{(\w+)\}/g, (whole, name: string) => (name in values ? String(values[name]) : whole));
 };
 
-// The line for this team at this point, or a plain one for a faction without lines.
-const teamLine = (name: string, when: 'halfway' | 'nearly', score: number, startedAt: number): string => {
-  const lines = TEAM_LINES[factionKey(name)]?.[when] ?? [];
-  const line = lines[Math.floor(startedAt / 60_000) % Math.max(lines.length, 1)];
-  if (line) return line(score);
-  return when === 'halfway' ? `${name} leads on ${score}!` : `${name} has ${score} points!`;
-};
-
-// Ten minutes in: a joke, where the rules are and the leaderboard. It changes from match to match like the team lines.
-const TEN_MINUTE_LINES: ((site: string) => string)[] = [
-  (site) => `10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at ${site}`,
-  (site) => `Still alive? Impressive. Rules are in our Discord, and your K/D is on the leaderboard at ${site}`,
-  (site) => `Enjoying the chaos? Read the rules in our Discord, soldier. Leaderboard at ${site}`,
-];
-
-const tenMinuteLine = (site: string, startedAt: number): string => {
-  const line = TEN_MINUTE_LINES[Math.floor(startedAt / 60_000) % TEN_MINUTE_LINES.length];
-  return line ? line(site) : '';
-};
+// The team in front's line: from its own list, or the plain one for a faction without a list.
+const teamLine = (lists: Record<string, string[]>, other: string[], team: Score, score: number, random: () => number): string =>
+  pickLine(lists[factionKey(team.name)] ?? other, { team: team.name, score }, random);
 
 // Only the team in front is named; when the top teams are level, nobody is.
-const leaderLine = (scores: Score[], startedAt: number): string => {
+const halfwayLine = (scores: Score[], random: () => number): string => {
   const [first, second] = [...scores].sort((a, b) => b.score - a.score);
   if (!first) return 'Halfway there!';
-  if (second && second.score === first.score) return "Halfway there and it's neck and neck!";
-  return `Halfway there! ${teamLine(first.name, 'halfway', first.score, startedAt)}`;
+  if (second && second.score === first.score) return pickLine(lines.HALFWAY_LEVEL, {}, random);
+  return `Halfway there! ${teamLine(lines.HALFWAY, lines.HALFWAY_OTHER, first, first.score, random)}`;
 };
 
 // Everything this match has reached so far, in the order it happens.
-export const milestones = (match: MatchState, now: number, rule: MessageRule, vip: VipRule | null): Milestone[] => {
+// `random` picks the lines; each message's line is chosen when it is sent.
+export const milestones = (
+  match: MatchState,
+  now: number,
+  rule: MessageRule,
+  vip: VipRule | null,
+  random: () => number = Math.random,
+): Milestone[] => {
   const { siteHost, scoreToWin } = rule;
   const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
   const top = Math.max(0, leader?.score ?? 0);
@@ -104,14 +63,14 @@ export const milestones = (match: MatchState, now: number, rule: MessageRule, vi
   return [
     // Only when the bot saw the match start, so the time is right.
     ...(match.summarisable && match.liveAt !== null && now - match.liveAt >= TEN_MINUTES
-      ? [{ key: 'ten-minutes', text: tenMinuteLine(siteHost, match.startedAt) }]
+      ? [{ key: 'ten-minutes', text: pickLine(lines.TEN_MINUTES, { site: siteHost }, random) }]
       : []),
     ...(top >= scoreToWin / 2
       ? [
           {
             key: 'halfway',
             text:
-              `${leaderLine(match.factionScores, match.startedAt)} ` +
+              `${halfwayLine(match.factionScores, random)} ` +
               (vip
                 ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}`
                 : `Check the leaderboard and join our Discord at ${siteHost}`),
@@ -123,7 +82,7 @@ export const milestones = (match: MatchState, now: number, rule: MessageRule, vi
       ? [
           {
             key: 'nearly',
-            text: `${teamLine(leader.name, 'nearly', nearly, match.startedAt)} Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`,
+            text: `${teamLine(lines.NEARLY, lines.NEARLY_OTHER, leader, nearly, random)} Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`,
           },
         ]
       : []),
@@ -139,8 +98,9 @@ export const nextMessage = (
   now: number,
   rule: MessageRule,
   vip: VipRule | null,
+  random: () => number = Math.random,
 ): { messages: MatchMessages; send: string | null } => {
-  const due = milestones(match, now, rule, vip);
+  const due = milestones(match, now, rule, vip, random);
   if (previous === null || previous.match !== match.startedAt) {
     return { messages: { match: match.startedAt, sent: due.map((m) => m.key) }, send: null };
   }
