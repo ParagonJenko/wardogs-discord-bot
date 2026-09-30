@@ -10,14 +10,17 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260930.1",
     "@types/node": "^22.20.4",
     "typescript": "~5.9.3",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.2",
+    "wrangler": "^4.144.0"
   }
 }

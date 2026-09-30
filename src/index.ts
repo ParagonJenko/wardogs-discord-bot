@@ -1,7 +1,7 @@
 import { fetchServer } from './battlemetrics.ts';
 import { loadConfig } from './config.ts';
 import { postWebhook } from './discord.ts';
-import { createPoller } from './poller.ts';
+import { createPoller, memoryStore } from './poller.ts';
 
 const config = loadConfig(process.env);
 
@@ -16,6 +16,7 @@ const poll = createPoller({
   send: (message) => postWebhook(config.webhookUrl, message),
   now: Date.now,
   log: { info: timestamped(console.log), error: timestamped(console.error) },
+  store: memoryStore(),
 });
 
 const loop = async (): Promise<void> => {

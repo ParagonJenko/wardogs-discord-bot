@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
-import { createPoller } from '../src/poller.ts';
+import type { MonitorState } from '../src/alerts.ts';
+import { createPoller, memoryStore } from '../src/poller.ts';
 
 const config: Config = {
   serverId: '123',
@@ -11,7 +12,7 @@ const config: Config = {
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
 };
 
-const setup = (populations: (number | Error)[]) => {
+const setup = (populations: (number | Error)[], store = memoryStore()) => {
   const queue = [...populations];
   const sent: DiscordMessage[] = [];
   const send = vi.fn(async (message: DiscordMessage) => {
@@ -29,6 +30,7 @@ const setup = (populations: (number | Error)[]) => {
     send,
     now: () => (clock += 60_000),
     log,
+    store,
   });
   return { tick, send, sent, log };
 };
@@ -74,5 +76,17 @@ describe('poller', () => {
 
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('fetch failed'));
     expect(sent).toHaveLength(1);
+  });
+
+  it('picks up from saved state instead of starting over', async () => {
+    const saved: MonitorState = { phase: 'live', lastAlertAt: { live: 0 } };
+    const store = memoryStore(saved);
+    const { tick, sent } = setup([15], store);
+
+    await tick();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.embeds[0]?.title).toMatch(/dropped below 20/);
+    await expect(store.load()).resolves.toMatchObject({ phase: 'seeding' });
   });
 });

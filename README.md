@@ -19,11 +19,36 @@ every 60 seconds; no API key is needed.
 2. **Webhook.** In Discord: channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
 3. **Role to ping (optional).** Enable Developer Mode (User Settings → Advanced), then Server Settings →
    Roles → right-click the role → Copy Role ID.
-4. Copy `.env.example` to `.env` and fill in the values.
 
-## Run
+## Run on Cloudflare Workers (free)
 
-With Node 22.18 or newer:
+A cron trigger runs the check every minute. A Durable Object keeps the alert state between runs. Both are
+on the Workers free plan, and the bot uses about 1,440 invocations a day against a 100,000 limit.
+
+1. Create a free Cloudflare account, then log in from this folder:
+   ```bash
+   npm ci
+   npx wrangler login
+   ```
+2. Put your server ID (and optionally role ID and thresholds) in the `vars` block of `wrangler.jsonc`.
+3. Store the webhook as a secret, so it is not committed:
+   ```bash
+   npx wrangler secret put DISCORD_WEBHOOK_URL
+   ```
+4. Deploy:
+   ```bash
+   npm run deploy
+   ```
+
+Logs are under Workers & Pages → wardogs-discord-bot → Logs in the Cloudflare dashboard. The first run
+logs `Watching "<server name>": N/M players`. On Workers the check always runs every minute;
+`POLL_INTERVAL_SECONDS` is not used.
+
+To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` again.
+
+## Run with Node or Docker
+
+With Node 22.18 or newer, copy `.env.example` to `.env`, fill it in, then:
 
 ```bash
 npm ci --omit=dev
@@ -37,11 +62,10 @@ docker build -t wardogs-discord-bot .
 docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardogs-discord-bot
 ```
 
-On start it logs the current population. It does not post on start, so restarting the bot never
-re-announces a server that is already seeding or live.
-
 ## Behaviour
 
+- The first check only logs the current population and does not post, so starting the bot never
+  announces a server that is already seeding or live. State is kept across Cloudflare runs.
 - Seeding only fires coming from empty. A server that drops from live to 12 players gets a low-pop alert,
   not a seeding alert.
 - An empty server that jumps straight to 20+ gets a live alert only.

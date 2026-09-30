@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wardogs-discord-bot",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-30",
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "WATCHER", "class_name": "Watcher" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
+  "observability": { "enabled": true },
+  // Non-secret settings. Set DISCORD_WEBHOOK_URL with `npx wrangler secret put DISCORD_WEBHOOK_URL`.
+  "vars": {
+    "BATTLEMETRICS_SERVER_ID": "",
+    "DISCORD_ROLE_ID": "",
+    "SEEDING_THRESHOLD": "1",
+    "LIVE_THRESHOLD": "20",
+    "LOW_POP_THRESHOLD": "20",
+    "ALERT_COOLDOWN_MINUTES": "10"
+  }
+}
