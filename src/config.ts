@@ -2,8 +2,23 @@ import { z } from 'zod';
 import type { AlertRules } from './alerts.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
-// Just the listener's address; the bot adds /v1/status itself.
-const rconUrl = z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'must look like http://203.0.113.10:7776');
+// Just the listener's address; the bot adds /v1/status itself. Pasted values often carry quotes, stray
+// whitespace or no scheme, so those are tidied rather than rejected.
+const tidyAddress = (value: string): string => {
+  const bare = value.trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  return /^[a-z]+:\/\//i.test(bare) ? bare : `http://${bare}`;
+};
+const rconUrl = z
+  .string()
+  .transform(tidyAddress)
+  .pipe(
+    z
+      .string()
+      .regex(
+        /^https?:\/\/[^/\s]+\/?$/,
+        'must be the address and port only, like http://203.0.113.10:7776 (no path after the port)',
+      ),
+  );
 const count = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
 // An invite code, or a discord.gg / discord.com/invite link; only the code is kept.
 const invite = z
