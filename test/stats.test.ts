@@ -38,6 +38,7 @@ const match: MatchState = {
   startedAt: MIDNIGHT,
   lastSeenAt: MIDNIGHT,
   liveAt: MIDNIGHT,
+  summarisable: true,
   peakPlayers: 30,
   players: {
     '76561198000000001': { name: 'Ash', kills: 4, deaths: 1 },

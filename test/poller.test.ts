@@ -243,17 +243,22 @@ describe('poller stats', () => {
 
   it('records a finished match once, even when the alert after it is retried', async () => {
     const stats = sink();
+    // Seeding, then live, then a new map; the low-pop alert after the summary fails once and is retried.
     const { run, send } = setup(
-      [snapshot(crowd(22)), snapshot(crowd(10), 'Europe'), snapshot(crowd(10), 'Europe')],
+      [snapshot(crowd(5)), snapshot(crowd(22)), snapshot(crowd(10), 'Europe'), snapshot(crowd(10), 'Europe')],
       memoryStore(),
       stats,
     );
-    send.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+    send
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
 
-    await run(3);
+    await run(4);
 
+    expect(send).toHaveBeenCalledTimes(4);
     expect(stats.matchEnded).toHaveBeenCalledTimes(1);
-    expect(stats.matchEnded).toHaveBeenCalledWith(expect.objectContaining({ map: 'Kavkazi', peakPlayers: 22 }), 120_000);
+    expect(stats.matchEnded).toHaveBeenCalledWith(expect.objectContaining({ map: 'Kavkazi', peakPlayers: 22 }), 180_000);
   });
 
   it('still sends alerts and saves state when the stats update fails', async () => {
