@@ -246,6 +246,26 @@ How it changes the server:
 Turning it off (`VIP_SEED_DAYS` `"0"`) stops changes; players already on the list stay until an admin removes them.
 Automatic VIP is Cloudflare only.
 
+## In-game messages
+
+During a match, the bot broadcasts short messages in game that point players at the website (`SITE_URL`) for the
+leaderboard, the Discord and seeding:
+
+| When                                             | Message                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| 10 minutes after the match went live             | Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com |
+| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
+| Each team that reaches 90% of `SCORE_TO_WIN` (90) | Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
+
+- Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst.
+- After the bot restarts or is deployed mid-match, milestones the match already passed are not announced late.
+  The 10-minute message only goes out for a match the bot saw go live.
+- A message that fails to send is logged (`In-game message failed: …`) and not tried again.
+- They use the RCON password's write access (`POST /v1/broadcast`), like `/broadcast`.
+
+Set `MATCH_MESSAGES` to `"off"` in the `vars` block of `wrangler.jsonc` to stop them, and `SCORE_TO_WIN` if a match
+is won at a score other than 100. They need `SITE_URL`; without it none are sent.
+
 ## Run with Node or Docker
 
 With Node 22.18 or newer, copy `.env.example` to `.env`, fill it in, then:
@@ -294,8 +314,8 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 ## Security
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). The
-bot reads `GET /v1/status`, `/v1/players` and `/v1/rotation`, and only writes through `/broadcast`
-(`POST /v1/broadcast`) and, with automatic VIP on, the reserved list in `ServerSettings.ini`
+bot reads `GET /v1/status`, `/v1/players` and `/v1/rotation`, and only writes through `/broadcast` and the
+[in-game messages](#in-game-messages) (`POST /v1/broadcast`) and, with automatic VIP on, the reserved list in `ServerSettings.ini`
 (`PUT /v1/config`, see [Automatic VIP](#automatic-vip)), but:
 
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.

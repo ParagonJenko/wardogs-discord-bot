@@ -23,7 +23,7 @@ import {
   type SeedCredit,
 } from './players.ts';
 import { createPoller, parseState } from './poller.ts';
-import { fetchConfig, fetchSnapshot, putConfig, validateConfig } from './rcon.ts';
+import { fetchConfig, fetchSnapshot, putConfig, sendBroadcast, validateConfig } from './rcon.ts';
 import { socketHttp } from './socket-http.ts';
 import {
   discordDue,
@@ -110,6 +110,7 @@ export class Watcher extends DurableObject<Env> {
       config,
       fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, socketHttp(connect)),
       send: (message) => postWebhook(config.webhookUrl, message),
+      broadcast: (message) => sendBroadcast(config.rconUrl, config.rconPassword, message, socketHttp(connect)),
       now: Date.now,
       log: console,
       store: {

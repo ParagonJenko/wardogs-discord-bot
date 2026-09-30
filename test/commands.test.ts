@@ -14,6 +14,7 @@ const config: Config = {
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
   seedMinutes: 10,
   vip: null,
+  matchMessages: null,
 };
 
 // A fake RCON server keyed by path; records what was sent.

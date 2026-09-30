@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { initialState, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
+import { MatchMessagesSchema, nextMessage, type MatchMessages } from './messages.ts';
 import type { SeedCredit } from './players.ts';
 import type { Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
@@ -25,6 +26,8 @@ export type BotState = {
   unsentSummary: MatchSummary | null;
   // Whether the server has been live since it last emptied. Until it has, time online counts as seeding.
   liveSinceEmpty: boolean;
+  // Which in-game messages the current match has had.
+  messages: MatchMessages | null;
 };
 
 export type StateStore = {
@@ -40,6 +43,8 @@ type PollerDeps = {
   log: Logger;
   store: StateStore;
   stats?: StatsSink;
+  // Sends a message to everyone in game.
+  broadcast?: (message: string) => Promise<void>;
 };
 
 // Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
@@ -102,13 +107,22 @@ const BotStateSchema = z.object({
     .default(null),
   // Missing from state saved before seeding stopped at the first live.
   liveSinceEmpty: z.boolean().default(false),
+  // Missing from state saved before in-game messages.
+  messages: MatchMessagesSchema.nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
 const StoredStateSchema = z.union([
   BotStateSchema,
   AlertsSchema.transform(
-    (alerts): BotState => ({ alerts, seeding: {}, match: null, unsentSummary: null, liveSinceEmpty: alerts.phase === 'live' }),
+    (alerts): BotState => ({
+      alerts,
+      seeding: {},
+      match: null,
+      unsentSummary: null,
+      liveSinceEmpty: alerts.phase === 'live',
+      messages: null,
+    }),
   ),
 ]);
 
@@ -131,7 +145,7 @@ export const memoryStore = (initial: BotState | null = null): StateStore => {
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
-export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats }: PollerDeps) => {
+export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats, broadcast }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
     if (stats === undefined) return;
@@ -153,7 +167,9 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       const seedingNow = alerts.phase === 'seeding';
       const seeding = seedingNow ? tallySeeding({}, players) : {};
       const liveSinceEmpty = alerts.phase === 'live';
-      await store.save({ alerts, seeding, match, unsentSummary: null, liveSinceEmpty });
+      const messages =
+        config.matchMessages === null ? null : nextMessage(null, match, time, config.matchMessages, config.vip).messages;
+      await store.save({ alerts, seeding, match, unsentSummary: null, liveSinceEmpty, messages });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
@@ -184,6 +200,20 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     if (credits.length > 0) await stats?.seeded(credits, time);
     if (finished !== null) await stats?.matchEnded(finished, time);
 
+    // In-game messages go out whatever happens to the Discord posts. A failed one is not retried.
+    const { messages, send: message } =
+      config.matchMessages !== null && broadcast !== undefined && status.players > 0
+        ? nextMessage(state.messages, match, time, config.matchMessages, config.vip)
+        : { messages: state.messages, send: null };
+    if (message !== null && broadcast !== undefined) {
+      try {
+        await broadcast(message);
+        log.info(`Sent in game: ${message}`);
+      } catch (error) {
+        log.error(`In-game message failed: ${errorText(error)}`);
+      }
+    }
+
     // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
     // Discord is down, and an unsent summary is kept to retry. A newer summary replaces one still waiting; that match
     // is already recorded. While live, the seeding count is kept so a retried live alert can still name the seeders.
@@ -192,6 +222,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       seeding: tallied ?? (after === 'live' ? state.seeding : {}),
       match,
       liveSinceEmpty,
+      messages,
       unsentSummary: finished === null ? state.unsentSummary : summarise(finished),
     };
     try {
@@ -220,7 +251,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       throw error;
     }
     // The alert state is only saved after a successful send, so a failed alert is retried on the next check.
-    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, liveSinceEmpty });
+    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, liveSinceEmpty, messages });
   };
 
   return async (): Promise<void> => {

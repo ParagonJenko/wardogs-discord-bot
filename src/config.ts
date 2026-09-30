@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AlertRules } from './alerts.ts';
+import type { MessageRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
 // Just the listener's address; the bot adds /v1/status itself. Pasted values often carry quotes, stray
@@ -49,6 +50,10 @@ const EnvSchema = z
     VIP_SEED_DAYS: z.coerce.number().int().min(0).max(7).default(0),
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
+    // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
+    MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
+    // The score a faction needs to win, for "halfway" and "nearly there" messages.
+    SCORE_TO_WIN: z.coerce.number().int().min(2).default(100),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -77,6 +82,8 @@ export type Config = {
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
   seedMinutes: number;
   vip: VipRule | null;
+  // Null when MATCH_MESSAGES is off or there is no SITE_URL to point players at.
+  matchMessages: MessageRule | null;
 };
 
 export const loadConfig = (env: Record<string, string | undefined>): Config => {
@@ -108,6 +115,10 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     vip:
       e.VIP_SEED_DAYS > 0
         ? { seedDays: e.VIP_SEED_DAYS, seedMinutes: e.VIP_SEED_MINUTES, windowDays: VIP_WEEK_DAYS, lengthDays: VIP_WEEK_DAYS }
+        : null,
+    matchMessages:
+      e.MATCH_MESSAGES === 'on' && e.SITE_URL
+        ? { siteHost: new URL(e.SITE_URL).host, scoreToWin: e.SCORE_TO_WIN }
         : null,
   };
 };

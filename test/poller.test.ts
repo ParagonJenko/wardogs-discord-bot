@@ -18,6 +18,7 @@ const config: Config = {
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
   seedMinutes: 10,
   vip: null,
+  matchMessages: null,
 };
 
 const player = (steamId: string, kills = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths: 0 });
@@ -216,6 +217,7 @@ describe('poller', () => {
       match: null,
       unsentSummary: null,
       liveSinceEmpty: true,
+      messages: null,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -480,17 +482,93 @@ describe('parseState', () => {
       match: null,
       unsentSummary: null,
       liveSinceEmpty: true,
+      messages: null,
     });
   });
 
   it('reads state saved before unsent summaries and seeding-until-live were kept', () => {
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
-    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, liveSinceEmpty: false });
+    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, liveSinceEmpty: false, messages: null });
   });
 
   it('starts fresh when nothing or something unrecognisable was saved', () => {
     expect(parseState(undefined)).toBeNull();
     expect(parseState({ phase: 'unknown' })).toBeNull();
+  });
+});
+
+describe('in-game messages', () => {
+  const withScores = (players: Player[], valkyra: number, kharr: number): Snapshot => ({
+    ...snapshot(players),
+    status: { ...snapshot(players).status, factionScores: [{ name: 'Valkyra', score: valkyra }, { name: 'Kharr', score: kharr }] },
+  });
+
+  const on = { siteHost: 'gaminginit.com', scoreToWin: 100 };
+
+  const messagesPoller = (snapshots: Snapshot[], broadcast = vi.fn(async (_message: string) => {}), matchMessages: typeof on | null = on) => {
+    const queue = [...snapshots];
+    const log = { info: vi.fn(), error: vi.fn() };
+    let clock = 0;
+    const tick = createPoller({
+      config: { ...config, matchMessages },
+      fetchSnapshot: async () => queue.shift() ?? snapshot([]),
+      send: vi.fn(async () => {}),
+      // Five minutes a check, so ten minutes pass quickly.
+      now: () => (clock += 5 * 60_000),
+      log,
+      store: memoryStore(),
+      broadcast,
+    });
+    return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, broadcast, log };
+  };
+
+  it('sends each message once as the match goes on, and saves which were sent', async () => {
+    const { run, broadcast, log } = messagesPoller([
+      withScores(crowd(5), 0, 0),
+      withScores(crowd(22), 5, 3),
+      withScores(crowd(22), 20, 12),
+      withScores(crowd(22), 35, 20),
+      withScores(crowd(22), 52, 30),
+      withScores(crowd(22), 91, 70),
+      withScores(crowd(22), 95, 80),
+    ]);
+
+    await run(7);
+
+    expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
+      'Enjoying the match? Join our Discord and see the leaderboard at gaminginit.com',
+      'Halfway there! Check the leaderboard and join our Discord at gaminginit.com',
+      'Valkyra has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+    ]);
+    expect(log.info).toHaveBeenCalledWith('Sent in game: Halfway there! Check the leaderboard and join our Discord at gaminginit.com');
+  });
+
+  it('logs a failed message and does not send it again', async () => {
+    const broadcast = vi.fn(async (_message: string) => {
+      throw new Error('RCON request timed out after 8000ms');
+    });
+    const { run, log } = messagesPoller(
+      [withScores(crowd(5), 0, 0), withScores(crowd(22), 52, 3), withScores(crowd(22), 60, 3), withScores(crowd(22), 70, 3)],
+      broadcast,
+    );
+
+    await run(4);
+
+    // Halfway fails once and is not tried again; ten minutes in is a different message, due on the last check.
+    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', 'Enjoying the match']);
+    expect(log.error).toHaveBeenCalledWith('In-game message failed: RCON request timed out after 8000ms');
+  });
+
+  it('sends nothing when messages are off', async () => {
+    const { run, broadcast } = messagesPoller(
+      [withScores(crowd(5), 0, 0), withScores(crowd(22), 60, 3), withScores(crowd(22), 95, 3), withScores(crowd(22), 99, 3)],
+      undefined,
+      null,
+    );
+
+    await run(4);
+
+    expect(broadcast).not.toHaveBeenCalled();
   });
 });
