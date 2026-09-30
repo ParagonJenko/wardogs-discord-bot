@@ -169,9 +169,10 @@ describe('handleInteraction', () => {
     const d = deps();
 
     const result = await handleInteraction(body, signature, timestamp, d);
+    await result.followUp?.();
 
     expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
-    expect(result.followUp).toBeDefined();
+    expect(d.runCommand).toHaveBeenCalledWith({ name: 'broadcast', options: { message: 'Seeding now!' }, userId: '42' });
   });
 
   it('refuses members with other roles, and admin roles from another Discord server', async () => {

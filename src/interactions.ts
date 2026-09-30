@@ -13,8 +13,8 @@ const isCommandName = (name: string | undefined): name is CommandName =>
 const ADMINISTRATOR = 1n << 3n;
 
 // Admin commands change things in game or in the records, or show Steam IDs, so they are hidden from, and refused to,
-// anyone who is not an Administrator or does not have one of the admin roles. Their replies are only shown to the
-// person who ran them.
+// anyone who has neither Discord's Administrator permission nor one of the admin roles. Their replies are only shown
+// to the person who ran them.
 const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'removematch'];
 
 export const SEEDERS_DEFAULT_DAYS = 7;
