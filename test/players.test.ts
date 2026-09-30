@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  leaderboard,
   matchRecord,
   matchRecordKey,
   parsePlayerDay,
@@ -8,17 +9,29 @@ import {
   recentDayKeys,
   recordActivity,
   recordMatchPlayers,
+  recordSeed,
   totals,
   type PlayerDay,
+  type PlayerTotals,
 } from '../src/players.ts';
 import type { Player } from '../src/rcon.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 // 2026-09-30T12:00:00Z
 const NOON = Date.UTC(2026, 8, 30, 12);
-const DAY = 24 * 60 * 60_000;
 
 const player = (steamId: string, name = `P${steamId}`): Player => ({ steamId, name, kills: 0, deaths: 0 });
+
+const row = (name: string, values: Partial<PlayerTotals> = {}): PlayerTotals => ({
+  name,
+  seedingMinutes: 0,
+  liveMinutes: 0,
+  seedDays: 0,
+  matches: 0,
+  kills: 0,
+  deaths: 0,
+  ...values,
+});
 
 const match: MatchState = {
   key: 'Kavkazi#0',
@@ -52,15 +65,14 @@ describe('keys', () => {
 describe('recordActivity', () => {
   it('counts seeding and live minutes for everyone online, by Steam ID', () => {
     const day = [
-      { players: [player('a')], phase: 'seeding' as const },
-      { players: [player('a'), player('b')], phase: 'seeding' as const },
-      { players: [player('a'), player('b')], phase: 'live' as const },
-      { players: [player('a')], phase: 'empty' as const },
-    ].reduce<PlayerDay>((acc, check) => recordActivity(acc, check.players, check.phase, 1), {});
+      { players: [player('a')], kind: 'seeding' as const },
+      { players: [player('a'), player('b')], kind: 'seeding' as const },
+      { players: [player('a'), player('b')], kind: 'live' as const },
+    ].reduce<PlayerDay>((acc, check) => recordActivity(acc, check.players, check.kind, 1), {});
 
     expect(day).toEqual({
-      a: { name: 'Pa', seedingMinutes: 2, liveMinutes: 1, matches: 0, kills: 0, deaths: 0 },
-      b: { name: 'Pb', seedingMinutes: 1, liveMinutes: 1, matches: 0, kills: 0, deaths: 0 },
+      a: row('Pa', { seedingMinutes: 2, liveMinutes: 1 }),
+      b: row('Pb', { seedingMinutes: 1, liveMinutes: 1 }),
     });
   });
 
@@ -71,13 +83,25 @@ describe('recordActivity', () => {
   });
 });
 
+describe('recordSeed', () => {
+  it('marks the day for seeders on for more than the minimum, once however often it is recorded', () => {
+    const seeders = [
+      { steamId: 'a', name: 'Ash', minutes: 11 },
+      { steamId: 'b', name: 'Bo', minutes: 10 },
+    ];
+    const day = recordSeed(recordSeed(recordActivity({}, [player('a', 'Ash')], 'seeding', 11), seeders, 10), seeders, 10);
+
+    expect(day).toEqual({ a: row('Ash', { seedingMinutes: 11, seedDays: 1 }) });
+  });
+});
+
 describe('recordMatchPlayers', () => {
   it('adds the match, kills and deaths to everyone who played, keeping their minutes', () => {
     const before = recordActivity({}, [player('a', 'Ash')], 'seeding', 5);
 
     expect(recordMatchPlayers(recordMatchPlayers(before, match), match)).toEqual({
-      a: { name: 'Ash', seedingMinutes: 5, liveMinutes: 0, matches: 2, kills: 24, deaths: 6 },
-      b: { name: 'Bo', seedingMinutes: 0, liveMinutes: 0, matches: 2, kills: 8, deaths: 18 },
+      a: row('Ash', { seedingMinutes: 5, matches: 2, kills: 24, deaths: 6 }),
+      b: row('Bo', { matches: 2, kills: 8, deaths: 18 }),
     });
   });
 });
@@ -100,30 +124,54 @@ describe('matchRecord', () => {
   });
 });
 
-describe('totals and rankSeeders', () => {
+describe('totals and rankings', () => {
   const monday: PlayerDay = {
-    a: { name: 'Ash', seedingMinutes: 30, liveMinutes: 60, matches: 2, kills: 20, deaths: 5 },
-    b: { name: 'Bo', seedingMinutes: 50, liveMinutes: 0, matches: 0, kills: 0, deaths: 0 },
+    a: row('Ash', { seedingMinutes: 30, liveMinutes: 60, seedDays: 1, matches: 2, kills: 20, deaths: 5 }),
+    b: row('Bo', { seedingMinutes: 50 }),
   };
   const tuesday: PlayerDay = {
-    a: { name: 'Ash2', seedingMinutes: 40, liveMinutes: 10, matches: 1, kills: 3, deaths: 1 },
-    c: { name: 'Cy', seedingMinutes: 0, liveMinutes: 90, matches: 3, kills: 30, deaths: 12 },
+    a: row('Ash2', { seedingMinutes: 40, liveMinutes: 10, seedDays: 1, matches: 1, kills: 3, deaths: 1 }),
+    c: row('Cy', { liveMinutes: 90, matches: 3, kills: 30, deaths: 12 }),
   };
 
   it('adds up days, keeping the most recent name', () => {
     expect(totals([monday, tuesday])).toEqual([
-      { steamId: 'a', name: 'Ash2', seedingMinutes: 70, liveMinutes: 70, matches: 3, kills: 23, deaths: 6 },
-      { steamId: 'b', name: 'Bo', seedingMinutes: 50, liveMinutes: 0, matches: 0, kills: 0, deaths: 0 },
-      { steamId: 'c', name: 'Cy', seedingMinutes: 0, liveMinutes: 90, matches: 3, kills: 30, deaths: 12 },
+      { steamId: 'a', ...row('Ash2', { seedingMinutes: 70, liveMinutes: 70, seedDays: 2, matches: 3, kills: 23, deaths: 6 }) },
+      { steamId: 'b', ...row('Bo', { seedingMinutes: 50 }) },
+      { steamId: 'c', ...row('Cy', { liveMinutes: 90, matches: 3, kills: 30, deaths: 12 }) },
     ]);
   });
 
-  it('ranks seeders by minutes, leaving out players who never seeded', () => {
-    expect(rankSeeders([monday, tuesday], 5).map((p) => [p.steamId, p.seedingMinutes])).toEqual([
-      ['a', 70],
-      ['b', 50],
+  it('ranks seeders by seed days, then minutes, leaving out players who never seeded', () => {
+    const wednesday: PlayerDay = { b: row('Bo', { seedingMinutes: 100, seedDays: 1 }) };
+
+    expect(rankSeeders([monday, tuesday], 5).map((p) => p.steamId)).toEqual(['a', 'b']);
+    expect(rankSeeders([monday, tuesday, wednesday], 5).map((p) => [p.steamId, p.seedDays, p.seedingMinutes])).toEqual([
+      ['a', 2, 70],
+      ['b', 1, 150],
     ]);
     expect(rankSeeders([monday, tuesday], 1)).toHaveLength(1);
+  });
+
+  it('builds a public leaderboard with names only', () => {
+    const board = leaderboard([monday, tuesday], 30, 2);
+
+    expect(board).toMatchObject({ days: 30, kdMinMatches: 3 });
+    expect(board.kills.map((p) => [p.name, p.kills])).toEqual([
+      ['Cy', 30],
+      ['Ash2', 23],
+    ]);
+    // Both played 3 matches: Ash2 23/6 = 3.83 beats Cy 30/12 = 2.5.
+    expect(board.kd.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
+    expect(board.playtime.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
+    expect(board.seeding.map((p) => p.name)).toEqual(['Ash2', 'Bo']);
+    expect(JSON.stringify(board)).not.toContain('steamId');
+  });
+
+  it('leaves players with too few matches off the K/D board', () => {
+    const lucky: PlayerDay = { d: row('Dee', { matches: 1, kills: 9, deaths: 0 }) };
+
+    expect(leaderboard([monday, tuesday, lucky], 30, 10).kd.map((p) => p.name)).not.toContain('Dee');
   });
 });
 

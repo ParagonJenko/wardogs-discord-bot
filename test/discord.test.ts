@@ -20,6 +20,18 @@ describe('buildMessage', () => {
     expect(embed?.description).toContain('7/64');
   });
 
+  it('tells people what seeding earns when automatic VIP is on, only on the seeding alert', () => {
+    const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
+    const [seeding] = buildMessage('seeding', server, { lowPop: 20, vip }).embeds;
+    const [live] = buildMessage('live', { ...server, players: 20 }, { lowPop: 20, vip }).embeds;
+
+    expect(seeding?.description).toBe(
+      '**7/64** players. Jump in and help get it live!\n🎖️ Seed on 3 days in a week and get a reserved slot for a week. ' +
+        "A seed counts when you're on for more than 10 min and the server goes live.",
+    );
+    expect(live?.description).not.toContain('🎖️');
+  });
+
   it('announces going live', () => {
     const [embed] = buildMessage('live', { ...server, players: 20 }, { lowPop: 20 }).embeds;
 
@@ -255,28 +267,35 @@ describe('buildLastMatchEmbed', () => {
 });
 
 describe('buildSeedersEmbed', () => {
-  it('lists seeders with their minutes and Steam IDs', () => {
+  it('lists seeders with their seed days, minutes, Steam IDs and VIP', () => {
     const embed = buildSeedersEmbed(
       [
-        { steamId: '76561198000000001', name: 'Ash_1', seedingMinutes: 95 },
-        { steamId: '76561198000000002', name: 'Bo', seedingMinutes: 40 },
+        { steamId: '76561198000000001', name: 'Ash_1', seedingMinutes: 95, seedDays: 3, vipUntil: 1_727_690_000_000 },
+        { steamId: '76561198000000002', name: 'Bo', seedingMinutes: 40, seedDays: 1, vipUntil: null },
       ],
       7,
+      10,
+      null,
     );
 
     expect(embed.title).toBe('🌱 Top seeders, last 7 days');
     expect(embed.description).toBe(
       [
-        '1. Ash\\_1: 95 min · `76561198000000001`',
-        '2. Bo: 40 min · `76561198000000002`',
+        '1. Ash\\_1: 3 seed days, 95 min · `76561198000000001` · 🎖️ VIP until <t:1727690000:f>',
+        '2. Bo: 1 seed day, 40 min · `76561198000000002`',
         '',
-        'Minutes online while the server was seeding. Days are UTC.',
+        'A seed day: on for more than 10 min while the server seeded, and it then went live. Days are UTC.',
       ].join('\n'),
     );
   });
 
-  it('says so when nobody seeded', () => {
-    expect(buildSeedersEmbed([], 1)).toMatchObject({ title: '🌱 Top seeders, last 1 day', description: 'Nobody seeded in that time.' });
+  it('says so when nobody seeded, and gives the VIP rule when it is on', () => {
+    const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
+    const embed = buildSeedersEmbed([], 1, 10, vip);
+
+    expect(embed.title).toBe('🌱 Top seeders, last 1 day');
+    expect(embed.description).toMatch(/^Nobody seeded in that time\.\n\n/);
+    expect(embed.description).toContain('🎖️ Seed on 3 days in a week and get a reserved slot for a week.');
   });
 });
 

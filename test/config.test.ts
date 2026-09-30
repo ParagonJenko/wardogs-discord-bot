@@ -17,7 +17,18 @@ describe('loadConfig', () => {
       inviteCode: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
+      seedMinutes: 10,
+      vip: null,
     });
+  });
+
+  it('turns on automatic VIP when VIP_SEED_DAYS is set', () => {
+    const config = loadConfig({ ...required, VIP_SEED_DAYS: '3', VIP_SEED_MINUTES: '15' });
+
+    expect(config.seedMinutes).toBe(15);
+    expect(config.vip).toEqual({ seedDays: 3, seedMinutes: 15, windowDays: 7, lengthDays: 7 });
+    expect(loadConfig({ ...required, VIP_SEED_DAYS: '0' }).vip).toBeNull();
+    expect(() => loadConfig({ ...required, VIP_SEED_DAYS: '8' })).toThrow(/VIP_SEED_DAYS/);
   });
 
   it('reads overrides from the environment', () => {

@@ -5,9 +5,9 @@ import {
   buildRotationEmbed,
   buildSeedersEmbed,
   buildStatusEmbed,
+  type SeederRow,
 } from './discord.ts';
 import { SEEDERS_DEFAULT_DAYS, SEEDERS_MAX_DAYS, type CommandReply, type CommandRequest } from './interactions.ts';
-import type { RankedPlayer } from './players.ts';
 import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from './rcon.ts';
 import type { RecentMatch } from './stats.ts';
 
@@ -16,7 +16,7 @@ type CommandDeps = {
   config: () => Config;
   http: HttpClient;
   lastMatch: () => Promise<RecentMatch | null>;
-  seeders: (days: number) => Promise<RankedPlayer[]>;
+  seeders: (days: number) => Promise<SeederRow[]>;
   log: { info: (message: string) => void };
 };
 
@@ -35,7 +35,8 @@ export const runCommand =
     }
     if (name === 'seeders') {
       const days = dayCount(options['days']);
-      return { embeds: [buildSeedersEmbed(await seeders(days), days)] };
+      const { seedMinutes, vip } = config();
+      return { embeds: [buildSeedersEmbed(await seeders(days), days, seedMinutes, vip)] };
     }
 
     const { rconUrl, rconPassword, rules } = config();

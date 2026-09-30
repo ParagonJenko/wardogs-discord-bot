@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import { createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
+import type { SeedCredit } from '../src/players.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
 import type { Observation } from '../src/stats.ts';
 import type { MatchState } from '../src/tracking.ts';
@@ -14,6 +15,8 @@ const config: Config = {
   inviteCode: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
+  seedMinutes: 10,
+  vip: null,
 };
 
 const player = (steamId: string, kills = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths: 0 });
@@ -208,6 +211,7 @@ describe('poller', () => {
       seeding: {},
       match: null,
       unsentSummary: null,
+      liveSinceEmpty: true,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -222,6 +226,7 @@ describe('poller', () => {
 describe('poller stats', () => {
   const sink = () => ({
     check: vi.fn(async (_observation: Observation) => {}),
+    seeded: vi.fn(async (_seeders: SeedCredit[], _at: number) => {}),
     matchEnded: vi.fn(async (_match: MatchState, _at: number) => {}),
   });
 
@@ -309,6 +314,94 @@ describe('poller stats', () => {
     expect(stats.matchEnded.mock.calls[0]?.[0]).toMatchObject({ key: 'Kavkazi#0', liveAt: 120_000, players: { a: { kills: 7 } } });
   });
 
+  it('counts seeding only until the server first goes live, until it empties again', async () => {
+    const stats = sink();
+    const a = player('a');
+    const { run } = setup(
+      [snapshot([]), snapshot([a]), snapshot(crowd(20, [a])), snapshot(crowd(15, [a])), snapshot(crowd(15, [a])), snapshot([]), snapshot([a])],
+      memoryStore(),
+      stats,
+    );
+
+    await run(7);
+
+    expect(stats.check.mock.calls.map(([o]) => [o.phase, o.seeding])).toEqual([
+      ['empty', false],
+      ['seeding', true],
+      ['live', false],
+      ['seeding', false],
+      ['seeding', false],
+      ['empty', false],
+      ['seeding', true],
+    ]);
+  });
+
+  it('credits everyone who seeded when the server goes live, and not when it comes back from low pop', async () => {
+    const stats = sink();
+    const a = player('a');
+    const b = player('b');
+    const { run, sent } = setup(
+      [snapshot([]), snapshot([a]), snapshot([a, b]), snapshot(crowd(20, [a, b])), snapshot(crowd(15, [a])), snapshot(crowd(15, [a])), snapshot(crowd(21, [a]))],
+      memoryStore(),
+      stats,
+    );
+
+    await run(7);
+
+    expect(stats.seeded.mock.calls).toEqual([
+      [
+        [
+          { steamId: 'a', name: 'Pa', minutes: 2 },
+          { steamId: 'b', name: 'Pb', minutes: 1 },
+        ],
+        240_000,
+      ],
+    ]);
+    expect(sent.find((m) => m.embeds[0]?.title.endsWith('is live'))?.embeds[0]?.fields).toEqual([
+      { name: 'Top seeders', value: '1. Pa (2 min)\n2. Pb (1 min)' },
+    ]);
+  });
+
+  it('credits seeders and names them on the live alert even when every Discord post was failing', async () => {
+    const stats = sink();
+    const a = player('a');
+    const { run, send } = setup([snapshot([]), snapshot([a]), snapshot([a]), snapshot(crowd(20, [a])), snapshot(crowd(20, [a]))], memoryStore(), stats);
+    send.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+    send.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+    send.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+    await run(5);
+
+    expect(stats.seeded.mock.calls.map(([seeders, at]) => [seeders, at])).toEqual([
+      [[{ steamId: 'a', name: 'Pa', minutes: 2 }], 240_000],
+      [[{ steamId: 'a', name: 'Pa', minutes: 2 }], 300_000],
+    ]);
+    expect(send.mock.calls.map(([m]) => [m.embeds[0]?.title, m.embeds[0]?.fields?.[0]?.value])).toEqual([
+      ['🌱 UK Wardogs #1 is seeding', undefined],
+      ['🌱 UK Wardogs #1 is seeding', undefined],
+      ['🟢 UK Wardogs #1 is live', '1. Pa (2 min)'],
+      ['🟢 UK Wardogs #1 is live', '1. Pa (2 min)'],
+    ]);
+  });
+
+  it('does not carry a seeding count past an empty server while Discord is down', async () => {
+    const stats = sink();
+    const a = player('a');
+    const { run, send } = setup(
+      [snapshot([]), snapshot([a]), snapshot([a]), snapshot(crowd(20, [a])), snapshot([]), snapshot([a]), snapshot(crowd(20, [a]))],
+      memoryStore(),
+      stats,
+    );
+    send.mockRejectedValue(new Error('Discord webhook failed: 500'));
+
+    await run(7);
+
+    expect(stats.seeded.mock.calls.map(([seeders]) => seeders)).toEqual([
+      [{ steamId: 'a', name: 'Pa', minutes: 2 }],
+      [{ steamId: 'a', name: 'Pa', minutes: 1 }],
+    ]);
+  });
+
   it('posts a summary Discord rejected on a later check, once', async () => {
     const { run, send } = setup([
       snapshot(crowd(5)),
@@ -351,13 +444,14 @@ describe('parseState', () => {
       seeding: {},
       match: null,
       unsentSummary: null,
+      liveSinceEmpty: true,
     });
   });
 
-  it('reads state saved before unsent summaries were kept', () => {
+  it('reads state saved before unsent summaries and seeding-until-live were kept', () => {
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
-    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null });
+    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, liveSinceEmpty: false });
   });
 
   it('starts fresh when nothing or something unrecognisable was saved', () => {

@@ -11,6 +11,8 @@ const config: Config = {
   inviteCode: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
+  seedMinutes: 10,
+  vip: null,
 };
 
 // A fake RCON server keyed by path; records what was sent.
@@ -26,7 +28,7 @@ const rcon = (responses: Record<string, unknown>) => {
 const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = null) => {
   const server = rcon(responses);
   const log = { info: vi.fn() };
-  const seeders = vi.fn(async (_days: number) => [{ steamId: '7656', name: 'Ash', seedingMinutes: 95, liveMinutes: 0, matches: 0, kills: 0, deaths: 0 }]);
+  const seeders = vi.fn(async (_days: number) => [{ steamId: '7656', name: 'Ash', seedingMinutes: 95, seedDays: 2, vipUntil: null }]);
   const run = runCommand({
     config: () => config,
     http: server.http,
@@ -86,7 +88,7 @@ describe('runCommand', () => {
     await run({ name: 'seeders', options: { days: '30' }, userId: '42' });
 
     expect(week.embeds?.[0]).toMatchObject({ title: '🌱 Top seeders, last 7 days' });
-    expect(week.embeds?.[0]?.description).toContain('1. Ash: 95 min · `7656`');
+    expect(week.embeds?.[0]?.description).toContain('1. Ash: 2 seed days, 95 min · `7656`');
     expect(seeders.mock.calls).toEqual([[7], [30]]);
     expect(sent).toEqual([]);
   });

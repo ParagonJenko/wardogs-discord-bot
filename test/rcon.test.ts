@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from '../src/rcon.ts';
+import {
+  fetchConfig,
+  fetchPlayers,
+  fetchRotation,
+  fetchStatus,
+  putConfig,
+  sendBroadcast,
+  validateConfig,
+  type HttpClient,
+} from '../src/rcon.ts';
 
 const statusBody = {
   serverName: 'UK Wardogs #1',
@@ -162,5 +171,51 @@ describe('sendBroadcast', () => {
     const { get } = respondWith(400, { error: { code: 'bad_request', message: 'Message too long' } });
 
     await expect(sendBroadcast('http://203.0.113.10:7776', 'secret', 'x', get)).rejects.toThrow(/400/);
+  });
+});
+
+describe('server config', () => {
+  const recorder = (status: number, body: unknown) => {
+    const requests: { path: string; method: string; headers: Record<string, string>; body?: string }[] = [];
+    const http: HttpClient = async (url, headers, sent, method) => {
+      requests.push({ path: url.pathname, method: sent === undefined ? 'GET' : (method ?? 'POST'), headers, ...(sent === undefined ? {} : { body: sent }) });
+      return { status, body: JSON.stringify(body) };
+    };
+    return { http, requests };
+  };
+  const ini = '[/Script/WDGame.WDGameSession]\n+DefaultReservedPlayerIds=76561198000000001\n';
+
+  it('reads ServerSettings.ini and its revision', async () => {
+    const { http } = recorder(200, { revision: 7, writable: true, text: ini, sections: [] });
+
+    await expect(fetchConfig('http://203.0.113.10:7776', 'secret', http)).resolves.toEqual({ revision: '7', writable: true, text: ini });
+  });
+
+  it('validates as plain text, then writes it only if the revision still matches', async () => {
+    const { http, requests } = recorder(200, { ok: true, errors: [], stripped: [], shadowed: [] });
+
+    await validateConfig('http://203.0.113.10:7776', 'secret', ini, http);
+    await putConfig('http://203.0.113.10:7776', 'secret', { revision: 'abc', writable: true, text: ini }, http);
+
+    expect(requests.map((r) => [r.method, r.path, r.headers['Content-Type'], r.headers['If-Match'], r.body])).toEqual([
+      ['POST', '/v1/config/validate', 'text/plain; charset=utf-8', undefined, ini],
+      ['PUT', '/v1/config', 'text/plain; charset=utf-8', '"abc"', ini],
+    ]);
+  });
+
+  it('reports errors, and keys the server strips or pins', async () => {
+    const { http } = recorder(200, { ok: false, errors: [{ key: 'MaxPlayers', message: 'too high' }], stripped: ['DefaultReservedPlayerIds'] });
+
+    await expect(validateConfig('http://203.0.113.10:7776', 'secret', ini, http)).resolves.toEqual({
+      ok: false,
+      errors: ['{"key":"MaxPlayers","message":"too high"}'],
+      ignored: ['DefaultReservedPlayerIds'],
+    });
+  });
+
+  it('throws when someone else changed the file since it was read', async () => {
+    const { http } = recorder(412, { error: 'revision mismatch' });
+
+    await expect(putConfig('http://203.0.113.10:7776', 'secret', { revision: '"abc"', writable: true, text: ini }, http)).rejects.toThrow(/412/);
   });
 });

@@ -11,6 +11,7 @@ Watches a WARDOGS server through its RCON API and posts to a Discord channel whe
 It also posts:
 
 - **Top seeders** on the live alert: the 3 players who were online longest while the server seeded.
+- **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
@@ -18,9 +19,10 @@ And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/
 `/broadcast` and `/seeders` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
-population, daily peaks, the current and recent matches, and Discord member counts
-(see [Website stats](#website-stats)). And it keeps [player records](#player-records) for leaderboards and
-seeder rewards: every finished match's full scoreboard, and each player's seeding time, play time, kills and deaths.
+population, daily peaks, the current and recent matches, Discord member counts and a public leaderboard
+(see [Website stats](#website-stats)). It keeps [player records](#player-records):
+every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. And it gives
+[automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
@@ -79,7 +81,7 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/broadcast`    | Administrators only  | Sends a message (up to 200 characters) to everyone in game         |
-| `/seeders`      | Administrators only  | Top 25 seeders over the last 7 days (or `days`: 1–90), with Steam IDs, for VIP |
+| `/seeders`      | Administrators only  | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
@@ -145,8 +147,11 @@ commands to. Alerts, top seeders and match summaries work in both.
 | `matches`      | The last 10 match summaries, newest first                                              |
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed      |
+| `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
+| `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
 
-Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password.
+Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password: leaderboard rows
+are names with their totals.
 
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
@@ -169,20 +174,60 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Record                       | What                                                                                   |
 | ---------------------------- | -------------------------------------------------------------------------------------- |
 | Each finished match          | Map, start, live and end times, length, peak, faction scores, and every player's Steam ID, name, kills and deaths |
-| Each player, each UTC day    | Name, minutes online while seeding, minutes online while live, matches played, kills, deaths |
+| Each player, each UTC day    | Name, seeding minutes, live minutes, whether they had a successful seed, matches played, kills, deaths |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
   only seeded it and left.
-- Seeding minutes follow the top seeders rule: each check (every minute) while the server is seeding adds a minute
-  for everyone online. The check that finds the server live counts as live. A server that drops below
-  `LOW_POP_THRESHOLD` after being live counts as seeding again, so time spent keeping it going counts too.
+- Seeding is the time from an empty server until it first goes live: each check (every minute) adds a minute for
+  everyone online. Once the server has been live, time online counts as live minutes until it empties, even if it
+  drops below `LOW_POP_THRESHOLD`. The check that finds the server live counts as live.
+- A successful seed is being online for more than `VIP_SEED_MINUTES` (default 10) of that seeding, and the server
+  then going live. It marks the day it went live (UTC), once however many times it happens that day.
 - Records are kept for good. They start from the first deploy with this feature; older matches only have the
   public top 5, without Steam IDs.
 - Both are stored in the same Durable Object as the bot's state, so they are covered by the free plan: a check
   writes one row for the day's totals, however many players are online.
 
 The Node/Docker version does not keep player records.
+
+## Automatic VIP
+
+Players who seed get a reserved slot, so they skip the queue when the server is full:
+
+- **Seed on 3 days in a week** (`VIP_SEED_DAYS` successful seeds in the last 7 UTC days, including today), and the
+  bot adds you to the server's reserved list for **a week**.
+- When the week is up, you come off the list, unless you earned it again during that week. Then it runs for
+  another week.
+- The bot checks every 10 minutes. The game server only reads the reserved list when it restarts, so VIP starts
+  (and ends) at the server's next restart, usually its daily one.
+
+Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
+
+| Variable           | What                                                                   | Default in `wrangler.jsonc` |
+| ------------------ | ---------------------------------------------------------------------- | --------------------------- |
+| `VIP_SEED_DAYS`    | Days with a successful seed needed in a week. `0` turns automatic VIP off | `3`                      |
+| `VIP_SEED_MINUTES` | A seed counts when a player is on for more than this, and it goes live | `10`                        |
+
+How it changes the server:
+
+- Live WARDOGS builds only change reserved slots through `ServerSettings.ini`, so the bot reads it with
+  `GET /v1/config`, adds or removes `+DefaultReservedPlayerIds=<Steam ID>` lines in
+  `[/Script/WDGame.WDGameSession]`, checks the result with `POST /v1/config/validate`, and writes it back with
+  `PUT /v1/config`. Every other line stays exactly as it was.
+- It writes with the revision it read, so if someone edits the file in between, the server refuses the write and
+  the bot tries again 10 minutes later.
+- It only removes players it added itself. Reserved slots an admin gave out by hand are never touched, and a
+  player who already has one is left as they are.
+- If an admin takes a bot-given VIP off the list, the bot forgets it. It adds them again only if they earn it again.
+- If the file removes reserved players with `-DefaultReservedPlayerIds` or `!DefaultReservedPlayerIds` lines, the
+  bot stops and logs why, rather than guess. Remove those lines by hand to let it work.
+- `MaxReservedSlots` in the same section sets how many slots are held back for reserved players. The bot does not
+  change it.
+- Each change is logged (`VIP added: …`, `VIP ended: …`), and `/seeders` shows who has VIP from the bot and until when.
+
+Turning it off (`VIP_SEED_DAYS` `"0"`) stops changes; players already on the list stay until an admin removes them.
+Automatic VIP is Cloudflare only.
 
 ## Run with Node or Docker
 
@@ -213,7 +258,8 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   give more slack before the warning.
 - Seeding time is counted once per check (every minute) for everyone online while the server is seeding.
   The check that finds the server live does not count, so players who join at 20+ are not credited. The
-  count resets when the server goes live or empties.
+  count resets when the server goes live, and only starts again once it has emptied: a live server that drops
+  below `LOW_POP_THRESHOLD` is not seeding.
 - WARDOGS RCON does not report when a match ends. The bot treats a map change, players' kills going
   backwards (a restart on the same map), or the server emptying as the end of a match, and summarises it
   from the last stats it saw. That can miss up to one minute at the end of the match. Players who left
@@ -228,7 +274,8 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). The
 bot reads `GET /v1/status`, `/v1/players` and `/v1/rotation`, and only writes through `/broadcast`
-(`POST /v1/broadcast`), but:
+(`POST /v1/broadcast`) and, with automatic VIP on, the reserved list in `ServerSettings.ini`
+(`PUT /v1/config`, see [Automatic VIP](#automatic-vip)), but:
 
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if

@@ -1,17 +1,20 @@
 import { z } from 'zod';
-import type { Phase } from './alerts.ts';
 import { mapName } from './discord.ts';
 import type { FactionScore, Player } from './rcon.ts';
 import { dayOf } from './stats.ts';
 import { summarise, type MatchState } from './tracking.ts';
 
 // Per-player records for leaderboards and seeder rewards, kept for good. They are keyed by Steam ID, so they are
-// private: /api/stats never includes them.
+// private: /api/stats only ever shows names.
 
 export type PlayerTotals = {
   name: string;
+  // Minutes online while the server seeded, before it first went live.
   seedingMinutes: number;
+  // Minutes online once it had gone live, until it emptied.
   liveMinutes: number;
+  // Days with a successful seed: on for more than the minimum while it seeded, and it then went live. 0 or 1 in a day.
+  seedDays: number;
   matches: number;
   kills: number;
   deaths: number;
@@ -36,6 +39,9 @@ export type MatchRecord = {
 
 export type RankedPlayer = PlayerTotals & { steamId: string };
 
+// A seeder's time in the seed that just got the server live.
+export type SeedCredit = { steamId: string; name: string; minutes: number };
+
 const DAY_MS = 24 * 60 * 60_000;
 
 export const playerDayKey = (at: number): string => `players:${dayOf(at)}`;
@@ -53,6 +59,7 @@ const PlayerDaySchema = z.record(
     name: z.string(),
     seedingMinutes: z.number(),
     liveMinutes: z.number(),
+    seedDays: z.number(),
     matches: z.number(),
     kills: z.number(),
     deaths: z.number(),
@@ -65,37 +72,53 @@ export const parsePlayerDay = (raw: unknown): PlayerDay => {
   return parsed.success ? parsed.data : {};
 };
 
-const blank = (name: string): PlayerTotals => ({ name, seedingMinutes: 0, liveMinutes: 0, matches: 0, kills: 0, deaths: 0 });
+const blank = (name: string): PlayerTotals => ({
+  name,
+  seedingMinutes: 0,
+  liveMinutes: 0,
+  seedDays: 0,
+  matches: 0,
+  kills: 0,
+  deaths: 0,
+});
 
-// Time online: while the server seeds it counts as seeding, while live as time played. The same rule as the
-// top seeders on the live alert, so the check that finds the server live counts as live.
-export const recordActivity = (day: PlayerDay, players: Player[], phase: Phase, minutes: number): PlayerDay => {
-  if (phase === 'empty') return day;
-  const field = phase === 'seeding' ? 'seedingMinutes' : 'liveMinutes';
-  return {
-    ...day,
-    ...Object.fromEntries(
-      players.map((p) => {
-        const known = day[p.steamId] ?? blank(p.name);
-        return [p.steamId, { ...known, name: p.name, [field]: known[field] + minutes }];
-      }),
-    ),
-  };
-};
-
-// Credits a finished match to everyone who played in it, on the day it ended.
-export const recordMatchPlayers = (day: PlayerDay, match: MatchState): PlayerDay => ({
+const update = (day: PlayerDay, entries: [steamId: string, name: string, change: (t: PlayerTotals) => Partial<PlayerTotals>][]) => ({
   ...day,
   ...Object.fromEntries(
-    Object.entries(match.players).map(([steamId, p]) => {
-      const known = day[steamId] ?? blank(p.name);
-      return [
-        steamId,
-        { ...known, name: p.name, matches: known.matches + 1, kills: known.kills + p.kills, deaths: known.deaths + p.deaths },
-      ];
+    entries.map(([steamId, name, change]) => {
+      const known = day[steamId] ?? blank(name);
+      return [steamId, { ...known, name, ...change(known) }];
     }),
   ),
 });
+
+// Time online: seeding until the server first goes live, then live until it empties.
+export const recordActivity = (day: PlayerDay, players: Player[], kind: 'seeding' | 'live', minutes: number): PlayerDay => {
+  const field = kind === 'seeding' ? 'seedingMinutes' : 'liveMinutes';
+  return update(
+    day,
+    players.map((p) => [p.steamId, p.name, (t) => ({ [field]: t[field] + minutes })]),
+  );
+};
+
+// Marks the day for everyone who seeded for more than `minMinutes` before the server went live. Marking twice is
+// harmless, so a retried check cannot count a seed twice.
+export const recordSeed = (day: PlayerDay, seeders: SeedCredit[], minMinutes: number): PlayerDay =>
+  update(
+    day,
+    seeders.filter((s) => s.minutes > minMinutes).map((s) => [s.steamId, s.name, () => ({ seedDays: 1 })]),
+  );
+
+// Credits a finished match to everyone who played in it, on the day it ended.
+export const recordMatchPlayers = (day: PlayerDay, match: MatchState): PlayerDay =>
+  update(
+    day,
+    Object.entries(match.players).map(([steamId, p]) => [
+      steamId,
+      p.name,
+      (t) => ({ matches: t.matches + 1, kills: t.kills + p.kills, deaths: t.deaths + p.deaths }),
+    ]),
+  );
 
 export const matchRecord = (match: MatchState, endedAt: number): MatchRecord => {
   const summary = summarise(match);
@@ -121,6 +144,7 @@ export const totals = (days: PlayerDay[]): RankedPlayer[] => {
         name: t.name,
         seedingMinutes: known.seedingMinutes + t.seedingMinutes,
         liveMinutes: known.liveMinutes + t.liveMinutes,
+        seedDays: known.seedDays + t.seedDays,
         matches: known.matches + t.matches,
         kills: known.kills + t.kills,
         deaths: known.deaths + t.deaths,
@@ -130,8 +154,42 @@ export const totals = (days: PlayerDay[]): RankedPlayer[] => {
   return [...sum].map(([steamId, t]) => ({ steamId, ...t }));
 };
 
+// Seed days first, as they earn VIP, then minutes.
 export const rankSeeders = (days: PlayerDay[], count: number): RankedPlayer[] =>
   totals(days)
     .filter((p) => p.seedingMinutes > 0)
-    .sort((a, b) => b.seedingMinutes - a.seedingMinutes)
+    .sort((a, b) => b.seedDays - a.seedDays || b.seedingMinutes - a.seedingMinutes)
     .slice(0, count);
+
+export type Leaderboard = {
+  days: number;
+  kdMinMatches: number;
+  kills: PlayerTotals[];
+  kd: PlayerTotals[];
+  playtime: PlayerTotals[];
+  seeding: PlayerTotals[];
+};
+
+const KD_MIN_MATCHES = 3;
+
+const ratio = (p: PlayerTotals): number => p.kills / Math.max(p.deaths, 1);
+const played = (p: PlayerTotals): number => p.seedingMinutes + p.liveMinutes;
+
+// Public, so names only: Steam IDs are left out.
+export const leaderboard = (days: PlayerDay[], period: number, count: number): Leaderboard => {
+  const players = totals(days);
+  const top = (keep: (p: RankedPlayer) => boolean, order: (a: RankedPlayer, b: RankedPlayer) => number): PlayerTotals[] =>
+    players
+      .filter(keep)
+      .sort(order)
+      .slice(0, count)
+      .map(({ steamId: _steamId, ...entry }) => entry);
+  return {
+    days: period,
+    kdMinMatches: KD_MIN_MATCHES,
+    kills: top((p) => p.kills > 0, (a, b) => b.kills - a.kills || a.deaths - b.deaths),
+    kd: top((p) => p.kills > 0 && p.matches >= KD_MIN_MATCHES, (a, b) => ratio(b) - ratio(a) || b.kills - a.kills),
+    playtime: top((p) => played(p) > 0, (a, b) => played(b) - played(a)),
+    seeding: top((p) => p.seedingMinutes > 0, (a, b) => b.seedDays - a.seedDays || b.seedingMinutes - a.seedingMinutes),
+  };
+};
