@@ -226,6 +226,30 @@ describe('runStaffCommand', () => {
     ]);
   });
 
+  it('/setnextmap plays the map as the rotation does, changing only what staff asked', async () => {
+    const { run, sent } = setup({
+      'GET /v1/rotation': [
+        200,
+        { enabled: true, mode: 'ordered', entries: [{ map: 'Europe', status: 'next', experiences: ['Europe_KOTH_01'], lighting: 'DayClear' }] },
+      ],
+      'GET /v1/catalog/experiences': [200, { experiences: [{ id: 'Europe_KOTH_01', displayName: 'King of the Hill' }] }],
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }, { id: 'DayEarlyFog', displayName: 'Early fog' }] }],
+      'GET /v1/catalog/maps/Europe/experiences': [200, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'] }],
+      'GET /v1/catalog/maps/Europe/alternators': [200, { alternators: [] }],
+    });
+
+    await expect(run('setnextmap', { map: 'Europe', infantry_only: 'true', lighting: 'early fog' })).resolves.toEqual({
+      content:
+        '🗺️ Next map: **Ozeti** · King of the Hill · Infantry only · Early fog. The server goes there when this match ends; the rotation is unchanged.',
+    });
+    await expect(run('setnextmap', { map: 'Europe', mode: 'Capture' })).resolves.toEqual({
+      content: 'No game mode "Capture" on this map. Pick one from the list.',
+    });
+    expect(sent.filter((s) => s.startsWith('POST'))).toEqual([
+      `POST /v1/match/map ${JSON.stringify({ map: 'Europe', experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayEarlyFog' })}`,
+    ]);
+  });
+
   it('/vip add and /vip remove go through the records', async () => {
     const { run, records } = setup();
 
@@ -337,6 +361,26 @@ describe('suggestStaff', () => {
       { name: 'Valkyra · 1 player · 40 points', value: 'Valkyra' },
       { name: 'Kharr · 2 players · 35 points', value: 'Kharr' },
     ]);
+  });
+
+  it('offers the modes and zone layouts of the map picked, and every lighting', async () => {
+    const { suggest } = setup({
+      'GET /v1/catalog/experiences': [200, { experiences: [{ id: 'Europe_KOTH_01', displayName: 'King of the Hill' }] }],
+      'GET /v1/catalog/maps/Europe/experiences': [200, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'] }],
+      'GET /v1/catalog/maps/Europe/alternators': [200, { alternators: [{ tag: 'ZoneAlternator.Ozeti.Default.Line', displayName: 'Line' }] }],
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }] }],
+    });
+
+    await expect(suggest({ name: 'setnextmap', options: { map: 'Europe', mode: '' }, focused: 'mode' })).resolves.toEqual([
+      { name: 'King of the Hill', value: 'Europe_KOTH_01' },
+    ]);
+    await expect(suggest({ name: 'changemap', options: { map: 'Europe', zones: 'li' }, focused: 'zones' })).resolves.toEqual([
+      { name: 'Line', value: 'ZoneAlternator.Ozeti.Default.Line' },
+    ]);
+    await expect(suggest({ name: 'setnextmap', options: { lighting: '' }, focused: 'lighting' })).resolves.toEqual([
+      { name: 'Day, clear', value: 'DayClear' },
+    ]);
+    await expect(suggest({ name: 'setnextmap', options: { mode: '' }, focused: 'mode' })).resolves.toEqual([]);
   });
 
   it('offers maps by the names players know', async () => {

@@ -1,15 +1,21 @@
 import type { Config } from './config.ts';
 import { buildPlayerEmbed, mapName, playerName } from './discord.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
+import { modesFor, planSetup } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
 import type { PlayerTotals } from './players.ts';
 import {
   endMatch,
   fetchBans,
   fetchConfig,
+  fetchExperiences,
+  fetchLightings,
+  fetchMapExperiences,
   fetchMaps,
   fetchPlayers,
+  fetchRotation,
   fetchStatus,
+  fetchZones,
   kickPlayer,
   messagePlayer,
   queueMap,
@@ -185,12 +191,28 @@ export const suggestStaff =
             return { name: fit(`${f.name} · ${count} player${count === 1 ? '' : 's'} · ${f.score} points`), value: f.name };
           });
       }
+      const lower = typed.trim().toLowerCase();
+      const named = (items: { id: string; name: string }[]): Choice[] =>
+        items
+          .filter((i) => i.id.toLowerCase().includes(lower) || i.name.toLowerCase().includes(lower))
+          .map((i) => ({ name: fit(i.name), value: i.id }));
       if (focused === 'map') {
-        const lower = typed.trim().toLowerCase();
         return (await fetchMaps(rconUrl, rconPassword, http))
           .filter((m) => [m.id, m.name, mapLabel(m)].some((label) => label.toLowerCase().includes(lower)))
           .map((m) => ({ name: fit(mapLabel(m)), value: m.id }));
       }
+      if (focused === 'lighting') return named(await fetchLightings(rconUrl, rconPassword, http));
+      // Modes and zone layouts depend on the map, so they are listed once one is picked.
+      const map = options['map'] ?? '';
+      if (!/^[A-Za-z0-9_]+$/.test(map)) return [];
+      if (focused === 'mode') {
+        const [mapExperiences, experiences] = await Promise.all([
+          fetchMapExperiences(rconUrl, rconPassword, map, http),
+          optional(fetchExperiences(rconUrl, rconPassword, http)),
+        ]);
+        return named(modesFor({ mapExperiences, experiences }));
+      }
+      if (focused === 'zones') return named(await fetchZones(rconUrl, rconPassword, map, http));
       return [];
     })();
     return choices.slice(0, MAX_CHOICES);
@@ -314,15 +336,29 @@ export const runStaffCommand =
     }
 
     if (name === 'setnextmap' || name === 'changemap') {
-      const map = findMap(options['map'], await fetchMaps(rconUrl, rconPassword, http));
+      const [maps, rotation, experiences, lightings] = await Promise.all([
+        fetchMaps(rconUrl, rconPassword, http),
+        optional(fetchRotation(rconUrl, rconPassword, http)),
+        optional(fetchExperiences(rconUrl, rconPassword, http)),
+        optional(fetchLightings(rconUrl, rconPassword, http)),
+      ]);
+      const map = findMap(options['map'], maps);
       if (map === null) return { content: 'Pick a map from the list.' };
-      log.info(`/${name} by ${staff}: ${map.id}`);
-      await queueMap(rconUrl, rconPassword, map.id, http);
+      const [mapExperiences, zones] = await Promise.all([
+        optional(fetchMapExperiences(rconUrl, rconPassword, map.id, http)),
+        optional(fetchZones(rconUrl, rconPassword, map.id, http)),
+      ]);
+      const planned = planSetup(map.id, options, { rotation, mapExperiences, experiences, lightings, zones });
+      if ('problem' in planned) return { content: planned.problem };
+      const { setup, labels } = planned;
+      log.info(`/${name} by ${staff}: ${map.id} ${JSON.stringify(setup)}`);
+      await queueMap(rconUrl, rconPassword, map.id, http, setup);
+      const described = [`**${mapLabel(map)}**`, ...labels].join(' · ');
       if (name === 'setnextmap') {
-        return { content: `🗺️ Next map: **${mapLabel(map)}**. The server goes there when this match ends; the rotation is unchanged.` };
+        return { content: `🗺️ Next map: ${described}. The server goes there when this match ends; the rotation is unchanged.` };
       }
       await endMatch(rconUrl, rconPassword, http);
-      return { content: `🗺️ Ended the match. The server moves to **${mapLabel(map)}** after the end screen.` };
+      return { content: `🗺️ Ended the match. The server moves to ${described} after the end screen.` };
     }
 
     if (name === 'vip') {

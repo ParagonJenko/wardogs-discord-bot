@@ -94,8 +94,8 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/switchteam`   | Staff only           | Moves a player to another team (`team`, or the other one when there are two) and respawns them |
 | `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
 | `/unban`        | Staff only           | Lifts a ban                                                        |
-| `/setnextmap`   | Staff only           | Sets the map after this match, without changing the rotation       |
-| `/changemap`    | Staff only           | Ends the current match now and changes to the map                  |
+| `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
+| `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
 | `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days                      |
 | `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days |
 
@@ -182,7 +182,20 @@ works when it matches exactly one player.
 - **`/unban`** lists the banned players. It works on any ban, however it was made.
 - **`/setnextmap`** sets the map the server goes to when this match ends (`POST /v1/match/map`). The rotation is not
   changed. **`/changemap`** does the same, then ends the current match straight away (`POST /v1/match/end`); the
-  server shows the end screen, then changes map.
+  server shows the end screen, then changes map. Both take how the map is played, all optional:
+
+  | Option          | What                                                                      |
+  | --------------- | ------------------------------------------------------------------------- |
+  | `mode`          | The game mode, from the modes that map has                                |
+  | `infantry_only` | Infantry only: on or off                                                  |
+  | `hardcore`      | Hardcore: on or off                                                       |
+  | `lighting`      | Time of day and weather                                                   |
+  | `zones`         | The control-zone layout, from the layouts that map has                    |
+
+  Anything left out is what the rotation plays that map with (for a map not in the rotation: its first mode, and the
+  server's own lighting and zones). So `/setnextmap map:Ozeti infantry_only:True` is the rotation's Ozeti, infantry
+  only. `mode` and `zones` list the choices once a map is picked. The reply says the setup, such as
+  "Next map: **Ozeti** · King of the Hill · Infantry only · Day, clear".
 - **`/vip add`** puts a player on the reserved list for the number of days given. It ends like automatic VIP: when
   the time is up, unless they have earned it by seeding by then. For a player who already has VIP from the bot, it
   sets the end to the later of the two. A reserved slot an admin added by hand in `ServerSettings.ini` is left as it
