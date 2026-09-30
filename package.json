@@ -11,7 +11,8 @@
     "start": "node --env-file-if-exists=.env src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "register": "node --env-file-if-exists=.env scripts/register-commands.ts"
   },
   "dependencies": {
     "zod": "^4.6.5"
