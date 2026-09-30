@@ -23,7 +23,7 @@ const NO_PINGS = { parse: [], roles: [] };
 // Map ids as RCON reports them, and the names players see in game.
 const MAP_NAMES: Record<string, string> = { Kavkazi: 'Bakurani', Europe: 'Ozeti', NorthAmerica: 'Zestafona' };
 
-const mapName = (id: string): string => MAP_NAMES[id] ?? id;
+export const mapName = (id: string): string => MAP_NAMES[id] ?? id;
 
 // Player names are free text; escape Discord markdown so a name cannot restyle or break the message.
 const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>#[\]()-]/g, '\\$&');

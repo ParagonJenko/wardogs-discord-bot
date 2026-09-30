@@ -48,14 +48,17 @@ const statsWentBackwards = (match: MatchState, players: Player[]): boolean =>
     return before !== undefined && (p.kills < before.kills || p.deaths < before.deaths);
   });
 
+export const topPlayers = (players: Record<string, PlayerStats>, count = TOP_PLAYERS): PlayerStats[] =>
+  Object.values(players)
+    .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
+    .slice(0, count);
+
 const summarise = (match: MatchState): MatchSummary => ({
   map: match.key.split('#')[0] ?? '',
   durationMs: match.lastSeenAt - (match.liveAt ?? match.lastSeenAt),
   peakPlayers: match.peakPlayers,
   factionScores: match.factionScores,
-  top: Object.values(match.players)
-    .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
-    .slice(0, TOP_PLAYERS),
+  top: topPlayers(match.players),
 });
 
 const freshMatch = (status: ServerStatus, now: number): MatchState => ({
