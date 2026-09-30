@@ -3,9 +3,35 @@ import type { Embed } from './discord.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
-const STATUS_COMMAND = 'serverstatus';
+const COMMAND_NAMES = ['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast'] as const;
+export type CommandName = (typeof COMMAND_NAMES)[number];
 
-export const COMMANDS = [{ name: STATUS_COMMAND, description: 'Show the WARDOGS server status', type: 1 }];
+const isCommandName = (name: string | undefined): name is CommandName =>
+  COMMAND_NAMES.some((command) => command === name);
+
+// Discord permission bit for "Manage Server".
+const MANAGE_GUILD = 1n << 5n;
+
+// Admin commands change things in game, so they are hidden from, and refused to, anyone without Manage Server.
+// Their replies are only shown to the person who ran them.
+const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast'];
+
+export const COMMANDS = [
+  { name: 'serverstatus', description: 'Show the WARDOGS server status', type: 1 },
+  { name: 'players', description: 'Who is on the server, with kills and deaths', type: 1 },
+  { name: 'lastmatch', description: 'Summary of the last finished match', type: 1 },
+  { name: 'rotation', description: 'The current map and what is coming next', type: 1 },
+  {
+    name: 'broadcast',
+    description: 'Send a message to everyone in game (Manage Server only)',
+    type: 1,
+    default_member_permissions: String(MANAGE_GUILD),
+    contexts: [0],
+    options: [
+      { type: 3, name: 'message', description: 'What to show in game (up to 200 characters)', required: true, max_length: 200 },
+    ],
+  },
+] satisfies ({ name: CommandName } & Record<string, unknown>)[];
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
@@ -18,14 +44,25 @@ const InteractionSchema = z.object({
   type: z.number(),
   application_id: z.string(),
   token: z.string().optional(),
-  data: z.object({ name: z.string() }).optional(),
+  data: z
+    .object({
+      name: z.string(),
+      options: z.array(z.object({ name: z.string(), value: z.unknown() })).optional(),
+    })
+    .optional(),
+  member: z
+    .object({ permissions: z.string().optional(), user: z.object({ id: z.string() }).optional() })
+    .optional(),
 });
 
-type Reply = { content?: string; embeds?: Embed[]; allowed_mentions: { parse: never[] } };
+export type CommandRequest = { name: CommandName; options: Record<string, string>; userId: string | null };
+export type CommandReply = { content?: string; embeds?: Embed[] };
+
+type Reply = CommandReply & { allowed_mentions: { parse: never[] } };
 
 type InteractionDeps = {
   publicKey: string;
-  getStatusEmbed: () => Promise<Embed>;
+  runCommand: (request: CommandRequest) => Promise<CommandReply>;
   editReply: (applicationId: string, token: string, reply: Reply) => Promise<void>;
   log: { error: (message: string) => void };
   now: () => number;
@@ -52,6 +89,16 @@ const verifySignature = async (publicKey: string, signature: string, timestamp: 
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+const hasManageGuild = (permissions: string | undefined): boolean => {
+  try {
+    return permissions !== undefined && (BigInt(permissions) & MANAGE_GUILD) === MANAGE_GUILD;
+  } catch {
+    return false;
+  }
+};
+
+const privateMessage = (content: string) => ({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+
 export const handleInteraction = async (
   body: string,
   signature: string | null,
@@ -71,23 +118,39 @@ export const handleInteraction = async (
 
   if (interaction.type === PING) return { status: 200, body: { type: PONG } };
 
-  if (interaction.type === APPLICATION_COMMAND && interaction.data?.name === STATUS_COMMAND && interaction.token) {
-    const token = interaction.token;
-    // Discord allows 3 seconds for the first response and RCON can be slower, so defer and edit later.
-    const followUp = async (): Promise<void> => {
-      const reply: Reply = await deps.getStatusEmbed().then(
-        (embed) => ({ embeds: [embed], allowed_mentions: { parse: [] } }),
-        (error: unknown) => {
-          deps.log.error(`/serverstatus failed: ${errorText(error)}`);
-          return { content: "Couldn't reach the game server right now. Try again in a minute.", allowed_mentions: { parse: [] } };
-        },
-      );
-      await deps.editReply(interaction.application_id, token, reply);
-    };
-    return { status: 200, body: { type: DEFERRED_CHANNEL_MESSAGE }, followUp };
+  const name = interaction.data?.name;
+  if (interaction.type !== APPLICATION_COMMAND || !isCommandName(name) || !interaction.token) {
+    return { status: 200, body: privateMessage('Unknown command.') };
   }
 
-  return { status: 200, body: { type: CHANNEL_MESSAGE, data: { content: 'Unknown command.', flags: EPHEMERAL } } };
+  const admin = ADMIN_COMMANDS.includes(name);
+  // Discord hides admin commands from other members, but server owners can override that, so check again.
+  if (admin && !hasManageGuild(interaction.member?.permissions)) {
+    return { status: 200, body: privateMessage('Only members with the Manage Server permission can use this.') };
+  }
+
+  const token = interaction.token;
+  const request: CommandRequest = {
+    name,
+    options: Object.fromEntries((interaction.data?.options ?? []).map((o) => [o.name, String(o.value)])),
+    userId: interaction.member?.user?.id ?? null,
+  };
+  // Discord allows 3 seconds for the first response and RCON can be slower, so defer and edit later.
+  const followUp = async (): Promise<void> => {
+    const reply: Reply = await deps.runCommand(request).then(
+      (result) => ({ ...result, allowed_mentions: { parse: [] } }),
+      (error: unknown) => {
+        deps.log.error(`/${name} failed: ${errorText(error)}`);
+        return {
+          content: "Couldn't get that from the game server right now. Try again in a minute.",
+          allowed_mentions: { parse: [] },
+        };
+      },
+    );
+    await deps.editReply(interaction.application_id, token, reply);
+  };
+  const deferred = admin ? { type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } } : { type: DEFERRED_CHANNEL_MESSAGE };
+  return { status: 200, body: deferred, followUp };
 };
 
 // The edit races the deferred "thinking…" response: if RCON answers (or fails) quickly, Discord may not have
@@ -118,6 +181,6 @@ export const editOriginalReply =
       attempt(),
     );
     if (!response.ok) {
-      throw new Error(`Discord rejected the /serverstatus reply: ${response.status} ${await response.text()}`);
+      throw new Error(`Discord rejected the command reply: ${response.status} ${await response.text()}`);
     }
   };

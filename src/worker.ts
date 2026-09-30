@@ -1,12 +1,13 @@
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config.ts';
-import { buildStatusEmbed, postWebhook } from './discord.ts';
+import { runCommand } from './commands.ts';
+import { postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import { createPoller, parseState } from './poller.ts';
-import { fetchSnapshot, fetchStatus } from './rcon.ts';
-import { socketGet } from './socket-http.ts';
+import { fetchSnapshot } from './rcon.ts';
+import { socketHttp } from './socket-http.ts';
 import {
   discordDue,
   parseStats,
@@ -42,7 +43,7 @@ export class Watcher extends DurableObject<Env> {
     const minutesPerCheck = config.pollIntervalMs / 60_000;
     const poll = createPoller({
       config,
-      fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, socketGet(connect)),
+      fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, socketHttp(connect)),
       send: (message) => postWebhook(config.webhookUrl, message),
       now: Date.now,
       log: console,
@@ -135,19 +136,19 @@ export default {
       request.headers.get('x-signature-timestamp'),
       {
         publicKey,
-        // Config is read only when /serverstatus runs, so Discord's endpoint check (a signed PING) passes even
-        // before the RCON secrets are set.
-        getStatusEmbed: async () => {
-          const config = loadConfig(vars);
-          return buildStatusEmbed(await fetchStatus(config.rconUrl, config.rconPassword, socketGet(connect)), config.rules);
-        },
+        runCommand: runCommand({
+          config: () => loadConfig(vars),
+          http: socketHttp(connect),
+          lastMatch: async () => (await env.WATCHER.get(env.WATCHER.idFromName('watcher')).stats()).matches[0] ?? null,
+          log: console,
+        }),
         editReply: editOriginalReply(),
         log: console,
         now: Date.now,
       },
     );
     if (result.followUp) {
-      ctx.waitUntil(result.followUp().catch((error: unknown) => console.error(`/serverstatus reply failed: ${String(error)}`)));
+      ctx.waitUntil(result.followUp().catch((error: unknown) => console.error(`Command reply failed: ${String(error)}`)));
     }
     return Response.json(result.body, { status: result.status });
   },

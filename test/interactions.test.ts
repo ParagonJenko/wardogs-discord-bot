@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { editOriginalReply, handleInteraction } from '../src/interactions.ts';
+import { COMMANDS, editOriginalReply, handleInteraction, type CommandRequest } from '../src/interactions.ts';
 
 const encoder = new TextEncoder();
 const hex = (bytes: ArrayBuffer): string => Buffer.from(bytes).toString('hex');
@@ -26,7 +26,7 @@ const embed = { title: 'UK Wardogs #1', description: '🟢 **Live** · **24/98**
 
 const deps = () => ({
   publicKey,
-  getStatusEmbed: vi.fn(async () => embed),
+  runCommand: vi.fn(async (_request: CommandRequest) => ({ embeds: [embed] })),
   editReply: vi.fn(async () => undefined),
   log: { error: vi.fn() },
   now: () => NOW_MS,
@@ -56,7 +56,7 @@ describe('handleInteraction', () => {
 
     expect((await handleInteraction(old.body, old.signature, old.timestamp, d)).status).toBe(401);
     expect((await handleInteraction(ahead.body, ahead.signature, ahead.timestamp, d)).status).toBe(401);
-    expect(d.getStatusEmbed).not.toHaveBeenCalled();
+    expect(d.runCommand).not.toHaveBeenCalled();
   });
 
   it('answers Discord\'s ping so the endpoint can be saved', async () => {
@@ -82,15 +82,59 @@ describe('handleInteraction', () => {
   it('replies with a short message, and logs the reason, when the server cannot be reached', async () => {
     const { body, signature, timestamp } = await signed(statusCommand);
     const d = deps();
-    d.getStatusEmbed.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
 
     await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
 
     expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
-      content: "Couldn't reach the game server right now. Try again in a minute.",
+      content: "Couldn't get that from the game server right now. Try again in a minute.",
       allowed_mentions: { parse: [] },
     });
     expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('timed out'));
+  });
+
+  it.each(['players', 'lastmatch', 'rotation'])('defers /%s publicly and runs it', async (name) => {
+    const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name } });
+    const d = deps();
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+    await result.followUp?.();
+
+    expect(result.body).toEqual({ type: 5 });
+    expect(d.runCommand).toHaveBeenCalledWith({ name, options: {}, userId: null });
+  });
+
+  const broadcast = (permissions: string | undefined) => ({
+    ...statusCommand,
+    data: { name: 'broadcast', options: [{ name: 'message', type: 3, value: 'Seeding now!' }] },
+    member: { user: { id: '42' }, ...(permissions === undefined ? {} : { permissions }) },
+  });
+
+  it('runs /broadcast for someone with Manage Server, replying privately', async () => {
+    const { body, signature, timestamp } = await signed(broadcast(String(1 << 5)));
+    const d = deps();
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+    await result.followUp?.();
+
+    expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
+    expect(d.runCommand).toHaveBeenCalledWith({ name: 'broadcast', options: { message: 'Seeding now!' }, userId: '42' });
+  });
+
+  it('refuses /broadcast from someone without Manage Server, even if Discord let the command through', async () => {
+    const d = deps();
+    const results = await Promise.all(
+      [String(1 << 11), undefined].map(async (permissions) => {
+        const { body, signature, timestamp } = await signed(broadcast(permissions));
+        return handleInteraction(body, signature, timestamp, d);
+      }),
+    );
+
+    results.forEach((result) => {
+      expect(result.body).toMatchObject({ type: 4, data: { flags: 64 } });
+      expect(result.followUp).toBeUndefined();
+    });
+    expect(d.runCommand).not.toHaveBeenCalled();
   });
 
   it('answers an unknown command privately', async () => {
@@ -141,5 +185,15 @@ describe('editOriginalReply', () => {
 
     await expect(editOriginalReply(fetchFn, [0, 0, 0])('111', 'tok', {})).rejects.toThrow(/400 .*Invalid Form Body/);
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('COMMANDS', () => {
+  it('registers every command, with /broadcast limited to Manage Server', () => {
+    expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast']);
+    expect(COMMANDS.find((c) => c.name === 'broadcast')).toMatchObject({
+      default_member_permissions: '32',
+      options: [{ name: 'message', type: 3, required: true, max_length: 200 }],
+    });
   });
 });
