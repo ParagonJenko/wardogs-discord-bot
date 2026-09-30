@@ -3,9 +3,20 @@ import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config.ts';
 import { buildStatusEmbed, postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
+import { fetchInviteCounts } from './invite.ts';
 import { createPoller, parseState } from './poller.ts';
 import { fetchSnapshot, fetchStatus } from './rcon.ts';
 import { socketGet } from './socket-http.ts';
+import {
+  discordDue,
+  parseStats,
+  publicStats,
+  recordDiscord,
+  recordMatch,
+  recordObservation,
+  type PublicStats,
+  type SiteStats,
+} from './stats.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -19,10 +30,16 @@ const stringVars = (env: Env): Record<string, string> =>
 
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 export class Watcher extends DurableObject<Env> {
+  private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {
+    const storage = this.ctx.storage;
+    await storage.put('stats', change(parseStats(await storage.get('stats'))));
+  }
+
   async check(): Promise<void> {
     // The cron fires every minute whatever POLL_INTERVAL_SECONDS says, and seeding minutes are counted per check.
     const config = { ...loadConfig(stringVars(this.env)), pollIntervalMs: 60_000 };
     const storage = this.ctx.storage;
+    const minutesPerCheck = config.pollIntervalMs / 60_000;
     const poll = createPoller({
       config,
       fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, socketGet(connect)),
@@ -33,18 +50,80 @@ export class Watcher extends DurableObject<Env> {
         load: async () => parseState(await storage.get('state')),
         save: (state) => storage.put('state', state),
       },
+      stats: {
+        check: (observation) => this.updateStats((stats) => recordObservation(stats, observation, minutesPerCheck)),
+        matchEnded: (summary, at) => this.updateStats((stats) => recordMatch(stats, summary, at)),
+      },
     });
     await poll();
+
+    const { inviteCode } = config;
+    if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
+      try {
+        const counts = await fetchInviteCounts(inviteCode, Date.now());
+        await this.updateStats((stats) => recordDiscord(stats, counts));
+      } catch (error) {
+        console.error(`Discord member count failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  async stats(): Promise<PublicStats> {
+    const config = loadConfig(stringVars(this.env));
+    return publicStats(parseStats(await this.ctx.storage.get('stats')), config.rules, Date.now());
   }
 }
+
+// The stats only change once a minute. Each Worker instance keeps the last answer for a short while so a busy
+// page does not wake the Durable Object on every request. Requests that arrive while a refresh is in flight wait
+// for that one instead of starting their own.
+const STATS_CACHE_MS = 30_000;
+let cachedStats: { body: Promise<string>; at: number } | null = null;
+
+const serveStats = async (env: Env, ctx: ExecutionContext): Promise<Response> => {
+  const now = Date.now();
+  if (cachedStats === null || now - cachedStats.at >= STATS_CACHE_MS) {
+    const body = env.WATCHER.get(env.WATCHER.idFromName('watcher'))
+      .stats()
+      .then((stats) => JSON.stringify(stats));
+    const entry = { body, at: now };
+    cachedStats = entry;
+    // Other requests may be waiting on this refresh, so it must finish even if this request is cancelled.
+    // A failed refresh is dropped so the next request tries again.
+    ctx.waitUntil(
+      body.catch(() => {
+        if (cachedStats === entry) cachedStats = null;
+      }),
+    );
+  }
+  return new Response(await cachedStats.body, {
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      // Public, read-only numbers, so any site may show them.
+      'access-control-allow-origin': '*',
+      'cache-control': 'public, max-age=30',
+    },
+  });
+};
 
 export default {
   async scheduled(_controller, env) {
     await env.WATCHER.get(env.WATCHER.idFromName('watcher')).check();
   },
 
-  // Slash commands: Discord POSTs signed interactions to this Worker's URL.
+  // GET /api/stats feeds the community website. Slash commands: Discord POSTs signed interactions to this Worker's URL.
   async fetch(request, env, ctx) {
+    if (request.method === 'GET' && new URL(request.url).pathname === '/api/stats') {
+      try {
+        return await serveStats(env, ctx);
+      } catch (error) {
+        console.error(`/api/stats failed: ${error instanceof Error ? error.message : String(error)}`);
+        return Response.json(
+          { error: 'Stats are unavailable' },
+          { status: 503, headers: { 'access-control-allow-origin': '*' } },
+        );
+      }
+    }
     if (request.method !== 'POST') return new Response('Not found', { status: 404 });
     const vars = stringVars(env);
     const publicKey = vars['DISCORD_PUBLIC_KEY'];

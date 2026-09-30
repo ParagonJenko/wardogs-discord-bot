@@ -5,6 +5,14 @@ const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
 // Just the listener's address; the bot adds /v1/status itself.
 const rconUrl = z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'must look like http://203.0.113.10:7776');
 const count = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
+// An invite code, or a discord.gg / discord.com/invite link; only the code is kept.
+const invite = z
+  .string()
+  .regex(
+    /^(?:https?:\/\/)?(?:www\.)?(?:discord\.gg\/|discord(?:app)?\.com\/invite\/)?[\w-]+\/?$/,
+    'must be an invite link like https://discord.gg/abc123',
+  )
+  .transform((value) => value.replace(/\/$/, '').split('/').pop() ?? value);
 
 const EnvSchema = z
   .object({
@@ -14,6 +22,7 @@ const EnvSchema = z
       .string()
       .regex(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/, 'must be a Discord webhook URL'),
     DISCORD_ROLE_ID: numericId.optional(),
+    DISCORD_INVITE: invite.optional(),
     SEEDING_THRESHOLD: count(1),
     LIVE_THRESHOLD: count(20),
     LOW_POP_THRESHOLD: count(20),
@@ -34,6 +43,7 @@ export type Config = {
   rconPassword: string;
   webhookUrl: string;
   roleId: string | undefined;
+  inviteCode: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
 };
@@ -54,6 +64,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     rconPassword: e.RCON_PASSWORD,
     webhookUrl: e.DISCORD_WEBHOOK_URL,
     roleId: e.DISCORD_ROLE_ID,
+    inviteCode: e.DISCORD_INVITE,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,
     rules: {
       seeding: e.SEEDING_THRESHOLD,

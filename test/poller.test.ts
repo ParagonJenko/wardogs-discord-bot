@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
-import { createPoller, memoryStore, parseState, type BotState } from '../src/poller.ts';
+import { createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
+import type { Observation } from '../src/stats.ts';
+import type { MatchSummary } from '../src/tracking.ts';
 
 const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
   rconPassword: 'secret',
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   roleId: undefined,
+  inviteCode: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
 };
@@ -26,7 +29,7 @@ const snapshot = (players: Player[], map = 'Kavkazi'): Snapshot => ({
   players,
 });
 
-const setup = (snapshots: (Snapshot | Error)[], store = memoryStore()) => {
+const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: StatsSink) => {
   const queue = [...snapshots];
   const sent: DiscordMessage[] = [];
   const send = vi.fn(async (message: DiscordMessage) => {
@@ -45,6 +48,7 @@ const setup = (snapshots: (Snapshot | Error)[], store = memoryStore()) => {
     now: () => (clock += 60_000),
     log,
     store,
+    stats,
   });
   const run = async (times: number) => {
     for (let i = 0; i < times; i++) await tick();
@@ -205,6 +209,68 @@ describe('poller', () => {
     await tick();
 
     expect(titles(sent)).toEqual(['🔻 UK Wardogs #1 dropped below 20 players']);
+    await expect(store.load()).resolves.toMatchObject({ alerts: { phase: 'seeding' } });
+  });
+});
+
+describe('poller stats', () => {
+  const sink = () => ({
+    check: vi.fn(async (_observation: Observation) => {}),
+    matchEnded: vi.fn(async (_summary: MatchSummary, _at: number) => {}),
+  });
+
+  it('reports every check that reached the server', async () => {
+    const stats = sink();
+    const { run } = setup([snapshot([]), new Error('fetch failed'), snapshot(crowd(3))], memoryStore(), stats);
+
+    await run(3);
+
+    expect(stats.check.mock.calls.map(([o]) => [o.status.players, o.phase])).toEqual([
+      [0, 'empty'],
+      [3, 'seeding'],
+    ]);
+  });
+
+  it('records the check even when the Discord post fails, so the site still sees the server', async () => {
+    const stats = sink();
+    const { run, send } = setup([snapshot([]), snapshot(crowd(1)), snapshot(crowd(2))], memoryStore(), stats);
+    send.mockRejectedValue(new Error('Discord webhook failed: 404'));
+
+    await run(3);
+
+    expect(stats.check.mock.calls.map(([o]) => o.status.players)).toEqual([0, 1, 2]);
+  });
+
+  it('records a finished match once, even when the alert after it is retried', async () => {
+    const stats = sink();
+    // Seeding, then live, then a new map; the low-pop alert after the summary fails once and is retried.
+    const { run, send } = setup(
+      [snapshot(crowd(5)), snapshot(crowd(22)), snapshot(crowd(10), 'Europe'), snapshot(crowd(10), 'Europe')],
+      memoryStore(),
+      stats,
+    );
+    send
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+    await run(4);
+
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(stats.matchEnded).toHaveBeenCalledTimes(1);
+    expect(stats.matchEnded).toHaveBeenCalledWith(expect.objectContaining({ map: 'Kavkazi', peakPlayers: 22 }), 180_000);
+  });
+
+  it('still sends alerts and saves state when the stats update fails', async () => {
+    const stats = sink();
+    stats.check.mockRejectedValue(new Error('storage full'));
+    const { run, sent, log, store } = setup([snapshot([]), snapshot(crowd(1))], memoryStore(), stats);
+
+    await run(2);
+
+    expect(titles(sent)).toEqual(['🌱 UK Wardogs #1 is seeding']);
+    expect(log.error).toHaveBeenCalledWith('Stats update failed: storage full');
+    expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('Check failed'));
     await expect(store.load()).resolves.toMatchObject({ alerts: { phase: 'seeding' } });
   });
 });

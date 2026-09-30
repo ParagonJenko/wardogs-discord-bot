@@ -3,7 +3,15 @@ import { initialState, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
 import type { Snapshot } from './rcon.ts';
-import { observeMatch, tallySeeding, topSeeders, type MatchState, type SeedingTally } from './tracking.ts';
+import type { Observation } from './stats.ts';
+import {
+  observeMatch,
+  tallySeeding,
+  topSeeders,
+  type MatchState,
+  type MatchSummary,
+  type SeedingTally,
+} from './tracking.ts';
 
 type Logger = { info: (message: string) => void; error: (message: string) => void };
 
@@ -25,6 +33,15 @@ type PollerDeps = {
   now: () => number;
   log: Logger;
   store: StateStore;
+  stats?: StatsSink;
+};
+
+// Feeds the website's stats. `check` runs once for every check that reached the server, even if a Discord post
+// then fails, so the site never shows a reachable server as down. `matchEnded` runs once the summary is saved,
+// so a retried alert cannot record the same match twice.
+export type StatsSink = {
+  check: (observation: Observation) => Promise<void>;
+  matchEnded: (summary: MatchSummary, at: number) => Promise<void>;
 };
 
 const TOP_SEEDERS = 3;
@@ -76,7 +93,17 @@ export const memoryStore = (initial: BotState | null = null): StateStore => {
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
-export const createPoller = ({ config, fetchSnapshot, send, now, log, store }: PollerDeps) => {
+export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats }: PollerDeps) => {
+  // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
+  const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
+    if (stats === undefined) return;
+    try {
+      await record(stats);
+    } catch (error) {
+      log.error(`Stats update failed: ${errorText(error)}`);
+    }
+  };
+
   const check = async (): Promise<void> => {
     const { status, players } = await fetchSnapshot();
     const state = await store.load();
@@ -88,6 +115,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store }: P
       const seeding = alerts.phase === 'seeding' ? tallySeeding({}, players) : {};
       await store.save({ alerts, seeding, match });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
+      await report((sink) => sink.check({ at: time, status, phase: alerts.phase, match }));
       return;
     }
 
@@ -105,11 +133,14 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store }: P
           }))
         : [];
 
+    await report((sink) => sink.check({ at: time, status, phase: after, match }));
+
     if (finished !== null) {
       await send(buildMatchSummary(finished, status.name));
       // Save straight away so a failed alert below does not post the summary a second time.
       await store.save({ ...state, match });
       log.info(`Sent match summary for ${finished.map}`);
+      await report((sink) => sink.matchEnded(finished, time));
     }
     if (result.alert !== null) {
       await send(

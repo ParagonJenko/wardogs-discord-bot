@@ -17,6 +17,10 @@ It also posts:
 And it answers **`/status`** in Discord with the current population, state, map and score
 (Cloudflare only; see [Slash command](#slash-command-status)).
 
+On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
+population, daily peaks, the current and recent matches, and Discord member counts
+(see [Website stats](#website-stats)).
+
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
 
@@ -91,6 +95,36 @@ reason is in the Worker logs.
 
 The Node/Docker version does not support `/status`, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.
+
+## Website stats
+
+`GET <worker url>/api/stats` returns public JSON for a community website, such as
+[gaminginit](https://github.com/ParagonJenko/gaminginit). Any site may read it (CORS `*`). It contains:
+
+| Field          | What                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `server`       | Name, players, max players, map, phase (`empty`/`seeding`/`live`), score, `seenAt`     |
+| `history`      | `[time, players]` for every check in the last 24 hours                                 |
+| `days`         | Peak players and minutes live for each of the last 14 days (UTC)                       |
+| `currentMatch` | Map, start time, peak, score and the top 5 players by kills                            |
+| `matches`      | The last 10 match summaries, newest first                                              |
+| `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
+| `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed      |
+
+Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password.
+
+`server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
+it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
+
+For the Discord counts, set `DISCORD_INVITE` in the `vars` block of `wrangler.jsonc` to an invite link that
+does not expire (`https://discord.gg/abc123` or just `abc123`), then `npm run deploy`. Leave it empty to skip
+them.
+
+Every page view that loads the stats is a Worker request, and the free plan allows 100,000 a day,
+including the bot's own 1,440 cron runs. Each Worker instance reuses its last answer for 30 seconds, and the
+gaminginit site only polls once a minute while its tab is visible, which is plenty for a community site.
+
+The Node/Docker version does not serve `/api/stats`.
 
 ## Run with Node or Docker
 

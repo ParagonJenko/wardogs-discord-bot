@@ -14,6 +14,7 @@ describe('loadConfig', () => {
       rconPassword: 'secret',
       webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123',
       roleId: undefined,
+      inviteCode: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000 },
     });
@@ -40,6 +41,16 @@ describe('loadConfig', () => {
 
     expect(config.roleId).toBeUndefined();
     expect(config.rules.live).toBe(20);
+  });
+
+  it('keeps only the code from a Discord invite link', () => {
+    for (const link of ['https://discord.gg/wardogs-UK', 'discord.gg/wardogs-UK/', 'https://discord.com/invite/wardogs-UK', 'wardogs-UK']) {
+      expect(loadConfig({ ...required, DISCORD_INVITE: link }).inviteCode).toBe('wardogs-UK');
+    }
+  });
+
+  it('rejects a Discord invite that is not an invite link', () => {
+    expect(() => loadConfig({ ...required, DISCORD_INVITE: 'https://example.com/join' })).toThrow(/DISCORD_INVITE/);
   });
 
   it('rejects a missing RCON password', () => {

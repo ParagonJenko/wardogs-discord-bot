@@ -14,6 +14,8 @@
   // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README.
   "vars": {
     "DISCORD_ROLE_ID": "1554801355015594025",
+    // Optional: an invite link that never expires, for the member counts in /api/stats.
+    "DISCORD_INVITE": "",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",
