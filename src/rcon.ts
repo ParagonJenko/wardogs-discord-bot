@@ -35,7 +35,8 @@ export type ServerStatus = {
   factionScores: FactionScore[];
 };
 
-export type Player = { steamId: string; name: string; kills: number; deaths: number };
+// kills and deaths are null when a reading leaves them out, so a gap is never mistaken for a reset.
+export type Player = { steamId: string; name: string; kills: number | null; deaths: number | null };
 
 export type Snapshot = { status: ServerStatus; players: Player[] };
 
@@ -73,8 +74,8 @@ export const fetchPlayers = async (rconUrl: string, password: string, get: HttpG
   return players.map((player) => ({
     steamId: player.steamId,
     name: player.name,
-    kills: player.kills ?? 0,
-    deaths: player.deaths ?? 0,
+    kills: player.kills ?? null,
+    deaths: player.deaths ?? null,
   }));
 };
 

@@ -20,7 +20,8 @@ const stringVars = (env: Env): Record<string, string> =>
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 export class Watcher extends DurableObject<Env> {
   async check(): Promise<void> {
-    const config = loadConfig(stringVars(this.env));
+    // The cron fires every minute whatever POLL_INTERVAL_SECONDS says, and seeding minutes are counted per check.
+    const config = { ...loadConfig(stringVars(this.env)), pollIntervalMs: 60_000 };
     const storage = this.ctx.storage;
     const poll = createPoller({
       config,
@@ -60,6 +61,7 @@ export default {
           buildStatusEmbed(await fetchStatus(config.rconUrl, config.rconPassword, socketGet(connect)), config.rules),
         editReply: editOriginalReply(),
         log: console,
+        now: Date.now,
       },
     );
     if (result.followUp) {

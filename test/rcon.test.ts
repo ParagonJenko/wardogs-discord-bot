@@ -102,4 +102,12 @@ describe('fetchPlayers', () => {
     ]);
     expect(requests[0]?.url).toBe('http://203.0.113.10:7776/v1/players');
   });
+
+  it('reports a missing kill or death count as unknown rather than zero', async () => {
+    const { get } = respondWith(200, { players: [{ name: 'Ash', steamId: '1' }], count: 1 });
+
+    await expect(fetchPlayers('http://203.0.113.10:7776', 'secret', get)).resolves.toEqual([
+      { steamId: '1', name: 'Ash', kills: null, deaths: null },
+    ]);
+  });
 });

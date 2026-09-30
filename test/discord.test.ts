@@ -98,6 +98,14 @@ describe('buildMatchSummary', () => {
     ]);
   });
 
+  it('keeps the player list within Discord\'s 1024 character field limit for long names', () => {
+    const longNames = Array.from({ length: 5 }, (_, i) => ({ name: `${'_'.repeat(300)}${i}`, kills: 9, deaths: 9 }));
+    const [embed] = buildMatchSummary({ ...summary, top: longNames }, 'UK').embeds;
+
+    expect(embed?.fields?.[0]?.value.length).toBeLessThanOrEqual(1024);
+    expect(embed?.fields?.[0]?.value.split('\n')).toHaveLength(5);
+  });
+
   it('never pings anyone', () => {
     expect(buildMatchSummary(summary, 'UK Wardogs #1').allowed_mentions).toEqual({ parse: [], roles: [] });
   });

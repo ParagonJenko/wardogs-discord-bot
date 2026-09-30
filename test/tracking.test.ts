@@ -41,13 +41,14 @@ describe('seeding tally', () => {
 });
 
 // Runs a sequence of observations one minute apart and collects any finished-match summaries.
+// The bot is taken to have first seen the opening map while the server was still seeding (at time 0).
 const observe = (steps: { status: ServerStatus; players: Player[]; live?: boolean }[]) =>
   steps.reduce<{ match: MatchState | null; finished: unknown[] }>(
     (acc, s, i) => {
       const result = observeMatch(acc.match, s.status, s.players, s.live ?? true, (i + 1) * 60_000);
       return { match: result.match, finished: result.finished ? [...acc.finished, result.finished] : acc.finished };
     },
-    { match: null, finished: [] },
+    { match: steps[0] ? observeMatch(null, steps[0].status, [], false, 0).match : null, finished: [] },
   );
 
 describe('match tracking', () => {
@@ -131,6 +132,29 @@ describe('match tracking', () => {
   });
 
   it('does not summarise the match already running when the bot starts', () => {
-    expect(observeMatch(null, status(), [player('a', 3)], true, 0).finished).toBeNull();
+    const first = observeMatch(null, status(), [player('a', 3)], true, 0);
+    const second = observeMatch(first.match, status(), [player('a', 5)], true, 60_000);
+    const next = observeMatch(second.match, status({ map: 'Europe' }), [], true, 120_000);
+
+    expect(first.finished).toBeNull();
+    expect(next.finished).toBeNull();
+  });
+
+  it('does summarise a match the bot first saw while it was still seeding', () => {
+    const first = observeMatch(null, status(), [player('a')], false, 0);
+    const live = observeMatch(first.match, status(), [player('a', 2)], true, 60_000);
+
+    expect(observeMatch(live.match, status({ map: 'Europe' }), [], true, 120_000).finished).not.toBeNull();
+  });
+
+  it('keeps the last known kills when a reading leaves them out, without treating it as a restart', () => {
+    const unknown = { ...player('a'), kills: null, deaths: null };
+    const { finished } = observe([
+      { status: status(), players: [player('a', 6, 2)] },
+      { status: status(), players: [unknown] },
+      { status: status({ map: 'Europe' }), players: [] },
+    ]);
+
+    expect(finished).toEqual([expect.objectContaining({ top: [{ name: 'Pa', kills: 6, deaths: 2 }] })]);
   });
 });

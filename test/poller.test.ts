@@ -84,7 +84,25 @@ describe('poller', () => {
 
     await run(5);
 
-    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toMatch(/^1\. Pa \(4 min\)\n2\. Pb \(3 min\)\n3\. Px0 \(2 min\)$/);
+    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toBe('1. Pa (3 min)\n2. Pb (2 min)\n3. Px0 (1 min)');
+  });
+
+  it('does not credit players who only joined on the check that went live', async () => {
+    const a = player('a');
+    const { run, sent } = setup([snapshot([]), snapshot([a]), snapshot(crowd(20, [a]))]);
+
+    await run(3);
+
+    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toBe('1. Pa (1 min)');
+  });
+
+  it('counts players who were already seeding when the bot started', async () => {
+    const a = player('a');
+    const { run, sent } = setup([snapshot([a]), snapshot([a]), snapshot(crowd(20, [a]))]);
+
+    await run(3);
+
+    expect(sent[0]?.embeds[0]?.fields?.[0]?.value).toBe('1. Pa (2 min)');
   });
 
   it('starts the seeding count again after the server empties', async () => {
@@ -101,34 +119,48 @@ describe('poller', () => {
 
     await run(6);
 
-    expect(sent.at(-1)?.embeds[0]?.fields?.[0]?.value).toMatch(/^1\. Pb \(2 min\)/);
+    expect(sent.at(-1)?.embeds[0]?.fields?.[0]?.value).toBe('1. Pb (1 min)');
   });
 
   it('posts a match summary when the map changes after a live match', async () => {
     const { run, sent } = setup([
+      snapshot(crowd(5)),
       snapshot(crowd(22, [player('a', 3)])),
       snapshot(crowd(22, [player('a', 9)])),
       snapshot(crowd(22), 'Europe'),
     ]);
 
-    await run(3);
+    await run(4);
 
-    expect(titles(sent)).toEqual(['🏁 Match over on Bakurani']);
-    expect(sent[0]?.embeds[0]?.fields?.[0]?.value).toMatch(/^1\. Pa: 9 kills/);
+    expect(titles(sent)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over on Bakurani']);
+    expect(sent[1]?.embeds[0]?.fields?.[0]?.value).toMatch(/^1\. Pa: 9 kills/);
+  });
+
+  it('does not summarise the match that was already live when the bot started', async () => {
+    const { run, sent } = setup([snapshot(crowd(22, [player('a', 3)])), snapshot(crowd(22), 'Europe')]);
+
+    await run(2);
+
+    expect(sent).toEqual([]);
   });
 
   it('retries a failed alert without posting the match summary twice', async () => {
     const { run, send } = setup([
+      snapshot(crowd(5)),
       snapshot(crowd(22)),
       snapshot(crowd(10), 'Europe'),
       snapshot(crowd(10), 'Europe'),
       snapshot(crowd(10), 'Europe'),
     ]);
-    send.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+    send
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
 
-    await run(4);
+    await run(5);
 
     expect(send.mock.calls.map(([m]) => m.embeds[0]?.title)).toEqual([
+      '🟢 UK Wardogs #1 is live',
       '🏁 Match over on Bakurani',
       '🔻 UK Wardogs #1 dropped below 20 players',
       '🔻 UK Wardogs #1 dropped below 20 players',
