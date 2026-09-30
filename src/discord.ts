@@ -231,7 +231,9 @@ const headline = (scores: FactionScore[]): string | null => {
 // The embed takes the winning faction's colour.
 const winnerColour = (scores: FactionScore[]): number => {
   const [first, second] = byScore(scores);
-  return (first && second && first.score !== second.score && colourOf(first.colorHex)) || INFO_COLOR;
+  if (!first || !second || first.score === second.score) return INFO_COLOR;
+  // Black (#000000) is 0, so only a missing colour falls back.
+  return colourOf(first.colorHex) ?? INFO_COLOR;
 };
 
 export const buildMatchSummary = (summary: MatchSummary, serverName: string, siteUrl?: string): DiscordMessage => {
@@ -366,6 +368,7 @@ export const buildVipMessage = (
   vip: VipRule,
   siteUrl?: string,
 ): DiscordMessage => {
+  const linked = site(siteUrl);
   const week = vip.lengthDays === 7 ? 'week' : span(vip.lengthDays);
   const earned =
     added.length > 0
@@ -382,8 +385,8 @@ export const buildVipMessage = (
           ...(renewed.length > 0 ? [{ name: `Kept for another ${week}`, value: nameList(renewed.map((p) => p.name)) }] : []),
           { name: 'Earn one too', value: `${vipOffer(vip)}\n${vipRule(vip)}` },
         ],
-        ...site(siteUrl),
-        footer: { text: "Reserved slots start after the server's next restart." },
+        ...linked,
+        footer: { text: ["Reserved slots start after the server's next restart.", linked.footer?.text].filter(Boolean).join(' · ') },
       },
     ],
     allowed_mentions: NO_PINGS,

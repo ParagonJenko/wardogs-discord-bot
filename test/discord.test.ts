@@ -139,6 +139,15 @@ describe('buildMatchSummary', () => {
     ]);
   });
 
+  it('keeps a black winner colour', () => {
+    const black = [
+      { name: 'Night', score: 100, colorHex: '#000000' },
+      { name: 'Day', score: 50, colorHex: '#ffffff' },
+    ];
+
+    expect(embedOf(buildMatchSummary({ ...summary, factionScores: black }, 'UK'))?.color).toBe(0);
+  });
+
   it('lists every faction when there are three, and calls a draw a draw', () => {
     const three = [
       { name: 'Kharr', score: 100 },
@@ -380,9 +389,15 @@ describe('buildVipMessage', () => {
       color: 0xf1c40f,
       fields: [{ name: 'Earn one too', value: `${offer}\n${rule}` }],
       url: 'https://gaminginit.com',
-      footer: { text: "Reserved slots start after the server's next restart." },
+      footer: { text: "Reserved slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com" },
     });
     expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+
+  it('keeps the website in the footer next to the restart note', () => {
+    expect(embedOf(buildVipMessage([{ name: 'Ash' }], [], vip, 'https://gaminginit.com'))?.footer).toEqual({
+      text: "Reserved slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com",
+    });
   });
 
   it('lists several players, and who kept theirs for another week', () => {

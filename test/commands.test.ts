@@ -92,6 +92,23 @@ describe('runCommand', () => {
     expect(reply.embeds?.[0]?.title).toBe('🏁 Last match · Ozeti');
   });
 
+  it('/lastmatch links to the website when there is one, and still works when the settings do not load', async () => {
+    const match = { map: 'Ozeti', endedAt: 0, durationMs: 60_000, peakPlayers: 30, factionScores: [], top: [] };
+    const run = (settings: () => Config) =>
+      runCommand({ config: settings, http: rcon({}).http, lastMatch: async () => match, seeders: async () => [], removeMatch: async () => null, log: { info: vi.fn() } })({
+        name: 'lastmatch',
+        options: {},
+        userId: null,
+      });
+
+    expect((await run(() => ({ ...config, siteUrl: 'https://gaminginit.com' }))).embeds?.[0]?.url).toBe('https://gaminginit.com');
+    const unconfigured = await run(() => {
+      throw new Error('Invalid configuration');
+    });
+    expect(unconfigured.embeds?.[0]).toMatchObject({ title: '🏁 Last match · Ozeti' });
+    expect(unconfigured.embeds?.[0]?.url).toBeUndefined();
+  });
+
   it('/lastmatch says so when no match has finished yet', async () => {
     const { run } = setup();
 
