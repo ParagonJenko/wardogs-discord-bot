@@ -13,7 +13,7 @@
   "observability": { "enabled": true },
   // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README.
   "vars": {
-    "DISCORD_ROLE_ID": "",
+    "DISCORD_ROLE_ID": "1554801355015594025",
     // Optional: an invite link that never expires, for the member counts in /api/stats.
     "DISCORD_INVITE": "",
     "SEEDING_THRESHOLD": "1",
