@@ -297,10 +297,15 @@ describe('addVip and removeVip', () => {
     expect(shorter).toMatchObject({ outcome: 'extended', until: NOW + 6 * DAY });
   });
 
-  it('leaves a player an admin reserved by hand alone', async () => {
+  it('leaves a player an admin reserved by hand alone, but lifts a block from /vip remove', async () => {
     const rcon = server();
+    const blocked = { ...empty, revoked: { [ADMIN]: NOW + DAY } };
 
     expect(await addVip({ steamId: ADMIN, name: 'Admin', days: 7, now: NOW, state: empty, rcon })).toEqual({
+      state: empty,
+      outcome: 'already-reserved',
+    });
+    expect(await addVip({ steamId: ADMIN, name: 'Admin', days: 7, now: NOW, state: blocked, rcon })).toEqual({
       state: empty,
       outcome: 'already-reserved',
     });

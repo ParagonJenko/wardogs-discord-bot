@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { banReason } from '../src/moderation.ts';
 import {
   buildLastMatchEmbed,
   buildPlayerEmbed,
@@ -434,13 +435,21 @@ describe('buildPlayerEmbed', () => {
     expect(field(embed, 'Staff history')).toBe('Nothing through the bot yet.');
   });
 
-  it('shows a ban the bot made, and trusts the server when the ban was lifted by hand', () => {
-    const ban = { name: 'Ash', until: NOW + DAY, reason: 'Cheating', by: '42', at: NOW };
-    const banned = buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: { steamId: ID, reason: 'x', bannedBy: null } });
+  it('shows a ban the bot made, and trusts the server when the ban was lifted or replaced by hand', () => {
+    const ban = { name: 'Ash', until: NOW + DAY, reason: 'Cheating', serverReason: banReason('Cheating', NOW + DAY), by: '42', at: NOW };
+    const botBan = { steamId: ID, reason: banReason('Cheating', NOW + DAY), bannedBy: 'rcon' };
+    const banned = buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: botBan });
+    const bots = `🔨 Banned until ${t(NOW + DAY, 'f')} (${t(NOW + DAY, 'R')}) by <@42>: Cheating`;
 
-    expect(field(banned, 'Ban')).toBe(`🔨 Banned until ${t(NOW + DAY, 'f')} (${t(NOW + DAY, 'R')}) by <@42>: Cheating`);
+    expect(field(banned, 'Ban')).toBe(bots);
     expect(banned.color).toBe(0xe74c3c);
     expect(field(buildPlayerEmbed({ ...profile, record: { ...record, ban } }), 'Ban')).toBe('Not banned');
+    expect(
+      field(buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: { steamId: ID, reason: 'Abuse', bannedBy: 'console' } }), 'Ban'),
+    ).toBe('🔨 Banned on the server: Abuse');
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: undefined }), 'Ban')).toBe(
+      `${bots}\n(Couldn't check the server's ban list.)`,
+    );
     expect(field(buildPlayerEmbed({ ...profile, serverBan: { steamId: ID, reason: null, bannedBy: 'config' } }), 'Ban')).toBe(
       '🔨 Banned on the server',
     );

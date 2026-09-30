@@ -12,6 +12,7 @@ import {
   BAN_LENGTHS,
   banReason,
   expiredBans,
+  isBotBan,
   modLogKey,
   parseBanBook,
   parseModLog,
@@ -43,6 +44,7 @@ import {
   fetchConfig,
   fetchSnapshot,
   putConfig,
+  RconError,
   removeBan,
   sendBroadcast,
   validateConfig,
@@ -214,20 +216,33 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Lifts timed bans whose time is up. One that fails is tried again at the next check.
+  // Lifts timed bans whose time is up, if the ban on the server is still the bot's. One that fails is tried again at
+  // the next check.
   private async expireBans(config: Config): Promise<void> {
     const now = Date.now();
     const book = parseBanBook(await this.ctx.storage.get('bans'));
+    const due = expiredBans(book, now);
+    if (due.length === 0) return;
     const http = socketHttp(connect);
-    for (const steamId of expiredBans(book, now)) {
-      const name = book[steamId]?.name ?? steamId;
-      try {
+    try {
+      const onServer = await fetchBans(config.rconUrl, config.rconPassword, http);
+      for (const steamId of due) {
+        const ban = book[steamId];
+        if (ban === undefined) continue;
+        const current = onServer.find((b) => b.steamId === steamId);
+        const label = `${JSON.stringify(ban.name)} (${steamId})`;
+        if (current === undefined || !isBotBan(current.reason, ban)) {
+          // Lifted already, or lifted and banned again some other way: that ban is not the bot's to lift.
+          await this.record(steamId, null, { ban: null });
+          console.info(`Ban ended: ${label} ${current === undefined ? 'was already unbanned' : 'has a newer ban, left alone'}`);
+          continue;
+        }
         await removeBan(config.rconUrl, config.rconPassword, steamId, http);
-        await this.record(steamId, { action: 'unban', at: now, by: 'bot', name, reason: 'The ban ran out' }, { ban: null });
-        console.info(`Ban ended: ${JSON.stringify(name)} (${steamId})`);
-      } catch (error) {
-        console.error(`Lifting the ban on ${steamId} failed: ${errorText(error)}`);
+        await this.record(steamId, { action: 'unban', at: now, by: 'bot', name: ban.name, reason: 'The ban ran out' }, { ban: null });
+        console.info(`Ban ended: ${label}`);
       }
+    } catch (error) {
+      console.error(`Lifting ended bans failed: ${errorText(error)}`);
     }
   }
 
@@ -336,8 +351,8 @@ export class Watcher extends DurableObject<Env> {
     await this.record(steamId, entry);
   }
 
-  // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A ban the bot made can be
-  // changed by banning again; one made some other way is left alone.
+  // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A player who is already
+  // banned is left as they are, so no ban is ever lifted to change it: staff /unban first.
   async ban({ steamId, name, length, reason, by }: BanRequest): Promise<BanResult> {
     const option = BAN_LENGTHS.find((l) => l.value === length);
     if (option === undefined) throw new Error(`Unknown ban length: ${length}`);
@@ -345,14 +360,24 @@ export class Watcher extends DurableObject<Env> {
       const { config, http } = this.rcon();
       const at = Date.now();
       const until = option.ms === null ? null : at + option.ms;
-      const banned = (await fetchBans(config.rconUrl, config.rconPassword, http)).some((b) => b.steamId === steamId);
-      const ours = parseBanBook(await this.ctx.storage.get('bans'))[steamId] !== undefined;
-      if (banned && !ours) return { outcome: 'already-banned', until: null };
-      // Changing the bot's own ban replaces it, so the reason the server keeps says when the new one ends.
-      if (banned) await removeBan(config.rconUrl, config.rconPassword, steamId, http);
-      await addBan(config.rconUrl, config.rconPassword, steamId, banReason(reason, until), http);
-      await this.record(steamId, { action: 'ban', at, by, name, reason, detail: option.name }, { ban: { name, until, reason, by, at } });
-      return { outcome: banned ? 'updated' : 'banned', until };
+      const current = (await fetchBans(config.rconUrl, config.rconPassword, http)).find((b) => b.steamId === steamId);
+      if (current !== undefined) {
+        const ours = parseBanBook(await this.ctx.storage.get('bans'))[steamId];
+        const byBot = ours !== undefined && isBotBan(current.reason, ours);
+        return { outcome: 'already-banned', until: byBot ? ours.until : null, byBot };
+      }
+      // Remembered before the server is asked, so a ban that goes through but times out still ends on time. If the
+      // server refuses, it is forgotten again; the bot also forgets it at its end if the server never had it.
+      const ban: BanRecord = { name, until, reason, serverReason: banReason(reason, until), by, at };
+      await this.record(steamId, null, { ban });
+      try {
+        await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
+      } catch (error) {
+        if (error instanceof RconError) await this.record(steamId, null, { ban: null });
+        throw error;
+      }
+      await this.record(steamId, { action: 'ban', at, by, name, reason, detail: option.name });
+      return { outcome: 'banned', until, byBot: true };
     });
   }
 
@@ -371,7 +396,11 @@ export class Watcher extends DurableObject<Env> {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
       const change = await addVip({ steamId, name, days, now, state, rcon: this.vipRcon(this.rcon()) });
-      if (change.outcome === 'already-reserved') return { outcome: change.outcome };
+      if (change.outcome === 'already-reserved') {
+        // Nothing given, but any block from /vip remove is lifted.
+        await this.record(steamId, null, { vip: change.state });
+        return { outcome: change.outcome };
+      }
       const outcome = change.outcome === 'extended' ? 'extended' : 'added';
       await this.record(steamId, { action: 'vip-add', at: now, by, name, detail: `${days} day${days === 1 ? '' : 's'}` }, { vip: change.state });
       return { outcome, ...(change.until === undefined ? {} : { until: change.until }) };

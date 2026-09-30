@@ -209,16 +209,17 @@ export type VipChange = {
 };
 
 // Gives a player VIP for `days`, as staff asked. It ends like any other: when the time is up, unless they earned it.
+// It also lifts any block from /vip remove, even for a player who already has a reserved slot by hand.
 export const addVip = async (
   { steamId, name, days, now, state, rcon }: { steamId: string; name: string; days: number; now: number; state: VipState; rcon: VipRcon },
 ): Promise<VipChange> => {
   const config = await rcon.fetchConfig();
   const onList = reservedIds(config.text).includes(steamId);
   const current = state.granted[steamId];
-  if (onList && current === undefined) return { state, outcome: 'already-reserved' };
+  const { [steamId]: _unblocked, ...revoked } = state.revoked;
+  if (onList && current === undefined) return { state: { ...state, revoked }, outcome: 'already-reserved' };
   if (!onList) await writeReserved(rcon, config, [steamId], []);
   const expiresAt = Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
-  const { [steamId]: _unblocked, ...revoked } = state.revoked;
   return {
     state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: current?.grantedAt ?? now, expiresAt } } },
     outcome: onList ? 'extended' : 'added',

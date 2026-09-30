@@ -176,9 +176,9 @@ works when it matches exactly one player.
   respawn on the new side.
 - **`/ban`** needs a length and a reason. The server's own bans are permanent (they go into `ServerSettings.ini`), so
   for a timed ban the bot writes when it ends into the reason, remembers it, and lifts the ban itself at the first
-  check after it ends (within a minute), logging `Ban ended: …`. A player in game is kicked too. Banning a player
-  again changes a ban the bot made (its length and reason); a ban made some other way is left alone, so `/unban`
-  them first.
+  check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly
+  the one it wrote: if someone lifted it and banned the player again some other way, that ban stays. A player in
+  game is kicked too. A player who is already banned is left as they are; to change a ban, `/unban` them first.
 - **`/unban`** lists the banned players. It works on any ban, however it was made.
 - **`/setnextmap`** sets the map the server goes to when this match ends (`POST /v1/match/map`). The rotation is not
   changed. **`/changemap`** does the same, then ends the current match straight away (`POST /v1/match/end`); the

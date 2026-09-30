@@ -2,7 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
 import type { HttpClient } from '../src/rcon.ts';
-import { findPlayer, runStaffCommand, suggestStaff, type PlayerRecord, type StaffCommand, type StaffRecords } from '../src/staff.ts';
+import {
+  findPlayer,
+  runStaffCommand,
+  suggestStaff,
+  type BanResult,
+  type PlayerRecord,
+  type StaffCommand,
+  type StaffRecords,
+} from '../src/staff.ts';
 
 const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
@@ -67,7 +75,7 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   player: vi.fn(async () => emptyRecord),
   knownPlayers: vi.fn(async () => [{ steamId: OLD, name: 'Oldtimer' }]),
   log: vi.fn(async () => undefined),
-  ban: vi.fn(async () => ({ outcome: 'banned' as const, until: NOW + 86_400_000 })),
+  ban: vi.fn(async (): Promise<BanResult> => ({ outcome: 'banned', until: NOW + 86_400_000, byBot: true })),
   unban: vi.fn(async () => true),
   vipAdd: vi.fn(async () => ({ outcome: 'added' as const, until: NOW + 30 * 86_400_000 })),
   vipRemove: vi.fn(async () => ({ outcome: 'removed' as const })),
@@ -165,16 +173,21 @@ describe('runStaffCommand', () => {
     });
   });
 
-  it('/ban works on players who are not online, and leaves bans made outside the bot alone', async () => {
+  it('/ban works on players who are not online, and leaves a player who is already banned as they are', async () => {
     const { run, sent, records } = setup();
-    records.ban.mockResolvedValueOnce({ outcome: 'banned', until: null });
-    records.ban.mockResolvedValueOnce({ outcome: 'already-banned', until: null });
+    records.ban
+      .mockResolvedValueOnce({ outcome: 'banned', until: null, byBot: true })
+      .mockResolvedValueOnce({ outcome: 'already-banned', until: null, byBot: false })
+      .mockResolvedValueOnce({ outcome: 'already-banned', until: NOW + 3_600_000, byBot: true });
 
     await expect(run('ban', { player: 'oldtimer', duration: 'permanent', reason: 'Cheating' })).resolves.toEqual({
       content: '🔨 Banned **Oldtimer** permanently. Reason: Cheating',
     });
     await expect(run('ban', { player: OLD, duration: '1h', reason: 'x' })).resolves.toEqual({
-      content: '**Oldtimer** is already banned, and not by the bot. Use /unban first to change that ban.',
+      content: '**Oldtimer** is already banned, not by the bot. Use /unban first to change the ban.',
+    });
+    await expect(run('ban', { player: OLD, duration: '1d', reason: 'x' })).resolves.toEqual({
+      content: `**Oldtimer** is already banned until <t:${(NOW + 3_600_000) / 1000}:f>. Use /unban first to change the ban.`,
     });
     expect(sent.some((s) => s.includes('/kick'))).toBe(false);
   });

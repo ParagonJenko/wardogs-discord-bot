@@ -41,8 +41,9 @@ export type PlayerRecord = {
 };
 
 export type BanRequest = Named & { length: string; reason: string; by: string };
-// `already-banned`: banned outside the bot, so the bot leaves that ban alone. `updated`: a ban the bot made, changed.
-export type BanResult = { outcome: 'banned' | 'updated' | 'already-banned'; until: number | null };
+// `already-banned`: the player has a ban already, which stays as it is. `byBot` says whether the bot made it, and
+// then `until` is when it ends.
+export type BanResult = { outcome: 'banned' | 'already-banned'; until: number | null; byBot: boolean };
 export type VipAddResult = { outcome: 'added' | 'extended' | 'already-reserved'; until?: number };
 export type VipRemoveResult = { outcome: 'removed' | 'not-reserved' };
 
@@ -275,7 +276,12 @@ export const runStaffCommand =
       log.info(`/ban by ${staff}: ${logged(player)} for ${length.name}: ${JSON.stringify(reason)}`);
       const result = await records.ban({ ...player, length: length.value, reason, by });
       if (result.outcome === 'already-banned') {
-        return { content: `${who(player)} is already banned, and not by the bot. Use /unban first to change that ban.` };
+        const current = !result.byBot
+          ? ', not by the bot'
+          : result.until === null
+            ? ' permanently'
+            : ` until <t:${unix(result.until)}:f>`;
+        return { content: `${who(player)} is already banned${current}. Use /unban first to change the ban.` };
       }
       // The ban keeps them out from now on; a kick removes them if they are in game.
       const kicked = live.some((p) => p.steamId === player.steamId)
@@ -285,8 +291,7 @@ export const runStaffCommand =
           )
         : '';
       const span = result.until === null ? 'permanently' : `for ${length.name}, until <t:${unix(result.until)}:f>`;
-      const verb = result.outcome === 'updated' ? `Changed ${who(player)}'s ban: now ${span}` : `Banned ${who(player)} ${span}`;
-      return { content: `🔨 ${verb}${kicked}. Reason: ${reason}` };
+      return { content: `🔨 Banned ${who(player)} ${span}${kicked}. Reason: ${reason}` };
     }
 
     if (name === 'unban') {

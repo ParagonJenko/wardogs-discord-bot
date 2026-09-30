@@ -33,13 +33,21 @@ export const parseModLog = (raw: unknown): ModEntry[] => {
 // Newest last.
 export const appendMod = (log: ModEntry[], entry: ModEntry): ModEntry[] => [...log, entry].slice(-MAX_ENTRIES);
 
-// Bans the bot made, by Steam ID. `until` is null for a permanent ban.
-export type BanRecord = { name: string; until: number | null; reason: string; by: string; at: number };
+// Bans the bot made, by Steam ID. `until` is null for a permanent ban. `serverReason` is the reason exactly as the bot
+// gave it to the server, which is how the bot knows the ban there is still its own.
+export type BanRecord = { name: string; until: number | null; reason: string; serverReason: string; by: string; at: number };
 export type BanBook = Record<string, BanRecord>;
 
 const BanBookSchema = z.record(
   z.string(),
-  z.object({ name: z.string(), until: z.number().nullable(), reason: z.string(), by: z.string(), at: z.number() }),
+  z.object({
+    name: z.string(),
+    until: z.number().nullable(),
+    reason: z.string(),
+    serverReason: z.string(),
+    by: z.string(),
+    at: z.number(),
+  }),
 );
 
 export const parseBanBook = (raw: unknown): BanBook => {
@@ -69,3 +77,8 @@ export const BAN_LENGTHS: { value: string; name: string; ms: number | null }[] =
 // The reason the server keeps with a ban. A timed one says when it ends, as the server itself never lifts it.
 export const banReason = (reason: string, until: number | null): string =>
   until === null ? reason : `${reason} (ends ${new Date(until).toISOString().slice(0, 16).replace('T', ' ')} UTC)`;
+
+// Whether the ban on the server is still the one the bot made: someone may have lifted it and banned the player again
+// some other way. The bot only lifts, or describes, a ban whose reason is exactly the one it wrote.
+export const isBotBan = (serverReason: string | null, ban: BanRecord): boolean =>
+  (serverReason ?? '').trim() === ban.serverReason.trim();

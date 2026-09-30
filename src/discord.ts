@@ -1,6 +1,6 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
-import type { ModAction } from './moderation.ts';
+import { isBotBan, type BanRecord, type ModAction } from './moderation.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
 import type { RecentMatch } from './stats.ts';
@@ -513,16 +513,21 @@ const vipText = ({ record, reserved, now }: PlayerProfile): string => {
 };
 
 const banText = ({ record, serverBan }: PlayerProfile): string => {
-  // The server is the truth when it can be read: a ban lifted by hand is gone even if the bot still has a record.
+  // The server is the truth when it can be read: a ban lifted by hand is gone even if the bot still has a record, and
+  // a ban made some other way since is not described as the bot's.
   if (serverBan === null) return 'Not banned';
   const ban = record.ban;
-  if (ban !== null) {
-    const until = ban.until === null ? 'permanently' : `until ${when(ban.until, 'f')} (${when(ban.until, 'R')})`;
-    return `🔨 Banned ${until} by <@${ban.by}>: ${cut(ban.reason)}`;
-  }
-  if (serverBan) return `🔨 Banned on the server${serverBan.reason ? `: ${cut(serverBan.reason)}` : ''}`;
-  return "Couldn't read the ban list";
+  const bots = (b: BanRecord): string => {
+    const until = b.until === null ? 'permanently' : `until ${when(b.until, 'f')} (${when(b.until, 'R')})`;
+    return `🔨 Banned ${until} by <@${b.by}>: ${cut(b.reason)}`;
+  };
+  if (serverBan === undefined) return ban === null ? "Couldn't read the ban list" : `${bots(ban)}\n(Couldn't check the server's ban list.)`;
+  if (ban !== null && isBotBan(serverBan.reason, ban)) return bots(ban);
+  return `🔨 Banned on the server${serverBan.reason ? `: ${cut(serverBan.reason)}` : ''}`;
 };
+
+// Red while the player is banned, as far as can be told.
+const isBanned = ({ record, serverBan }: PlayerProfile): boolean => (serverBan === undefined ? record.ban !== null : serverBan !== null);
 
 const historyText = (record: PlayerRecord): string => {
   if (record.log.length === 0) return 'Nothing through the bot yet.';
@@ -554,7 +559,7 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
   return {
     title: `👤 ${name === null ? 'Unknown player' : playerName(name)}`,
     description: [`\`${steamId}\` · [Steam profile](https://steamcommunity.com/profiles/${steamId})`, here].join('\n'),
-    color: record.ban !== null && profile.serverBan !== null ? COLORS.lowPop : INFO_COLOR,
+    color: isBanned(profile) ? COLORS.lowPop : INFO_COLOR,
     fields: [
       ...(t === null
         ? [{ name: `Time · ${period}`, value: 'Not seen on the server.' }]
