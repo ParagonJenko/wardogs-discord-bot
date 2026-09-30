@@ -11,9 +11,8 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
   "observability": { "enabled": true },
-  // Non-secret settings. Set DISCORD_WEBHOOK_URL with `npx wrangler secret put DISCORD_WEBHOOK_URL`.
+  // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README.
   "vars": {
-    "BATTLEMETRICS_SERVER_ID": "",
     "DISCORD_ROLE_ID": "",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",

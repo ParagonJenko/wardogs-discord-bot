@@ -2,11 +2,14 @@ import { z } from 'zod';
 import type { AlertRules } from './alerts.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
+// Just the listener's address; the bot adds /v1/status itself.
+const rconUrl = z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'must look like http://203.0.113.10:7776');
 const count = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
 
 const EnvSchema = z
   .object({
-    BATTLEMETRICS_SERVER_ID: numericId,
+    RCON_URL: rconUrl,
+    RCON_PASSWORD: z.string().min(1),
     DISCORD_WEBHOOK_URL: z
       .string()
       .regex(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/, 'must be a Discord webhook URL'),
@@ -27,7 +30,8 @@ const EnvSchema = z
   });
 
 export type Config = {
-  serverId: string;
+  rconUrl: string;
+  rconPassword: string;
   webhookUrl: string;
   roleId: string | undefined;
   pollIntervalMs: number;
@@ -46,7 +50,8 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
 
   const e = parsed.data;
   return {
-    serverId: e.BATTLEMETRICS_SERVER_ID,
+    rconUrl: e.RCON_URL,
+    rconPassword: e.RCON_PASSWORD,
     webhookUrl: e.DISCORD_WEBHOOK_URL,
     roleId: e.DISCORD_ROLE_ID,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,

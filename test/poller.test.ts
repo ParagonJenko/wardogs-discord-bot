@@ -5,7 +5,8 @@ import type { MonitorState } from '../src/alerts.ts';
 import { createPoller, memoryStore } from '../src/poller.ts';
 
 const config: Config = {
-  serverId: '123',
+  rconUrl: 'http://203.0.113.10:7776',
+  rconPassword: 'secret',
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   roleId: undefined,
   pollIntervalMs: 60_000,
@@ -25,7 +26,7 @@ const setup = (populations: (number | Error)[], store = memoryStore()) => {
     fetchServer: async () => {
       const next = queue.shift();
       if (next instanceof Error) throw next;
-      return { id: '123', name: 'UK Wardogs #1', players: next ?? 0, maxPlayers: 64 };
+      return { name: 'UK Wardogs #1', players: next ?? 0, maxPlayers: 64 };
     },
     send,
     now: () => (clock += 60_000),
@@ -78,7 +79,7 @@ describe('poller', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps going when BattleMetrics is unreachable', async () => {
+  it('keeps going when RCON is unreachable', async () => {
     const { tick, sent, log } = setup([0, new Error('fetch failed'), 1]);
 
     await tick();
