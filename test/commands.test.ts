@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runCommand } from '../src/commands.ts';
+import { runCommand, suggestOptions } from '../src/commands.ts';
 import type { Config } from '../src/config.ts';
 import type { HttpClient } from '../src/rcon.ts';
 
@@ -29,14 +29,30 @@ const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = nul
   const server = rcon(responses);
   const log = { info: vi.fn() };
   const seeders = vi.fn(async (_days: number) => [{ steamId: '7656', name: 'Ash', seedingMinutes: 95, seedDays: 2, vipUntil: null }]);
+  const removeMatch = vi.fn(async (endedAt: number) => (endedAt === ozeti.endedAt ? { match: ozeti, players: 96 } : null));
   const run = runCommand({
     config: () => config,
     http: server.http,
     lastMatch: async () => lastMatch as never,
     seeders,
+    removeMatch,
     log,
   });
-  return { run, sent: server.sent, log, seeders };
+  return { run, sent: server.sent, log, seeders, removeMatch };
+};
+
+// 2026-09-30T14:05:00Z
+const ozeti = {
+  map: 'Ozeti',
+  endedAt: Date.UTC(2026, 8, 30, 14, 5),
+  durationMs: 69 * 60_000,
+  peakPlayers: 100,
+  factionScores: [
+    { name: 'Valkyra', score: 70 },
+    { name: 'Kharr', score: 67 },
+    { name: 'Haldor', score: 41 },
+  ],
+  top: [],
 };
 
 describe('runCommand', () => {
@@ -101,6 +117,45 @@ describe('runCommand', () => {
     expect(seeders.mock.calls).toEqual([[1], [90], [7]]);
   });
 
+  it('/removematch deletes the picked match, logs who did it, and says what came off', async () => {
+    const { run, removeMatch, log, sent } = setup();
+
+    const reply = await run({ name: 'removematch', options: { match: String(ozeti.endedAt) }, userId: '42' });
+
+    expect(removeMatch).toHaveBeenCalledWith(ozeti.endedAt);
+    expect(reply).toEqual({
+      content:
+        '🗑️ Removed the Ozeti match that ended <t:1790777100:f> (**Valkyra** won 70, Kharr 67, Haldor 41 · 69 min). ' +
+        "Its match, kills and deaths came off 96 players' totals.",
+    });
+    expect(log.info).toHaveBeenCalledWith('/removematch by Discord user 42: Ozeti ended 2026-09-30T14:05:00.000Z');
+    expect(sent).toEqual([]);
+  });
+
+  it('/removematch refuses anything that is not a recent match', async () => {
+    const { run, removeMatch, log } = setup();
+
+    for (const match of ['ozeti', '123']) {
+      await expect(run({ name: 'removematch', options: { match }, userId: '42' })).resolves.toEqual({
+        content: "That isn't one of the recent matches. Pick one from the list.",
+      });
+    }
+    expect(removeMatch.mock.calls).toEqual([[123]]);
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it('suggests recent matches for /removematch, narrowed to what has been typed', async () => {
+    const europe = { ...ozeti, map: 'Zestafona', endedAt: ozeti.endedAt - 3_600_000, factionScores: [] };
+    const suggest = suggestOptions({ recentMatches: async () => [ozeti, europe] });
+
+    await expect(suggest({ name: 'removematch', options: { match: '' }, userId: '42' })).resolves.toEqual([
+      { name: 'Ozeti · Valkyra won 70, Kharr 67, Haldor 41 · 69 min · ended 30 Sep 14:05 UTC', value: String(ozeti.endedAt) },
+      { name: 'Zestafona · 69 min · ended 30 Sep 13:05 UTC', value: String(europe.endedAt) },
+    ]);
+    await expect(suggest({ name: 'removematch', options: { match: 'zest' }, userId: '42' })).resolves.toHaveLength(1);
+    await expect(suggest({ name: 'seeders', options: {}, userId: '42' })).resolves.toEqual([]);
+  });
+
   it('/broadcast sends the message in game and logs the attempt and the result', async () => {
     const { run, sent, log } = setup();
 
@@ -123,6 +178,7 @@ describe('runCommand', () => {
       },
       lastMatch: async () => null,
       seeders: async () => [],
+      removeMatch: async () => null,
       log,
     });
 

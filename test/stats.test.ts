@@ -11,6 +11,7 @@ import {
   recordDiscord,
   recordMatch,
   recordObservation,
+  removeRecentMatch,
   type Observation,
 } from '../src/stats.ts';
 import type { MatchState, MatchSummary } from '../src/tracking.ts';
@@ -152,6 +153,18 @@ describe('recordMatch', () => {
 
     expect(stats.matches).toHaveLength(MATCHES_KEPT);
     expect(stats.matches[0]).toEqual({ ...summary, map: 'Ozeti', endedAt: MIDNIGHT + (MATCHES_KEPT + 1) * HOUR });
+  });
+});
+
+describe('removeRecentMatch', () => {
+  it('takes off the match that ended at that time, and nothing else', () => {
+    const stats = [0, 1, 2].reduce((acc, i) => recordMatch(acc, summary, MIDNIGHT + i * HOUR), emptyStats());
+
+    const { stats: after, removed } = removeRecentMatch(stats, MIDNIGHT + HOUR);
+
+    expect(removed).toEqual({ ...summary, map: 'Ozeti', endedAt: MIDNIGHT + HOUR });
+    expect(after.matches.map((m) => m.endedAt)).toEqual([MIDNIGHT + 2 * HOUR, MIDNIGHT]);
+    expect(removeRecentMatch(stats, MIDNIGHT + 5 * HOUR)).toEqual({ stats, removed: null });
   });
 });
 

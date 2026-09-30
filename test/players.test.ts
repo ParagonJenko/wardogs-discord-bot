@@ -3,6 +3,7 @@ import {
   leaderboard,
   matchRecord,
   matchRecordKey,
+  parseMatchRecord,
   parsePlayerDay,
   playerDayKey,
   rankSeeders,
@@ -11,6 +12,7 @@ import {
   recordMatchPlayers,
   recordSeed,
   totals,
+  unrecordMatchPlayers,
   type PlayerDay,
   type PlayerTotals,
 } from '../src/players.ts';
@@ -106,6 +108,24 @@ describe('recordMatchPlayers', () => {
   });
 });
 
+describe('unrecordMatchPlayers', () => {
+  it('takes a match back off its players, leaving their minutes and anyone else alone', () => {
+    const before = recordMatchPlayers(recordActivity({ c: row('Cy', { matches: 1 }) }, [player('a', 'Ash')], 'live', 30), match);
+
+    expect(unrecordMatchPlayers(before, matchRecord(match, NOON).players)).toEqual({
+      a: row('Ash', { liveMinutes: 30 }),
+      b: row('Bo'),
+      c: row('Cy', { matches: 1 }),
+    });
+  });
+
+  it('never goes below zero, and skips players the day does not have', () => {
+    const day = { a: row('Ash', { matches: 0, kills: 5, deaths: 1 }) };
+
+    expect(unrecordMatchPlayers(day, matchRecord(match, NOON).players)).toEqual({ a: row('Ash') });
+  });
+});
+
 describe('matchRecord', () => {
   it('keeps every player with their Steam ID, and the map name players see', () => {
     expect(matchRecord(match, NOON + 60_000)).toEqual({
@@ -172,6 +192,15 @@ describe('totals and rankings', () => {
     const lucky: PlayerDay = { d: row('Dee', { matches: 1, kills: 9, deaths: 0 }) };
 
     expect(leaderboard([monday, tuesday, lucky], 30, 10).kd.map((p) => p.name)).not.toContain('Dee');
+  });
+});
+
+describe('parseMatchRecord', () => {
+  it('reads back a stored match, and refuses anything else', () => {
+    const record = matchRecord(match, NOON);
+
+    expect(parseMatchRecord(structuredClone(record))).toEqual(record);
+    expect(parseMatchRecord({ map: 'Ozeti' })).toBeNull();
   });
 });
 

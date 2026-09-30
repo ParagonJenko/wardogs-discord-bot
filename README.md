@@ -16,7 +16,7 @@ It also posts:
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
 And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
-`/broadcast` and `/seeders` (Cloudflare only; see [Slash commands](#slash-commands)).
+`/broadcast`, `/seeders` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the current and recent matches, Discord member counts and a public leaderboard
@@ -82,6 +82,7 @@ socket to the RCON listener and sends the HTTP request itself.
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/broadcast`    | Administrators only  | Sends a message (up to 200 characters) to everyone in game         |
 | `/seeders`      | Administrators only  | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
+| `/removematch`  | Administrators only  | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
 command to the Worker's URL; nothing has to stay connected.
@@ -113,7 +114,7 @@ command to the Worker's URL; nothing has to stay connected.
 6. Add the app to your Discord server by opening this link:
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
-Commands reply publicly in the channel, except `/broadcast` and `/seeders`, whose replies only the sender sees. If the game
+Commands reply publicly in the channel, except `/broadcast`, `/seeders` and `/removematch`, whose replies only the sender sees. If the game
 server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
 commands, run `npm run register` again.
 
@@ -128,7 +129,15 @@ commands, run `npm run register` again.
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 
-`/seeders` shows Steam IDs, so it has the same limits: your server only, Administrators only, and a private reply.
+`/seeders` shows Steam IDs and `/removematch` changes the records, so they have the same limits: your server only,
+Administrators only, and a private reply.
+
+`/removematch` is for a match the bot recorded by mistake, such as part of a match it wrongly thought had ended.
+Start typing and pick the match from the list of recent matches (map, result, length and end time, UTC). It takes
+the match off the recent matches, deletes its record, and takes its match, kills and deaths back off its players'
+totals for the day it ended. Seeding and play time are not changed. Each removal is logged with the admin's Discord
+user ID. If a match was wrongly split into parts, remove every part except the last: the last part has everyone's
+full kills and deaths.
 
 The Node/Docker version does not support slash commands, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.

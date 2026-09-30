@@ -29,6 +29,7 @@ const embed = { title: 'UK Wardogs #1', description: '🟢 **Live** · **24/98**
 const deps = () => ({
   publicKey,
   runCommand: vi.fn(async (_request: CommandRequest) => ({ embeds: [embed] })),
+  suggest: vi.fn(async (_request: CommandRequest) => [{ name: 'Ozeti · 69 min', value: '1790776000000' }]),
   editReply: vi.fn(async () => undefined),
   log: { error: vi.fn() },
   now: () => NOW_MS,
@@ -206,6 +207,51 @@ describe('handleInteraction', () => {
     });
   });
 
+  describe('autocomplete', () => {
+    const typing = (permissions: string, guildId = '777') => ({
+      type: 4,
+      application_id: '111',
+      guild_id: guildId,
+      data: { name: 'removematch', options: [{ name: 'match', type: 3, value: 'oze', focused: true }] },
+      member: { user: { id: '42' }, permissions },
+    });
+
+    it('offers choices for what an Administrator has typed so far', async () => {
+      const { body, signature, timestamp } = await signed(typing(String(ADMINISTRATOR)));
+      const d = deps();
+
+      const result = await handleInteraction(body, signature, timestamp, d);
+
+      expect(result.body).toEqual({ type: 8, data: { choices: [{ name: 'Ozeti · 69 min', value: '1790776000000' }] } });
+      expect(d.suggest).toHaveBeenCalledWith({ name: 'removematch', options: { match: 'oze' }, userId: '42' });
+      expect(d.runCommand).not.toHaveBeenCalled();
+    });
+
+    it('offers nothing to anyone who could not run the command', async () => {
+      const d = deps();
+      const results = await Promise.all(
+        [typing(String(1 << 5)), typing(String(ADMINISTRATOR), '888')].map(async (payload) => {
+          const { body, signature, timestamp } = await signed(payload);
+          return handleInteraction(body, signature, timestamp, d);
+        }),
+      );
+
+      results.forEach((result) => expect(result.body).toEqual({ type: 8, data: { choices: [] } }));
+      expect(d.suggest).not.toHaveBeenCalled();
+    });
+
+    it('offers nothing, and logs why, when the suggestions fail', async () => {
+      const { body, signature, timestamp } = await signed(typing(String(ADMINISTRATOR)));
+      const d = deps();
+      d.suggest.mockRejectedValueOnce(new Error('storage unavailable'));
+
+      const result = await handleInteraction(body, signature, timestamp, d);
+
+      expect(result.body).toEqual({ type: 8, data: { choices: [] } });
+      expect(d.log.error).toHaveBeenCalledWith('/removematch suggestions failed: storage unavailable');
+    });
+  });
+
   it('answers an unknown command privately', async () => {
     const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name: 'other' } });
 
@@ -259,7 +305,11 @@ describe('editOriginalReply', () => {
 
 describe('COMMANDS', () => {
   it('registers every command, with /broadcast and /seeders limited to Administrators', () => {
-    expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders']);
+    expect(COMMANDS.map((c) => c.name)).toEqual(['serverstatus', 'players', 'lastmatch', 'rotation', 'broadcast', 'seeders', 'removematch']);
+    expect(COMMANDS.find((c) => c.name === 'removematch')).toMatchObject({
+      default_member_permissions: '8',
+      options: [{ name: 'match', type: 3, required: true, autocomplete: true }],
+    });
     expect(COMMANDS.find((c) => c.name === 'seeders')).toMatchObject({
       default_member_permissions: '8',
       options: [{ name: 'days', type: 4, required: false, min_value: 1, max_value: 90 }],
