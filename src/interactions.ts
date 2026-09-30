@@ -13,7 +13,8 @@ const isCommandName = (name: string | undefined): name is CommandName =>
 const ADMINISTRATOR = 1n << 3n;
 
 // Admin commands change things in game or in the records, or show Steam IDs, so they are hidden from, and refused to,
-// anyone who is not an Administrator. Their replies are only shown to the person who ran them.
+// anyone who has neither Discord's Administrator permission nor one of the admin roles. Their replies are only shown
+// to the person who ran them.
 const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'removematch'];
 
 export const SEEDERS_DEFAULT_DAYS = 7;
@@ -26,7 +27,7 @@ export const COMMANDS = [
   { name: 'rotation', description: 'The current map and what is coming next', type: 1 },
   {
     name: 'broadcast',
-    description: 'Send a message to everyone in game (Administrators only)',
+    description: 'Send a message to everyone in game (staff only)',
     type: 1,
     default_member_permissions: String(ADMINISTRATOR),
     contexts: [0],
@@ -36,7 +37,7 @@ export const COMMANDS = [
   },
   {
     name: 'seeders',
-    description: 'Who seeded the most, with Steam IDs for VIP (Administrators only)',
+    description: 'Who seeded the most, with Steam IDs for VIP (staff only)',
     type: 1,
     default_member_permissions: String(ADMINISTRATOR),
     contexts: [0],
@@ -53,7 +54,7 @@ export const COMMANDS = [
   },
   {
     name: 'removematch',
-    description: 'Delete a wrongly recorded match and its leaderboard counts (Administrators only)',
+    description: 'Delete a wrongly recorded match and its leaderboard counts (staff only)',
     type: 1,
     default_member_permissions: String(ADMINISTRATOR),
     contexts: [0],
@@ -81,7 +82,11 @@ const InteractionSchema = z.object({
     })
     .optional(),
   member: z
-    .object({ permissions: z.string().optional(), user: z.object({ id: z.string() }).optional() })
+    .object({
+      permissions: z.string().optional(),
+      roles: z.array(z.string()).optional(),
+      user: z.object({ id: z.string() }).optional(),
+    })
     .optional(),
   guild_id: z.string().optional(),
 });
@@ -104,6 +109,8 @@ type InteractionDeps = {
   // The only Discord server allowed to use admin commands. Commands are registered globally, so without this an
   // admin in any server that adds the app could control this game server.
   adminGuildId: string | undefined;
+  // Roles in that server whose members may use admin commands without being Administrators, such as Staff.
+  adminRoleIds: string[];
 };
 
 export type InteractionResult = { status: number; body: unknown; followUp?: () => Promise<void> };
@@ -134,6 +141,11 @@ const isAdministrator = (permissions: string | undefined): boolean => {
     return false;
   }
 };
+
+type Member = { permissions?: string | undefined; roles?: string[] | undefined } | undefined;
+
+const isAdmin = (member: Member, adminRoleIds: string[]): boolean =>
+  isAdministrator(member?.permissions) || (member?.roles ?? []).some((role) => adminRoleIds.includes(role));
 
 const privateMessage = (content: string) => ({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
 
@@ -170,7 +182,7 @@ export const handleInteraction = async (
       (!ADMIN_COMMANDS.includes(name) ||
         (deps.adminGuildId !== undefined &&
           interaction.guild_id === deps.adminGuildId &&
-          isAdministrator(interaction.member?.permissions)));
+          isAdmin(interaction.member, deps.adminRoleIds)));
     const choices = allowed
       ? await deps.suggest(toRequest(name)).catch((error: unknown) => {
           deps.log.error(`/${name} suggestions failed: ${errorText(error)}`);
@@ -188,9 +200,10 @@ export const handleInteraction = async (
   if (admin && (!deps.adminGuildId || interaction.guild_id !== deps.adminGuildId)) {
     return { status: 200, body: privateMessage('This command can only be used in the Discord server that runs this bot.') };
   }
-  // Discord hides admin commands from other members, but server owners can override that, so check again.
-  if (admin && !isAdministrator(interaction.member?.permissions)) {
-    return { status: 200, body: privateMessage('Only server Administrators can use this.') };
+  // Discord shows admin commands only to Administrators and roles given access in Server Settings, and server owners
+  // can change that, so check again.
+  if (admin && !isAdmin(interaction.member, deps.adminRoleIds)) {
+    return { status: 200, body: privateMessage('Only Administrators and staff can use this.') };
   }
 
   const token = interaction.token;

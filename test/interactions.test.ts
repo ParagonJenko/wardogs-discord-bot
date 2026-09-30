@@ -34,6 +34,7 @@ const deps = () => ({
   log: { error: vi.fn() },
   now: () => NOW_MS,
   adminGuildId: '777' as string | undefined,
+  adminRoleIds: ['555'],
 });
 
 describe('handleInteraction', () => {
@@ -162,6 +163,37 @@ describe('handleInteraction', () => {
     expect(d.runCommand).not.toHaveBeenCalled();
   });
 
+  it('runs admin commands for members with an admin role, such as Staff, without Administrator', async () => {
+    const staff = { ...broadcast(String(1 << 5)), member: { user: { id: '42' }, permissions: String(1 << 5), roles: ['111', '555'] } };
+    const { body, signature, timestamp } = await signed(staff);
+    const d = deps();
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+    await result.followUp?.();
+
+    expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
+    expect(d.runCommand).toHaveBeenCalledWith({ name: 'broadcast', options: { message: 'Seeding now!' }, userId: '42' });
+  });
+
+  it('refuses members with other roles, and admin roles from another Discord server', async () => {
+    const d = deps();
+    const results = await Promise.all(
+      [
+        { ...broadcast('0'), member: { user: { id: '42' }, permissions: '0', roles: ['111'] } },
+        { ...broadcast('0', '888'), member: { user: { id: '42' }, permissions: '0', roles: ['555'] } },
+      ].map(async (payload) => {
+        const { body, signature, timestamp } = await signed(payload);
+        return handleInteraction(body, signature, timestamp, d);
+      }),
+    );
+
+    expect(results.map((r) => r.body)).toEqual([
+      { type: 4, data: { content: 'Only Administrators and staff can use this.', flags: 64 } },
+      { type: 4, data: { content: 'This command can only be used in the Discord server that runs this bot.', flags: 64 } },
+    ]);
+    expect(d.runCommand).not.toHaveBeenCalled();
+  });
+
   it('tells an admin a failed /broadcast may still have been delivered', async () => {
     const { body, signature, timestamp } = await signed(broadcast(String(ADMINISTRATOR)));
     const d = deps();
@@ -225,6 +257,16 @@ describe('handleInteraction', () => {
       expect(result.body).toEqual({ type: 8, data: { choices: [{ name: 'Ozeti · 69 min', value: '1790776000000' }] } });
       expect(d.suggest).toHaveBeenCalledWith({ name: 'removematch', options: { match: 'oze' }, userId: '42' });
       expect(d.runCommand).not.toHaveBeenCalled();
+    });
+
+    it('offers choices to staff too', async () => {
+      const staff = { ...typing('0'), member: { user: { id: '42' }, permissions: '0', roles: ['555'] } };
+      const { body, signature, timestamp } = await signed(staff);
+      const d = deps();
+
+      await handleInteraction(body, signature, timestamp, d);
+
+      expect(d.suggest).toHaveBeenCalled();
     });
 
     it('offers nothing to anyone who could not run the command', async () => {
