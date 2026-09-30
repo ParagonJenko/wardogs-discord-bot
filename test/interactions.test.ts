@@ -30,6 +30,7 @@ const deps = () => ({
   editReply: vi.fn(async () => undefined),
   log: { error: vi.fn() },
   now: () => NOW_MS,
+  adminGuildId: '777' as string | undefined,
 });
 
 describe('handleInteraction', () => {
@@ -87,7 +88,7 @@ describe('handleInteraction', () => {
     await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
 
     expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
-      content: "Couldn't get that from the game server right now. Try again in a minute.",
+      content: "Couldn't get that right now. Try again in a minute.",
       allowed_mentions: { parse: [] },
     });
     expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('timed out'));
@@ -104,8 +105,9 @@ describe('handleInteraction', () => {
     expect(d.runCommand).toHaveBeenCalledWith({ name, options: {}, userId: null });
   });
 
-  const broadcast = (permissions: string | undefined) => ({
+  const broadcast = (permissions: string | undefined, guildId: string | null = '777') => ({
     ...statusCommand,
+    ...(guildId === null ? {} : { guild_id: guildId }),
     data: { name: 'broadcast', options: [{ name: 'message', type: 3, value: 'Seeding now!' }] },
     member: { user: { id: '42' }, ...(permissions === undefined ? {} : { permissions }) },
   });
@@ -135,6 +137,39 @@ describe('handleInteraction', () => {
       expect(result.followUp).toBeUndefined();
     });
     expect(d.runCommand).not.toHaveBeenCalled();
+  });
+
+  it('refuses /broadcast from any other Discord server, or when no server is configured', async () => {
+    const cases: [string | null, string | undefined][] = [
+      ['888', '777'],
+      [null, '777'],
+      ['777', undefined],
+    ];
+    const d = deps();
+    const results = await Promise.all(
+      cases.map(async ([guildId, adminGuildId]) => {
+        const { body, signature, timestamp } = await signed(broadcast(String(1 << 5), guildId));
+        return handleInteraction(body, signature, timestamp, { ...d, adminGuildId });
+      }),
+    );
+
+    results.forEach((result) => {
+      expect(result.body).toMatchObject({ type: 4, data: { flags: 64 } });
+    });
+    expect(d.runCommand).not.toHaveBeenCalled();
+  });
+
+  it('tells an admin a failed /broadcast may still have been delivered', async () => {
+    const { body, signature, timestamp } = await signed(broadcast(String(1 << 5)));
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
+      content: "Couldn't confirm the broadcast was delivered. Check in game before sending it again.",
+      allowed_mentions: { parse: [] },
+    });
   });
 
   it('answers an unknown command privately', async () => {

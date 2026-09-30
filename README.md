@@ -113,9 +113,16 @@ Commands reply publicly in the channel, except `/broadcast`, whose reply only th
 server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
 commands, run `npm run register` again.
 
-`/broadcast` is hidden from members without **Manage Server**, and the Worker checks that permission again
-on every use, because it uses the RCON password's write access. Each broadcast is logged with the sender's
-Discord user ID.
+`/broadcast` uses the RCON password's write access, so it is locked down:
+
+- It only works in your own Discord server. Set `DISCORD_GUILD_ID` in the `vars` block of `wrangler.jsonc`
+  (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
+  set, `/broadcast` is refused everywhere. Commands are registered globally, so without this an admin in any
+  other server that added the app could broadcast into your game.
+- It is hidden from members without **Manage Server**, and the Worker checks that permission again on every
+  use.
+- Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
+  Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 
 The Node/Docker version does not support slash commands, because Discord needs a public HTTPS URL to send
 commands to. Alerts, top seeders and match summaries work in both.

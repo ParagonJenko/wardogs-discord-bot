@@ -53,6 +53,7 @@ const InteractionSchema = z.object({
   member: z
     .object({ permissions: z.string().optional(), user: z.object({ id: z.string() }).optional() })
     .optional(),
+  guild_id: z.string().optional(),
 });
 
 export type CommandRequest = { name: CommandName; options: Record<string, string>; userId: string | null };
@@ -66,6 +67,9 @@ type InteractionDeps = {
   editReply: (applicationId: string, token: string, reply: Reply) => Promise<void>;
   log: { error: (message: string) => void };
   now: () => number;
+  // The only Discord server allowed to use admin commands. Commands are registered globally, so without this an
+  // admin in any server that adds the app could control this game server.
+  adminGuildId: string | undefined;
 };
 
 export type InteractionResult = { status: number; body: unknown; followUp?: () => Promise<void> };
@@ -124,6 +128,9 @@ export const handleInteraction = async (
   }
 
   const admin = ADMIN_COMMANDS.includes(name);
+  if (admin && (!deps.adminGuildId || interaction.guild_id !== deps.adminGuildId)) {
+    return { status: 200, body: privateMessage('This command can only be used in the Discord server that runs this bot.') };
+  }
   // Discord hides admin commands from other members, but server owners can override that, so check again.
   if (admin && !hasManageGuild(interaction.member?.permissions)) {
     return { status: 200, body: privateMessage('Only members with the Manage Server permission can use this.') };
@@ -141,10 +148,11 @@ export const handleInteraction = async (
       (result) => ({ ...result, allowed_mentions: { parse: [] } }),
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
-        return {
-          content: "Couldn't get that from the game server right now. Try again in a minute.",
-          allowed_mentions: { parse: [] },
-        };
+        // A broadcast that timed out may still have reached the game, so don't invite a blind retry.
+        const content = admin
+          ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
+          : "Couldn't get that right now. Try again in a minute.";
+        return { content, allowed_mentions: { parse: [] } };
       },
     );
     await deps.editReply(interaction.application_id, token, reply);

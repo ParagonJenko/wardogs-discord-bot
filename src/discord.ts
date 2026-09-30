@@ -198,8 +198,9 @@ export const buildRotationEmbed = (rotation: Rotation): Embed => {
   const shown = (() => {
     if (!rotation.enabled) return [...fromNow.slice(0, 1).map(rotationLine), '', 'Rotation is off, so this map repeats.'];
     if (rotation.mode === 'random') {
-      const now = entries.filter((e) => e.status === 'now' || e.status === 'next').map(rotationLine);
-      return [...now, '', 'Random order, so only the next map is known.'];
+      // The next map can sit earlier in the list than the current one, so pick them in that order.
+      const known = ['now', 'next'].flatMap((status) => entries.filter((e) => e.status === status)).map(rotationLine);
+      return [...known, '', 'Random order, so only the next map is known.'];
     }
     return fromNow.map((entry) => (entry ? rotationLine(entry) : ''));
   })();

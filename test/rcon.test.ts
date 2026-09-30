@@ -152,6 +152,12 @@ describe('sendBroadcast', () => {
     ]);
   });
 
+  it('accepts an empty success reply', async () => {
+    const { get } = respondWith(204, '');
+
+    await expect(sendBroadcast('http://203.0.113.10:7776', 'secret', 'hi', get)).resolves.toBeUndefined();
+  });
+
   it('throws when the server refuses it', async () => {
     const { get } = respondWith(400, { error: { code: 'bad_request', message: 'Message too long' } });
 

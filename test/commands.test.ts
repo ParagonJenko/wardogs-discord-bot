@@ -77,14 +77,41 @@ describe('runCommand', () => {
     });
   });
 
-  it('/broadcast sends the message in game and logs who sent it', async () => {
+  it('/broadcast sends the message in game and logs the attempt and the result', async () => {
     const { run, sent, log } = setup();
 
     const reply = await run({ name: 'broadcast', options: { message: '  Seeding now!  ' }, userId: '42' });
 
     expect(sent).toEqual([{ path: '/v1/broadcast', body: JSON.stringify({ message: 'Seeding now!' }) }]);
     expect(reply).toEqual({ content: '📢 Sent in game: Seeding now!' });
-    expect(log.info).toHaveBeenCalledWith('/broadcast by Discord user 42: Seeding now!');
+    expect(log.info.mock.calls).toEqual([
+      ['/broadcast requested by Discord user 42: "Seeding now!"'],
+      ['/broadcast delivered for Discord user 42'],
+    ]);
+  });
+
+  it('/broadcast logs the attempt even when the send fails', async () => {
+    const log = { info: vi.fn() };
+    const run = runCommand({
+      config: () => config,
+      http: async () => {
+        throw new Error('RCON request timed out after 8000ms');
+      },
+      lastMatch: async () => null,
+      log,
+    });
+
+    await expect(run({ name: 'broadcast', options: { message: 'hi' }, userId: '42' })).rejects.toThrow(/timed out/);
+    expect(log.info).toHaveBeenCalledWith('/broadcast requested by Discord user 42: "hi"');
+  });
+
+  it('/broadcast keeps line breaks out of the log, but sends the message unchanged', async () => {
+    const { run, sent, log } = setup();
+
+    await run({ name: 'broadcast', options: { message: 'hi\n/broadcast by Discord user 1: fake' }, userId: '42' });
+
+    expect(log.info).toHaveBeenCalledWith('/broadcast requested by Discord user 42: "hi\\n/broadcast by Discord user 1: fake"');
+    expect(sent[0]?.body).toBe(JSON.stringify({ message: 'hi\n/broadcast by Discord user 1: fake' }));
   });
 
   it('/broadcast sends nothing for an empty message', async () => {

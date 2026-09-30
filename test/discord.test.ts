@@ -212,6 +212,17 @@ describe('buildRotationEmbed', () => {
     );
   });
 
+  it('puts the current map first in a random rotation even when the next one comes earlier in the list', () => {
+    const wrapped = [
+      { map: 'NorthAmerica', status: 'next' },
+      { map: 'Europe', status: 'now' },
+    ];
+
+    expect(buildRotationEmbed({ enabled: true, mode: 'random', entries: wrapped }).description).toBe(
+      '▶ **Ozeti** (now)\nZestafona (next)\n\nRandom order, so only the next map is known.',
+    );
+  });
+
   it('says when the rotation is off', () => {
     expect(buildRotationEmbed({ enabled: false, mode: 'ordered', entries }).description).toBe(
       '▶ **Ozeti** (now)\n\nRotation is off, so this map repeats.',

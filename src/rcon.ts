@@ -74,7 +74,8 @@ const rconRequest = async (
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`RCON request failed: ${path} ${response.status}`);
   }
-  return JSON.parse(response.body);
+  // A write may succeed with an empty body (e.g. 204); reads still fail their schema check on null.
+  return response.body.trim() === '' ? null : JSON.parse(response.body);
 };
 
 export const fetchStatus = async (rconUrl: string, password: string, get: HttpClient): Promise<ServerStatus> => {

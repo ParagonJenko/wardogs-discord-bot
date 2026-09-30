@@ -27,7 +27,11 @@ export const runCommand =
 
     const message = (options['message'] ?? '').trim();
     if (!message) return { content: 'Nothing to send.' };
+    const sender = `Discord user ${userId ?? 'unknown'}`;
+    // Logged before sending, so a send that times out after reaching the server still has a record.
+    // JSON quoting keeps line breaks in the message from faking extra log lines.
+    log.info(`/broadcast requested by ${sender}: ${JSON.stringify(message)}`);
     await sendBroadcast(rconUrl, rconPassword, message, http);
-    log.info(`/broadcast by Discord user ${userId ?? 'unknown'}: ${message}`);
+    log.info(`/broadcast delivered for ${sender}`);
     return { content: `📢 Sent in game: ${message}` };
   };

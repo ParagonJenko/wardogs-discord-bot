@@ -145,6 +145,7 @@ export default {
         editReply: editOriginalReply(),
         log: console,
         now: Date.now,
+        adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
       },
     );
     if (result.followUp) {
