@@ -16,8 +16,8 @@ It also posts:
   length, peak population, and the top 5 players by kills with deaths and K/D.
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
-pop), medals for the top three players, each faction's score with a dot in its in-game colour, and match
-summaries in the winning faction's colour.
+pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
+other faction gets a dot in its in-game colour), and match summaries in the winning faction's colour.
 
 And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
 `/broadcast`, `/seeders` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
