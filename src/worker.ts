@@ -155,10 +155,10 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // One write for the site's stats and today's player totals.
-  private async recordCheck(observation: Observation, minutes: number): Promise<void> {
+  private async recordCheck(observation: Observation, minutes: number, busyThreshold: number): Promise<void> {
     const dayKey = playerDayKey(observation.at);
     const stored = await this.ctx.storage.get(['stats', dayKey]);
-    const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes);
+    const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes, busyThreshold);
     if (observation.phase === 'empty' || observation.players.length === 0) {
       await this.ctx.storage.put('stats', stats);
       return;
@@ -205,7 +205,7 @@ export class Watcher extends DurableObject<Env> {
         save: (state) => storage.put('state', state),
       },
       stats: {
-        check: (observation) => this.recordCheck(observation, minutesPerCheck),
+        check: (observation) => this.recordCheck(observation, minutesPerCheck, config.busyThreshold),
         seeded: (seeders, at) => this.recordSeed(seeders, at, config.seedMinutes),
         matchEnded: (match, at) => this.recordMatchEnd(match, at),
       },
@@ -333,7 +333,8 @@ export class Watcher extends DurableObject<Env> {
     const now = Date.now();
     const keys = recentDayKeys(now, LEADERBOARD_DAYS);
     const stored = await this.ctx.storage.get(['stats', ...keys]);
-    return publicStats(parseStats(stored.get('stats')), config.rules, now, {
+    const { seeding, live } = config.rules;
+    return publicStats(parseStats(stored.get('stats')), { seeding, live, busy: config.busyThreshold }, now, {
       leaderboard: leaderboard(keys.map((key) => parsePlayerDay(stored.get(key))), LEADERBOARD_DAYS, LEADERBOARD_SIZE),
       vip: config.vip,
     });

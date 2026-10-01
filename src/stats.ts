@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AlertRules, Phase } from './alerts.ts';
+import type { Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
 import { mapName } from './discord.ts';
 import type { Leaderboard } from './players.ts';
@@ -13,11 +13,23 @@ export type Sample = [at: number, players: number];
 
 export type DayStats = { day: string; peak: number; liveMinutes: number };
 
-// Each UTC day's readings by UTC hour (index 0 to 23): the players summed over the readings, and how many readings.
-export type HourTotals = { day: string; players: number[]; readings: number[] };
+// Each UTC day's readings by UTC hour (index 0 to 23): the players summed over the readings and how many readings.
+// Then the busy threshold the day's busy counts use, how many readings were checked against it, and how many of those
+// had at least that many players. The threshold is null before busy readings were counted.
+export type HourTotals = {
+  day: string;
+  players: number[];
+  readings: number[];
+  busyThreshold: number | null;
+  checked: number[];
+  busy: number[];
+};
 
-// The average players in each UTC hour over the last `days` days, null for an hour with no readings.
-export type Hourly = { days: number; players: (number | null)[] };
+// For each UTC hour over the last `days` days: the average players, null for an hour with no readings, and the share of
+// readings (0 to 1) with at least the busy threshold, null for an hour with no readings checked against it.
+export type Hourly = { days: number; players: (number | null)[]; busy: (number | null)[] };
+
+export type Thresholds = { seeding: number; live: number; busy: number };
 
 export type RecentMatch = MatchSummary & { endedAt: number };
 
@@ -97,8 +109,19 @@ const SiteStatsSchema = z.object({
     .nullable(),
   history: z.array(z.tuple([z.number(), z.number()])),
   days: z.array(z.object({ day: z.string(), peak: z.number(), liveMinutes: z.number() })),
-  // Missing from stats saved before it was added.
-  hours: z.array(z.object({ day: z.string(), players: z.array(z.number()), readings: z.array(z.number()) })).optional(),
+  // Missing from stats saved before it was added, and the busy counts from stats saved before those.
+  hours: z
+    .array(
+      z.object({
+        day: z.string(),
+        players: z.array(z.number()),
+        readings: z.array(z.number()),
+        busyThreshold: z.number().nullable().optional(),
+        checked: z.array(z.number()).optional(),
+        busy: z.array(z.number()).optional(),
+      }),
+    )
+    .optional(),
   matches: z.array(
     z.object({
       map: z.string(),
@@ -127,28 +150,52 @@ const SiteStatsSchema = z.object({
 // Days are UTC dates, so every visitor sees the same boundaries.
 export const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
-// Adds one reading to its UTC hour, keeping the hours inside the last DAYS_KEPT calendar days like recordDay.
-const recordHour = (hours: HourTotals[], at: number, players: number): HourTotals[] => {
+const noHours = (): number[] => Array(24).fill(0);
+
+// Adds one reading to its UTC hour, keeping the hours inside the last DAYS_KEPT calendar days like recordDay. A null
+// threshold adds the reading without checking whether it was busy.
+const recordHour = (hours: HourTotals[], at: number, players: number, busyThreshold: number | null): HourTotals[] => {
   const day = dayOf(at);
   const oldest = dayOf(at - (DAYS_KEPT - 1) * DAY_MS);
   const hour = new Date(at).getUTCHours();
-  const today = hours.find((h) => h.day === day) ?? { day, players: Array(24).fill(0), readings: Array(24).fill(0) };
+  const today = hours.find((h) => h.day === day) ?? {
+    day,
+    players: noHours(),
+    readings: noHours(),
+    busyThreshold,
+    checked: noHours(),
+    busy: noHours(),
+  };
+  // Busy counts only add up under one threshold, so a new threshold starts the day's busy counts again.
+  const same = today.busyThreshold === busyThreshold;
+  const add = (counts: number[], amount: number) => counts.map((count, h) => (h === hour ? count + amount : count));
   const updated = {
     day,
-    players: today.players.map((total, h) => (h === hour ? total + players : total)),
-    readings: today.readings.map((count, h) => (h === hour ? count + 1 : count)),
+    players: add(today.players, players),
+    readings: add(today.readings, 1),
+    busyThreshold,
+    checked: add(same ? today.checked : noHours(), busyThreshold === null ? 0 : 1),
+    busy: add(same ? today.busy : noHours(), busyThreshold !== null && players >= busyThreshold ? 1 : 0),
   };
   return [...hours.filter((h) => h.day !== day && h.day >= oldest), updated].sort((a, b) => a.day.localeCompare(b.day));
 };
 
 // Reads what a store saved. Anything unrecognisable starts fresh rather than breaking the page. Stats saved before
 // the hours were kept start them from the last 24 hours of readings, so the busiest times do not start empty.
+// Readings saved before busy ones were counted are not checked, so they are left out of the busy shares.
 export const parseStats = (raw: unknown): SiteStats => {
   const parsed = SiteStatsSchema.safeParse(raw);
   if (!parsed.success) return emptyStats();
   const { hours, ...stats } = parsed.data;
-  const fromHistory = () => stats.history.reduce<HourTotals[]>((acc, [at, players]) => recordHour(acc, at, players), []);
-  return { ...stats, hours: hours ?? fromHistory() };
+  const fromHistory = () =>
+    stats.history.reduce<HourTotals[]>((acc, [at, players]) => recordHour(acc, at, players, null), []);
+  const saved = hours?.map((h) => ({
+    ...h,
+    busyThreshold: h.busyThreshold ?? null,
+    checked: h.checked ?? noHours(),
+    busy: h.busy ?? noHours(),
+  }));
+  return { ...stats, hours: saved ?? fromHistory() };
 };
 
 // Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
@@ -172,7 +219,12 @@ const currentMatch = (match: MatchState, status: ServerStatus): CurrentMatch | n
         top: topPlayers(match.players),
       };
 
-export const recordObservation = (stats: SiteStats, obs: Observation, minutesPerCheck: number): SiteStats => ({
+export const recordObservation = (
+  stats: SiteStats,
+  obs: Observation,
+  minutesPerCheck: number,
+  busyThreshold: number,
+): SiteStats => ({
   ...stats,
   server: {
     name: obs.status.name,
@@ -185,7 +237,7 @@ export const recordObservation = (stats: SiteStats, obs: Observation, minutesPer
   },
   history: [...stats.history.filter(([at]) => at > obs.at - HISTORY_MS), [obs.at, obs.status.players]],
   days: recordDay(stats.days, obs.at, obs.status.players, obs.phase === 'live' ? minutesPerCheck : 0),
-  hours: recordHour(stats.hours, obs.at, obs.status.players),
+  hours: recordHour(stats.hours, obs.at, obs.status.players, busyThreshold),
   currentMatch: currentMatch(obs.match, obs.status),
 });
 
@@ -212,32 +264,42 @@ export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null };
 export type PublicStats = Omit<SiteStats, 'hours'> &
   PublicExtras & {
     generatedAt: number;
-    thresholds: { seeding: number; live: number };
+    thresholds: Thresholds;
     hourly: Hourly;
   };
 
-// Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players
-// summed over its readings. Rounded to a tenth to keep the JSON short.
-export const hourlyAverages = (hours: HourTotals[], now: number): Hourly => {
+// Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players summed
+// over its readings. Its busy share is its busy readings over the readings checked against `busyThreshold`; days
+// counted under another threshold, or before busy readings were counted, are left out. Averages are rounded to a
+// tenth and shares to a hundredth to keep the JSON short.
+export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number): Hourly => {
   const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
   const kept = hours.filter((h) => h.day >= oldest);
-  const players = Array.from({ length: 24 }, (_, hour) => {
-    const total = kept.reduce((sum, h) => sum + (h.players[hour] ?? 0), 0);
-    const readings = kept.reduce((sum, h) => sum + (h.readings[hour] ?? 0), 0);
-    return readings === 0 ? null : Math.round((total / readings) * 10) / 10;
-  });
-  return { days: DAYS_KEPT, players };
+  const sameThreshold = kept.filter((h) => h.busyThreshold === busyThreshold);
+  const total = (days: HourTotals[], pick: (h: HourTotals) => number[], hour: number) =>
+    days.reduce((sum, h) => sum + (pick(h)[hour] ?? 0), 0);
+  const ratio = (part: number, whole: number, places: number) =>
+    whole === 0 ? null : Math.round((part / whole) * places) / places;
+  return {
+    days: DAYS_KEPT,
+    players: Array.from({ length: 24 }, (_, hour) =>
+      ratio(total(kept, (h) => h.players, hour), total(kept, (h) => h.readings, hour), 10),
+    ),
+    busy: Array.from({ length: 24 }, (_, hour) =>
+      ratio(total(sameThreshold, (h) => h.busy, hour), total(sameThreshold, (h) => h.checked, hour), 100),
+    ),
+  };
 };
 
 export const publicStats = (
   { hours, ...stats }: SiteStats,
-  rules: AlertRules,
+  thresholds: Thresholds,
   now: number,
   extras: PublicExtras,
 ): PublicStats => ({
   generatedAt: now,
-  thresholds: { seeding: rules.seeding, live: rules.live },
+  thresholds,
   ...stats,
-  hourly: hourlyAverages(hours, now),
+  hourly: hourlyAverages(hours, now, thresholds.busy),
   ...extras,
 });

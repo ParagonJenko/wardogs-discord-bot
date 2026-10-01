@@ -47,6 +47,8 @@ const EnvSchema = z
     SEEDING_THRESHOLD: count(1),
     LIVE_THRESHOLD: count(20),
     LOW_POP_THRESHOLD: count(20),
+    // The website's busy times: the hours when the server usually has at least this many players.
+    BUSY_THRESHOLD: count(97),
     POLL_INTERVAL_SECONDS: z.coerce.number().int().min(10).default(60),
     ALERT_COOLDOWN_MINUTES: z.coerce.number().int().min(0).default(10),
     // A drop in players only counts (low-pop alert, seeding re-armed) once it has lasted this long.
@@ -86,6 +88,8 @@ export type Config = {
   siteUrl: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
+  // Players from which the server counts as busy, for the website.
+  busyThreshold: number;
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
   seedMinutes: number;
   vip: VipRule | null;
@@ -120,6 +124,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       cooldownMs: e.ALERT_COOLDOWN_MINUTES * 60_000,
       graceMs: e.DROP_GRACE_MINUTES * 60_000,
     },
+    busyThreshold: e.BUSY_THRESHOLD,
     seedMinutes: e.VIP_SEED_MINUTES,
     vip:
       e.VIP_SEED_DAYS > 0
