@@ -163,14 +163,38 @@ describe('recordObservation', () => {
     expect(stats.hours[0]?.busy.reduce((a, b) => a + b)).toBe(2);
   });
 
-  it('starts the day’s busy counts again when the threshold changes', () => {
-    const first = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 98), 1, BUSY);
+  it('checks the last 24 hours of readings again when the threshold changes', () => {
+    const first = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 50), 1, 40);
     const stats = recordObservation(first, observation(MIDNIGHT + 21 * HOUR, 70), 1, 60);
 
+    expect(first.hours[0]?.busy[20]).toBe(1);
     expect(stats.hours[0]?.busyThreshold).toBe(60);
-    expect(stats.hours[0]?.readings[20]).toBe(1);
-    expect(stats.hours[0]?.checked[20]).toBe(0);
+    expect(stats.hours[0]?.checked[20]).toBe(1);
+    expect(stats.hours[0]?.busy[20]).toBe(0);
     expect(stats.hours[0]?.busy[21]).toBe(1);
+  });
+
+  it('checks the readings from the last 24 hours that were saved before busy ones were counted', () => {
+    const full = Array.from({ length: 7 }, (_, i) => observation(MIDNIGHT + (14 + i) * HOUR, 98)).reduce(
+      (acc, obs) => recordObservation(acc, obs, 1, BUSY),
+      emptyStats(),
+    );
+    const older = { ...full, hours: full.hours.map(({ busyThreshold: _t, checked: _c, busy: _b, ...h }) => h) };
+    const stats = recordObservation(parseStats(structuredClone(older)), observation(MIDNIGHT + 21 * HOUR, 90), 1, BUSY);
+
+    const { busy } = hourlyAverages(stats.hours, MIDNIGHT + 21 * HOUR, BUSY);
+    expect(busy.slice(14, 22)).toEqual([1, 1, 1, 1, 1, 1, 1, 0]);
+    expect(stats.hours[0]?.checked[14]).toBe(1);
+
+    const next = recordObservation(stats, observation(MIDNIGHT + 21 * HOUR + 60_000, 98), 1, BUSY);
+    expect(next.hours[0]?.checked[21]).toBe(2);
+    expect(next.hours[0]?.checked[14]).toBe(1);
+
+    // As left by a bot that only counted busy readings from its deploy on: today at 97, only the last hour checked.
+    const lastHourOnly = (counts: number[]) => counts.map((c, i) => (i === 21 ? c : 0));
+    const deployed = { ...stats, hours: stats.hours.map((h) => ({ ...h, checked: lastHourOnly(h.checked), busy: lastHourOnly(h.busy) })) };
+    const fixed = recordObservation(deployed, observation(MIDNIGHT + 21 * HOUR + 60_000, 98), 1, BUSY);
+    expect(hourlyAverages(fixed.hours, MIDNIGHT + 22 * HOUR, BUSY).busy.slice(14, 22)).toEqual([1, 1, 1, 1, 1, 1, 1, 0.5]);
   });
 
   it('shows the current match top players without their Steam IDs', () => {
@@ -326,13 +350,15 @@ describe('hourlyAverages', () => {
 
   it('leaves out busy counts made under another threshold', () => {
     const first = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 98), 1, BUSY);
-    const stats = [observation(MIDNIGHT + DAY + 20 * HOUR, 70), observation(MIDNIGHT + DAY + 20 * HOUR + 60_000, 50)].reduce(
+    const later = MIDNIGHT + 2 * DAY + 20 * HOUR;
+    const stats = [observation(later, 70), observation(later + 60_000, 50)].reduce(
       (acc, obs) => recordObservation(acc, obs, 1, 60),
       first,
     );
 
-    expect(hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, 60).busy[20]).toBe(0.5);
-    expect(hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, BUSY).busy[20]).toBe(1);
+    expect(hourlyAverages(first.hours, later, 60).busy[20]).toBeNull();
+    expect(hourlyAverages(stats.hours, later + HOUR, 60).busy[20]).toBe(0.5);
+    expect(hourlyAverages(stats.hours, later + HOUR, BUSY).busy[20]).toBeNull();
   });
 
   it('leaves out days older than that, as after a long outage', () => {

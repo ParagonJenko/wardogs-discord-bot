@@ -180,9 +180,38 @@ const recordHour = (hours: HourTotals[], at: number, players: number, busyThresh
   return [...hours.filter((h) => h.day !== day && h.day >= oldest), updated].sort((a, b) => a.day.localeCompare(b.day));
 };
 
+// Brings every day's busy counts to `busyThreshold`, dropping counts made under another threshold. An hour with more
+// readings in `recent` than were checked takes its counts from those readings, so after a new threshold, or the
+// deploy that started busy counts, the last 24 hours count straight away.
+const recheckHours = (hours: HourTotals[], recent: Sample[], busyThreshold: number): HourTotals[] => {
+  const fromRecent = new Map<string, { checked: number[]; busy: number[] }>();
+  for (const [at, players] of recent) {
+    const day = dayOf(at);
+    const counts = fromRecent.get(day) ?? { checked: noHours(), busy: noHours() };
+    const hour = new Date(at).getUTCHours();
+    counts.checked[hour] += 1;
+    if (players >= busyThreshold) counts.busy[hour] += 1;
+    fromRecent.set(day, counts);
+  }
+  return hours.map((h) => {
+    const same = h.busyThreshold === busyThreshold;
+    const checked = same ? h.checked : noHours();
+    const busy = same ? h.busy : noHours();
+    const counts = fromRecent.get(h.day) ?? { checked: noHours(), busy: noHours() };
+    const better = (hour: number) => counts.checked[hour] > checked[hour];
+    return {
+      ...h,
+      busyThreshold,
+      checked: checked.map((count, hour) => (better(hour) ? counts.checked[hour] : count)),
+      busy: busy.map((count, hour) => (better(hour) ? counts.busy[hour] : count)),
+    };
+  });
+};
+
 // Reads what a store saved. Anything unrecognisable starts fresh rather than breaking the page. Stats saved before
 // the hours were kept start them from the last 24 hours of readings, so the busiest times do not start empty.
-// Readings saved before busy ones were counted are not checked, so they are left out of the busy shares.
+// Readings saved before busy ones were counted are not checked, so they are left out of the busy shares until
+// recheckHours checks the ones still in the history.
 export const parseStats = (raw: unknown): SiteStats => {
   const parsed = SiteStatsSchema.safeParse(raw);
   if (!parsed.success) return emptyStats();
@@ -224,22 +253,25 @@ export const recordObservation = (
   obs: Observation,
   minutesPerCheck: number,
   busyThreshold: number,
-): SiteStats => ({
-  ...stats,
-  server: {
-    name: obs.status.name,
-    players: obs.status.players,
-    maxPlayers: obs.status.maxPlayers,
-    map: mapName(obs.status.map),
-    phase: obs.phase,
-    factionScores: obs.status.factionScores,
-    seenAt: obs.at,
-  },
-  history: [...stats.history.filter(([at]) => at > obs.at - HISTORY_MS), [obs.at, obs.status.players]],
-  days: recordDay(stats.days, obs.at, obs.status.players, obs.phase === 'live' ? minutesPerCheck : 0),
-  hours: recordHour(stats.hours, obs.at, obs.status.players, busyThreshold),
-  currentMatch: currentMatch(obs.match, obs.status),
-});
+): SiteStats => {
+  const recent = stats.history.filter(([at]) => at > obs.at - HISTORY_MS);
+  return {
+    ...stats,
+    server: {
+      name: obs.status.name,
+      players: obs.status.players,
+      maxPlayers: obs.status.maxPlayers,
+      map: mapName(obs.status.map),
+      phase: obs.phase,
+      factionScores: obs.status.factionScores,
+      seenAt: obs.at,
+    },
+    history: [...recent, [obs.at, obs.status.players]],
+    days: recordDay(stats.days, obs.at, obs.status.players, obs.phase === 'live' ? minutesPerCheck : 0),
+    hours: recordHour(recheckHours(stats.hours, recent, busyThreshold), obs.at, obs.status.players, busyThreshold),
+    currentMatch: currentMatch(obs.match, obs.status),
+  };
+};
 
 // Newest first.
 export const recordMatch = (stats: SiteStats, summary: MatchSummary, at: number): SiteStats => ({
