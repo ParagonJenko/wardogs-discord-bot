@@ -13,12 +13,20 @@ export type Sample = [at: number, players: number];
 
 export type DayStats = { day: string; peak: number; liveMinutes: number };
 
-// Each UTC day's readings by UTC hour (index 0 to 23): the players summed over the readings, how many readings, and
-// how many of them had at least the busy threshold.
-export type HourTotals = { day: string; players: number[]; readings: number[]; busy: number[] };
+// Each UTC day's readings by UTC hour (index 0 to 23): the players summed over the readings and how many readings.
+// Then the busy threshold the day's busy counts use, how many readings were checked against it, and how many of those
+// had at least that many players. The threshold is null before busy readings were counted.
+export type HourTotals = {
+  day: string;
+  players: number[];
+  readings: number[];
+  busyThreshold: number | null;
+  checked: number[];
+  busy: number[];
+};
 
-// For each UTC hour over the last `days` days: the average players, and the share of readings (0 to 1) with at least
-// the busy threshold. Null for an hour with no readings.
+// For each UTC hour over the last `days` days: the average players, null for an hour with no readings, and the share of
+// readings (0 to 1) with at least the busy threshold, null for an hour with no readings checked against it.
 export type Hourly = { days: number; players: (number | null)[]; busy: (number | null)[] };
 
 export type Thresholds = { seeding: number; live: number; busy: number };
@@ -101,13 +109,15 @@ const SiteStatsSchema = z.object({
     .nullable(),
   history: z.array(z.tuple([z.number(), z.number()])),
   days: z.array(z.object({ day: z.string(), peak: z.number(), liveMinutes: z.number() })),
-  // Missing from stats saved before it was added, and `busy` from stats saved before that.
+  // Missing from stats saved before it was added, and the busy counts from stats saved before those.
   hours: z
     .array(
       z.object({
         day: z.string(),
         players: z.array(z.number()),
         readings: z.array(z.number()),
+        busyThreshold: z.number().nullable().optional(),
+        checked: z.array(z.number()).optional(),
         busy: z.array(z.number()).optional(),
       }),
     )
@@ -142,32 +152,50 @@ export const dayOf = (at: number): string => new Date(at).toISOString().slice(0,
 
 const noHours = (): number[] => Array(24).fill(0);
 
-// Adds one reading to its UTC hour, keeping the hours inside the last DAYS_KEPT calendar days like recordDay.
-const recordHour = (hours: HourTotals[], at: number, players: number, busy: boolean): HourTotals[] => {
+// Adds one reading to its UTC hour, keeping the hours inside the last DAYS_KEPT calendar days like recordDay. A null
+// threshold adds the reading without checking whether it was busy.
+const recordHour = (hours: HourTotals[], at: number, players: number, busyThreshold: number | null): HourTotals[] => {
   const day = dayOf(at);
   const oldest = dayOf(at - (DAYS_KEPT - 1) * DAY_MS);
   const hour = new Date(at).getUTCHours();
-  const today = hours.find((h) => h.day === day) ?? { day, players: noHours(), readings: noHours(), busy: noHours() };
+  const today = hours.find((h) => h.day === day) ?? {
+    day,
+    players: noHours(),
+    readings: noHours(),
+    busyThreshold,
+    checked: noHours(),
+    busy: noHours(),
+  };
+  // Busy counts only add up under one threshold, so a new threshold starts the day's busy counts again.
+  const same = today.busyThreshold === busyThreshold;
   const add = (counts: number[], amount: number) => counts.map((count, h) => (h === hour ? count + amount : count));
   const updated = {
     day,
     players: add(today.players, players),
     readings: add(today.readings, 1),
-    busy: add(today.busy, busy ? 1 : 0),
+    busyThreshold,
+    checked: add(same ? today.checked : noHours(), busyThreshold === null ? 0 : 1),
+    busy: add(same ? today.busy : noHours(), busyThreshold !== null && players >= busyThreshold ? 1 : 0),
   };
   return [...hours.filter((h) => h.day !== day && h.day >= oldest), updated].sort((a, b) => a.day.localeCompare(b.day));
 };
 
 // Reads what a store saved. Anything unrecognisable starts fresh rather than breaking the page. Stats saved before
 // the hours were kept start them from the last 24 hours of readings, so the busiest times do not start empty.
-// Readings saved before busy ones were counted count as not busy; they are gone after DAYS_KEPT days.
+// Readings saved before busy ones were counted are not checked, so they are left out of the busy shares.
 export const parseStats = (raw: unknown): SiteStats => {
   const parsed = SiteStatsSchema.safeParse(raw);
   if (!parsed.success) return emptyStats();
   const { hours, ...stats } = parsed.data;
   const fromHistory = () =>
-    stats.history.reduce<HourTotals[]>((acc, [at, players]) => recordHour(acc, at, players, false), []);
-  return { ...stats, hours: hours?.map((h) => ({ ...h, busy: h.busy ?? noHours() })) ?? fromHistory() };
+    stats.history.reduce<HourTotals[]>((acc, [at, players]) => recordHour(acc, at, players, null), []);
+  const saved = hours?.map((h) => ({
+    ...h,
+    busyThreshold: h.busyThreshold ?? null,
+    checked: h.checked ?? noHours(),
+    busy: h.busy ?? noHours(),
+  }));
+  return { ...stats, hours: saved ?? fromHistory() };
 };
 
 // Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
@@ -209,7 +237,7 @@ export const recordObservation = (
   },
   history: [...stats.history.filter(([at]) => at > obs.at - HISTORY_MS), [obs.at, obs.status.players]],
   days: recordDay(stats.days, obs.at, obs.status.players, obs.phase === 'live' ? minutesPerCheck : 0),
-  hours: recordHour(stats.hours, obs.at, obs.status.players, obs.status.players >= busyThreshold),
+  hours: recordHour(stats.hours, obs.at, obs.status.players, busyThreshold),
   currentMatch: currentMatch(obs.match, obs.status),
 });
 
@@ -240,20 +268,27 @@ export type PublicStats = Omit<SiteStats, 'hours'> &
     hourly: Hourly;
   };
 
-// Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players
-// summed over its readings, and its busy share is its busy readings over its readings. Averages are rounded to a
+// Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players summed
+// over its readings. Its busy share is its busy readings over the readings checked against `busyThreshold`; days
+// counted under another threshold, or before busy readings were counted, are left out. Averages are rounded to a
 // tenth and shares to a hundredth to keep the JSON short.
-export const hourlyAverages = (hours: HourTotals[], now: number): Hourly => {
+export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number): Hourly => {
   const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
   const kept = hours.filter((h) => h.day >= oldest);
-  const sum = (pick: (h: HourTotals) => number[], hour: number) =>
-    kept.reduce((total, h) => total + (pick(h)[hour] ?? 0), 0);
-  const per = (pick: (h: HourTotals) => number[], places: number) =>
-    Array.from({ length: 24 }, (_, hour) => {
-      const readings = sum((h) => h.readings, hour);
-      return readings === 0 ? null : Math.round((sum(pick, hour) / readings) * places) / places;
-    });
-  return { days: DAYS_KEPT, players: per((h) => h.players, 10), busy: per((h) => h.busy, 100) };
+  const sameThreshold = kept.filter((h) => h.busyThreshold === busyThreshold);
+  const total = (days: HourTotals[], pick: (h: HourTotals) => number[], hour: number) =>
+    days.reduce((sum, h) => sum + (pick(h)[hour] ?? 0), 0);
+  const ratio = (part: number, whole: number, places: number) =>
+    whole === 0 ? null : Math.round((part / whole) * places) / places;
+  return {
+    days: DAYS_KEPT,
+    players: Array.from({ length: 24 }, (_, hour) =>
+      ratio(total(kept, (h) => h.players, hour), total(kept, (h) => h.readings, hour), 10),
+    ),
+    busy: Array.from({ length: 24 }, (_, hour) =>
+      ratio(total(sameThreshold, (h) => h.busy, hour), total(sameThreshold, (h) => h.checked, hour), 100),
+    ),
+  };
 };
 
 export const publicStats = (
@@ -265,6 +300,6 @@ export const publicStats = (
   generatedAt: now,
   thresholds,
   ...stats,
-  hourly: hourlyAverages(hours, now),
+  hourly: hourlyAverages(hours, now, thresholds.busy),
   ...extras,
 });

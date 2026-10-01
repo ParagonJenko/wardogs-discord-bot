@@ -157,8 +157,20 @@ describe('recordObservation', () => {
     );
 
     expect(stats.hours[0]?.readings[20]).toBe(3);
+    expect(stats.hours[0]?.busyThreshold).toBe(BUSY);
+    expect(stats.hours[0]?.checked[20]).toBe(3);
     expect(stats.hours[0]?.busy[20]).toBe(2);
     expect(stats.hours[0]?.busy.reduce((a, b) => a + b)).toBe(2);
+  });
+
+  it('starts the day’s busy counts again when the threshold changes', () => {
+    const first = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 98), 1, BUSY);
+    const stats = recordObservation(first, observation(MIDNIGHT + 21 * HOUR, 70), 1, 60);
+
+    expect(stats.hours[0]?.busyThreshold).toBe(60);
+    expect(stats.hours[0]?.readings[20]).toBe(1);
+    expect(stats.hours[0]?.checked[20]).toBe(0);
+    expect(stats.hours[0]?.busy[21]).toBe(1);
   });
 
   it('shows the current match top players without their Steam IDs', () => {
@@ -225,17 +237,27 @@ describe('parseStats', () => {
       emptyStats(),
     );
     const { hours, ...older } = stats;
+    const parsed = parseStats(structuredClone(older));
 
-    expect(parseStats(structuredClone(older))).toEqual(stats);
-    expect(hours[0]?.readings[20]).toBe(3);
+    expect({ ...parsed, hours: [] }).toEqual({ ...stats, hours: [] });
+    expect(parsed.hours[0]?.players).toEqual(hours[0]?.players);
+    expect(parsed.hours[0]?.readings[20]).toBe(3);
+    expect(parsed.hours[0]?.busyThreshold).toBeNull();
+    expect(parsed.hours[0]?.checked).toEqual(Array(24).fill(0));
   });
 
-  it('counts readings saved before busy ones were counted as not busy', () => {
-    const stats = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 98), 1, BUSY);
-    const older = { ...stats, hours: stats.hours.map(({ busy: _busy, ...h }) => h) };
+  it('leaves readings saved before busy ones were counted out of the busy shares', () => {
+    const stats = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 30), 1, BUSY);
+    const older = { ...stats, hours: stats.hours.map(({ busyThreshold: _t, checked: _c, busy: _b, ...h }) => h) };
+    const parsed = parseStats(structuredClone(older));
 
-    expect(parseStats(structuredClone(older)).hours[0]?.busy).toEqual(Array(24).fill(0));
-    expect(parseStats(structuredClone(older)).hours[0]?.readings[20]).toBe(1);
+    expect(parsed.hours[0]?.readings[20]).toBe(1);
+    expect(parsed.hours[0]?.checked[20]).toBe(0);
+    expect(hourlyAverages(parsed.hours, MIDNIGHT + 20 * HOUR, BUSY).busy[20]).toBeNull();
+
+    const later = recordObservation(parsed, observation(MIDNIGHT + DAY + 20 * HOUR, 98), 1, BUSY);
+    expect(hourlyAverages(later.hours, MIDNIGHT + DAY + 20 * HOUR, BUSY).busy[20]).toBe(1);
+    expect(hourlyAverages(later.hours, MIDNIGHT + DAY + 20 * HOUR, BUSY).players[20]).toBe(64);
   });
 
   it('starts fresh when nothing or something unrecognisable was saved', () => {
@@ -274,7 +296,7 @@ describe('hourlyAverages', () => {
       observation(MIDNIGHT + DAY + 3 * HOUR + 2 * 60_000, 2),
     ].reduce((acc, obs) => recordObservation(acc, obs, 1, BUSY), emptyStats());
 
-    const { days, players } = hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR);
+    const { days, players } = hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, BUSY);
 
     expect(days).toBe(DAYS_KEPT);
     expect(players).toHaveLength(24);
@@ -294,7 +316,7 @@ describe('hourlyAverages', () => {
       observation(MIDNIGHT + DAY + 4 * HOUR, 50),
     ].reduce((acc, obs) => recordObservation(acc, obs, 1, BUSY), emptyStats());
 
-    const { busy } = hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR);
+    const { busy } = hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, BUSY);
 
     expect(busy[20]).toBe(0.67);
     expect(busy[3]).toBe(0.33);
@@ -302,10 +324,21 @@ describe('hourlyAverages', () => {
     expect(busy[5]).toBeNull();
   });
 
+  it('leaves out busy counts made under another threshold', () => {
+    const first = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 98), 1, BUSY);
+    const stats = [observation(MIDNIGHT + DAY + 20 * HOUR, 70), observation(MIDNIGHT + DAY + 20 * HOUR + 60_000, 50)].reduce(
+      (acc, obs) => recordObservation(acc, obs, 1, 60),
+      first,
+    );
+
+    expect(hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, 60).busy[20]).toBe(0.5);
+    expect(hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, BUSY).busy[20]).toBe(1);
+  });
+
   it('leaves out days older than that, as after a long outage', () => {
     const stats = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 30), 1, BUSY);
 
-    expect(hourlyAverages(stats.hours, MIDNIGHT + (DAYS_KEPT - 1) * DAY).players[20]).toBe(30);
-    expect(hourlyAverages(stats.hours, MIDNIGHT + DAYS_KEPT * DAY).players[20]).toBeNull();
+    expect(hourlyAverages(stats.hours, MIDNIGHT + (DAYS_KEPT - 1) * DAY, BUSY).players[20]).toBe(30);
+    expect(hourlyAverages(stats.hours, MIDNIGHT + DAYS_KEPT * DAY, BUSY).players[20]).toBeNull();
   });
 });
