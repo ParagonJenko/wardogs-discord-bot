@@ -217,7 +217,6 @@ describe('poller', () => {
       seeding: {},
       match: null,
       unsentSummary: null,
-      liveSinceEmpty: true,
       messages: null,
     };
     const store = memoryStore(saved);
@@ -231,6 +230,54 @@ describe('poller', () => {
 });
 
 describe('poller with a grace time for drops', () => {
+  // The server crashes or empties out, then players get it live again: each time is a seed.
+  const day = async (timeline: (Snapshot | Error)[]) => {
+    const queue = [...timeline];
+    const seeded = vi.fn(async (_seeders: SeedCredit[], _at: number) => {});
+    let clock = 0;
+    const tick = createPoller({
+      config: { ...config, rules: { ...config.rules, graceMs: 5 * 60_000 } },
+      fetchSnapshot: async () => {
+        const next = queue.shift() ?? snapshot([]);
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      send: vi.fn(async () => {}),
+      now: () => (clock += 60_000),
+      log: { info: vi.fn(), error: vi.fn() },
+      store: memoryStore(),
+      stats: { check: vi.fn(async () => {}), seeded, matchEnded: vi.fn(async () => {}) },
+    });
+    for (let i = timeline.length; i > 0; i--) await tick();
+    // Who seeded each time the server went live, and for how long.
+    return seeded.mock.calls.map(([seeders]) => seeders.filter((s) => !s.steamId.startsWith('x')).map((s) => `${s.name} ${s.minutes}`));
+  };
+  const minutes = (n: number, reading: Snapshot | Error) => Array.from({ length: n }, () => reading);
+  const seedBy = (n: number, seeder: Player) => minutes(n, snapshot(crowd(10, [seeder])));
+  const live = (n: number) => minutes(n, snapshot(crowd(25)));
+  const ash = player('ash');
+  const bo = player('bo');
+
+  it('counts a seed after a crash, even when the bot never saw the server empty', async () => {
+    // Ash seeds it live; it crashes, and RCON is down until Bo is already seeding it again.
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30), ...minutes(60, new Error('down')), ...seedBy(60, bo), ...live(10)]);
+
+    // Bo's first 5 minutes are the grace time, while it could still have been a blip.
+    expect(seeds).toEqual([['Pash 30'], ['Pbo 55']]);
+  });
+
+  it('counts a seed when players drift off and others get it back up, without it emptying', async () => {
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30), ...seedBy(90, bo), ...live(10)]);
+
+    expect(seeds).toEqual([['Pash 30'], ['Pbo 85']]);
+  });
+
+  it('counts a seed after a quick crash that emptied the server for less than the grace time', async () => {
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30), ...minutes(3, snapshot([])), ...seedBy(87, bo), ...live(10)]);
+
+    expect(seeds).toEqual([['Pash 30'], ['Pbo 85']]);
+  });
+
   it('pings nobody, and counts nobody as seeding, when a live server restarts and fills again', async () => {
     const queue: (Snapshot | Error)[] = [
       snapshot(crowd(60)),
@@ -355,7 +402,7 @@ describe('poller stats', () => {
     expect(stats.matchEnded.mock.calls[0]?.[0]).toMatchObject({ key: 'Kavkazi#0', liveAt: 120_000, players: { a: { kills: 7 } } });
   });
 
-  it('counts seeding only until the server first goes live, until it empties again', async () => {
+  it('counts seeding whenever the server is seeding: from empty, and building back up after a drop from live', async () => {
     const stats = sink();
     const a = player('a');
     const { run } = setup(
@@ -370,14 +417,14 @@ describe('poller stats', () => {
       ['empty', false],
       ['seeding', true],
       ['live', false],
-      ['seeding', false],
-      ['seeding', false],
+      ['seeding', true],
+      ['seeding', true],
       ['empty', false],
       ['seeding', true],
     ]);
   });
 
-  it('credits everyone who seeded when the server goes live, and not when it comes back from low pop', async () => {
+  it('credits everyone who seeded when the server goes live, and again when they get it back up after a drop', async () => {
     const stats = sink();
     const a = player('a');
     const b = player('b');
@@ -389,15 +436,18 @@ describe('poller stats', () => {
 
     await run(7);
 
-    expect(stats.seeded.mock.calls).toEqual([
+    expect(stats.seeded.mock.calls[0]).toEqual([
       [
-        [
-          { steamId: 'a', name: 'Pa', minutes: 2 },
-          { steamId: 'b', name: 'Pb', minutes: 1 },
-        ],
-        240_000,
+        { steamId: 'a', name: 'Pa', minutes: 2 },
+        { steamId: 'b', name: 'Pb', minutes: 1 },
       ],
+      240_000,
     ]);
+    // Only a stayed on through the drop, so b gets no credit for getting it back up.
+    const again = stats.seeded.mock.calls[1];
+    expect(again?.[1]).toBe(420_000);
+    expect(again?.[0]).toContainEqual({ steamId: 'a', name: 'Pa', minutes: 2 });
+    expect(again?.[0].map((s) => s.steamId)).not.toContain('b');
     expect(field(sent.find((m) => m.embeds[0]?.title.endsWith('is live')), 'Top seeders')).toBe('🥇 Pa · 2 min\n🥈 Pb · 1 min');
   });
 
@@ -516,15 +566,16 @@ describe('parseState', () => {
       seeding: {},
       match: null,
       unsentSummary: null,
-      liveSinceEmpty: true,
       messages: null,
     });
   });
 
-  it('reads state saved before unsent summaries and seeding-until-live were kept', () => {
+  it('reads state saved before unsent summaries were kept, and drops what is no longer used', () => {
+    expect(parseState({ ...parseState({ phase: 'live', lastAlertAt: {} }), liveSinceEmpty: true })).not.toHaveProperty('liveSinceEmpty');
+
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
-    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, liveSinceEmpty: false, messages: null });
+    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null });
   });
 
   it('starts fresh when nothing or something unrecognisable was saved', () => {

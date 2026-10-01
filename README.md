@@ -302,11 +302,13 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
   only seeded it and left.
-- Seeding is the time from an empty server until it first goes live: each check (every minute) adds a minute for
-  everyone online. Once the server has been live, time online counts as live minutes until it empties, even if it
-  drops below `LOW_POP_THRESHOLD`. The check that finds the server live counts as live.
+- Seeding is time online while the server is seeding: each check (every minute) adds a minute for everyone online.
+  That is filling up from empty, and building back up after a drop from live (a crash, or players leaving) that
+  lasted longer than `DROP_GRACE_MINUTES`. A shorter drop is a blip: the server stays live, and the time counts as
+  live minutes. The check that finds the server live counts as live.
 - A successful seed is being online for more than `VIP_SEED_MINUTES` (default 10) of that seeding, and the server
-  then going live. It marks the day it went live (UTC), once however many times it happens that day.
+  then going live. Each time the server is seeded back to live counts, so after a crash the players who get it live
+  again are credited too. It marks the day it went live (UTC), once however many times it happens that day.
 - Records are kept for good. They start from the first deploy with this feature; older matches only have the
   public top 5, without Steam IDs.
 - Both are stored in the same Durable Object as the bot's state, so they are covered by the free plan: a check
@@ -417,8 +419,10 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   give more slack before the warning.
 - Seeding time is counted once per check (every minute) for everyone online while the server is seeding.
   The check that finds the server live does not count, so players who join at 20+ are not credited. The
-  count resets when the server goes live, and only starts again once it has emptied: a live server that drops
-  below `LOW_POP_THRESHOLD` is not seeding.
+  count resets when the server goes live or empties.
+- A live server that drops below `LOW_POP_THRESHOLD` for longer than `DROP_GRACE_MINUTES` is being seeded again,
+  whether it crashed or players left, and whether or not it emptied. Its seeding count starts once the drop has
+  lasted that long, so the first `DROP_GRACE_MINUTES` after a drop do not count as seeding.
 - WARDOGS RCON does not report when a match ends. The bot treats a map change, a restart on the same map, or
   the server emptying as the end of a match, and summarises it from the last stats it saw. That can miss up to
   one minute at the end of the match. A restart means the faction scores drop and most players' kills and
