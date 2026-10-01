@@ -14,6 +14,7 @@
   // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So is
   // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status.
   "vars": {
+    // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop.
     "DISCORD_ROLE_ID": "1554801355015594025",
     // Optional: an invite link that never expires, for the member counts in /api/stats.
     "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",

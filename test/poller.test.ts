@@ -35,7 +35,7 @@ const snapshot = (players: Player[], map = 'Kavkazi'): Snapshot => ({
   players,
 });
 
-const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: StatsSink) => {
+const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: StatsSink, overrides: Partial<Config> = {}) => {
   const queue = [...snapshots];
   const sent: DiscordMessage[] = [];
   const send = vi.fn(async (message: DiscordMessage) => {
@@ -44,7 +44,7 @@ const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: S
   const log = { info: vi.fn(), error: vi.fn() };
   let clock = 0;
   const tick = createPoller({
-    config,
+    config: { ...config, ...overrides },
     fetchSnapshot: async () => {
       const next = queue.shift() ?? snapshot([]);
       if (next instanceof Error) throw next;
@@ -82,6 +82,27 @@ describe('poller', () => {
     await run(2);
 
     expect(titles(sent)).toEqual(['🌱 UK Wardogs #1 is seeding']);
+  });
+
+  it('pings the configured role on the seeding, live and low-pop alerts, and not on a match summary', async () => {
+    const seeders = '1554801355015594025';
+    const { run, sent } = setup(
+      [snapshot([]), snapshot(crowd(3)), snapshot(crowd(25)), snapshot(crowd(25), 'Europe'), snapshot(crowd(5), 'Europe')],
+      memoryStore(),
+      undefined,
+      { roleId: seeders },
+    );
+
+    await run(5);
+
+    expect(titles(sent)).toEqual([
+      '🌱 UK Wardogs #1 is seeding',
+      '🟢 UK Wardogs #1 is live',
+      '🏁 Match over · 🟧 Bakurani',
+      '🔻 UK Wardogs #1 dropped below 20 players',
+    ]);
+    expect(sent.map((m) => m.content)).toEqual([`<@&${seeders}>`, `<@&${seeders}>`, undefined, `<@&${seeders}>`]);
+    expect(sent.map((m) => m.allowed_mentions.roles)).toEqual([[seeders], [seeders], [], [seeders]]);
   });
 
   it('credits the players who seeded longest when the server goes live', async () => {
