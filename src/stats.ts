@@ -2,12 +2,13 @@ import { z } from 'zod';
 import type { Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
 import { mapName } from './discord.ts';
-import type { Leaderboard } from './players.ts';
+import type { Leaderboard, RankedPlayer } from './players.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
-import { topPlayers, type MatchState, type MatchSummary, type PlayerStats } from './tracking.ts';
+import { topPlayers, type MatchState, type MatchSummary, type RankedStats } from './tracking.ts';
 
-// Numbers for the community website, served by the Worker at GET /api/stats. Anyone can read them, so they
-// hold nothing private: no Steam IDs, no RCON address or password.
+// Numbers for the community website, served by the Worker at GET /api/stats. Anyone can read them, so what is served
+// holds nothing private: no RCON address or password, and no Steam IDs. The stored stats keep the Steam IDs of the
+// players they name, and publicStats swaps them for the players' public ids, which link to their player pages.
 
 export type Sample = [at: number, players: number];
 
@@ -39,7 +40,7 @@ export type CurrentMatch = {
   liveAt: number | null;
   peakPlayers: number;
   factionScores: FactionScore[];
-  top: PlayerStats[];
+  top: RankedStats[];
 };
 
 export type ServerSnapshot = {
@@ -93,7 +94,8 @@ export const emptyStats = (): SiteStats => ({
 });
 
 const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() }));
-const Players = z.array(z.object({ name: z.string(), kills: z.number(), deaths: z.number() }));
+// The Steam ID is missing from stats saved before it was kept.
+const Players = z.array(z.object({ steamId: z.string().optional(), name: z.string(), kills: z.number(), deaths: z.number() }));
 
 const SiteStatsSchema = z.object({
   server: z
@@ -290,15 +292,45 @@ export const discordDue = (stats: SiteStats, now: number): boolean =>
 
 export const recordDiscord = (stats: SiteStats, discord: DiscordCounts): SiteStats => ({ ...stats, discord });
 
-// The leaderboard (names only) and what seeding earns come from the player records, which are read separately.
+// The leaderboard and what seeding earns come from the player records, which are read separately.
 export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null };
 
-export type PublicStats = Omit<SiteStats, 'hours'> &
-  PublicExtras & {
-    generatedAt: number;
-    thresholds: Thresholds;
-    hourly: Hourly;
-  };
+// Looks up a player's public id by Steam ID (see profiles.ts).
+export type IdOf = (steamId: string) => string | undefined;
+
+// A player as the website sees them: the Steam ID swapped for their public id, or left out when there is none.
+export type Public<T> = Omit<T, 'steamId'> & { id?: string };
+
+export type PublicMatch = Omit<RecentMatch, 'top'> & { top: Public<RankedStats>[] };
+
+export type PublicStats = Omit<SiteStats, 'hours' | 'matches' | 'currentMatch'> & {
+  generatedAt: number;
+  thresholds: Thresholds;
+  hourly: Hourly;
+  matches: PublicMatch[];
+  currentMatch: (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null;
+  leaderboard: Leaderboard<Public<RankedPlayer>>;
+  vip: VipRule | null;
+};
+
+const named = <T extends { steamId?: string }>(rows: T[], idOf: IdOf): Public<T>[] =>
+  rows.map(({ steamId, ...row }) => {
+    const id = steamId === undefined ? undefined : idOf(steamId);
+    return id === undefined ? row : { ...row, id };
+  });
+
+// Everyone the public stats name, so their public ids can be worked out before publicStats needs them.
+export const namedSteamIds = (stats: SiteStats, leaderboard: Leaderboard): string[] => {
+  const rows = [
+    ...stats.matches.flatMap((m) => m.top),
+    ...(stats.currentMatch?.top ?? []),
+    ...leaderboard.kills,
+    ...leaderboard.kd,
+    ...leaderboard.playtime,
+    ...leaderboard.seeding,
+  ];
+  return [...new Set(rows.flatMap((p) => (p.steamId === undefined ? [] : [p.steamId])))];
+};
 
 // Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players summed
 // over its readings. Its busy share is its busy readings over the readings checked against `busyThreshold`; days
@@ -324,14 +356,25 @@ export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: 
 };
 
 export const publicStats = (
-  { hours, ...stats }: SiteStats,
+  { hours, matches, currentMatch, ...stats }: SiteStats,
   thresholds: Thresholds,
   now: number,
-  extras: PublicExtras,
+  { leaderboard, vip }: PublicExtras,
+  idOf: IdOf,
 ): PublicStats => ({
   generatedAt: now,
   thresholds,
   ...stats,
+  matches: matches.map((m) => ({ ...m, top: named(m.top, idOf) })),
+  currentMatch: currentMatch === null ? null : { ...currentMatch, top: named(currentMatch.top, idOf) },
   hourly: hourlyAverages(hours, now, thresholds.busy),
-  ...extras,
+  leaderboard: {
+    days: leaderboard.days,
+    kdMinMatches: leaderboard.kdMinMatches,
+    kills: named(leaderboard.kills, idOf),
+    kd: named(leaderboard.kd, idOf),
+    playtime: named(leaderboard.playtime, idOf),
+    seeding: named(leaderboard.seeding, idOf),
+  },
+  vip,
 });

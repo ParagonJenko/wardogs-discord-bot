@@ -89,6 +89,8 @@ const BotStateSchema = z.object({
             // Missing from state saved before rejoining players were tracked: their counters were their totals.
             lastKills: z.number().optional(),
             lastDeaths: z.number().optional(),
+            // Missing from state saved before sides were tracked, and for players the server gave no faction for.
+            faction: z.string().optional(),
           })
           .transform((p) => ({ ...p, lastKills: p.lastKills ?? p.kills, lastDeaths: p.lastDeaths ?? p.deaths })),
       ),

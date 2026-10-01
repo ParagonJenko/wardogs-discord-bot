@@ -20,9 +20,14 @@ export const topSeeders = (tally: SeedingTally, count: number): { name: string; 
 // seen before that, so it can miss up to one check of the final minute.
 export type PlayerStats = { name: string; kills: number; deaths: number };
 
+// A player on a match's scoreboard. The Steam ID is missing from summaries saved before it was kept; it never goes on
+// the website as it is (see profiles.ts).
+export type RankedStats = PlayerStats & { steamId?: string };
+
 // A player's totals for the match, and the counters RCON last reported for them. The counters start again from 0
-// when a player rejoins, so the totals only ever add what is new since the last reading.
-export type TrackedPlayer = PlayerStats & { lastKills: number; lastDeaths: number };
+// when a player rejoins, so the totals only ever add what is new since the last reading. `faction` is the side they
+// were last seen on, when the server says.
+export type TrackedPlayer = PlayerStats & { lastKills: number; lastDeaths: number; faction?: string };
 
 export type MatchState = {
   key: string;
@@ -42,7 +47,7 @@ export type MatchSummary = {
   durationMs: number;
   peakPlayers: number;
   factionScores: FactionScore[];
-  top: PlayerStats[];
+  top: RankedStats[];
 };
 
 const TOP_PLAYERS = 5;
@@ -81,11 +86,17 @@ const restarted = (match: MatchState, status: ServerStatus, players: Player[]): 
 const counted = (total: number, last: number, now: number | null): number =>
   now === null ? total : now >= last ? total + now - last : total + now;
 
+// A reading without the faction keeps the one seen before.
+const sideOf = (known: TrackedPlayer | undefined, p: Player): { faction?: string } => {
+  const faction = p.faction ?? known?.faction;
+  return faction ? { faction } : {};
+};
+
 const track = (known: TrackedPlayer | undefined, p: Player): TrackedPlayer => {
   if (known === undefined) {
     const kills = p.kills ?? 0;
     const deaths = p.deaths ?? 0;
-    return { name: p.name, kills, deaths, lastKills: kills, lastDeaths: deaths };
+    return { name: p.name, kills, deaths, lastKills: kills, lastDeaths: deaths, ...sideOf(known, p) };
   }
   return {
     name: p.name,
@@ -93,14 +104,18 @@ const track = (known: TrackedPlayer | undefined, p: Player): TrackedPlayer => {
     deaths: counted(known.deaths, known.lastDeaths, p.deaths),
     lastKills: p.kills ?? known.lastKills,
     lastDeaths: p.deaths ?? known.lastDeaths,
+    ...sideOf(known, p),
   };
 };
 
-export const topPlayers = (players: Record<string, PlayerStats>, count = TOP_PLAYERS): PlayerStats[] =>
-  Object.values(players)
-    .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
+// Most kills first, then fewest deaths: the order of every scoreboard the bot shows.
+export const byKills = (a: PlayerStats, b: PlayerStats): number => b.kills - a.kills || a.deaths - b.deaths;
+
+export const topPlayers = (players: Record<string, PlayerStats>, count = TOP_PLAYERS): RankedStats[] =>
+  Object.entries(players)
+    .sort(([, a], [, b]) => byKills(a, b))
     .slice(0, count)
-    .map(({ name, kills, deaths }) => ({ name, kills, deaths }));
+    .map(([steamId, { name, kills, deaths }]) => ({ steamId, name, kills, deaths }));
 
 export const summarise = (match: MatchState): MatchSummary => ({
   map: keyMap(match.key),

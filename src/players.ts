@@ -23,7 +23,8 @@ export type PlayerTotals = {
 // One UTC day's totals, by Steam ID. Stored as one value per day, so a check writes one row however many are online.
 export type PlayerDay = Record<string, PlayerTotals>;
 
-export type MatchPlayer = { steamId: string; name: string; kills: number; deaths: number };
+// `faction` is the side they were last seen on, missing from matches recorded before sides were kept.
+export type MatchPlayer = { steamId: string; name: string; kills: number; deaths: number; faction?: string };
 
 // Every player's final stats for one finished match.
 export type MatchRecord = {
@@ -48,6 +49,9 @@ export const playerDayKey = (at: number): string => `players:${dayOf(at)}`;
 
 // Zero-padded so the keys sort by start time.
 export const matchRecordKey = (startedAt: number): string => `match:${String(startedAt).padStart(15, '0')}`;
+
+// The UTC date a day's key is for.
+export const dayOfKey = (key: string): string => key.slice(key.indexOf(':') + 1);
 
 // The keys for today (UTC) and the days before it, oldest first.
 export const recentDayKeys = (now: number, days: number): string[] =>
@@ -152,7 +156,13 @@ export const matchRecord = (match: MatchState, endedAt: number): MatchRecord => 
     durationMs: summary.durationMs,
     peakPlayers: summary.peakPlayers,
     factionScores: summary.factionScores,
-    players: Object.entries(match.players).map(([steamId, p]) => ({ steamId, name: p.name, kills: p.kills, deaths: p.deaths })),
+    players: Object.entries(match.players).map(([steamId, p]) => ({
+      steamId,
+      name: p.name,
+      kills: p.kills,
+      deaths: p.deaths,
+      ...(p.faction ? { faction: p.faction } : {}),
+    })),
   };
 };
 
@@ -163,8 +173,11 @@ const MatchRecordSchema = z.object({
   endedAt: z.number(),
   durationMs: z.number(),
   peakPlayers: z.number(),
-  factionScores: z.array(z.object({ name: z.string(), score: z.number() })),
-  players: z.array(z.object({ steamId: z.string(), name: z.string(), kills: z.number(), deaths: z.number() })),
+  // Each side's colour in game is kept when the server reported it, for the player pages.
+  factionScores: z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() })),
+  players: z.array(
+    z.object({ steamId: z.string(), name: z.string(), kills: z.number(), deaths: z.number(), faction: z.string().optional() }),
+  ),
 });
 
 export const parseMatchRecord = (raw: unknown): MatchRecord | null => {
@@ -199,35 +212,49 @@ export const rankSeeders = (days: PlayerDay[], count: number): RankedPlayer[] =>
     .sort((a, b) => b.seedDays - a.seedDays || b.seedingMinutes - a.seedingMinutes)
     .slice(0, count);
 
-export type Leaderboard = {
-  days: number;
-  kdMinMatches: number;
-  kills: PlayerTotals[];
-  kd: PlayerTotals[];
-  playtime: PlayerTotals[];
-  seeding: PlayerTotals[];
-};
+export type BoardKey = 'kills' | 'kd' | 'playtime' | 'seeding';
+
+// Rows keep their Steam IDs until the stats go out, when publicStats swaps them for public ids.
+export type Leaderboard<Row = RankedPlayer> = { days: number; kdMinMatches: number } & Record<BoardKey, Row[]>;
 
 const KD_MIN_MATCHES = 3;
 
 const ratio = (p: PlayerTotals): number => p.kills / Math.max(p.deaths, 1);
 const played = (p: PlayerTotals): number => p.seedingMinutes + p.liveMinutes;
 
-// Public, so names only: Steam IDs are left out.
+// Who each board lists, and in what order. Player pages rank players by the same rules.
+const BOARDS: Record<BoardKey, { keep: (p: PlayerTotals) => boolean; order: (a: PlayerTotals, b: PlayerTotals) => number }> = {
+  kills: { keep: (p) => p.kills > 0, order: (a, b) => b.kills - a.kills || a.deaths - b.deaths },
+  kd: { keep: (p) => p.kills > 0 && p.matches >= KD_MIN_MATCHES, order: (a, b) => ratio(b) - ratio(a) || b.kills - a.kills },
+  playtime: { keep: (p) => played(p) > 0, order: (a, b) => played(b) - played(a) },
+  seeding: { keep: (p) => p.seedingMinutes > 0, order: (a, b) => b.seedDays - a.seedDays || b.seedingMinutes - a.seedingMinutes },
+};
+
+const board = (players: RankedPlayer[], key: BoardKey): RankedPlayer[] =>
+  players.filter(BOARDS[key].keep).sort(BOARDS[key].order);
+
 export const leaderboard = (days: PlayerDay[], period: number, count: number): Leaderboard => {
   const players = totals(days);
-  const top = (keep: (p: RankedPlayer) => boolean, order: (a: RankedPlayer, b: RankedPlayer) => number): PlayerTotals[] =>
-    players
-      .filter(keep)
-      .sort(order)
-      .slice(0, count)
-      .map(({ steamId: _steamId, ...entry }) => entry);
+  const top = (key: BoardKey) => board(players, key).slice(0, count);
+  return { days: period, kdMinMatches: KD_MIN_MATCHES, kills: top('kills'), kd: top('kd'), playtime: top('playtime'), seeding: top('seeding') };
+};
+
+// A player's place on each board over `period` days (1 is the top), or null when the board leaves them out, and how
+// many players played in that time.
+export type Ranks = { days: number; kdMinMatches: number; players: number } & Record<BoardKey, number | null>;
+
+export const ranks = (players: RankedPlayer[], steamId: string, period: number): Ranks => {
+  const place = (key: BoardKey): number | null => {
+    const index = board(players, key).findIndex((p) => p.steamId === steamId);
+    return index === -1 ? null : index + 1;
+  };
   return {
     days: period,
     kdMinMatches: KD_MIN_MATCHES,
-    kills: top((p) => p.kills > 0, (a, b) => b.kills - a.kills || a.deaths - b.deaths),
-    kd: top((p) => p.kills > 0 && p.matches >= KD_MIN_MATCHES, (a, b) => ratio(b) - ratio(a) || b.kills - a.kills),
-    playtime: top((p) => played(p) > 0, (a, b) => played(b) - played(a)),
-    seeding: top((p) => p.seedingMinutes > 0, (a, b) => b.seedDays - a.seedDays || b.seedingMinutes - a.seedingMinutes),
+    players: players.length,
+    kills: place('kills'),
+    kd: place('kd'),
+    playtime: place('playtime'),
+    seeding: place('seeding'),
   };
 };

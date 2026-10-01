@@ -7,6 +7,7 @@ import {
   HISTORY_MS,
   hourlyAverages,
   MATCHES_KEPT,
+  namedSteamIds,
   parseStats,
   publicStats,
   recordDiscord,
@@ -197,14 +198,13 @@ describe('recordObservation', () => {
     expect(hourlyAverages(fixed.hours, MIDNIGHT + 22 * HOUR, BUSY).busy.slice(14, 22)).toEqual([1, 1, 1, 1, 1, 1, 1, 0.5]);
   });
 
-  it('shows the current match top players without their Steam IDs', () => {
+  it('shows the current match top players, keeping their Steam IDs for publicStats to swap', () => {
     const stats = recordObservation(emptyStats(), observation(MIDNIGHT, 30), 1, BUSY);
 
     expect(stats.currentMatch?.top).toEqual([
-      { name: 'Bo', kills: 9, deaths: 3 },
-      { name: 'Ash', kills: 4, deaths: 1 },
+      { steamId: '76561198000000002', name: 'Bo', kills: 9, deaths: 3 },
+      { steamId: '76561198000000001', name: 'Ash', kills: 4, deaths: 1 },
     ]);
-    expect(JSON.stringify(stats)).not.toContain('76561198');
   });
 
   it('has no current match while the server is empty', () => {
@@ -298,7 +298,7 @@ describe('publicStats', () => {
 
     const { hours: _hours, ...stats } = emptyStats();
 
-    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip })).toEqual({
+    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip }, () => undefined)).toEqual({
       ...stats,
       generatedAt: MIDNIGHT,
       thresholds,
@@ -306,6 +306,51 @@ describe('publicStats', () => {
       leaderboard,
       vip,
     });
+  });
+});
+
+describe('publicStats and Steam IDs', () => {
+  const ids: Record<string, string> = { '76561198000000001': 'a1a1a1a1a1a1', '76561198000000002': 'b2b2b2b2b2b2' };
+  const thresholds = { seeding: 1, live: 20, busy: BUSY };
+  const ash = { steamId: '76561198000000001', name: 'Ash', seedingMinutes: 5, liveMinutes: 60, seedDays: 1, matches: 2, kills: 4, deaths: 1 };
+  const leaderboard = { days: 30, kdMinMatches: 3, kills: [ash], kd: [], playtime: [ash], seeding: [ash] };
+  const stats = recordMatch(
+    recordObservation(emptyStats(), observation(MIDNIGHT, 30), 1, BUSY),
+    { ...summary, top: [{ steamId: '76561198000000002', name: 'Bo', kills: 9, deaths: 3 }, { name: 'Old', kills: 1, deaths: 0 }] },
+    MIDNIGHT,
+  );
+
+  it('swaps every Steam ID for the player’s public id', () => {
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null }, (steamId) => ids[steamId]);
+
+    expect(served.currentMatch?.top).toEqual([
+      { id: 'b2b2b2b2b2b2', name: 'Bo', kills: 9, deaths: 3 },
+      { id: 'a1a1a1a1a1a1', name: 'Ash', kills: 4, deaths: 1 },
+    ]);
+    // A match saved before Steam IDs were kept names its players without an id.
+    expect(served.matches[0]?.top).toEqual([
+      { id: 'b2b2b2b2b2b2', name: 'Bo', kills: 9, deaths: 3 },
+      { name: 'Old', kills: 1, deaths: 0 },
+    ]);
+    expect(served.leaderboard.kills).toEqual([{ ...ash, steamId: undefined, id: 'a1a1a1a1a1a1' }]);
+    expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
+  });
+
+  it('lists everyone the public stats name, once each', () => {
+    expect(namedSteamIds(stats, leaderboard).sort()).toEqual(['76561198000000001', '76561198000000002']);
+  });
+
+  it('leaves out ids it does not know, and still no Steam IDs', () => {
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null }, () => undefined);
+
+    expect(served.leaderboard.kills[0]).not.toHaveProperty('id');
+    expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
+  });
+
+  it('reads stats saved before Steam IDs were kept', () => {
+    const saved = JSON.parse(JSON.stringify({ ...stats, matches: [{ ...stats.matches[0], top: [{ name: 'Bo', kills: 9, deaths: 3 }] }] }));
+
+    expect(parseStats(saved).matches[0]?.top).toEqual([{ name: 'Bo', kills: 9, deaths: 3 }]);
   });
 });
 
