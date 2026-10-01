@@ -24,8 +24,6 @@ export type BotState = {
   match: MatchState | null;
   // A match summary Discord has not accepted yet; posting it is retried on each check.
   unsentSummary: MatchSummary | null;
-  // Whether the server has been live since it last emptied. Until it has, time online counts as seeding.
-  liveSinceEmpty: boolean;
   // Which in-game messages the current match has had.
   messages: MatchMessages | null;
 };
@@ -108,8 +106,6 @@ const BotStateSchema = z.object({
     })
     .nullable()
     .default(null),
-  // Missing from state saved before seeding stopped at the first live.
-  liveSinceEmpty: z.boolean().default(false),
   // Missing from state saved before in-game messages.
   messages: MatchMessagesSchema.nullable().default(null),
 });
@@ -123,7 +119,6 @@ const StoredStateSchema = z.union([
       seeding: {},
       match: null,
       unsentSummary: null,
-      liveSinceEmpty: alerts.phase === 'live',
       messages: null,
     }),
   ),
@@ -169,10 +164,9 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       const { match } = observeMatch(null, status, players, alerts.phase === 'live', time);
       const seedingNow = alerts.phase === 'seeding';
       const seeding = seedingNow ? tallySeeding({}, players) : {};
-      const liveSinceEmpty = alerts.phase === 'live';
       const messages =
         config.matchMessages === null ? null : nextMessage(null, match, time, config.matchMessages, config.vip).messages;
-      await store.save({ alerts, seeding, match, unsentSummary: null, liveSinceEmpty, messages });
+      await store.save({ alerts, seeding, match, unsentSummary: null, messages });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
@@ -182,15 +176,18 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     const before = state.alerts.phase;
     const after = result.state.phase;
     const { match, finished } = observeMatch(state.match, status, players, after === 'live', time);
-    // Seeding is the time from empty until the server first goes live. A live server that drops below the low-pop
-    // threshold is not seeding again until it has emptied.
-    const liveSinceEmpty = after !== 'empty' && (state.liveSinceEmpty || before === 'live' || after === 'live');
-    const seedingNow = after === 'seeding' && !liveSinceEmpty;
+    // Seeding is time on the server while it is in the seeding phase: filling up from empty, or building back up
+    // after a drop from live (a crash, or players leaving) that outlasted the grace time. A shorter drop keeps the
+    // server live, so a quick restart is not seeding.
+    const seedingNow = after === 'seeding';
     const tallied = seedingNow ? tallySeeding(state.seeding, players) : null;
     const minutes = (checks: number): number => Math.round((checks * config.pollIntervalMs) / 60_000);
 
     // Count everyone online on each check while the server is seeding; reset once it is live or empty.
-    const wentLive = before !== 'live' && after === 'live';
+    // Seeding is over when the server goes live. A seeding count carried into a live check means that too: when the
+    // low-pop alert that starts a re-seed cannot be posted, the phase stays live (so the alert is retried) while the
+    // re-seed is already being counted.
+    const wentLive = after === 'live' && (before !== 'live' || Object.keys(state.seeding).length > 0);
     const seeders = wentLive
       ? topSeeders(state.seeding, TOP_SEEDERS).map((s) => ({ name: s.name, minutes: minutes(s.checks) }))
       : [];
@@ -224,7 +221,6 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       ...state,
       seeding: tallied ?? (after === 'live' ? state.seeding : {}),
       match,
-      liveSinceEmpty,
       messages,
       unsentSummary: finished === null ? state.unsentSummary : summarise(finished),
     };
@@ -254,7 +250,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       throw error;
     }
     // The alert state is only saved after a successful send, so a failed alert is retried on the next check.
-    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, liveSinceEmpty, messages });
+    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, messages });
   };
 
   return async (): Promise<void> => {
