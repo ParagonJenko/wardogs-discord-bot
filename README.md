@@ -264,11 +264,11 @@ There is no chat log command: the game's RCON API has no way to read chat.
 | `server`       | Name, players, max players, map, phase (`empty`/`seeding`/`live`), score, `seenAt`     |
 | `history`      | `[time, players]` for every check in the last 24 hours                                 |
 | `days`         | Peak players and minutes live for each of the last 14 days (UTC)                       |
-| `hourly`       | `{ "days": 14, "players": [24 numbers] }`: the average players in each UTC hour (0 to 23) over the last 14 days, `null` for an hour with no readings |
+| `hourly`       | `{ "days": 14, "players": [24 numbers], "busy": [24 numbers] }`: for each UTC hour (0 to 23) over the last 14 days, the average players and the share of readings (0 to 1) with at least `thresholds.busy` players. `null` for an hour with no readings |
 | `currentMatch` | Map, start time, peak, score and the top 5 players by kills                            |
 | `matches`      | The last 10 match summaries, newest first                                              |
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
-| `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed      |
+| `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
 | `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
 
@@ -277,6 +277,9 @@ are names with their totals.
 
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
+
+The site's busy times are the hours when the server usually has `BUSY_THRESHOLD` players or more (default 97). Set
+it in the `vars` block of `wrangler.jsonc`.
 
 For the Discord counts, set `DISCORD_INVITE` in the `vars` block of `wrangler.jsonc` to an invite link that
 does not expire (`https://discord.gg/abc123` or just `abc123`), then `npm run deploy`. Leave it empty to skip

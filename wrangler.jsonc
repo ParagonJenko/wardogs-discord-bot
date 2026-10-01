@@ -27,6 +27,8 @@
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",
+    // The website's busy times: the hours when the server usually has at least this many players.
+    "BUSY_THRESHOLD": "97",
     "ALERT_COOLDOWN_MINUTES": "10",
     // A drop in players only counts once it lasts this long, so a crash or restart that fills again quickly pings nobody.
     "DROP_GRACE_MINUTES": "5",

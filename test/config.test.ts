@@ -19,6 +19,7 @@ describe('loadConfig', () => {
       siteUrl: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000 },
+      busyThreshold: 97,
       seedMinutes: 10,
       vip: null,
       matchMessages: null,
@@ -68,11 +69,13 @@ describe('loadConfig', () => {
       POLL_INTERVAL_SECONDS: '120',
       ALERT_COOLDOWN_MINUTES: '0',
       DROP_GRACE_MINUTES: '2',
+      BUSY_THRESHOLD: '60',
     });
 
     expect(config.roleId).toBe('987654321');
     expect(config.pollIntervalMs).toBe(120_000);
     expect(config.rules).toEqual({ seeding: 5, live: 40, lowPop: 30, cooldownMs: 0, graceMs: 120_000 });
+    expect(config.busyThreshold).toBe(60);
   });
 
   it('treats blank values as unset, as left by a copied .env.example', () => {
