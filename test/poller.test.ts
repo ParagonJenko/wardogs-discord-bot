@@ -451,6 +451,24 @@ describe('poller stats', () => {
     expect(field(sent.find((m) => m.embeds[0]?.title.endsWith('is live')), 'Top seeders')).toBe('🥇 Pa · 2 min\n🥈 Pb · 1 min');
   });
 
+  it('credits a re-seed even when Discord was down for its low-pop alert the whole time', async () => {
+    const stats = sink();
+    const a = player('a');
+    const { run, send } = setup(
+      [snapshot([]), snapshot([a]), snapshot(crowd(20, [a])), snapshot(crowd(15, [a])), snapshot(crowd(15, [a])), snapshot(crowd(21, [a]))],
+      memoryStore(),
+      stats,
+    );
+    // The seeding and live alerts post; both tries at the low-pop alert fail.
+    send.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
+    send.mockRejectedValueOnce(new Error('Discord webhook failed: 500')).mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+    await run(6);
+
+    expect(stats.seeded.mock.calls.map(([, at]) => at)).toEqual([180_000, 360_000]);
+    expect(stats.seeded.mock.calls[1]?.[0]).toContainEqual({ steamId: 'a', name: 'Pa', minutes: 2 });
+  });
+
   it('credits seeders and names them on the live alert even when every Discord post was failing', async () => {
     const stats = sink();
     const a = player('a');

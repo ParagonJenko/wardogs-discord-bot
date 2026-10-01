@@ -184,7 +184,10 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     const minutes = (checks: number): number => Math.round((checks * config.pollIntervalMs) / 60_000);
 
     // Count everyone online on each check while the server is seeding; reset once it is live or empty.
-    const wentLive = before !== 'live' && after === 'live';
+    // Seeding is over when the server goes live. A seeding count carried into a live check means that too: when the
+    // low-pop alert that starts a re-seed cannot be posted, the phase stays live (so the alert is retried) while the
+    // re-seed is already being counted.
+    const wentLive = after === 'live' && (before !== 'live' || Object.keys(state.seeding).length > 0);
     const seeders = wentLive
       ? topSeeders(state.seeding, TOP_SEEDERS).map((s) => ({ name: s.name, minutes: minutes(s.checks) }))
       : [];
