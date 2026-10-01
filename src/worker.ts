@@ -467,9 +467,10 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Notes the map staff set to play next, and the map being played now: once the server leaves that, it has been played.
-  async stageNextMap(map: string): Promise<void> {
-    const match = parseState(await this.ctx.storage.get('state'))?.match ?? null;
-    const fromMap = match === null ? '' : matchMap(match);
+  // The map being played comes from the server when staff set it, or else from the last check.
+  async stageNextMap(map: string, playing: string | null): Promise<void> {
+    const match = playing ? null : (parseState(await this.ctx.storage.get('state'))?.match ?? null);
+    const fromMap = playing || (match === null ? '' : matchMap(match));
     if (fromMap === '') return;
     const staged: StagedMap = { map, fromMap, at: Date.now() };
     await this.ctx.storage.put('nextMap', staged);
@@ -554,7 +555,7 @@ export default {
       unban: (target, by) => watcher().unban(target, by),
       vipAdd: (grant) => watcher().vipAdd(grant),
       vipRemove: (target) => watcher().vipRemove(target),
-      nextMap: (map) => watcher().stageNextMap(map),
+      nextMap: (map, playing) => watcher().stageNextMap(map, playing),
     };
     const result = await handleInteraction(
       await request.text(),

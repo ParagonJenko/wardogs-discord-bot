@@ -249,7 +249,18 @@ describe('runStaffCommand', () => {
       'POST /v1/match/end {}',
     ]);
     // For the live status, which cannot see a staged map in the rotation.
-    expect(records.nextMap.mock.calls).toEqual([['Europe'], ['Kavkazi']]);
+    // The server's status has no map here, and the rotation could not be read.
+    expect(records.nextMap.mock.calls).toEqual([
+      ['Europe', null],
+      ['Kavkazi', null],
+    ]);
+  });
+
+  it('notes the map being played as the server reports it when staff set the next map', async () => {
+    const { run, records } = setup({ 'GET /v1/status': [200, { ...status, map: 'NorthAmerica' }] });
+
+    await run('setnextmap', { map: 'Europe' });
+    expect(records.nextMap).toHaveBeenCalledWith('Europe', 'NorthAmerica');
   });
 
   it('/setnextmap still works when the next map cannot be noted for the live status', async () => {
