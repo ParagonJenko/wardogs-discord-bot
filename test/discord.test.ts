@@ -96,11 +96,13 @@ describe('buildMessage', () => {
     expect(plain?.footer).toBeUndefined();
   });
 
-  it('pings only the configured role', () => {
-    const message = buildMessage('seeding', server, { lowPop: 20, roleId: '999' });
+  it('pings only the configured role, on every kind of alert', () => {
+    for (const kind of ['seeding', 'live', 'lowPop'] as const) {
+      const message = buildMessage(kind, server, { lowPop: 20, roleId: '999' });
 
-    expect(message.content).toBe('<@&999>');
-    expect(message.allowed_mentions).toEqual({ parse: [], roles: ['999'] });
+      expect(message.content).toBe('<@&999>');
+      expect(message.allowed_mentions).toEqual({ parse: [], roles: ['999'] });
+    }
   });
 
   it('pings nobody when no role is configured, even if the server name contains @everyone', () => {
