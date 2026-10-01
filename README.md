@@ -27,8 +27,8 @@ And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/
 `/broadcast`, `/seeders` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
-population, daily peaks, the current and recent matches, Discord member counts and a public leaderboard
-(see [Website stats](#website-stats)). It keeps [player records](#player-records):
+population, daily peaks, the busiest hours, the current and recent matches, Discord member counts and a public
+leaderboard (see [Website stats](#website-stats)). It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. And it gives
 [automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week.
 
@@ -264,6 +264,7 @@ There is no chat log command: the game's RCON API has no way to read chat.
 | `server`       | Name, players, max players, map, phase (`empty`/`seeding`/`live`), score, `seenAt`     |
 | `history`      | `[time, players]` for every check in the last 24 hours                                 |
 | `days`         | Peak players and minutes live for each of the last 14 days (UTC)                       |
+| `hourly`       | `{ "days": 14, "players": [24 numbers] }`: the average players in each UTC hour (0 to 23) over the last 14 days, `null` for an hour with no readings |
 | `currentMatch` | Map, start time, peak, score and the top 5 players by kills                            |
 | `matches`      | The last 10 match summaries, newest first                                              |
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
