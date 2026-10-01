@@ -9,7 +9,7 @@ import { summarise, type MatchState } from './tracking.ts';
 
 export type PlayerTotals = {
   name: string;
-  // Minutes online while the server seeded, before it first went live.
+  // Minutes online while the server was seeding.
   seedingMinutes: number;
   // Minutes online once it had gone live, until it emptied.
   liveMinutes: number;
@@ -92,7 +92,7 @@ const update = (day: PlayerDay, entries: [steamId: string, name: string, change:
   ),
 });
 
-// Time online: seeding until the server first goes live, then live until it empties.
+// Time online, as seeding or live minutes.
 export const recordActivity = (day: PlayerDay, players: Player[], kind: 'seeding' | 'live', minutes: number): PlayerDay => {
   const field = kind === 'seeding' ? 'seedingMinutes' : 'liveMinutes';
   return update(

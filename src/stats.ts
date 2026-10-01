@@ -51,7 +51,7 @@ export type Observation = {
   // Who is online, for the private player records. Never copied into the public stats.
   players: Player[];
   phase: Phase;
-  // True while the server seeds before it first goes live. Once it has been live, it is not seeding until it empties.
+  // True while the server is seeding: filling up from empty, or building back up after a drop from live.
   seeding: boolean;
   match: MatchState;
 };
