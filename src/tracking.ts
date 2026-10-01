@@ -51,6 +51,9 @@ const matchKey = (status: ServerStatus): string => `${status.map}#${status.rotat
 
 const keyMap = (key: string): string => key.slice(0, key.lastIndexOf('#'));
 
+// The map a match is on, as RCON names it, or '' when no reading has had it yet.
+export const matchMap = (match: MatchState): string => keyMap(match.key);
+
 // Only the map counts: the rotation slot can move when an admin edits the rotation, and a reading can leave the map out.
 const mapChanged = (match: MatchState, status: ServerStatus): boolean => {
   const before = keyMap(match.key);

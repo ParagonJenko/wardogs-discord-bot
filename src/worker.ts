@@ -2,7 +2,8 @@ import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
-import { buildVipMessage, postWebhook } from './discord.ts';
+import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
+import { buildLiveStatus, buildVipMessage, postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
@@ -42,6 +43,7 @@ import {
   addBan,
   fetchBans,
   fetchConfig,
+  fetchRotation,
   fetchSnapshot,
   putConfig,
   RconError,
@@ -50,6 +52,7 @@ import {
   validateConfig,
   type HttpClient,
   type ServerConfig,
+  type Snapshot,
 } from './rcon.ts';
 import { socketHttp } from './socket-http.ts';
 import {
@@ -75,7 +78,7 @@ import {
   type RecentMatch,
   type SiteStats,
 } from './stats.ts';
-import { summarise, type MatchState } from './tracking.ts';
+import { matchMap, summarise, type MatchState } from './tracking.ts';
 import { addVip, parseVipState, removeVip, syncVip, vipDue, type VipState } from './vip.ts';
 
 type Env = {
@@ -98,6 +101,9 @@ const KNOWN_PLAYER_DAYS = 30;
 // Suggestions must reach Discord within 3 seconds.
 const SUGGEST_TIMEOUT_MS = 2_000;
 
+// A server that stopped answering this recently is most likely slow, not down, so the live status is left as it was.
+const OFFLINE_AFTER_MS = 3 * 60_000;
+
 const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => rest;
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -106,7 +112,8 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 // Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
-// the bot) and 'bans' (the bans the bot made, and when the timed ones end).
+// the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
+// status) and 'nextMap' (the map staff set to play next).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
@@ -184,9 +191,11 @@ export class Watcher extends DurableObject<Env> {
     const config = { ...loadConfig(stringVars(this.env)), pollIntervalMs: 60_000 };
     const storage = this.ctx.storage;
     const minutesPerCheck = config.pollIntervalMs / 60_000;
+    // What this check read from the server, for the live status.
+    const seen: { snapshot: Snapshot | null } = { snapshot: null };
     const poll = createPoller({
       config,
-      fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, socketHttp(connect)),
+      fetchSnapshot: async () => (seen.snapshot = await fetchSnapshot(config.rconUrl, config.rconPassword, socketHttp(connect))),
       send: (message) => postWebhook(config.webhookUrl, message),
       broadcast: (message) => sendBroadcast(config.rconUrl, config.rconPassword, message, socketHttp(connect)),
       now: Date.now,
@@ -202,6 +211,7 @@ export class Watcher extends DurableObject<Env> {
       },
     });
     await poll();
+    await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.updateVip(config));
 
@@ -213,6 +223,44 @@ export class Watcher extends DurableObject<Env> {
       } catch (error) {
         console.error(`Discord member count failed: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+  }
+
+  // Brings the live status message up to date, after the check has saved the match and stats it shows. A failure
+  // is logged and tried again next check; it never stops the bans and VIP updates after it.
+  private async updateBoard(config: Config, snapshot: Snapshot | null): Promise<void> {
+    const webhookUrl = config.statusWebhookUrl;
+    if (webhookUrl === undefined) return;
+    const storage = this.ctx.storage;
+    const now = Date.now();
+    try {
+      const stored = await storage.get(['board', 'state', 'stats', 'nextMap']);
+      const server = parseStats(stored.get('stats')).server;
+      if (snapshot === null && server !== null && now - server.seenAt < OFFLINE_AFTER_MS) return;
+      const match = parseState(stored.get('state'))?.match ?? null;
+      const next =
+        snapshot === null
+          ? null
+          : nextMap(
+              snapshot.status.map,
+              parseStagedMap(stored.get('nextMap')),
+              // Without the rotation, the live status just leaves the next map out.
+              await fetchRotation(config.rconUrl, config.rconPassword, socketHttp(connect)).catch(() => null),
+              now,
+            );
+      const message = buildLiveStatus(
+        { snapshot, lastSeen: server === null ? null : { name: server.name, at: server.seenAt }, match, nextMap: next, now },
+        config.rules,
+        config.siteUrl,
+      );
+      const ref = parseBoardRef(stored.get('board'));
+      const shown = await showBoard(webhookUrl, message, ref);
+      if (shown.messageId !== ref?.messageId) {
+        await storage.put('board', shown);
+        console.info(`Posted the live status (message ${shown.messageId})`);
+      }
+    } catch (error) {
+      console.error(`Live status update failed: ${errorText(error)}`);
     }
   }
 
@@ -418,6 +466,16 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
+  // Notes the map staff set to play next, and the map being played now: once the server leaves that, it has been played.
+  // The map being played comes from the server when staff set it, or else from the last check.
+  async stageNextMap(map: string, playing: string | null): Promise<void> {
+    const match = playing ? null : (parseState(await this.ctx.storage.get('state'))?.match ?? null);
+    const fromMap = playing || (match === null ? '' : matchMap(match));
+    if (fromMap === '') return;
+    const staged: StagedMap = { map, fromMap, at: Date.now() };
+    await this.ctx.storage.put('nextMap', staged);
+  }
+
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
   async seeders(days: number): Promise<SeederRow[]> {
     const keys = recentDayKeys(Date.now(), days);
@@ -497,6 +555,7 @@ export default {
       unban: (target, by) => watcher().unban(target, by),
       vipAdd: (grant) => watcher().vipAdd(grant),
       vipRemove: (target) => watcher().vipRemove(target),
+      nextMap: (map, playing) => watcher().stageNextMap(map, playing),
     };
     const result = await handleInteraction(
       await request.text(),

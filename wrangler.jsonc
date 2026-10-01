@@ -11,7 +11,8 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
   "observability": { "enabled": true },
-  // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README.
+  // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So is
+  // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status.
   "vars": {
     "DISCORD_ROLE_ID": "1554801355015594025",
     // Optional: an invite link that never expires, for the member counts in /api/stats.

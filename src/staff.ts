@@ -64,6 +64,9 @@ export type StaffRecords = {
   unban: (target: Named, by: string) => Promise<boolean>;
   vipAdd: (request: Named & { days: number; by: string }) => Promise<VipAddResult>;
   vipRemove: (request: Named & { by: string }) => Promise<VipRemoveResult>;
+  // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
+  // the server was on when staff set it, or null when that could not be read.
+  nextMap: (map: string, playing: string | null) => Promise<void>;
 };
 
 export type StaffDeps = {
@@ -347,11 +350,12 @@ export const runStaffCommand =
     }
 
     if (name === 'setnextmap' || name === 'changemap') {
-      const [maps, rotation, experiences, lightings] = await Promise.all([
+      const [maps, rotation, experiences, lightings, status] = await Promise.all([
         fetchMaps(rconUrl, rconPassword, http),
         optional(fetchRotation(rconUrl, rconPassword, http)),
         optional(fetchExperiences(rconUrl, rconPassword, http)),
         optional(fetchLightings(rconUrl, rconPassword, http)),
+        optional(fetchStatus(rconUrl, rconPassword, http)),
       ]);
       const map = findMap(options['map'], maps);
       if (map === null) return { content: 'Pick a map from the list.' };
@@ -364,6 +368,10 @@ export const runStaffCommand =
       const { setup, labels } = planned;
       log.info(`/${name} by ${staff}: ${map.id} ${JSON.stringify(setup)}`);
       await queueMap(rconUrl, rconPassword, map.id, http, setup);
+      // Read now: the bot's own reading can be up to a minute old, from before a map change.
+      const playing = status?.map || rotation?.entries.find((e) => e.status === 'now')?.map || null;
+      // The map is staged on the server either way; only the live status would miss it.
+      await records.nextMap(map.id, playing).catch((error: unknown) => log.info(`Next map not noted for the live status: ${String(error)}`));
       const described = [`${mapEmoji(map.id)}**${mapLabel(map)}**`, ...labels].join(' · ');
       if (name === 'setnextmap') {
         return { content: `🗺️ Next map: ${described}. The server goes there when this match ends; the rotation is unchanged.` };
