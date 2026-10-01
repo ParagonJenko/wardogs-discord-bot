@@ -14,6 +14,8 @@ It also posts:
 - **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D.
+- **A [live server status](#live-server-status)** (Cloudflare only): one message in a channel of its own,
+  edited every minute with the state, players, map, next map, score and top players.
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
 pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
@@ -78,6 +80,43 @@ To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` agai
 
 Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
 socket to the RCON listener and sends the HTTP request itself.
+
+## Live server status
+
+One message in a channel of its own that the bot edits every minute, so anyone can see the server at a glance:
+
+- **State:** live, seeding (and how many more it needs), empty, or offline with when it was last seen.
+- **Players:** the population bar.
+- **Maps:** the map, and the next map.
+- **Timing:** when the match started, or how long the server has been seeding.
+- **Score:** each team's score, with how many players are on each team.
+- **Top players:** the top 3 this match, by kills.
+
+Discord shows when it was last updated next to the footer, and times like "34 minutes ago" count up by themselves.
+
+To set it up:
+
+1. Make a channel, such as `#server-status`. In its permissions, turn off **Send Messages** for `@everyone`, so the
+   status stays the only message there.
+2. In that channel: settings → Integrations → Webhooks → New Webhook → Copy Webhook URL. Make a new webhook rather
+   than reusing the alerts one, or alerts would push the status up the channel.
+3. Store it as a secret:
+   ```bash
+   npx wrangler secret put DISCORD_STATUS_WEBHOOK_URL
+   ```
+
+The next check posts the message, and every check after that edits it.
+
+- **Deleted message:** the next check posts a new one.
+- **Changed webhook:** the bot posts in the new channel, and you delete the old message yourself.
+- **Server stops answering:** the message stays as it was for 3 minutes (a slow reply or a quick restart), then
+  shows the server as offline.
+- **Next map:** the rotation's next map, or the map staff set with `/setnextmap` or `/changemap` while this match
+  is on.
+- **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
+
+It costs one more RCON request (the rotation) and one Discord edit a minute. The Node/Docker version does not
+have it.
 
 ## Slash commands
 

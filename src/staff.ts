@@ -64,6 +64,8 @@ export type StaffRecords = {
   unban: (target: Named, by: string) => Promise<boolean>;
   vipAdd: (request: Named & { days: number; by: string }) => Promise<VipAddResult>;
   vipRemove: (request: Named & { by: string }) => Promise<VipRemoveResult>;
+  // Notes the map staff set to play next, for the live status: the rotation does not show it.
+  nextMap: (map: string) => Promise<void>;
 };
 
 export type StaffDeps = {
@@ -364,6 +366,8 @@ export const runStaffCommand =
       const { setup, labels } = planned;
       log.info(`/${name} by ${staff}: ${map.id} ${JSON.stringify(setup)}`);
       await queueMap(rconUrl, rconPassword, map.id, http, setup);
+      // The map is staged on the server either way; only the live status would miss it.
+      await records.nextMap(map.id).catch((error: unknown) => log.info(`Next map not noted for the live status: ${String(error)}`));
       const described = [`${mapEmoji(map.id)}**${mapLabel(map)}**`, ...labels].join(' · ');
       if (name === 'setnextmap') {
         return { content: `🗺️ Next map: ${described}. The server goes there when this match ends; the rotation is unchanged.` };

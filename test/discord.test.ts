@@ -8,6 +8,7 @@ import {
   buildPlayersEmbed,
   buildRotationEmbed,
   buildSeedersEmbed,
+  buildLiveStatus,
   buildStatusEmbed,
   buildVipMessage,
   postWebhook,
@@ -247,6 +248,101 @@ describe('buildStatusEmbed', () => {
 
   it('links to the website when there is one', () => {
     expect(buildStatusEmbed(status, rules, 'https://gaminginit.com')).toMatchObject({ url: 'https://gaminginit.com' });
+  });
+});
+
+describe('buildLiveStatus', () => {
+  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 };
+  const NOW = Date.UTC(2026, 9, 1, 20, 0);
+  const status = {
+    name: 'UK Wardogs #1',
+    players: 24,
+    maxPlayers: 98,
+    map: 'Europe',
+    rotationIndex: 1,
+    factionScores: [
+      { name: 'Valkyra', score: 43 },
+      { name: 'Lonestar', score: 51 },
+    ],
+  };
+  const player = (name: string, faction: string) => ({ steamId: name, name, kills: 0, deaths: 0, faction });
+  const players = [player('Ash', 'Lonestar'), player('Bo', 'Valkyra'), player('Cy', 'Valkyra')];
+  const tracked = (name: string, kills: number, deaths: number) => ({ name, kills, deaths, lastKills: kills, lastDeaths: deaths });
+  const match = {
+    key: 'Europe#1',
+    startedAt: NOW - 40 * 60_000,
+    lastSeenAt: NOW,
+    liveAt: NOW - 25 * 60_000,
+    summarisable: true,
+    peakPlayers: 30,
+    players: { a: tracked('Ash', 12, 3), b: tracked('Bo', 7, 5), c: tracked('Cy', 0, 2), d: tracked('Di', 9, 9) },
+    factionScores: status.factionScores,
+  };
+  const view = { snapshot: { status, players }, lastSeen: null, match, nextMap: 'Kavkazi', now: NOW };
+
+  it('shows a live match: players, map, next map, when it started, the score with team sizes and the top players', () => {
+    expect(buildLiveStatus(view, rules, 'https://gaminginit.com')).toEqual({
+      embeds: [
+        {
+          title: 'UK Wardogs #1',
+          url: 'https://gaminginit.com',
+          description: '🟢 **Live**\nGet in while there are slots!',
+          color: 0x2ecc71,
+          fields: [
+            { name: 'Players', value: '🟩🟩⬛⬛⬛⬛⬛⬛⬛⬛ **24**/98' },
+            { name: 'Map', value: '🟦 Ozeti', inline: true },
+            { name: 'Next map', value: '🟧 Bakurani', inline: true },
+            { name: 'Match started', value: `<t:${(NOW - 25 * 60_000) / 1000}:R>`, inline: true },
+            { name: 'Score', value: '🤠 **Lonestar 51** · 1 on\n🐻 Valkyra 43 · 2 on', inline: true },
+            { name: 'Top players', value: '🥇 **Ash** · 12 kills\n🥈 **Di** · 9 kills\n🥉 **Bo** · 7 kills', inline: true },
+          ],
+          footer: { text: 'Updates every minute · Live stats and leaderboard: gaminginit.com' },
+          timestamp: '2026-10-01T20:00:00.000Z',
+        },
+      ],
+      allowed_mentions: { parse: [], roles: [] },
+    });
+  });
+
+  it('does not tell people to get in when the server is full', () => {
+    const full = buildLiveStatus({ ...view, snapshot: { status: { ...status, players: 98 }, players } }, rules);
+
+    expect(embedOf(full)?.description).toBe('🟢 **Live**\nFull right now. Keep trying!');
+  });
+
+  it('says how many more a seeding server needs, and how long it has been seeding', () => {
+    const seeding = buildLiveStatus(
+      { ...view, snapshot: { status: { ...status, players: 6, factionScores: [] }, players }, match: { ...match, liveAt: null } },
+      rules,
+    );
+
+    expect(embedOf(seeding)).toMatchObject({ description: '🌱 **Seeding** · 14 more to go live\nJump in and help get it live!', color: 0xf1c40f });
+    expect(field(seeding, 'Seeding since')).toBe(`<t:${(NOW - 40 * 60_000) / 1000}:R>`);
+    expect(field(seeding, 'Top players')).toBeUndefined();
+    expect(embedOf(seeding)?.footer).toEqual({ text: 'Updates every minute' });
+  });
+
+  it('shows an empty server without the last match', () => {
+    const empty = buildLiveStatus({ ...view, snapshot: { status: { ...status, players: 0 }, players: [] }, nextMap: null }, rules);
+
+    expect(embedOf(empty)).toMatchObject({ description: '⚪ **Empty**\nBe the first in!', color: 0x95a5a6 });
+    expect(embedOf(empty)?.fields?.map((f) => f.name)).toEqual(['Players', 'Map']);
+  });
+
+  it('shows the server offline, with when it was last seen', () => {
+    const offline = buildLiveStatus({ ...view, snapshot: null, lastSeen: { name: 'UK Wardogs #1', at: NOW - 10 * 60_000 } }, rules);
+
+    expect(embedOf(offline)).toEqual({
+      title: 'UK Wardogs #1',
+      description: `🔴 **Offline** · Last seen <t:${(NOW - 10 * 60_000) / 1000}:R>`,
+      color: 0xe74c3c,
+      footer: { text: 'Updates every minute' },
+      timestamp: '2026-10-01T20:00:00.000Z',
+    });
+    expect(embedOf(buildLiveStatus({ ...view, snapshot: null }, rules))).toMatchObject({
+      title: 'Server status',
+      description: "🔴 **Offline** · Can't reach the server",
+    });
   });
 });
 

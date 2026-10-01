@@ -13,12 +13,14 @@ const records: StaffRecords = {
   unban: vi.fn(),
   vipAdd: vi.fn(),
   vipRemove: vi.fn(),
+  nextMap: vi.fn(async () => undefined),
 };
 
 const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
   rconPassword: 'secret',
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
+  statusWebhookUrl: undefined,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,

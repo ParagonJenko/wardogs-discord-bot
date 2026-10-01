@@ -1,10 +1,10 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
 import { isBotBan, type BanRecord, type ModAction } from './moderation.ts';
-import type { Ban, FactionScore, Player, Rotation, ServerStatus } from './rcon.ts';
+import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
 import type { RecentMatch } from './stats.ts';
-import type { MatchSummary } from './tracking.ts';
+import { topPlayers, type MatchState, type MatchSummary } from './tracking.ts';
 
 export type EmbedField = { name: string; value: string; inline?: boolean };
 
@@ -319,6 +319,98 @@ export const buildStatusEmbed = (status: ServerStatus, rules: AlertRules, siteUr
   };
 };
 
+// The live status message, kept in a channel of its own and edited on every check.
+export type LiveView = {
+  // Null when the server could not be reached.
+  snapshot: Snapshot | null;
+  // The server's name and when it was last reached, for when it cannot be reached now.
+  lastSeen: { name: string; at: number } | null;
+  match: MatchState | null;
+  nextMap: string | null;
+  now: number;
+};
+
+const OFFLINE_COLOR = 0xe74c3c;
+const LIVE_TOP_PLAYERS = 3;
+
+const LIVE_HEADLINES: Record<Phase, string> = {
+  live: 'Get in while there are slots!',
+  seeding: 'Jump in and help get it live!',
+  empty: 'Be the first in!',
+};
+
+// Each faction's score, with how many of its players are on: 🐻 **Valkyra 45** · 12 on
+const scoreWithTeams = (scores: FactionScore[], players: Player[]): string => {
+  const counted = players.some((p) => p.faction);
+  return byScore(scores)
+    .map((s, i) => {
+      const text = `${escapeMarkdown(s.name)} ${s.score}`;
+      const on = players.filter((p) => p.faction && factionKey(p.faction) === factionKey(s.name)).length;
+      return `${factionBadge(s.name, s.colorHex)}${i === 0 ? `**${text}**` : text}${counted ? ` · ${on} on` : ''}`;
+    })
+    .join('\n');
+};
+
+export const buildLiveStatus = (view: LiveView, rules: AlertRules, siteUrl?: string): DiscordMessage => {
+  const linked = site(siteUrl);
+  const footer = { text: ['Updates every minute', linked.footer?.text].filter(Boolean).join(' · ') };
+  const timestamp = new Date(view.now).toISOString();
+  const { snapshot, match } = view;
+
+  if (snapshot === null) {
+    const seen = view.lastSeen;
+    return {
+      embeds: [
+        {
+          title: shorten(seen?.name ?? 'Server status'),
+          description: `🔴 **Offline** · ${seen ? `Last seen ${when(seen.at, 'R')}` : "Can't reach the server"}`,
+          color: OFFLINE_COLOR,
+          ...(linked.url ? { url: linked.url } : {}),
+          footer,
+          timestamp,
+        },
+      ],
+      allowed_mentions: NO_PINGS,
+    };
+  }
+
+  const { status, players } = snapshot;
+  const phase = phaseFor(status.players, rules);
+  const toGo = phase === 'seeding' ? ` · ${Math.max(0, rules.live - status.players)} more to go live` : '';
+  const full = status.maxPlayers > 0 && status.players >= status.maxPlayers;
+  // How long this match has been going, or how long the server has been seeding.
+  const started = match !== null && match.peakPlayers > 0 && phase !== 'empty' ? (match.liveAt ?? match.startedAt) : null;
+  const top = phase === 'live' && match !== null ? topPlayers(match.players, LIVE_TOP_PLAYERS).filter((p) => p.kills > 0) : [];
+  const fields: EmbedField[] = [
+    { name: 'Players', value: population(status.players, status.maxPlayers, phase) },
+    ...(status.map ? [{ name: 'Map', value: mapTitle(status.map), inline: true }] : []),
+    ...(view.nextMap ? [{ name: 'Next map', value: mapTitle(view.nextMap), inline: true }] : []),
+    ...(started !== null
+      ? [{ name: match?.liveAt ? 'Match started' : 'Seeding since', value: when(started, 'R'), inline: true }]
+      : []),
+    ...(status.factionScores.length > 0 && phase !== 'empty'
+      ? [{ name: 'Score', value: scoreWithTeams(status.factionScores, players), inline: true }]
+      : []),
+    ...(top.length > 0
+      ? [{ name: 'Top players', value: ranked(top.map((p) => `**${playerName(p.name)}** · ${plural(p.kills, 'kill')}`)), inline: true }]
+      : []),
+  ];
+  return {
+    embeds: [
+      {
+        title: shorten(status.name),
+        description: `${PHASE_LABELS[phase].label}${toGo}\n${full ? 'Full right now. Keep trying!' : LIVE_HEADLINES[phase]}`,
+        color: PHASE_LABELS[phase].color,
+        fields,
+        ...(linked.url ? { url: linked.url } : {}),
+        footer,
+        timestamp,
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
 export const postWebhook = async (
   webhookUrl: string,
   message: DiscordMessage,
@@ -538,6 +630,7 @@ const hoursAndMinutes = (total: number): string => {
   return hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
 };
 
+// Discord shows these in each viewer's own time, and keeps "5 minutes ago" up to date by itself.
 const when = (at: number, style: 'f' | 'd' | 'R'): string => `<t:${Math.floor(at / 1000)}:${style}>`;
 
 const cut = (text: string): string => (text.length > MAX_REASON_SHOWN ? `${text.slice(0, MAX_REASON_SHOWN - 1)}…` : text);

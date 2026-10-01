@@ -16,6 +16,7 @@ const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
   rconPassword: 'secret',
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
+  statusWebhookUrl: undefined,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
@@ -79,6 +80,7 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   unban: vi.fn(async () => true),
   vipAdd: vi.fn(async () => ({ outcome: 'added' as const, until: NOW + 30 * 86_400_000 })),
   vipRemove: vi.fn(async () => ({ outcome: 'removed' as const })),
+  nextMap: vi.fn(async () => undefined),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -232,7 +234,7 @@ describe('runStaffCommand', () => {
   });
 
   it('/setnextmap queues the map; /changemap also ends the match', async () => {
-    const { run, sent } = setup();
+    const { run, sent, records } = setup();
 
     await expect(run('setnextmap', { map: 'Europe' })).resolves.toEqual({
       content: '🗺️ Next map: 🟦 **Ozeti**. The server goes there when this match ends; the rotation is unchanged.',
@@ -246,6 +248,16 @@ describe('runStaffCommand', () => {
       `POST /v1/match/map ${JSON.stringify({ map: 'Kavkazi' })}`,
       'POST /v1/match/end {}',
     ]);
+    // For the live status, which cannot see a staged map in the rotation.
+    expect(records.nextMap.mock.calls).toEqual([['Europe'], ['Kavkazi']]);
+  });
+
+  it('/setnextmap still works when the next map cannot be noted for the live status', async () => {
+    const { run, records, log } = setup();
+    records.nextMap.mockRejectedValueOnce(new Error('storage down'));
+
+    await expect(run('setnextmap', { map: 'Europe' })).resolves.toMatchObject({ content: expect.stringContaining('Next map') });
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('storage down'));
   });
 
   it('/setnextmap plays the map as the rotation does, changing only what staff asked', async () => {

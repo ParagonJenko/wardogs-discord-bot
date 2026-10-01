@@ -20,6 +20,9 @@ const rconUrl = z
         'must be the address and port only, like http://203.0.113.10:7776 (no path after the port)',
       ),
   );
+const webhookUrl = z
+  .string()
+  .regex(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/, 'must be a Discord webhook URL');
 const count = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
 // An invite code, or a discord.gg / discord.com/invite link; only the code is kept.
 const invite = z
@@ -34,9 +37,9 @@ const EnvSchema = z
   .object({
     RCON_URL: rconUrl,
     RCON_PASSWORD: z.string().min(1),
-    DISCORD_WEBHOOK_URL: z
-      .string()
-      .regex(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/, 'must be a Discord webhook URL'),
+    DISCORD_WEBHOOK_URL: webhookUrl,
+    // A webhook in a channel of its own, for the live server status the bot keeps up to date there.
+    DISCORD_STATUS_WEBHOOK_URL: webhookUrl.optional(),
     DISCORD_ROLE_ID: numericId.optional(),
     DISCORD_INVITE: invite.optional(),
     // The community website; Discord posts link to it.
@@ -76,6 +79,8 @@ export type Config = {
   rconUrl: string;
   rconPassword: string;
   webhookUrl: string;
+  // Where the live server status is kept, when there is one.
+  statusWebhookUrl: string | undefined;
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
@@ -103,6 +108,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     rconUrl: e.RCON_URL,
     rconPassword: e.RCON_PASSWORD,
     webhookUrl: e.DISCORD_WEBHOOK_URL,
+    statusWebhookUrl: e.DISCORD_STATUS_WEBHOOK_URL,
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,

@@ -13,6 +13,7 @@ describe('loadConfig', () => {
       rconUrl: 'http://203.0.113.10:7776',
       rconPassword: 'secret',
       webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123',
+      statusWebhookUrl: undefined,
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
@@ -22,6 +23,14 @@ describe('loadConfig', () => {
       vip: null,
       matchMessages: null,
     });
+  });
+
+  it('reads the webhook for the live status, which must be a Discord webhook too', () => {
+    const url = 'https://discord.com/api/webhooks/222/status-Token_9';
+    expect(loadConfig({ ...required, DISCORD_STATUS_WEBHOOK_URL: url }).statusWebhookUrl).toBe(url);
+    expect(() => loadConfig({ ...required, DISCORD_STATUS_WEBHOOK_URL: 'https://example.com/hook' })).toThrow(
+      /DISCORD_STATUS_WEBHOOK_URL/,
+    );
   });
 
   it('reads the website address for links in Discord posts', () => {
