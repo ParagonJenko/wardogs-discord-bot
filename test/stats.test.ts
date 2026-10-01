@@ -5,6 +5,7 @@ import {
   discordDue,
   emptyStats,
   HISTORY_MS,
+  hourlyAverages,
   MATCHES_KEPT,
   parseStats,
   publicStats,
@@ -129,6 +130,25 @@ describe('recordObservation', () => {
     expect(stats.days[0]?.day).toBe('2026-10-03');
   });
 
+  it('adds each reading to its UTC hour, for the last 14 days', () => {
+    const stats = [
+      observation(MIDNIGHT + 20 * HOUR, 30),
+      observation(MIDNIGHT + 20 * HOUR + 30 * 60_000, 40),
+      observation(MIDNIGHT + 21 * HOUR, 10),
+      observation(MIDNIGHT + DAY + 20 * HOUR, 50),
+    ].reduce((acc, obs) => recordObservation(acc, obs, 1), emptyStats());
+
+    expect(stats.hours.map((h) => h.day)).toEqual(['2026-09-30', '2026-10-01']);
+    expect(stats.hours[0]?.players[20]).toBe(70);
+    expect(stats.hours[0]?.readings[20]).toBe(2);
+    expect(stats.hours[0]?.players[21]).toBe(10);
+    expect(stats.hours[0]?.readings[21]).toBe(1);
+    expect(stats.hours[1]?.readings.reduce((a, b) => a + b)).toBe(1);
+
+    const later = recordObservation(stats, observation(MIDNIGHT + DAYS_KEPT * DAY, 5), 1);
+    expect(later.hours.map((h) => h.day)).toEqual(['2026-10-01', '2026-10-14']);
+  });
+
   it('shows the current match top players without their Steam IDs', () => {
     const stats = recordObservation(emptyStats(), observation(MIDNIGHT, 30), 1);
 
@@ -187,6 +207,17 @@ describe('parseStats', () => {
     expect(parseStats(structuredClone(stats))).toEqual(stats);
   });
 
+  it('starts the hours from the last 24 hours of readings when they were saved without them', () => {
+    const stats = [0, 1, 2].reduce(
+      (acc, minutes) => recordObservation(acc, observation(MIDNIGHT + 20 * HOUR + minutes * 60_000, 30 + minutes), 1),
+      emptyStats(),
+    );
+    const { hours, ...older } = stats;
+
+    expect(parseStats(structuredClone(older))).toEqual(stats);
+    expect(hours[0]?.readings[20]).toBe(3);
+  });
+
   it('starts fresh when nothing or something unrecognisable was saved', () => {
     expect(parseStats(undefined)).toEqual(emptyStats());
     expect(parseStats({ history: 'nope' })).toEqual(emptyStats());
@@ -199,12 +230,43 @@ describe('publicStats', () => {
     const leaderboard = { days: 30, kdMinMatches: 3, kills: [], kd: [], playtime: [], seeding: [] };
     const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
 
+    const { hours: _hours, ...stats } = emptyStats();
+
     expect(publicStats(emptyStats(), rules, MIDNIGHT, { leaderboard, vip })).toEqual({
-      ...emptyStats(),
+      ...stats,
       generatedAt: MIDNIGHT,
       thresholds: { seeding: 1, live: 20 },
+      hourly: { days: DAYS_KEPT, players: Array(24).fill(null) },
       leaderboard,
       vip,
     });
+  });
+});
+
+describe('hourlyAverages', () => {
+  it(`averages the players in each UTC hour over the last ${DAYS_KEPT} days, with null for an hour with no readings`, () => {
+    const stats = [
+      observation(MIDNIGHT + 20 * HOUR, 30),
+      observation(MIDNIGHT + 20 * HOUR + 30 * 60_000, 40),
+      observation(MIDNIGHT + DAY + 20 * HOUR, 50),
+      observation(MIDNIGHT + DAY + 3 * HOUR, 1),
+      observation(MIDNIGHT + DAY + 3 * HOUR + 60_000, 2),
+      observation(MIDNIGHT + DAY + 3 * HOUR + 2 * 60_000, 2),
+    ].reduce((acc, obs) => recordObservation(acc, obs, 1), emptyStats());
+
+    const { days, players } = hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR);
+
+    expect(days).toBe(DAYS_KEPT);
+    expect(players).toHaveLength(24);
+    expect(players[20]).toBe(40);
+    expect(players[3]).toBe(1.7);
+    expect(players.filter((p) => p === null)).toHaveLength(22);
+  });
+
+  it('leaves out days older than that, as after a long outage', () => {
+    const stats = recordObservation(emptyStats(), observation(MIDNIGHT + 20 * HOUR, 30), 1);
+
+    expect(hourlyAverages(stats.hours, MIDNIGHT + (DAYS_KEPT - 1) * DAY).players[20]).toBe(30);
+    expect(hourlyAverages(stats.hours, MIDNIGHT + DAYS_KEPT * DAY).players[20]).toBeNull();
   });
 });

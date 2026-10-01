@@ -13,6 +13,12 @@ export type Sample = [at: number, players: number];
 
 export type DayStats = { day: string; peak: number; liveMinutes: number };
 
+// Each UTC day's readings by UTC hour (index 0 to 23): the players summed over the readings, and how many readings.
+export type HourTotals = { day: string; players: number[]; readings: number[] };
+
+// The average players in each UTC hour over the last `days` days, null for an hour with no readings.
+export type Hourly = { days: number; players: (number | null)[] };
+
 export type RecentMatch = MatchSummary & { endedAt: number };
 
 export type CurrentMatch = {
@@ -40,6 +46,8 @@ export type SiteStats = {
   server: ServerSnapshot | null;
   history: Sample[];
   days: DayStats[];
+  // Kept for the site's busiest times, and sent to it as `hourly`.
+  hours: HourTotals[];
   matches: RecentMatch[];
   currentMatch: CurrentMatch | null;
   discord: DiscordCounts | null;
@@ -66,6 +74,7 @@ export const emptyStats = (): SiteStats => ({
   server: null,
   history: [],
   days: [],
+  hours: [],
   matches: [],
   currentMatch: null,
   discord: null,
@@ -88,6 +97,8 @@ const SiteStatsSchema = z.object({
     .nullable(),
   history: z.array(z.tuple([z.number(), z.number()])),
   days: z.array(z.object({ day: z.string(), peak: z.number(), liveMinutes: z.number() })),
+  // Missing from stats saved before it was added.
+  hours: z.array(z.object({ day: z.string(), players: z.array(z.number()), readings: z.array(z.number()) })).optional(),
   matches: z.array(
     z.object({
       map: z.string(),
@@ -113,14 +124,32 @@ const SiteStatsSchema = z.object({
     .nullable(),
 });
 
-// Reads what a store saved. Anything unrecognisable starts fresh rather than breaking the page.
-export const parseStats = (raw: unknown): SiteStats => {
-  const parsed = SiteStatsSchema.safeParse(raw);
-  return parsed.success ? parsed.data : emptyStats();
-};
-
 // Days are UTC dates, so every visitor sees the same boundaries.
 export const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
+
+// Adds one reading to its UTC hour, keeping the hours inside the last DAYS_KEPT calendar days like recordDay.
+const recordHour = (hours: HourTotals[], at: number, players: number): HourTotals[] => {
+  const day = dayOf(at);
+  const oldest = dayOf(at - (DAYS_KEPT - 1) * DAY_MS);
+  const hour = new Date(at).getUTCHours();
+  const today = hours.find((h) => h.day === day) ?? { day, players: Array(24).fill(0), readings: Array(24).fill(0) };
+  const updated = {
+    day,
+    players: today.players.map((total, h) => (h === hour ? total + players : total)),
+    readings: today.readings.map((count, h) => (h === hour ? count + 1 : count)),
+  };
+  return [...hours.filter((h) => h.day !== day && h.day >= oldest), updated].sort((a, b) => a.day.localeCompare(b.day));
+};
+
+// Reads what a store saved. Anything unrecognisable starts fresh rather than breaking the page. Stats saved before
+// the hours were kept start them from the last 24 hours of readings, so the busiest times do not start empty.
+export const parseStats = (raw: unknown): SiteStats => {
+  const parsed = SiteStatsSchema.safeParse(raw);
+  if (!parsed.success) return emptyStats();
+  const { hours, ...stats } = parsed.data;
+  const fromHistory = () => stats.history.reduce<HourTotals[]>((acc, [at, players]) => recordHour(acc, at, players), []);
+  return { ...stats, hours: hours ?? fromHistory() };
+};
 
 // Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
 const recordDay = (days: DayStats[], at: number, players: number, liveMinutes: number): DayStats[] => {
@@ -156,6 +185,7 @@ export const recordObservation = (stats: SiteStats, obs: Observation, minutesPer
   },
   history: [...stats.history.filter(([at]) => at > obs.at - HISTORY_MS), [obs.at, obs.status.players]],
   days: recordDay(stats.days, obs.at, obs.status.players, obs.phase === 'live' ? minutesPerCheck : 0),
+  hours: recordHour(stats.hours, obs.at, obs.status.players),
   currentMatch: currentMatch(obs.match, obs.status),
 });
 
@@ -179,15 +209,35 @@ export const recordDiscord = (stats: SiteStats, discord: DiscordCounts): SiteSta
 // The leaderboard (names only) and what seeding earns come from the player records, which are read separately.
 export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null };
 
-export type PublicStats = SiteStats &
+export type PublicStats = Omit<SiteStats, 'hours'> &
   PublicExtras & {
     generatedAt: number;
     thresholds: { seeding: number; live: number };
+    hourly: Hourly;
   };
 
-export const publicStats = (stats: SiteStats, rules: AlertRules, now: number, extras: PublicExtras): PublicStats => ({
+// Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players
+// summed over its readings. Rounded to a tenth to keep the JSON short.
+export const hourlyAverages = (hours: HourTotals[], now: number): Hourly => {
+  const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
+  const kept = hours.filter((h) => h.day >= oldest);
+  const players = Array.from({ length: 24 }, (_, hour) => {
+    const total = kept.reduce((sum, h) => sum + (h.players[hour] ?? 0), 0);
+    const readings = kept.reduce((sum, h) => sum + (h.readings[hour] ?? 0), 0);
+    return readings === 0 ? null : Math.round((total / readings) * 10) / 10;
+  });
+  return { days: DAYS_KEPT, players };
+};
+
+export const publicStats = (
+  { hours, ...stats }: SiteStats,
+  rules: AlertRules,
+  now: number,
+  extras: PublicExtras,
+): PublicStats => ({
   generatedAt: now,
   thresholds: { seeding: rules.seeding, live: rules.live },
   ...stats,
+  hourly: hourlyAverages(hours, now),
   ...extras,
 });
