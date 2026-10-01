@@ -309,7 +309,7 @@ A player page has:
 | ---------- | ------------------------------------------------------------------------------------------ |
 | `name`     | The name they used most recently                                                           |
 | `activity` | Each UTC day they were on in the last 90 days: seeding and live minutes, seed day, matches, kills and deaths |
-| `matches`  | Their matches in the last 90 days (up to 500), newest first: map, end time, length, kills, deaths, place on the scoreboard out of how many, their side (`faction`), `result` (`won`, `lost` or `draw`) and the scores |
+| `matches`  | Their matches in the last 90 days (up to 500), newest first: map, end time, length, kills, deaths, place on the scoreboard out of how many, their side (`faction`), `result` (`won`, `lost` or `draw`) and every side's score, with its in-game colour (`colorHex`) when the server reported it |
 | `ranks`    | Their place on each leaderboard board over the last 30 days (null when they are not on it), out of how many players |
 | `online`   | When they are in game now: the map, their side, and their kills and deaths this match      |
 | `vip`      | `{ until }` while they have a reserved slot from the bot                                   |

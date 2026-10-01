@@ -173,7 +173,8 @@ const MatchRecordSchema = z.object({
   endedAt: z.number(),
   durationMs: z.number(),
   peakPlayers: z.number(),
-  factionScores: z.array(z.object({ name: z.string(), score: z.number() })),
+  // Each side's colour in game is kept when the server reported it, for the player pages.
+  factionScores: z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() })),
   players: z.array(
     z.object({ steamId: z.string(), name: z.string(), kills: z.number(), deaths: z.number(), faction: z.string().optional() }),
   ),

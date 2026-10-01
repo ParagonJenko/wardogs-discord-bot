@@ -97,6 +97,16 @@ describe('playerMatch', () => {
     expect(playerMatch(record(), BO)).toMatchObject({ faction: 'Lone Star', result: 'lost' });
   });
 
+  it('sends every side’s score, with its colour when the server reported it', () => {
+    const scores = [
+      { name: 'Valkyra', score: 100, colorHex: '#ff3333' },
+      { name: 'Lonestar', score: 72, colorHex: '#3366ff' },
+      { name: 'Manticore', score: 41, colorHex: '#f4900c' },
+    ];
+
+    expect(playerMatch(record({ factionScores: scores }), ASH)).toMatchObject({ result: 'won', factionScores: scores });
+  });
+
   it('calls a level score a draw for the sides on top', () => {
     const level = record({ factionScores: [{ name: 'Valkyra', score: 80 }, { name: 'Lonestar', score: 80 }] });
 

@@ -225,6 +225,17 @@ describe('parseMatchRecord', () => {
     expect(parseMatchRecord({ map: 'Ozeti' })).toBeNull();
   });
 
+  it('keeps each side’s colour when the server reported it', () => {
+    const scores = [
+      { name: 'Valkyra', score: 100, colorHex: '#ff3333' },
+      { name: 'Lonestar', score: 72, colorHex: '#3366ff' },
+      { name: 'Manticore', score: 41 },
+    ];
+    const record = matchRecord({ ...match, factionScores: scores }, NOON);
+
+    expect(parseMatchRecord(structuredClone(record))?.factionScores).toEqual(scores);
+  });
+
   it('keeps the side each player ended on, and reads matches recorded without sides', () => {
     const sided: MatchState = { ...match, players: { ...match.players, a: { ...match.players['a']!, faction: 'Valkyra' } } };
     const record = matchRecord(sided, NOON);
