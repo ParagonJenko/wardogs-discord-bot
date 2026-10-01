@@ -70,9 +70,9 @@ describe('match tracking', () => {
           { name: 'Kharr', score: 300 },
         ],
         top: [
-          { name: 'Pc', kills: 12, deaths: 3 },
-          { name: 'Pa', kills: 11, deaths: 2 },
-          { name: 'Pb', kills: 4, deaths: 6 },
+          { steamId: 'c', name: 'Pc', kills: 12, deaths: 3 },
+          { steamId: 'a', name: 'Pa', kills: 11, deaths: 2 },
+          { steamId: 'b', name: 'Pb', kills: 4, deaths: 6 },
         ],
       },
     ]);
@@ -111,9 +111,9 @@ describe('match tracking', () => {
     expect(finished).toEqual([
       expect.objectContaining({
         top: [
-          { name: 'Pa', kills: 11, deaths: 3 },
-          { name: 'Pb', kills: 6, deaths: 0 },
-          { name: 'Pc', kills: 3, deaths: 0 },
+          { steamId: 'a', name: 'Pa', kills: 11, deaths: 3 },
+          { steamId: 'b', name: 'Pb', kills: 6, deaths: 0 },
+          { steamId: 'c', name: 'Pc', kills: 3, deaths: 0 },
         ],
       }),
     ]);
@@ -128,7 +128,7 @@ describe('match tracking', () => {
       { status: status({ map: 'Europe', rotationIndex: 1 }), players: [] },
     ]);
 
-    expect(finished).toEqual([expect.objectContaining({ map: 'Kavkazi', top: [{ name: 'Pa', kills: 4, deaths: 0 }] })]);
+    expect(finished).toEqual([expect.objectContaining({ map: 'Kavkazi', top: [{ steamId: 'a', name: 'Pa', kills: 4, deaths: 0 }] })]);
   });
 
   it('keeps one match when the scores drop but the players’ counters do not (a bad reading)', () => {
@@ -139,7 +139,7 @@ describe('match tracking', () => {
       { status: status({ map: 'Europe', rotationIndex: 1 }), players: [] },
     ]);
 
-    expect(finished).toEqual([expect.objectContaining({ top: [{ name: 'Pa', kills: 7, deaths: 0 }, { name: 'Pb', kills: 3, deaths: 0 }] })]);
+    expect(finished).toEqual([expect.objectContaining({ top: [{ steamId: 'a', name: 'Pa', kills: 7, deaths: 0 }, { steamId: 'b', name: 'Pb', kills: 3, deaths: 0 }] })]);
   });
 
   it('treats most counters starting again as a restart when the server reports no scores', () => {
@@ -212,8 +212,8 @@ describe('match tracking', () => {
     ]);
 
     expect(finished).toEqual([
-      expect.objectContaining({ map: 'Kavkazi', durationMs: 60_000, top: [{ name: 'Pa', kills: 9, deaths: 0 }] }),
-      expect.objectContaining({ map: 'Kavkazi', durationMs: 0, top: [{ name: 'Pb', kills: 2, deaths: 0 }] }),
+      expect.objectContaining({ map: 'Kavkazi', durationMs: 60_000, top: [{ steamId: 'a', name: 'Pa', kills: 9, deaths: 0 }] }),
+      expect.objectContaining({ map: 'Kavkazi', durationMs: 0, top: [{ steamId: 'b', name: 'Pb', kills: 2, deaths: 0 }] }),
     ]);
   });
 
@@ -229,6 +229,17 @@ describe('match tracking', () => {
     expect(joined.match).toMatchObject({ startedAt: 11 * 60_000, liveAt: null, peakPlayers: 1 });
   });
 
+  it('keeps the side each player was last seen on, through readings that leave it out', () => {
+    const { match } = [
+      [{ ...player('a', 1), faction: 'Valkyra' }, player('b')],
+      [{ ...player('a', 2), faction: 'Kharr' }, player('b')],
+      [player('a', 3), player('b')],
+    ].reduce<{ match: MatchState | null }>((acc, players, i) => observeMatch(acc.match, status(), players, true, i * 60_000), { match: null });
+
+    expect(match?.players['a']).toMatchObject({ kills: 3, faction: 'Kharr' });
+    expect(match?.players['b']).not.toHaveProperty('faction');
+  });
+
   it('keeps the last known kills when a reading leaves them out, without treating it as a restart', () => {
     const unknown = { ...player('a'), kills: null, deaths: null };
     const { finished } = observe([
@@ -237,6 +248,6 @@ describe('match tracking', () => {
       { status: status({ map: 'Europe' }), players: [] },
     ]);
 
-    expect(finished).toEqual([expect.objectContaining({ top: [{ name: 'Pa', kills: 6, deaths: 2 }] })]);
+    expect(finished).toEqual([expect.objectContaining({ top: [{ steamId: 'a', name: 'Pa', kills: 6, deaths: 2 }] })]);
   });
 });

@@ -7,6 +7,7 @@ import {
   parsePlayerDay,
   playerDayKey,
   rankSeeders,
+  ranks,
   recentDayKeys,
   recordActivity,
   recordMatchPlayers,
@@ -173,7 +174,7 @@ describe('totals and rankings', () => {
     expect(rankSeeders([monday, tuesday], 1)).toHaveLength(1);
   });
 
-  it('builds a public leaderboard with names only', () => {
+  it('builds the leaderboard, keeping Steam IDs for publicStats to swap for public ids', () => {
     const board = leaderboard([monday, tuesday], 30, 2);
 
     expect(board).toMatchObject({ days: 30, kdMinMatches: 3 });
@@ -185,7 +186,7 @@ describe('totals and rankings', () => {
     expect(board.kd.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
     expect(board.playtime.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
     expect(board.seeding.map((p) => p.name)).toEqual(['Ash2', 'Bo']);
-    expect(JSON.stringify(board)).not.toContain('steamId');
+    expect(board.kills.map((p) => p.steamId)).toEqual(['c', 'a']);
   });
 
   it('leaves players with too few matches off the K/D board', () => {
@@ -195,12 +196,44 @@ describe('totals and rankings', () => {
   });
 });
 
+describe('ranks', () => {
+  const days: PlayerDay[] = [
+    {
+      a: row('Ash', { liveMinutes: 100, matches: 3, kills: 30, deaths: 10, seedingMinutes: 5 }),
+      b: row('Bo', { liveMinutes: 300, matches: 4, kills: 10, deaths: 1 }),
+      c: row('Cy', { liveMinutes: 10, matches: 1, kills: 50, deaths: 1, seedingMinutes: 40, seedDays: 1 }),
+    },
+  ];
+
+  it('places a player on each board by the leaderboard’s own rules', () => {
+    // K/D needs 3 matches, so Cy's 50 is left off it.
+    expect(ranks(totals(days), 'a', 30)).toEqual({ days: 30, kdMinMatches: 3, players: 3, kills: 2, kd: 2, playtime: 2, seeding: 2 });
+    expect(ranks(totals(days), 'c', 30)).toMatchObject({ kills: 1, kd: null, seeding: 1 });
+  });
+
+  it('leaves a player off a board they have nothing for', () => {
+    expect(ranks(totals(days), 'b', 30)).toMatchObject({ kd: 1, seeding: null });
+    expect(ranks(totals(days), 'nobody', 30)).toMatchObject({ kills: null, kd: null, playtime: null, seeding: null });
+  });
+});
+
 describe('parseMatchRecord', () => {
   it('reads back a stored match, and refuses anything else', () => {
     const record = matchRecord(match, NOON);
 
     expect(parseMatchRecord(structuredClone(record))).toEqual(record);
     expect(parseMatchRecord({ map: 'Ozeti' })).toBeNull();
+  });
+
+  it('keeps the side each player ended on, and reads matches recorded without sides', () => {
+    const sided: MatchState = { ...match, players: { ...match.players, a: { ...match.players['a']!, faction: 'Valkyra' } } };
+    const record = matchRecord(sided, NOON);
+
+    expect(record.players).toEqual([
+      { steamId: 'a', name: 'Ash', kills: 12, deaths: 3, faction: 'Valkyra' },
+      { steamId: 'b', name: 'Bo', kills: 4, deaths: 9 },
+    ]);
+    expect(parseMatchRecord(structuredClone(record))).toEqual(record);
   });
 });
 

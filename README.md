@@ -28,7 +28,8 @@ And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the busiest hours, the current and recent matches, Discord member counts and a public
-leaderboard (see [Website stats](#website-stats)). It keeps [player records](#player-records):
+leaderboard (see [Website stats](#website-stats)). It serves a page of stats for every player, too (see
+[Player pages](#player-pages)). It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. And it gives
 [automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week.
 
@@ -272,8 +273,9 @@ There is no chat log command: the game's RCON API has no way to read chat.
 | `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
 
-Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password: leaderboard rows
-are names with their totals.
+Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password. Each player on the
+leaderboard and in the current and recent matches has their name, their totals and an `id` for their
+[player page](#player-pages). Matches recorded before ids were added have names only.
 
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
@@ -292,6 +294,39 @@ gaminginit site only polls once a minute while its tab is visible, which is plen
 
 The Node/Docker version does not serve `/api/stats`.
 
+## Player pages
+
+Two more public endpoints let a website show every player's stats, not only the top 10:
+
+| Endpoint                 | What                                                                                   |
+| ------------------------ | -------------------------------------------------------------------------------------- |
+| `GET /api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now |
+| `GET /api/player?id=<id>` | One player's page, or 404 for an id nobody seen in the last 90 days has              |
+
+A player page has:
+
+| Field      | What                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------ |
+| `name`     | The name they used most recently                                                           |
+| `activity` | Each UTC day they were on in the last 90 days: seeding and live minutes, seed day, matches, kills and deaths |
+| `matches`  | Their matches in the last 90 days (up to 500), newest first: map, end time, length, kills, deaths, place on the scoreboard out of how many, their side (`faction`), `result` (`won`, `lost` or `draw`) and the scores |
+| `ranks`    | Their place on each leaderboard board over the last 30 days (null when they are not on it), out of how many players |
+| `online`   | When they are in game now: the map, their side, and their kills and deaths this match      |
+| `vip`      | `{ until }` while they have a reserved slot from the bot                                   |
+| `seeding`  | Their seed days in the VIP window and the rule they count towards, or `null` when automatic VIP is off |
+
+- Players are known by a public `id`, never their Steam ID: the first 12 hex characters of an HMAC of the Steam ID,
+  with a random key the bot makes the first time it needs one and keeps in its storage (`playerIdKey`). Ids stay the
+  same for good, so links to player pages keep working, and they cannot be turned back into Steam IDs.
+- A match's `faction` and `result` are only known for matches recorded since the bot started keeping each player's
+  side; older matches have `null`.
+- Staff history, bans, warnings and Steam IDs are never on a player page.
+- Like `/api/stats`, each Worker instance reuses an answer for 30 seconds. The Durable Object keeps past days and
+  finished matches in memory, as they do not change, so a page only reads the last two days and any new matches.
+  `/removematch` clears them.
+
+The Node/Docker version does not serve player pages.
+
 ## Player records
 
 On Cloudflare, the bot also keeps records for leaderboards and seeder rewards (such as VIP). They are keyed by
@@ -299,7 +334,7 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 
 | Record                       | What                                                                                   |
 | ---------------------------- | -------------------------------------------------------------------------------------- |
-| Each finished match          | Map, start, live and end times, length, peak, faction scores, and every player's Steam ID, name, kills and deaths |
+| Each finished match          | Map, start, live and end times, length, peak, faction scores, and every player's Steam ID, name, kills, deaths and side |
 | Each player, each UTC day    | Name, seeding minutes, live minutes, whether they had a successful seed, matches played, kills, deaths |
 | Each player's staff history  | The last 50 warnings, kicks, bans, unbans, team moves and VIP changes made through the bot: when, by whom (Discord user ID), and why |
 | Bans the bot made            | Name, reason, who made it, and when a timed ban ends                                    |

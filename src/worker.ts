@@ -3,7 +3,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
-import { buildLiveStatus, buildVipMessage, postWebhook } from './discord.ts';
+import { buildLiveStatus, buildVipMessage, mapName, postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
@@ -21,6 +21,7 @@ import {
   type ModEntry,
 } from './moderation.ts';
 import {
+  dayOfKey,
   leaderboard,
   matchRecord,
   matchRecordKey,
@@ -34,11 +35,26 @@ import {
   recordMatchPlayers,
   recordSeed,
   unrecordMatchPlayers,
+  type MatchRecord,
+  type PlayerDay,
   type PlayerTotals,
   type RankedPlayer,
   type SeedCredit,
 } from './players.ts';
 import { createPoller, parseState } from './poller.ts';
+import {
+  buildProfile,
+  directory,
+  importIdKey,
+  isIdKey,
+  newIdKey,
+  PLAYER_ID,
+  publicId,
+  type DayRecords,
+  type OnlineNow,
+  type PlayerDirectory,
+  type PlayerProfile,
+} from './profiles.ts';
 import {
   addBan,
   fetchBans,
@@ -67,6 +83,7 @@ import {
 } from './staff.ts';
 import {
   discordDue,
+  namedSteamIds,
   parseStats,
   publicStats,
   recordDiscord,
@@ -96,6 +113,7 @@ const SEEDERS_LISTED = 25;
 const MATCH_RECORDS_SEARCHED = 50;
 const LEADERBOARD_DAYS = 30;
 const LEADERBOARD_SIZE = 10;
+const DAY_MS = 24 * 60 * 60_000;
 // How far back staff can pick players who are not online.
 const KNOWN_PLAYER_DAYS = 30;
 // Suggestions must reach Discord within 3 seconds.
@@ -113,7 +131,7 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
-// status) and 'nextMap' (the map staff set to play next).
+// status), 'nextMap' (the map staff set to play next) and 'playerIdKey' (the key for players' public ids).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
@@ -124,6 +142,17 @@ export class Watcher extends DurableObject<Env> {
     this.queue = run.catch(() => undefined);
     return run;
   }
+
+  // The player records the website's pages read. Past days and finished matches only change through /removematch,
+  // which clears them, so they are kept in memory and each read only fetches the last two days and any new matches.
+  // The day before is fetched too, as a check that started before midnight may still be writing to it.
+  private dayCache = new Map<string, PlayerDay>();
+  private matchCache = new Map<string, MatchRecord>();
+  // Steam ID → public id.
+  private ids = new Map<string, string>();
+  private idKey: Promise<CryptoKey> | null = null;
+  // Who was online at the last check that reached the server.
+  private lastSnapshot: { at: number; snapshot: Snapshot } | null = null;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -211,6 +240,7 @@ export class Watcher extends DurableObject<Env> {
       },
     });
     await poll();
+    if (seen.snapshot !== null) this.lastSnapshot = { at: Date.now(), snapshot: seen.snapshot };
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.updateVip(config));
@@ -331,12 +361,115 @@ export class Watcher extends DurableObject<Env> {
   async stats(): Promise<PublicStats> {
     const config = loadConfig(stringVars(this.env));
     const now = Date.now();
-    const keys = recentDayKeys(now, LEADERBOARD_DAYS);
-    const stored = await this.ctx.storage.get(['stats', ...keys]);
+    const [stored, days] = await Promise.all([this.ctx.storage.get('stats'), this.recentDays(now)]);
+    const stats = parseStats(stored);
+    const board = leaderboard(days.slice(-LEADERBOARD_DAYS).map((d) => d.players), LEADERBOARD_DAYS, LEADERBOARD_SIZE);
+    const ids = await this.idsFor(namedSteamIds(stats, board));
     const { seeding, live } = config.rules;
-    return publicStats(parseStats(stored.get('stats')), { seeding, live, busy: config.busyThreshold }, now, {
-      leaderboard: leaderboard(keys.map((key) => parsePlayerDay(stored.get(key))), LEADERBOARD_DAYS, LEADERBOARD_SIZE),
-      vip: config.vip,
+    return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, { leaderboard: board, vip: config.vip }, (steamId) =>
+      ids.get(steamId),
+    );
+  }
+
+  // The key for players' public ids, made the first time it is needed. Changing it would change every id, and break
+  // every link to a player page, so it is stored with the records.
+  private publicIdKey(): Promise<CryptoKey> {
+    this.idKey ??= (async () => {
+      const stored = await this.ctx.storage.get('playerIdKey');
+      const key = isIdKey(stored) ? stored : newIdKey();
+      if (key !== stored) await this.ctx.storage.put('playerIdKey', key);
+      return importIdKey(key);
+    })().catch((error: unknown) => {
+      this.idKey = null;
+      throw error;
+    });
+    return this.idKey;
+  }
+
+  // Works out the public ids it does not know yet, and returns every id it knows, by Steam ID.
+  private async idsFor(steamIds: Iterable<string>): Promise<Map<string, string>> {
+    const missing = [...new Set(steamIds)].filter((steamId) => !this.ids.has(steamId));
+    if (missing.length > 0) {
+      const key = await this.publicIdKey();
+      const made = await Promise.all(missing.map(async (steamId) => [steamId, await publicId(key, steamId)] as const));
+      for (const [steamId, id] of made) this.ids.set(steamId, id);
+    }
+    return this.ids;
+  }
+
+  // Each player's totals for every UTC day of the player pages, oldest first, today last.
+  private async recentDays(now: number): Promise<DayRecords[]> {
+    const keys = recentDayKeys(now, PROFILE_DAYS);
+    const fresh = keys.slice(-2);
+    const read = keys.filter((key) => fresh.includes(key) || !this.dayCache.has(key));
+    const stored = await this.ctx.storage.get(read);
+    for (const key of this.dayCache.keys()) if (!keys.includes(key)) this.dayCache.delete(key);
+    for (const key of read) if (!fresh.includes(key)) this.dayCache.set(key, parsePlayerDay(stored.get(key)));
+    return keys.map((key) => ({
+      day: dayOfKey(key),
+      players: fresh.includes(key) ? parsePlayerDay(stored.get(key)) : (this.dayCache.get(key) ?? {}),
+    }));
+  }
+
+  // The records of the matches that started in the same days.
+  private async matchRecords(now: number): Promise<MatchRecord[]> {
+    const start = matchRecordKey(now - (PROFILE_DAYS - 1) * DAY_MS);
+    const last = [...this.matchCache.keys()].at(-1);
+    const stored = await this.ctx.storage.list({ prefix: 'match:', ...(last === undefined ? { start } : { startAfter: last }) });
+    for (const [key, value] of stored) {
+      const record = parseMatchRecord(value);
+      if (record !== null) this.matchCache.set(key, record);
+    }
+    for (const key of this.matchCache.keys()) if (key < start) this.matchCache.delete(key);
+    return [...this.matchCache.values()];
+  }
+
+  // The last check's reading, unless the server has stopped answering.
+  private onlineNow(now: number): Snapshot | null {
+    const last = this.lastSnapshot;
+    return last !== null && now - last.at < OFFLINE_AFTER_MS ? last.snapshot : null;
+  }
+
+  // Everyone seen in the last PROFILE_DAYS days, to find a player page in.
+  async players(): Promise<PlayerDirectory> {
+    const now = Date.now();
+    const days = await this.recentDays(now);
+    const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
+    const online = new Set(this.onlineNow(now)?.players.map((p) => p.steamId));
+    return directory(days, (steamId) => ids.get(steamId), online, now);
+  }
+
+  // One player's page, by public id. Null when nobody seen in the last PROFILE_DAYS days has that id.
+  async profile(id: string): Promise<PlayerProfile | null> {
+    const now = Date.now();
+    const days = await this.recentDays(now);
+    const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
+    const steamId = [...ids].find(([, known]) => known === id)?.[0];
+    if (steamId === undefined) return null;
+    const [matches, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['state', 'vip'])]);
+    const snapshot = this.onlineNow(now);
+    const inGame = snapshot?.players.find((p) => p.steamId === steamId);
+    const tracked = parseState(stored.get('state'))?.match?.players[steamId];
+    const online: OnlineNow | null =
+      snapshot === null || inGame === undefined
+        ? null
+        : {
+            map: mapName(snapshot.status.map),
+            faction: inGame.faction ?? tracked?.faction ?? null,
+            kills: tracked?.kills ?? inGame.kills ?? 0,
+            deaths: tracked?.deaths ?? inGame.deaths ?? 0,
+          };
+    const config = loadConfig(stringVars(this.env));
+    return buildProfile({
+      steamId,
+      id,
+      now,
+      days,
+      matches,
+      rankDays: LEADERBOARD_DAYS,
+      online,
+      vip: parseVipState(stored.get('vip')).granted[steamId] ?? null,
+      rule: config.vip,
     });
   }
 
@@ -362,6 +495,9 @@ export class Watcher extends DurableObject<Env> {
     const day = unrecordMatchPlayers(parsePlayerDay(await storage.get(dayKey)), record.players);
     // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
     await Promise.all([storage.put({ stats, [dayKey]: day }), storage.delete(found[0])]);
+    // The player pages read the records again, without it.
+    this.dayCache.clear();
+    this.matchCache.clear();
     return { match: removed, players: record.players.length };
   }
 
@@ -492,36 +628,51 @@ export class Watcher extends DurableObject<Env> {
   }
 }
 
-// The stats only change once a minute. Each Worker instance keeps the last answer for a short while so a busy
-// page does not wake the Durable Object on every request. Requests that arrive while a refresh is in flight wait
-// for that one instead of starting their own.
-const STATS_CACHE_MS = 30_000;
-let cachedStats: { body: Promise<string>; at: number } | null = null;
+// The stats only change once a minute. Each Worker instance keeps its last answers for a short while so a busy page
+// does not wake the Durable Object on every request. Requests that arrive while a refresh is in flight wait for that
+// one instead of starting their own.
+const CACHE_MS = 30_000;
+// One answer per player page; past this many, the oldest are dropped.
+const CACHE_ENTRIES = 200;
+const cache = new Map<string, { body: Promise<string | null>; at: number }>();
 
-const serveStats = async (env: Env, ctx: ExecutionContext): Promise<Response> => {
+// Public, read-only numbers, so any site may show them.
+const PUBLIC_HEADERS = { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' };
+
+// `load` answers null when there is no such thing, which is a 404.
+const serveJson = async (key: string, load: () => Promise<unknown>, ctx: ExecutionContext): Promise<Response> => {
   const now = Date.now();
-  if (cachedStats === null || now - cachedStats.at >= STATS_CACHE_MS) {
-    const body = env.WATCHER.get(env.WATCHER.idFromName('watcher'))
-      .stats()
-      .then((stats) => JSON.stringify(stats));
-    const entry = { body, at: now };
-    cachedStats = entry;
+  let entry = cache.get(key);
+  if (entry === undefined || now - entry.at >= CACHE_MS) {
+    const fresh = { body: load().then((value) => (value === null ? null : JSON.stringify(value))), at: now };
+    entry = fresh;
+    // Re-added, so the oldest answers are always first.
+    cache.delete(key);
+    cache.set(key, fresh);
+    for (const old of cache.keys()) {
+      if (cache.size <= CACHE_ENTRIES) break;
+      cache.delete(old);
+    }
     // Other requests may be waiting on this refresh, so it must finish even if this request is cancelled.
     // A failed refresh is dropped so the next request tries again.
     ctx.waitUntil(
-      body.catch(() => {
-        if (cachedStats === entry) cachedStats = null;
+      fresh.body.catch(() => {
+        if (cache.get(key) === fresh) cache.delete(key);
       }),
     );
   }
-  return new Response(await cachedStats.body, {
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      // Public, read-only numbers, so any site may show them.
-      'access-control-allow-origin': '*',
-      'cache-control': 'public, max-age=30',
-    },
-  });
+  const body = await entry.body;
+  if (body === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });
+  return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...PUBLIC_HEADERS } });
+};
+
+// The website's JSON: the server's stats, everyone to find a player page for, and one player's page.
+const publicRoute = (url: URL, watcher: () => DurableObjectStub<Watcher>): { key: string; load: () => Promise<unknown> } | null => {
+  if (url.pathname === '/api/stats') return { key: 'stats', load: () => watcher().stats() };
+  if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
+  const id = url.searchParams.get('id') ?? '';
+  if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
+  return null;
 };
 
 export default {
@@ -529,25 +680,25 @@ export default {
     await env.WATCHER.get(env.WATCHER.idFromName('watcher')).check();
   },
 
-  // GET /api/stats feeds the community website. Slash commands: Discord POSTs signed interactions to this Worker's URL.
+  // GET /api/stats, /api/players and /api/player feed the community website. Slash commands: Discord POSTs signed
+  // interactions to this Worker's URL.
   async fetch(request, env, ctx) {
-    if (request.method === 'GET' && new URL(request.url).pathname === '/api/stats') {
+    const url = new URL(request.url);
+    const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
+    if (request.method === 'GET' && url.pathname.startsWith('/api/')) {
+      const route = publicRoute(url, watcher);
+      if (route === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });
       try {
-        return await serveStats(env, ctx);
+        return await serveJson(route.key, route.load, ctx);
       } catch (error) {
-        console.error(`/api/stats failed: ${error instanceof Error ? error.message : String(error)}`);
-        return Response.json(
-          { error: 'Stats are unavailable' },
-          { status: 503, headers: { 'access-control-allow-origin': '*' } },
-        );
+        console.error(`${url.pathname} failed: ${error instanceof Error ? error.message : String(error)}`);
+        return Response.json({ error: 'Stats are unavailable' }, { status: 503, headers: { 'access-control-allow-origin': '*' } });
       }
     }
     if (request.method !== 'POST') return new Response('Not found', { status: 404 });
     const vars = stringVars(env);
     const publicKey = vars['DISCORD_PUBLIC_KEY'];
     if (!publicKey) return new Response('DISCORD_PUBLIC_KEY is not set', { status: 500 });
-
-    const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
     const records: StaffRecords = {
       player: (steamId) => watcher().playerRecord(steamId),
       knownPlayers: () => watcher().knownPlayers(),
@@ -567,7 +718,7 @@ export default {
         runCommand: runCommand({
           config: () => loadConfig(vars),
           http: socketHttp(connect),
-          lastMatch: async () => (await watcher().stats()).matches[0] ?? null,
+          lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
           seeders: (days) => watcher().seeders(days),
           removeMatch: (endedAt) => watcher().removeMatch(endedAt),
           records,

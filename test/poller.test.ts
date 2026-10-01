@@ -618,6 +618,25 @@ describe('parseState', () => {
     expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null });
   });
 
+  it('keeps the side each player in the match is on, and reads state saved before sides were kept', () => {
+    const match = {
+      key: 'Kavkazi#0',
+      startedAt: 0,
+      lastSeenAt: 0,
+      liveAt: null,
+      summarisable: true,
+      peakPlayers: 2,
+      players: {
+        a: { name: 'Pa', kills: 1, deaths: 0, lastKills: 1, lastDeaths: 0, faction: 'Valkyra' },
+        b: { name: 'Pb', kills: 0, deaths: 1, lastKills: 0, lastDeaths: 1 },
+      },
+      factionScores: [],
+    };
+    const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: {}, match, unsentSummary: null, messages: null };
+
+    expect(parseState(structuredClone(saved))?.match?.players).toEqual(match.players);
+  });
+
   it('starts fresh when nothing or something unrecognisable was saved', () => {
     expect(parseState(undefined)).toBeNull();
     expect(parseState({ phase: 'unknown' })).toBeNull();
