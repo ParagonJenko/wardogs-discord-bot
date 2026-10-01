@@ -324,6 +324,9 @@ A player page has:
 - Like `/api/stats`, each Worker instance reuses an answer for 30 seconds. The Durable Object keeps past days and
   finished matches in memory, as they do not change, so a page only reads the last two days and any new matches.
   `/removematch` clears them.
+- Who is in game is saved with each check (`online`), in the same write as the stats, so it survives the Durable
+  Object restarting. It counts as unknown once the server has not answered for 3 minutes.
+- A match counts on the UTC day it ended, like the player's days, so `matches` covers the same 90 days as `activity`.
 
 The Node/Docker version does not serve player pages.
 

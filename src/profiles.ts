@@ -1,7 +1,8 @@
+import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
 import { ranks, totals, type MatchRecord, type PlayerDay, type PlayerTotals, type Ranks } from './players.ts';
-import type { FactionScore } from './rcon.ts';
+import type { FactionScore, Player } from './rcon.ts';
 import { byKills } from './tracking.ts';
 import type { VipGrant } from './vip.ts';
 
@@ -30,6 +31,30 @@ export const importIdKey = (key: string): Promise<CryptoKey> => {
 export const publicId = async (key: CryptoKey, steamId: string): Promise<string> => {
   const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(steamId));
   return hex(new Uint8Array(mac, 0, 6));
+};
+
+// Who was in game at the last check that reached the server. It is stored with each check, so player pages still
+// know who is online after the Durable Object restarts. `map` is as RCON names it.
+export type OnlineSnapshot = { at: number; map: string; players: Player[] };
+
+const OnlineSchema = z.object({
+  at: z.number(),
+  map: z.string(),
+  players: z.array(
+    z.object({
+      steamId: z.string(),
+      name: z.string(),
+      kills: z.number().nullable(),
+      deaths: z.number().nullable(),
+      faction: z.string().optional(),
+    }),
+  ),
+});
+
+// Null when nothing was saved yet, or it is unrecognisable.
+export const parseOnline = (raw: unknown): OnlineSnapshot | null => {
+  const parsed = OnlineSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 };
 
 export type MatchResult = 'won' | 'lost' | 'draw';

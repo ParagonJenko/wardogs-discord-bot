@@ -48,10 +48,12 @@ import {
   importIdKey,
   isIdKey,
   newIdKey,
+  parseOnline,
   PLAYER_ID,
   publicId,
   type DayRecords,
   type OnlineNow,
+  type OnlineSnapshot,
   type PlayerDirectory,
   type PlayerProfile,
 } from './profiles.ts';
@@ -82,6 +84,7 @@ import {
   type VipRemoveResult,
 } from './staff.ts';
 import {
+  dayOf,
   discordDue,
   namedSteamIds,
   parseStats,
@@ -131,7 +134,8 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
-// status), 'nextMap' (the map staff set to play next) and 'playerIdKey' (the key for players' public ids).
+// status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids) and 'online' (who
+// was in game at the last check that reached the server).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
@@ -151,8 +155,6 @@ export class Watcher extends DurableObject<Env> {
   // Steam ID → public id.
   private ids = new Map<string, string>();
   private idKey: Promise<CryptoKey> | null = null;
-  // Who was online at the last check that reached the server.
-  private lastSnapshot: { at: number; snapshot: Snapshot } | null = null;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -183,18 +185,19 @@ export class Watcher extends DurableObject<Env> {
     await storage.put('stats', change(parseStats(await storage.get('stats'))));
   }
 
-  // One write for the site's stats and today's player totals.
+  // One write for the site's stats, who is online and today's player totals.
   private async recordCheck(observation: Observation, minutes: number, busyThreshold: number): Promise<void> {
     const dayKey = playerDayKey(observation.at);
     const stored = await this.ctx.storage.get(['stats', dayKey]);
     const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes, busyThreshold);
+    const online: OnlineSnapshot = { at: observation.at, map: observation.status.map, players: observation.players };
     if (observation.phase === 'empty' || observation.players.length === 0) {
-      await this.ctx.storage.put('stats', stats);
+      await this.ctx.storage.put({ stats, online });
       return;
     }
     const kind = observation.seeding ? 'seeding' : 'live';
     const day = recordActivity(parsePlayerDay(stored.get(dayKey)), observation.players, kind, minutes);
-    await this.ctx.storage.put({ stats, [dayKey]: day });
+    await this.ctx.storage.put({ stats, online, [dayKey]: day });
   }
 
   private async recordSeed(seeders: SeedCredit[], at: number, minMinutes: number): Promise<void> {
@@ -240,7 +243,6 @@ export class Watcher extends DurableObject<Env> {
       },
     });
     await poll();
-    if (seen.snapshot !== null) this.lastSnapshot = { at: Date.now(), snapshot: seen.snapshot };
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.updateVip(config));
@@ -411,9 +413,11 @@ export class Watcher extends DurableObject<Env> {
     }));
   }
 
-  // The records of the matches that started in the same days.
+  // The records of the matches that ended in the same UTC days, as a match counts on the day it ended. Records are
+  // keyed by when the match started, so they are read from a day earlier, for a match that ran past midnight.
   private async matchRecords(now: number): Promise<MatchRecord[]> {
-    const start = matchRecordKey(now - (PROFILE_DAYS - 1) * DAY_MS);
+    const first = Date.parse(`${dayOf(now - (PROFILE_DAYS - 1) * DAY_MS)}T00:00:00Z`);
+    const start = matchRecordKey(first - DAY_MS);
     const last = [...this.matchCache.keys()].at(-1);
     const stored = await this.ctx.storage.list({ prefix: 'match:', ...(last === undefined ? { start } : { startAfter: last }) });
     for (const [key, value] of stored) {
@@ -421,21 +425,21 @@ export class Watcher extends DurableObject<Env> {
       if (record !== null) this.matchCache.set(key, record);
     }
     for (const key of this.matchCache.keys()) if (key < start) this.matchCache.delete(key);
-    return [...this.matchCache.values()];
+    return [...this.matchCache.values()].filter((record) => record.endedAt >= first);
   }
 
-  // The last check's reading, unless the server has stopped answering.
-  private onlineNow(now: number): Snapshot | null {
-    const last = this.lastSnapshot;
-    return last !== null && now - last.at < OFFLINE_AFTER_MS ? last.snapshot : null;
+  // Who was in game at the last check, unless the server has stopped answering since.
+  private onlineNow(now: number, raw: unknown): OnlineSnapshot | null {
+    const online = parseOnline(raw);
+    return online !== null && now - online.at < OFFLINE_AFTER_MS ? online : null;
   }
 
   // Everyone seen in the last PROFILE_DAYS days, to find a player page in.
   async players(): Promise<PlayerDirectory> {
     const now = Date.now();
-    const days = await this.recentDays(now);
+    const [days, stored] = await Promise.all([this.recentDays(now), this.ctx.storage.get('online')]);
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
-    const online = new Set(this.onlineNow(now)?.players.map((p) => p.steamId));
+    const online = new Set(this.onlineNow(now, stored)?.players.map((p) => p.steamId));
     return directory(days, (steamId) => ids.get(steamId), online, now);
   }
 
@@ -446,15 +450,15 @@ export class Watcher extends DurableObject<Env> {
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
     const steamId = [...ids].find(([, known]) => known === id)?.[0];
     if (steamId === undefined) return null;
-    const [matches, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['state', 'vip'])]);
-    const snapshot = this.onlineNow(now);
+    const [matches, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['state', 'vip', 'online'])]);
+    const snapshot = this.onlineNow(now, stored.get('online'));
     const inGame = snapshot?.players.find((p) => p.steamId === steamId);
     const tracked = parseState(stored.get('state'))?.match?.players[steamId];
     const online: OnlineNow | null =
       snapshot === null || inGame === undefined
         ? null
         : {
-            map: mapName(snapshot.status.map),
+            map: mapName(snapshot.map),
             faction: inGame.faction ?? tracked?.faction ?? null,
             kills: tracked?.kills ?? inGame.kills ?? 0,
             deaths: tracked?.deaths ?? inGame.deaths ?? 0,

@@ -6,6 +6,7 @@ import {
   importIdKey,
   isIdKey,
   newIdKey,
+  parseOnline,
   PLAYER_ID,
   playerMatch,
   PROFILE_MATCHES,
@@ -81,6 +82,23 @@ describe('public ids', () => {
     expect(isIdKey('abc')).toBe(false);
     expect(isIdKey(undefined)).toBe(false);
     expect(isIdKey('z'.repeat(64))).toBe(false);
+  });
+});
+
+describe('parseOnline', () => {
+  it('reads back who was in game, and nothing for anything else', () => {
+    const online = {
+      at: NOON,
+      map: 'Europe',
+      players: [
+        { steamId: ASH, name: 'Ash', kills: 3, deaths: null, faction: 'Valkyra' },
+        { steamId: BO, name: 'Bo', kills: null, deaths: 1 },
+      ],
+    };
+
+    expect(parseOnline(structuredClone(online))).toEqual(online);
+    expect(parseOnline(undefined)).toBeNull();
+    expect(parseOnline({ at: NOON, players: 'none' })).toBeNull();
   });
 });
 
