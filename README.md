@@ -279,8 +279,8 @@ are names with their totals.
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
 
 The site's busy times are the hours when the server usually has `BUSY_THRESHOLD` players or more (default 97). Set
-it in the `vars` block of `wrangler.jsonc`. Changing it starts the busy counts again, and readings from before busy
-counts were kept are left out of them.
+it in the `vars` block of `wrangler.jsonc`. Changing it counts busy readings again from the last 24 hours, and older
+readings counted under another threshold, or from before busy counts were kept, are left out.
 
 For the Discord counts, set `DISCORD_INVITE` in the `vars` block of `wrangler.jsonc` to an invite link that
 does not expire (`https://discord.gg/abc123` or just `abc123`), then `npm run deploy`. Leave it empty to skip
