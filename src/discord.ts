@@ -236,6 +236,24 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
   };
 };
 
+// What staff send with /seednow: the seeding alert, worded as a call to join now, with their note and who called it.
+// Mentions in an embed never ping, so naming the caller is safe.
+export const buildSeedCall = (
+  server: Population,
+  options: MessageOptions & { note?: string; calledBy?: string | null },
+): DiscordMessage => {
+  const alert = buildMessage('seeding', server, options);
+  const lines = [
+    "**We're going to try to seed now. Come join!**",
+    options.note,
+    options.calledBy ? `Called by <@${options.calledBy}>` : undefined,
+  ].filter((line) => line !== undefined && line !== '');
+  return {
+    ...alert,
+    embeds: alert.embeds.map((embed) => ({ ...embed, title: `🌱 Seeding ${shorten(server.name)} now`, description: lines.join('\n\n') })),
+  };
+};
+
 // `markdown` escapes names and bolds the winner, for embeds; without it the text is plain, for a menu.
 const result = (scores: FactionScore[], markdown = true): string[] => {
   const ranked = byScore(scores);

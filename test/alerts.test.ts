@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, step, type AlertKind, type AlertRules, type MonitorState } from '../src/alerts.ts';
+import { initialState, step, withSeedCall, type AlertKind, type AlertRules, type MonitorState } from '../src/alerts.ts';
 
 const MINUTE = 60_000;
 
@@ -119,5 +119,28 @@ describe('grace for drops', () => {
 
   it('starts the grace time again after the players come back', () => {
     expect(run(60, [0, 0, 60, 0, 0, 60, 0, 0], grace)).toEqual(Array(8).fill(null));
+  });
+});
+
+describe('seeding call from staff', () => {
+  const empty = initialState(0, rules);
+
+  it('skips the automatic seeding alert when the first players join within its cooldown, so the role is not pinged twice', () => {
+    const joined = step(withSeedCall(empty, 0), 1, 5 * MINUTE, rules);
+
+    expect(joined).toMatchObject({ alert: null, state: { phase: 'seeding' } });
+    // Skipped, not put off: the server is already seeding, as the call said it would be.
+    expect(step(joined.state, 2, 10 * MINUTE, rules).alert).toBeNull();
+  });
+
+  it('holds back only for the cooldown: players who first join later still get the automatic alert', () => {
+    expect(step(withSeedCall(empty, 0), 1, 10 * MINUTE, rules).alert).toBe('seeding');
+  });
+
+  it('keeps a later automatic alert', () => {
+    const alerted = { ...empty, lastAlertAt: { seeding: 5 * MINUTE, live: MINUTE } };
+
+    expect(withSeedCall(alerted, 2 * MINUTE)).toBe(alerted);
+    expect(withSeedCall(alerted, 6 * MINUTE).lastAlertAt).toEqual({ seeding: 6 * MINUTE, live: MINUTE });
   });
 });

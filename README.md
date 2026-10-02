@@ -24,7 +24,7 @@ the same as on the website; `/rotation` takes the colour of the map being played
 faction's colour.
 
 And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
-`/broadcast`, `/seeders` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
+`/broadcast`, `/seeders`, `/seednow` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the busiest hours, the current and recent matches, Discord member counts and a public
@@ -129,6 +129,7 @@ have it.
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
 | `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
+| `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |
 | `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
 | `/warn`         | Staff only           | Sends a player in game a private message: "Staff warning: …"       |
 | `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), VIP, ban and staff history |
@@ -193,6 +194,17 @@ Staff commands use the RCON password's write access, change the records or show 
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 
+
+`/seednow` posts a seeding call to the alerts channel (`DISCORD_WEBHOOK_URL`) whenever staff want one, without waiting
+for the server to reach `SEEDING_THRESHOLD`. It looks like the seeding alert (players, map, how many more to go live and,
+when [automatic VIP](#automatic-vip) is on, what seeding earns), says "We're going to try to seed now. Come join!", adds
+the optional `message` (such as which squad to join) and who called it, and pings `DISCORD_ROLE_ID` if it is set.
+
+- It sends nothing when the server is already live.
+- It counts as the seeding alert: if the first players join within `ALERT_COOLDOWN_MINUTES` (default 10), there is no
+  automatic seeding alert as well, so the role is not pinged twice. Its time is saved before it is posted, and it never
+  goes out while a check is running, so a slow post or a check at the same moment cannot ping twice either.
+- Each call is logged with the staff member's Discord user ID before anything is sent, and again once it is posted.
 
 `/removematch` is for a match the bot recorded by mistake, such as part of a match it wrongly thought had ended.
 Start typing and pick the match from the list of recent matches (map, result, length and end time, UTC). It takes

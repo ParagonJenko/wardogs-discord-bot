@@ -12,6 +12,7 @@ const COMMAND_NAMES = [
   'rotation',
   'broadcast',
   'seeders',
+  'seednow',
   'removematch',
   ...STAFF_COMMANDS,
 ] as const;
@@ -26,10 +27,10 @@ const ADMINISTRATOR = 1n << 3n;
 // Admin commands change things in game or in the records, or show Steam IDs, so they are hidden from, and refused to,
 // anyone who has neither Discord's Administrator permission nor one of the admin roles. Their replies are only shown
 // to the person who ran them.
-const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'removematch', ...STAFF_COMMANDS];
+const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow', 'removematch', ...STAFF_COMMANDS];
 
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
-const ACTIONS: readonly CommandName[] = ['warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
+const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
 
 export const SEEDERS_DEFAULT_DAYS = 7;
 export const SEEDERS_MAX_DAYS = 90;
@@ -86,6 +87,14 @@ export const COMMANDS = [
         min_value: 1,
         max_value: SEEDERS_MAX_DAYS,
       },
+    ],
+  },
+  {
+    name: 'seednow',
+    description: "Post \"we're seeding now, come join\" to the alerts channel and ping the role (staff only)",
+    ...STAFF_ONLY,
+    options: [
+      { type: STRING, name: 'message', description: 'Anything to add, such as which squad to join', required: false, max_length: 200 },
     ],
   },
   {

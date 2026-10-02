@@ -1,5 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
+import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
@@ -7,7 +8,7 @@ import { buildLiveStatus, buildVipMessage, mapName, postWebhook } from './discor
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
-import type { SeederRow } from './discord.ts';
+import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
   appendMod,
   BAN_LENGTHS,
@@ -129,23 +130,29 @@ const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => res
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+// Runs work one at a time, in the order it was asked for. A failure does not hold up what comes after it.
+const oneAtATime = () => {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const run = queue.then(work);
+    queue = run.catch(() => undefined);
+    return run;
+  };
+};
+
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 // Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
-// status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids) and 'online' (who
-// was in game at the last check that reached the server).
+// status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
+// was in game at the last check that reached the server) and 'seedCall' (when staff last sent /seednow).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
-  private queue: Promise<unknown> = Promise.resolve();
-
-  private serial<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(work);
-    this.queue = run.catch(() => undefined);
-    return run;
-  }
+  private serial = oneAtATime();
+  // The alerts and /seednow run one at a time, so a check never sends the seeding alert while a seeding call is going out.
+  private alerting = oneAtATime();
 
   // The player records the website's pages read. Past days and finished matches only change through /removematch,
   // which clears them, so they are kept in memory and each read only fetches the last two days and any new matches.
@@ -233,7 +240,13 @@ export class Watcher extends DurableObject<Env> {
       now: Date.now,
       log: console,
       store: {
-        load: async () => parseState(await storage.get('state')),
+        // A /seednow call is kept apart from 'state', so a check that saves 'state' never overwrites it.
+        load: async () => {
+          const stored = await storage.get(['state', 'seedCall']);
+          const state = parseState(stored.get('state'));
+          const calledAt = stored.get('seedCall');
+          return state && typeof calledAt === 'number' ? { ...state, alerts: withSeedCall(state.alerts, calledAt) } : state;
+        },
         save: (state) => storage.put('state', state),
       },
       stats: {
@@ -242,7 +255,7 @@ export class Watcher extends DurableObject<Env> {
         matchEnded: (match, at) => this.recordMatchEnd(match, at),
       },
     });
-    await poll();
+    await this.alerting(poll);
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.updateVip(config));
@@ -617,6 +630,16 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put('nextMap', staged);
   }
 
+  // Posts a /seednow call. Its time is saved first, so the automatic seeding alert holds back even when the post times
+  // out after Discord took it.
+  async seedCall(message: DiscordMessage): Promise<void> {
+    const { webhookUrl } = loadConfig(stringVars(this.env));
+    await this.alerting(async () => {
+      await this.ctx.storage.put('seedCall', Date.now());
+      await postWebhook(webhookUrl, message);
+    });
+  }
+
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
   async seeders(days: number): Promise<SeederRow[]> {
     const keys = recentDayKeys(Date.now(), days);
@@ -725,6 +748,7 @@ export default {
           lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
           seeders: (days) => watcher().seeders(days),
           removeMatch: (endedAt) => watcher().removeMatch(endedAt),
+          seedCall: (message) => watcher().seedCall(message),
           records,
           now: Date.now,
           log: console,

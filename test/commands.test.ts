@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runCommand, suggestOptions } from '../src/commands.ts';
 import type { Config } from '../src/config.ts';
+import type { DiscordMessage } from '../src/discord.ts';
 import type { HttpClient } from '../src/rcon.ts';
 import type { StaffRecords } from '../src/staff.ts';
 
@@ -42,22 +43,24 @@ const rcon = (responses: Record<string, unknown>) => {
   return { http, sent };
 };
 
-const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = null) => {
+const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = null, settings: Config = config) => {
   const server = rcon(responses);
   const log = { info: vi.fn() };
   const seeders = vi.fn(async (_days: number) => [{ steamId: '7656', name: 'Ash', seedingMinutes: 95, seedDays: 2, vipUntil: null }]);
   const removeMatch = vi.fn(async (endedAt: number) => (endedAt === ozeti.endedAt ? { match: ozeti, players: 96 } : null));
+  const seedCall = vi.fn(async (_message: DiscordMessage) => undefined);
   const run = runCommand({
-    config: () => config,
+    config: () => settings,
     http: server.http,
     lastMatch: async () => lastMatch as never,
     seeders,
     removeMatch,
+    seedCall,
     records,
     now: () => 0,
     log,
   });
-  return { run, sent: server.sent, log, seeders, removeMatch };
+  return { run, sent: server.sent, log, seeders, removeMatch, seedCall };
 };
 
 // 2026-09-30T14:05:00Z
@@ -118,6 +121,7 @@ describe('runCommand', () => {
         lastMatch: async () => match,
         seeders: async () => [],
         removeMatch: async () => null,
+        seedCall: async () => undefined,
         records,
         now: () => 0,
         log: { info: vi.fn() },
@@ -202,6 +206,60 @@ describe('runCommand', () => {
     await expect(suggest({ name: 'seeders', options: {}, userId: '42' })).resolves.toEqual([]);
   });
 
+  describe('/seednow', () => {
+    const seeding = { '/v1/status': { serverName: 'UK Wardogs #1', map: 'Europe', players: { current: 3, max: 98 } } };
+
+    it('posts a call to seed, pinging the role, with the note and who called it, and logs it', async () => {
+      const { run, seedCall, log, sent } = setup(seeding, null, { ...config, roleId: '999' });
+
+      const reply = await run({ name: 'seednow', options: { message: '  Join Alpha squad  ' }, userId: '42' });
+
+      expect(reply).toEqual({ content: '🌱 Seeding call posted, pinging <@&999>.' });
+      const [message] = seedCall.mock.calls[0] ?? [];
+      expect(message).toMatchObject({ content: '<@&999>', allowed_mentions: { parse: [], roles: ['999'] } });
+      expect(message?.embeds[0]).toMatchObject({
+        title: '🌱 Seeding UK Wardogs #1 now',
+        description: "**We're going to try to seed now. Come join!**\n\nJoin Alpha squad\n\nCalled by <@42>",
+      });
+      expect(message?.embeds[0]?.fields).toContainEqual({ name: 'To go live', value: '**17** more', inline: true });
+      expect(sent.map((r) => r.path)).toEqual(['/v1/status']);
+      expect(log.info.mock.calls).toEqual([
+        ['/seednow requested by Discord user 42: "Join Alpha squad"'],
+        ['/seednow posted for Discord user 42 at 3/98 players'],
+      ]);
+    });
+
+    it('says nobody was pinged when no role is set', async () => {
+      const { run, seedCall } = setup(seeding);
+
+      const reply = await run({ name: 'seednow', options: {}, userId: '42' });
+
+      expect(reply.content).toBe('🌱 Seeding call posted. No role is set (`DISCORD_ROLE_ID`), so nobody was pinged.');
+      expect(seedCall.mock.calls[0]?.[0].content).toBeUndefined();
+      expect(seedCall.mock.calls[0]?.[0].embeds[0]?.description).toBe(
+        "**We're going to try to seed now. Come join!**\n\nCalled by <@42>",
+      );
+    });
+
+    it('sends nothing when the server is already live, but still logs who asked', async () => {
+      const { run, seedCall, log } = setup({ '/v1/status': { serverName: 'UK Wardogs #1', players: { current: 20, max: 98 } } });
+
+      await expect(run({ name: 'seednow', options: {}, userId: '42' })).resolves.toEqual({
+        content: 'The server is already live (20/98 players), so no seeding call was sent.',
+      });
+      expect(seedCall).not.toHaveBeenCalled();
+      expect(log.info.mock.calls).toEqual([['/seednow requested by Discord user 42']]);
+    });
+
+    it('logs who asked even when the post fails', async () => {
+      const { run, seedCall, log } = setup(seeding);
+      seedCall.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+      await expect(run({ name: 'seednow', options: {}, userId: '42' })).rejects.toThrow(/webhook failed/);
+      expect(log.info.mock.calls).toEqual([['/seednow requested by Discord user 42']]);
+    });
+  });
+
   it('/broadcast sends the message in game and logs the attempt and the result', async () => {
     const { run, sent, log } = setup();
 
@@ -225,6 +283,7 @@ describe('runCommand', () => {
       lastMatch: async () => null,
       seeders: async () => [],
       removeMatch: async () => null,
+      seedCall: async () => undefined,
       records,
       now: () => 0,
       log,
