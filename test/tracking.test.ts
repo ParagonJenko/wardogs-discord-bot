@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Player, ServerStatus } from '../src/rcon.ts';
-import { observeMatch, summarise, tallySeeding, topSeeders, type MatchState } from '../src/tracking.ts';
+import type { FactionScore, Player, ServerStatus } from '../src/rcon.ts';
+import { observeMatch, settleWin, summarise, tallySeeding, topSeeders, type MatchState } from '../src/tracking.ts';
 
 const player = (steamId: string, kills = 0, deaths = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths });
 
@@ -249,5 +249,35 @@ describe('match tracking', () => {
     ]);
 
     expect(finished).toEqual([expect.objectContaining({ top: [{ steamId: 'a', name: 'Pa', kills: 6, deaths: 2 }] })]);
+  });
+});
+
+describe('settling a win', () => {
+  const sides = (...scores: [string, number][]): FactionScore[] => scores.map(([name, score]) => ({ name, score }));
+
+  it('gives a side the last check saw one point short the winning score', () => {
+    expect(settleWin(sides(['Valkyra', 99], ['Kharr', 80]), 100)).toEqual(sides(['Valkyra', 100], ['Kharr', 80]));
+    expect(settleWin(sides(['Valkyra', 40], ['Kharr', 61], ['Haldor', 149]), 150)).toEqual(
+      sides(['Valkyra', 40], ['Kharr', 61], ['Haldor', 150]),
+    );
+  });
+
+  it('keeps its colour', () => {
+    expect(settleWin([{ name: 'Valkyra', score: 99, colorHex: '#cc3333' }, { name: 'Kharr', score: 80 }], 100)[0]).toEqual({
+      name: 'Valkyra',
+      score: 100,
+      colorHex: '#cc3333',
+    });
+  });
+
+  it('leaves scores that already have a winner, were further off, or are level at the top', () => {
+    for (const scores of [
+      sides(['Valkyra', 100], ['Kharr', 99]),
+      sides(['Valkyra', 98], ['Kharr', 80]),
+      sides(['Valkyra', 99], ['Kharr', 99]),
+      sides(),
+    ]) {
+      expect(settleWin(scores, 100)).toBe(scores);
+    }
   });
 });

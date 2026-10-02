@@ -513,11 +513,13 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   lasted that long, so the first `DROP_GRACE_MINUTES` after a drop do not count as seeding.
 - WARDOGS RCON does not report when a match ends. The bot treats a map change, a restart on the same map, or
   the server emptying as the end of a match, and summarises it from the last stats it saw. That can miss up to
-  one minute at the end of the match. A restart means the faction scores drop and most players' kills and
-  deaths start again from 0 at once. One player's counters starting again (they rejoined or switched team)
-  is not a new match: their earlier kills and deaths are kept and the new ones added. The rotation slot
-  moving, or a reading without the map, does not end a match either. Players who left mid-match keep their
-  last stats. Length is timed from when the server went live. Matches that never went live are not
+  one minute at the end of the match. A side one point short of `SCORE_TO_WIN` in that last reading (99 of 100)
+  scored the winning point in that minute, so the match is recorded with it on 100. Matches saved on 99 before
+  this was added are put right once, on the first check after the deploy. A restart means the faction scores
+  drop and most players' kills and deaths start again from 0 at once. One player's counters starting again (they
+  rejoined or switched team) is not a new match: their earlier kills and deaths are kept and the new ones added.
+  The rotation slot moving, or a reading without the map, does not end a match either. Players who left mid-match
+  keep their last stats. Length is timed from when the server went live. Matches that never went live are not
   summarised, and neither is the match already running when the bot starts.
 - With three or more factions, the summary names them all: "**Valkyra** won 100, Kharr 67, Haldor 41".
 - If a Discord post fails, the alert is retried on the next check while it is still true. A match summary

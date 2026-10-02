@@ -18,6 +18,7 @@ const config: Config = {
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0 },
   busyThreshold: 97,
+  scoreToWin: 100,
   seedMinutes: 10,
   vip: null,
   matchMessages: null,
@@ -383,6 +384,28 @@ describe('poller stats', () => {
     expect(send).toHaveBeenCalledTimes(4);
     expect(stats.matchEnded).toHaveBeenCalledTimes(1);
     expect(stats.matchEnded).toHaveBeenCalledWith(expect.objectContaining({ key: 'Kavkazi#0', peakPlayers: 22 }), 180_000);
+  });
+
+  it('records and summarises a win the last check saw one point short', async () => {
+    const stats = sink();
+    const scored = (players: Player[], valkyra: number, kharr: number, map = 'Kavkazi'): Snapshot => {
+      const base = snapshot(players, map);
+      return {
+        ...base,
+        status: { ...base.status, factionScores: [{ name: 'Valkyra', score: valkyra }, { name: 'Kharr', score: kharr }] },
+      };
+    };
+    const { run, sent } = setup(
+      [snapshot(crowd(5)), scored(crowd(22), 60, 40), scored(crowd(22), 99, 70), scored(crowd(22), 0, 0, 'Europe')],
+      memoryStore(),
+      stats,
+    );
+
+    await run(4);
+
+    expect(stats.matchEnded.mock.calls[0]?.[0].factionScores.map((s) => s.score)).toEqual([100, 70]);
+    expect(field(sent.at(-1), 'Score')).toContain('100');
+    expect(field(sent.at(-1), 'Score')).not.toContain('99');
   });
 
   it('records a finished match even when Discord rejects its summary, and keeps tracking the next one', async () => {

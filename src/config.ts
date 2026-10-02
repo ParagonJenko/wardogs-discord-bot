@@ -59,7 +59,8 @@ const EnvSchema = z
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
     // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
     MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
-    // The score a faction needs to win, for "halfway" and "nearly there" messages.
+    // The score a faction needs to win: for "halfway" and "nearly there" messages, and to record a win the last check
+    // saw one point short.
     SCORE_TO_WIN: z.coerce.number().int().min(2).default(100),
     // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
     // after someone joins. 0 turns both off.
@@ -93,6 +94,8 @@ export type Config = {
   rules: AlertRules;
   // Players from which the server counts as busy, for the website.
   busyThreshold: number;
+  // The score a faction needs to win.
+  scoreToWin: number;
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
   seedMinutes: number;
   vip: VipRule | null;
@@ -130,6 +133,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       graceMs: e.DROP_GRACE_MINUTES * 60_000,
     },
     busyThreshold: e.BUSY_THRESHOLD,
+    scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,
     vip:
       e.VIP_SEED_DAYS > 0

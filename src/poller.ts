@@ -18,6 +18,7 @@ import type { Player, Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
 import {
   observeMatch,
+  settleWin,
   summarise,
   tallySeeding,
   topSeeders,
@@ -207,7 +208,8 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     const result = step(state.alerts, status.players, time, config.rules);
     const before = state.alerts.phase;
     const after = result.state.phase;
-    const { match, finished } = observeMatch(state.match, status, players, after === 'live', time);
+    const { match, finished: ended } = observeMatch(state.match, status, players, after === 'live', time);
+    const finished = ended === null ? null : { ...ended, factionScores: settleWin(ended.factionScores, config.scoreToWin) };
     // Seeding is time on the server while it is in the seeding phase: filling up from empty, or building back up
     // after a drop from live (a crash, or players leaving) that outlasted the grace time. A shorter drop keeps the
     // server live, so a quick restart is not seeding.
