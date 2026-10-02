@@ -127,10 +127,11 @@ export const summarise = (match: MatchState): MatchSummary => ({
 
 // The bot reads the server once a minute, so the last reading before a match ends can come just before the winning
 // point. A side alone on one point short of the winning score when its match ends won it, so it gets the winning score.
-export const settleWin = (match: MatchState, scoreToWin: number): MatchState => {
-  const [first, second] = [...match.factionScores].sort((a, b) => b.score - a.score);
-  if (first === undefined || first.score !== scoreToWin - 1 || second?.score === first.score) return match;
-  return { ...match, factionScores: match.factionScores.map((s) => (s === first ? { ...s, score: scoreToWin } : s)) };
+// The same scores come back when nothing changes.
+export const settleWin = (scores: FactionScore[], scoreToWin: number): FactionScore[] => {
+  const [first, second] = [...scores].sort((a, b) => b.score - a.score);
+  if (first === undefined || first.score !== scoreToWin - 1 || second?.score === first.score) return scores;
+  return scores.map((s) => (s === first ? { ...s, score: scoreToWin } : s));
 };
 
 const freshMatch = (status: ServerStatus, now: number, summarisable: boolean): MatchState => ({

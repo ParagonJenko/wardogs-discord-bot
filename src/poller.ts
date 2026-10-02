@@ -209,7 +209,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     const before = state.alerts.phase;
     const after = result.state.phase;
     const { match, finished: ended } = observeMatch(state.match, status, players, after === 'live', time);
-    const finished = ended === null ? null : settleWin(ended, config.scoreToWin);
+    const finished = ended === null ? null : { ...ended, factionScores: settleWin(ended.factionScores, config.scoreToWin) };
     // Seeding is time on the server while it is in the seeding phase: filling up from empty, or building back up
     // after a drop from live (a crash, or players leaving) that outlasted the grace time. A shorter drop keeps the
     // server live, so a quick restart is not seeding.

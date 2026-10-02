@@ -100,7 +100,7 @@ import {
   type RecentMatch,
   type SiteStats,
 } from './stats.ts';
-import { matchMap, summarise, type MatchState } from './tracking.ts';
+import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
 import { addVip, parseVipState, removeVip, syncVip, vipDue, type VipState } from './vip.ts';
 
 type Env = {
@@ -116,6 +116,8 @@ const stringVars = (env: Env): Record<string, string> =>
 const SEEDERS_LISTED = 25;
 // Recent matches are the last 10, so their records are among the newest few.
 const MATCH_RECORDS_SEARCHED = 50;
+// Durable Object storage writes at most 128 keys at once.
+const RECORDS_PER_WRITE = 128;
 const LEADERBOARD_DAYS = 30;
 const LEADERBOARD_SIZE = 10;
 const DAY_MS = 24 * 60 * 60_000;
@@ -147,7 +149,8 @@ const oneAtATime = () => {
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
 // status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
-// was in game at the last check that reached the server) and 'seedCall' (when staff last sent /seednow).
+// was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow) and 'winsSettled'
+// (set once the matches saved before settleWin have been put right).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
@@ -163,6 +166,8 @@ export class Watcher extends DurableObject<Env> {
   // Steam ID → public id.
   private ids = new Map<string, string>();
   private idKey: Promise<CryptoKey> | null = null;
+  // Saves reading 'winsSettled' on every check once it is set.
+  private winsSettled = false;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -268,9 +273,55 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
+  // Matches saved before the bot settled a win the last check saw one point short (see settleWin) are put right once:
+  // their records, for the player pages, and the recent matches. Only storage is awaited, so nothing else runs between
+  // the reads and the writes. A failure is tried again on the next check.
+  private async settleSavedWins(scoreToWin: number): Promise<void> {
+    if (this.winsSettled) return;
+    const storage = this.ctx.storage;
+    try {
+      if ((await storage.get('winsSettled')) !== undefined) {
+        this.winsSettled = true;
+        return;
+      }
+      let records = 0;
+      let after: string | undefined;
+      for (;;) {
+        const page = await storage.list({
+          prefix: 'match:',
+          limit: RECORDS_PER_WRITE,
+          ...(after === undefined ? {} : { startAfter: after }),
+        });
+        const settled = [...page].flatMap(([key, value]) => {
+          const record = parseMatchRecord(value);
+          if (record === null) return [];
+          const factionScores = settleWin(record.factionScores, scoreToWin);
+          return factionScores === record.factionScores ? [] : [[key, { ...record, factionScores }] as const];
+        });
+        if (settled.length > 0) await storage.put(Object.fromEntries(settled));
+        records += settled.length;
+        after = [...page.keys()].at(-1);
+        if (page.size < RECORDS_PER_WRITE) break;
+      }
+      const stats = parseStats(await storage.get('stats'));
+      const matches = stats.matches.map((m) => {
+        const factionScores = settleWin(m.factionScores, scoreToWin);
+        return factionScores === m.factionScores ? m : { ...m, factionScores };
+      });
+      const recent = matches.filter((m, i) => m !== stats.matches[i]).length;
+      await storage.put({ ...(recent > 0 ? { stats: { ...stats, matches } } : {}), winsSettled: true });
+      this.matchCache.clear();
+      this.winsSettled = true;
+      console.info(`Settled wins saved one point short: ${records} match records, ${recent} recent matches`);
+    } catch (error) {
+      console.error(`Settling saved wins failed: ${errorText(error)}`);
+    }
+  }
+
   async check(): Promise<void> {
     // The cron fires every minute whatever POLL_INTERVAL_SECONDS says, and seeding minutes are counted per check.
     const config = { ...loadConfig(stringVars(this.env)), pollIntervalMs: 60_000 };
+    await this.settleSavedWins(config.scoreToWin);
     const storage = this.ctx.storage;
     const minutesPerCheck = config.pollIntervalMs / 60_000;
     // What this check read from the server, for the live status.

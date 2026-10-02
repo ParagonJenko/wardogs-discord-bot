@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Player, ServerStatus } from '../src/rcon.ts';
+import type { FactionScore, Player, ServerStatus } from '../src/rcon.ts';
 import { observeMatch, settleWin, summarise, tallySeeding, topSeeders, type MatchState } from '../src/tracking.ts';
 
 const player = (steamId: string, kills = 0, deaths = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths });
@@ -253,37 +253,31 @@ describe('match tracking', () => {
 });
 
 describe('settling a win', () => {
-  const ended = (...scores: [string, number][]): MatchState =>
-    observeMatch(null, status({ factionScores: scores.map(([name, score]) => ({ name, score })) }), [], true, 0).match;
-  const scores = (match: MatchState) => match.factionScores.map((s) => [s.name, s.score]);
+  const sides = (...scores: [string, number][]): FactionScore[] => scores.map(([name, score]) => ({ name, score }));
 
   it('gives a side the last check saw one point short the winning score', () => {
-    expect(scores(settleWin(ended(['Valkyra', 99], ['Kharr', 80]), 100))).toEqual([
-      ['Valkyra', 100],
-      ['Kharr', 80],
-    ]);
-    expect(scores(settleWin(ended(['Valkyra', 40], ['Kharr', 61], ['Haldor', 149]), 150))).toEqual([
-      ['Valkyra', 40],
-      ['Kharr', 61],
-      ['Haldor', 150],
-    ]);
+    expect(settleWin(sides(['Valkyra', 99], ['Kharr', 80]), 100)).toEqual(sides(['Valkyra', 100], ['Kharr', 80]));
+    expect(settleWin(sides(['Valkyra', 40], ['Kharr', 61], ['Haldor', 149]), 150)).toEqual(
+      sides(['Valkyra', 40], ['Kharr', 61], ['Haldor', 150]),
+    );
   });
 
   it('keeps its colour', () => {
-    const match = ended(['Valkyra', 99], ['Kharr', 80]);
-    const coloured = { ...match, factionScores: match.factionScores.map((s) => ({ ...s, colorHex: '#cc3333' })) };
-
-    expect(settleWin(coloured, 100).factionScores[0]).toEqual({ name: 'Valkyra', score: 100, colorHex: '#cc3333' });
+    expect(settleWin([{ name: 'Valkyra', score: 99, colorHex: '#cc3333' }, { name: 'Kharr', score: 80 }], 100)[0]).toEqual({
+      name: 'Valkyra',
+      score: 100,
+      colorHex: '#cc3333',
+    });
   });
 
-  it('leaves a match that already has a winner, was further off, or is level at the top', () => {
-    for (const match of [
-      ended(['Valkyra', 100], ['Kharr', 99]),
-      ended(['Valkyra', 98], ['Kharr', 80]),
-      ended(['Valkyra', 99], ['Kharr', 99]),
-      ended(),
+  it('leaves scores that already have a winner, were further off, or are level at the top', () => {
+    for (const scores of [
+      sides(['Valkyra', 100], ['Kharr', 99]),
+      sides(['Valkyra', 98], ['Kharr', 80]),
+      sides(['Valkyra', 99], ['Kharr', 99]),
+      sides(),
     ]) {
-      expect(settleWin(match, 100)).toBe(match);
+      expect(settleWin(scores, 100)).toBe(scores);
     }
   });
 });
