@@ -17,6 +17,7 @@ import {
   isBotBan,
   modLogKey,
   parseBanBook,
+  joinWork,
   parseModLog,
   type BanRecord,
   type ModEntry,
@@ -65,6 +66,8 @@ import {
   fetchPlayers,
   fetchRotation,
   fetchSnapshot,
+  isNotInGame,
+  kickPlayer,
   putConfig,
   RconError,
   removeBan,
@@ -76,6 +79,7 @@ import {
 } from './rcon.ts';
 import { socketHttp } from './socket-http.ts';
 import {
+  banKickReason,
   PROFILE_DAYS,
   type BanRequest,
   type BanResult,
@@ -344,6 +348,7 @@ export class Watcher extends DurableObject<Env> {
     await this.startJoinChecks(config);
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
+    await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
 
     const { inviteCode } = config;
@@ -411,9 +416,11 @@ export class Watcher extends DurableObject<Env> {
         const current = onServer.find((b) => b.steamId === steamId);
         const label = `${JSON.stringify(ban.name)} (${steamId})`;
         if (current === undefined || !isBotBan(current.reason, ban)) {
-          // Lifted already, or lifted and banned again some other way: that ban is not the bot's to lift.
+          // Lifted already, or lifted and banned again some other way: that ban is not the bot's to lift. A ban still
+          // waiting for the player to join was never on the server.
           await this.record(steamId, null, { ban: null });
-          console.info(`Ban ended: ${label} ${current === undefined ? 'was already unbanned' : 'has a newer ban, left alone'}`);
+          const why = current !== undefined ? 'has a newer ban, left alone' : ban.waiting ? 'ran out before they joined' : 'was already unbanned';
+          console.info(`Ban ended: ${label} ${why}`);
           continue;
         }
         await removeBan(config.rconUrl, config.rconPassword, steamId, http);
@@ -422,6 +429,59 @@ export class Watcher extends DurableObject<Env> {
       }
     } catch (error) {
       console.error(`Lifting ended bans failed: ${errorText(error)}`);
+    }
+  }
+
+  // Bans staff made while the player was not in game, which the game refuses: they go on the server, with a kick, at
+  // the first check that sees the player. A ban or kick that fails is tried again at the next check, and a kick until
+  // the player has gone.
+  private async applyWaitingBans(config: Config, snapshot: Snapshot | null): Promise<void> {
+    if (snapshot === null) return;
+    try {
+      const book = parseBanBook(await this.ctx.storage.get('bans'));
+      const work = joinWork(book, snapshot.players.map((p) => p.steamId), Date.now());
+      const http = socketHttp(connect);
+      const label = (steamId: string): string => `${JSON.stringify(book[steamId]?.name ?? '')} (${steamId})`;
+      // Saves the ban as on the server, with a kick still owed or not.
+      const applied = async (steamId: string, kicking: boolean): Promise<void> => {
+        const old = book[steamId];
+        if (old === undefined) return;
+        const { waiting: _waiting, kicking: _kicking, ...ban } = old;
+        book[steamId] = kicking ? { ...ban, kicking } : ban;
+        await this.record(steamId, null, { ban: book[steamId] });
+      };
+      for (const steamId of work.gone) await applied(steamId, false);
+      const kick = [...work.kick];
+      for (const steamId of work.ban) {
+        const ban = book[steamId];
+        if (ban === undefined) continue;
+        try {
+          await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
+        } catch (error) {
+          // Left again before the ban went in: it waits for the next time they join.
+          if (!isNotInGame(error)) console.error(`Waiting ban on ${label(steamId)} failed: ${errorText(error)}`);
+          continue;
+        }
+        await applied(steamId, true);
+        console.info(`Ban put on the server as they joined: ${label(steamId)}`);
+        kick.push(steamId);
+      }
+      for (const steamId of kick) {
+        const ban = book[steamId];
+        if (ban === undefined) continue;
+        try {
+          await kickPlayer(config.rconUrl, config.rconPassword, steamId, banKickReason(ban.reason, config.siteUrl), http);
+        } catch (error) {
+          // Not in game any more is as good as kicked: the ban keeps them out.
+          if (!isNotInGame(error)) {
+            console.error(`Kick after the waiting ban on ${label(steamId)} failed, trying again next check: ${errorText(error)}`);
+            continue;
+          }
+        }
+        await applied(steamId, false);
+      }
+    } catch (error) {
+      console.error(`Waiting bans failed: ${errorText(error)}`);
     }
   }
 
@@ -640,7 +700,8 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A player who is already
-  // banned is left as they are, so no ban is ever lifted to change it: staff /unban first.
+  // banned is left as they are, so no ban is ever lifted to change it: staff /unban first. The game only bans players
+  // who are in game, so for anyone else the ban waits, and the check that next sees them puts it on the server.
   async ban({ steamId, name, length, reason, by }: BanRequest): Promise<BanResult> {
     const option = BAN_LENGTHS.find((l) => l.value === length);
     if (option === undefined) throw new Error(`Unknown ban length: ${length}`);
@@ -649,10 +710,13 @@ export class Watcher extends DurableObject<Env> {
       const at = Date.now();
       const until = option.ms === null ? null : at + option.ms;
       const current = (await fetchBans(config.rconUrl, config.rconPassword, http)).find((b) => b.steamId === steamId);
+      const ours = parseBanBook(await this.ctx.storage.get('bans'))[steamId];
       if (current !== undefined) {
-        const ours = parseBanBook(await this.ctx.storage.get('bans'))[steamId];
         const byBot = ours !== undefined && isBotBan(current.reason, ours);
         return { outcome: 'already-banned', until: byBot ? ours.until : null, byBot };
+      }
+      if (ours?.waiting && (ours.until === null || ours.until > at)) {
+        return { outcome: 'already-banned', until: ours.until, byBot: true, waiting: true };
       }
       // Remembered before the server is asked, so a ban that goes through but times out still ends on time. If the
       // server refuses, it is forgotten again; the bot also forgets it at its end if the server never had it.
@@ -661,6 +725,11 @@ export class Watcher extends DurableObject<Env> {
       try {
         await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
       } catch (error) {
+        if (isNotInGame(error)) {
+          const detail = `${option.name}, waits for them to join`;
+          await this.record(steamId, { action: 'ban', at, by, name, reason, detail }, { ban: { ...ban, waiting: true } });
+          return { outcome: 'banned', until, byBot: true, waiting: true };
+        }
         if (error instanceof RconError) await this.record(steamId, null, { ban: null });
         throw error;
       }
@@ -669,11 +738,13 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  // False when the server had no ban for them. The bot forgets its own record of the ban either way.
+  // False when they had no ban: none on the server, and none waiting for them to join. The bot forgets its own record
+  // of the ban either way.
   async unban({ steamId, name }: Named, by: string): Promise<boolean> {
     return this.serial(async () => {
       const { config, http } = this.rcon();
-      const removed = await removeBan(config.rconUrl, config.rconPassword, steamId, http);
+      const waiting = parseBanBook(await this.ctx.storage.get('bans'))[steamId]?.waiting === true;
+      const removed = (await removeBan(config.rconUrl, config.rconPassword, steamId, http)) || waiting;
       await this.record(steamId, removed ? { action: 'unban', at: Date.now(), by, name } : null, { ban: null });
       return removed;
     });

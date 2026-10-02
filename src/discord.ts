@@ -673,21 +673,24 @@ const vipText = ({ record, reserved, now }: PlayerProfile): string => {
 };
 
 const banText = ({ record, serverBan }: PlayerProfile): string => {
-  // The server is the truth when it can be read: a ban lifted by hand is gone even if the bot still has a record, and
-  // a ban made some other way since is not described as the bot's.
-  if (serverBan === null) return 'Not banned';
   const ban = record.ban;
   const bots = (b: BanRecord): string => {
     const until = b.until === null ? 'permanently' : `until ${when(b.until, 'f')} (${when(b.until, 'R')})`;
     return `🔨 Banned ${until} by <@${b.by}>: ${cut(b.reason)}`;
   };
+  // The game only bans players in game, so a ban made while they were away is not on the server until they join.
+  if (ban?.waiting && serverBan === null) return `${bots(ban)}\n(Not on the server yet: the bot bans them when they next join.)`;
+  // The server is the truth when it can be read: a ban lifted by hand is gone even if the bot still has a record, and
+  // a ban made some other way since is not described as the bot's.
+  if (serverBan === null) return 'Not banned';
   if (serverBan === undefined) return ban === null ? "Couldn't read the ban list" : `${bots(ban)}\n(Couldn't check the server's ban list.)`;
   if (ban !== null && isBotBan(serverBan.reason, ban)) return bots(ban);
   return `🔨 Banned on the server${serverBan.reason ? `: ${cut(serverBan.reason)}` : ''}`;
 };
 
 // Red while the player is banned, as far as can be told.
-const isBanned = ({ record, serverBan }: PlayerProfile): boolean => (serverBan === undefined ? record.ban !== null : serverBan !== null);
+const isBanned = ({ record, serverBan }: PlayerProfile): boolean =>
+  serverBan === undefined ? record.ban !== null : serverBan !== null || record.ban?.waiting === true;
 
 const historyText = (record: PlayerRecord): string => {
   if (record.log.length === 0) return 'Nothing through the bot yet.';

@@ -34,8 +34,19 @@ export const parseModLog = (raw: unknown): ModEntry[] => {
 export const appendMod = (log: ModEntry[], entry: ModEntry): ModEntry[] => [...log, entry].slice(-MAX_ENTRIES);
 
 // Bans the bot made, by Steam ID. `until` is null for a permanent ban. `serverReason` is the reason exactly as the bot
-// gave it to the server, which is how the bot knows the ban there is still its own.
-export type BanRecord = { name: string; until: number | null; reason: string; serverReason: string; by: string; at: number };
+// gave it to the server, which is how the bot knows the ban there is still its own. `waiting` marks a ban the server
+// does not have yet: the game only bans players who are in game, so the bot bans them when it next sees them.
+// `kicking` marks one the bot put on the server that way while the kick that goes with it has not worked yet.
+export type BanRecord = {
+  name: string;
+  until: number | null;
+  reason: string;
+  serverReason: string;
+  by: string;
+  at: number;
+  waiting?: boolean;
+  kicking?: boolean;
+};
 export type BanBook = Record<string, BanRecord>;
 
 const BanBookSchema = z.record(
@@ -47,6 +58,8 @@ const BanBookSchema = z.record(
     serverReason: z.string(),
     by: z.string(),
     at: z.number(),
+    waiting: z.boolean().optional(),
+    kicking: z.boolean().optional(),
   }),
 );
 
@@ -60,6 +73,21 @@ export const expiredBans = (book: BanBook, now: number): string[] =>
   Object.entries(book)
     .filter(([, ban]) => ban.until !== null && ban.until <= now)
     .map(([steamId]) => steamId);
+
+// What a check that sees who is in game does about bans made while the player was away: `ban` the players in game
+// whose waiting ban has not run out, `kick` those in game a kick has not removed yet, and stop kicking those `gone`,
+// whom their ban now keeps out.
+export const joinWork = (book: BanBook, inGame: string[], now: number): { ban: string[]; kick: string[]; gone: string[] } => {
+  const on = new Set(inGame);
+  const entries = Object.entries(book);
+  const ids = (keep: (steamId: string, ban: BanRecord) => boolean): string[] =>
+    entries.filter(([steamId, ban]) => keep(steamId, ban)).map(([steamId]) => steamId);
+  return {
+    ban: ids((steamId, ban) => ban.waiting === true && on.has(steamId) && (ban.until === null || ban.until > now)),
+    kick: ids((steamId, ban) => ban.kicking === true && on.has(steamId)),
+    gone: ids((steamId, ban) => ban.kicking === true && !on.has(steamId)),
+  };
+};
 
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;

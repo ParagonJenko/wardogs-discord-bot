@@ -7,6 +7,7 @@ import {
   isBotBan,
   modLogKey,
   parseBanBook,
+  joinWork,
   parseModLog,
   type ModEntry,
 } from '../src/moderation.ts';
@@ -57,6 +58,22 @@ describe('ban book', () => {
     expect(isBotBan('Cheating (ends 2026-10-07 12:30 UTC)', ban)).toBe(true);
     expect(isBotBan('Cheating', ban)).toBe(false);
     expect(isBotBan(null, ban)).toBe(false);
+  });
+
+  it('bans players in game whose ban waited for them, and kicks them until they have gone', () => {
+    const CY = '76561198000000003';
+    const DI = '76561198000000004';
+    const book = parseBanBook({
+      [ASH]: { name: 'Ash', until: 100, reason: 'x', serverReason: 'x (ends …)', by: '1', at: 0, waiting: true },
+      [BO]: { name: 'Bo', until: null, reason: 'y', serverReason: 'y', by: '1', at: 0, waiting: true },
+      [CY]: { name: 'Cy', until: null, reason: 'z', serverReason: 'z', by: '1', at: 0, kicking: true },
+      [DI]: { name: 'Di', until: null, reason: 'w', serverReason: 'w', by: '1', at: 0 },
+    });
+
+    expect([book[BO]?.waiting, book[CY]?.kicking]).toEqual([true, true]);
+    expect(joinWork(book, [ASH, BO, CY, DI], 99)).toEqual({ ban: [ASH, BO], kick: [CY], gone: [] });
+    expect(joinWork(book, [ASH, BO, CY, DI], 100)).toEqual({ ban: [BO], kick: [CY], gone: [] });
+    expect(joinWork(book, [DI], 0)).toEqual({ ban: [], kick: [], gone: [CY] });
   });
 
   it('offers lengths from an hour to permanent', () => {

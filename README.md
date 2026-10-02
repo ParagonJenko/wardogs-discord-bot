@@ -235,7 +235,13 @@ works when it matches exactly one player.
   check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly
   the one it wrote: if someone lifted it and banned the player again some other way, that ban stays. A player in
   game is kicked too. A player who is already banned is left as they are; to change a ban, `/unban` them first.
-- **`/unban`** lists the banned players. It works on any ban, however it was made.
+- The game only bans players who are in game: for anyone else it answers `404 player_not_found`. So when staff ban
+  someone who is not on, the bot keeps the ban and puts it on the server, with a kick, at the first check that sees
+  them join (within a minute), logging `Ban put on the server as they joined: …`. A kick that fails is tried again
+  at each check until they have gone. The ban's time runs from when staff
+  made it, so a timed ban that ends before they join is dropped. `/player` shows such a ban as not on the server yet.
+- **`/unban`** lists the banned players. It works on any ban, however it was made, and also cancels a ban still
+  waiting for the player to join (type their name or Steam ID: the list only shows the server's bans).
 - **`/setnextmap`** sets the map the server goes to when this match ends (`POST /v1/match/map`). The rotation is not
   changed. **`/changemap`** does the same, then ends the current match straight away (`POST /v1/match/end`); the
   server shows the end screen, then changes map. Both take how the map is played, all optional:
@@ -352,7 +358,7 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Each finished match          | Map, start, live and end times, length, peak, faction scores, and every player's Steam ID, name, kills, deaths and side |
 | Each player, each UTC day    | Name, seeding minutes, live minutes, whether they had a successful seed, matches played, kills, deaths |
 | Each player's staff history  | The last 50 warnings, kicks, bans, unbans, team moves and VIP changes made through the bot: when, by whom (Discord user ID), and why |
-| Bans the bot made            | Name, reason, who made it, and when a timed ban ends                                    |
+| Bans the bot made            | Name, reason, who made it, when a timed ban ends, and whether it waits for them to join |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who

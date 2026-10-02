@@ -219,6 +219,22 @@ describe('runStaffCommand', () => {
     expect(sent.some((s) => s.includes('/kick'))).toBe(false);
   });
 
+  it('/ban says when the ban waits for the player to join, and does not kick them', async () => {
+    const { run, sent, records } = setup();
+    const joining = 'the bot bans and kicks them within a minute of them joining';
+    records.ban
+      .mockResolvedValueOnce({ outcome: 'banned', until: NOW + 86_400_000, byBot: true, waiting: true })
+      .mockResolvedValueOnce({ outcome: 'already-banned', until: null, byBot: true, waiting: true });
+
+    await expect(run('ban', { player: 'Bo', duration: '1d', reason: 'Cheating' })).resolves.toEqual({
+      content: `🔨 Banned **Bo** for 1 day, until <t:${(NOW + 86_400_000) / 1000}:f>. Reason: Cheating\n⏳ They aren't in game, and the game only bans players who are, so ${joining}.`,
+    });
+    await expect(run('ban', { player: OLD, duration: '1d', reason: 'x' })).resolves.toEqual({
+      content: `**Oldtimer** is already banned permanently. ⏳ They haven't joined since, so ${joining}. Use /unban first to change the ban.`,
+    });
+    expect(sent.some((s) => s.includes('/kick'))).toBe(false);
+  });
+
   it('/ban needs a reason and a length from the list', async () => {
     const { run, records } = setup();
 

@@ -48,8 +48,9 @@ export type PlayerRecord = {
 
 export type BanRequest = Named & { length: string; reason: string; by: string };
 // `already-banned`: the player has a ban already, which stays as it is. `byBot` says whether the bot made it, and
-// then `until` is when it ends.
-export type BanResult = { outcome: 'banned' | 'already-banned'; until: number | null; byBot: boolean };
+// then `until` is when it ends. `waiting`: the server does not have the ban yet, as the player is not in game; the bot
+// bans them when it next sees them.
+export type BanResult = { outcome: 'banned' | 'already-banned'; until: number | null; byBot: boolean; waiting?: boolean };
 export type VipAddResult = { outcome: 'added' | 'extended' | 'already-reserved'; until?: number };
 export type VipRemoveResult = { outcome: 'removed' | 'not-reserved' };
 
@@ -93,6 +94,9 @@ const rulesNote = (siteUrl: string | undefined): string => {
   const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
   return host ? `Rules: our Discord at ${host}` : 'Rules are in our Discord';
 };
+
+// The reason given with the kick that comes with a ban.
+export const banKickReason = (reason: string, siteUrl: string | undefined): string => `Banned: ${reason} | ${rulesNote(siteUrl)}`;
 
 const STEAM_ID = /^\d{17}$/;
 
@@ -320,22 +324,29 @@ export const runStaffCommand =
       const { player } = found;
       log.info(`/ban by ${staff}: ${logged(player)} for ${length.name}: ${JSON.stringify(reason)}`);
       const result = await records.ban({ ...player, length: length.value, reason, by });
+      const joining = 'the bot bans and kicks them within a minute of them joining';
       if (result.outcome === 'already-banned') {
         const current = !result.byBot
           ? ', not by the bot'
           : result.until === null
             ? ' permanently'
             : ` until <t:${unix(result.until)}:f>`;
-        return { content: `${who(player)} is already banned${current}. Use /unban first to change the ban.` };
+        const pending = result.waiting ? ` ⏳ They haven't joined since, so ${joining}.` : '';
+        return { content: `${who(player)} is already banned${current}.${pending} Use /unban first to change the ban.` };
+      }
+      const span = result.until === null ? 'permanently' : `for ${length.name}, until <t:${unix(result.until)}:f>`;
+      if (result.waiting) {
+        return {
+          content: `🔨 Banned ${who(player)} ${span}. Reason: ${reason}\n⏳ They aren't in game, and the game only bans players who are, so ${joining}.`,
+        };
       }
       // The ban keeps them out from now on; a kick removes them if they are in game.
       const kicked = live.some((p) => p.steamId === player.steamId)
-        ? await kickPlayer(rconUrl, rconPassword, player.steamId, `Banned: ${reason} | ${rules}`, http).then(
+        ? await kickPlayer(rconUrl, rconPassword, player.steamId, banKickReason(reason, siteUrl), http).then(
             () => ' and kicked them',
             () => ", but couldn't kick them. Use /kick",
           )
         : '';
-      const span = result.until === null ? 'permanently' : `for ${length.name}, until <t:${unix(result.until)}:f>`;
       return { content: `🔨 Banned ${who(player)} ${span}${kicked}. Reason: ${reason}` };
     }
 
