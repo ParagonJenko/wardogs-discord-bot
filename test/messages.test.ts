@@ -142,7 +142,8 @@ describe('the lines', () => {
   });
 
   it('fits every message in the game with its call to action, without cutting it', () => {
-    const texts = [0, 0.25, 0.5, 0.75, 0.99].flatMap((r) => [
+    // 100 steps reach every line of a list of up to 100.
+    const texts = Array.from({ length: 100 }, (_, i) => i / 100).flatMap((r) => [
       ...milestones(match({ factionScores: [{ name: 'Manticore', score: 95 }] }), 10 * MINUTE, rule, vip, () => r),
       ...milestones(match({ factionScores: [{ name: 'Lonestar', score: 95 }] }), 0, rule, vip, () => r),
       ...milestones(match({ factionScores: [{ name: 'Valkyra', score: 95 }] }), 0, rule, vip, () => r),
