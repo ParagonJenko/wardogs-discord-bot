@@ -125,11 +125,16 @@ describe('grace for drops', () => {
 describe('seeding call from staff', () => {
   const empty = initialState(0, rules);
 
-  it('holds back the automatic seeding alert for its cooldown, so the role is not pinged twice', () => {
-    const called = withSeedCall(empty, 0);
+  it('skips the automatic seeding alert when the first players join within its cooldown, so the role is not pinged twice', () => {
+    const joined = step(withSeedCall(empty, 0), 1, 5 * MINUTE, rules);
 
-    expect(step(called, 1, 5 * MINUTE, rules)).toMatchObject({ alert: null, state: { phase: 'seeding' } });
-    expect(step(called, 1, 10 * MINUTE, rules).alert).toBe('seeding');
+    expect(joined).toMatchObject({ alert: null, state: { phase: 'seeding' } });
+    // Skipped, not put off: the server is already seeding, as the call said it would be.
+    expect(step(joined.state, 2, 10 * MINUTE, rules).alert).toBeNull();
+  });
+
+  it('holds back only for the cooldown: players who first join later still get the automatic alert', () => {
+    expect(step(withSeedCall(empty, 0), 1, 10 * MINUTE, rules).alert).toBe('seeding');
   });
 
   it('keeps a later automatic alert', () => {

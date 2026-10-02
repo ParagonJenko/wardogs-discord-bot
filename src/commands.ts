@@ -103,13 +103,15 @@ export const runCommand =
     if (name === 'players') return { embeds: [buildPlayersEmbed(await fetchPlayers(rconUrl, rconPassword, http))] };
     if (name === 'rotation') return { embeds: [buildRotationEmbed(await fetchRotation(rconUrl, rconPassword, http))] };
     if (name === 'seednow') {
+      const note = (options['message'] ?? '').trim();
+      // Logged before anything can fail, like /broadcast, so every call has a record of who made it.
+      log.info(`/seednow requested by Discord user ${userId ?? 'unknown'}${note ? `: ${JSON.stringify(note)}` : ''}`);
       const status = await fetchStatus(rconUrl, rconPassword, http);
       if (status.players >= rules.live) {
         return { content: `The server is already live (${status.players}/${status.maxPlayers} players), so no seeding call was sent.` };
       }
-      const note = (options['message'] ?? '').trim();
       await seedCall(buildSeedCall(status, { lowPop: rules.lowPop, live: rules.live, roleId, vip, siteUrl, note, calledBy: userId }));
-      log.info(`/seednow by Discord user ${userId ?? 'unknown'} at ${status.players}/${status.maxPlayers} players`);
+      log.info(`/seednow posted for Discord user ${userId ?? 'unknown'} at ${status.players}/${status.maxPlayers} players`);
       return {
         content: roleId
           ? `🌱 Seeding call posted, pinging <@&${roleId}>.`

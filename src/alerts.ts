@@ -75,8 +75,8 @@ export const step = (state: MonitorState, players: number, now: number, rules: A
   };
 };
 
-// A seeding call staff sent with /seednow counts as the seeding alert, so when the first players join, the automatic
-// alert waits out its cooldown instead of pinging the role a second time.
+// A seeding call staff sent with /seednow counts as the seeding alert, so when the first players join within its
+// cooldown, the automatic alert is skipped (as after any alert) instead of pinging the role a second time.
 export const withSeedCall = (state: MonitorState, calledAt: number): MonitorState => {
   const sent = state.lastAlertAt.seeding;
   if (sent !== undefined && sent >= calledAt) return state;

@@ -201,9 +201,10 @@ when [automatic VIP](#automatic-vip) is on, what seeding earns), says "We're goi
 the optional `message` (such as which squad to join) and who called it, and pings `DISCORD_ROLE_ID` if it is set.
 
 - It sends nothing when the server is already live.
-- It counts as the seeding alert, so when the first players join, the automatic one waits out
-  `ALERT_COOLDOWN_MINUTES` (default 10) instead of pinging the role again.
-- Each call is logged with the staff member's Discord user ID.
+- It counts as the seeding alert: if the first players join within `ALERT_COOLDOWN_MINUTES` (default 10), there is no
+  automatic seeding alert as well, so the role is not pinged twice. Its time is saved before it is posted, and it never
+  goes out while a check is running, so a slow post or a check at the same moment cannot ping twice either.
+- Each call is logged with the staff member's Discord user ID before anything is sent, and again once it is posted.
 
 `/removematch` is for a match the bot recorded by mistake, such as part of a match it wrongly thought had ended.
 Start typing and pick the match from the list of recent matches (map, result, length and end time, UTC). It takes

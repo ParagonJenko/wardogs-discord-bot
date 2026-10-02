@@ -223,7 +223,10 @@ describe('runCommand', () => {
       });
       expect(message?.embeds[0]?.fields).toContainEqual({ name: 'To go live', value: '**17** more', inline: true });
       expect(sent.map((r) => r.path)).toEqual(['/v1/status']);
-      expect(log.info).toHaveBeenCalledWith('/seednow by Discord user 42 at 3/98 players');
+      expect(log.info.mock.calls).toEqual([
+        ['/seednow requested by Discord user 42: "Join Alpha squad"'],
+        ['/seednow posted for Discord user 42 at 3/98 players'],
+      ]);
     });
 
     it('says nobody was pinged when no role is set', async () => {
@@ -238,13 +241,22 @@ describe('runCommand', () => {
       );
     });
 
-    it('sends nothing when the server is already live', async () => {
-      const { run, seedCall } = setup({ '/v1/status': { serverName: 'UK Wardogs #1', players: { current: 20, max: 98 } } });
+    it('sends nothing when the server is already live, but still logs who asked', async () => {
+      const { run, seedCall, log } = setup({ '/v1/status': { serverName: 'UK Wardogs #1', players: { current: 20, max: 98 } } });
 
       await expect(run({ name: 'seednow', options: {}, userId: '42' })).resolves.toEqual({
         content: 'The server is already live (20/98 players), so no seeding call was sent.',
       });
       expect(seedCall).not.toHaveBeenCalled();
+      expect(log.info.mock.calls).toEqual([['/seednow requested by Discord user 42']]);
+    });
+
+    it('logs who asked even when the post fails', async () => {
+      const { run, seedCall, log } = setup(seeding);
+      seedCall.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+      await expect(run({ name: 'seednow', options: {}, userId: '42' })).rejects.toThrow(/webhook failed/);
+      expect(log.info.mock.calls).toEqual([['/seednow requested by Discord user 42']]);
     });
   });
 

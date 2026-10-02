@@ -8,7 +8,7 @@ import { buildLiveStatus, buildVipMessage, mapName, postWebhook } from './discor
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
-import type { SeederRow } from './discord.ts';
+import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
   appendMod,
   BAN_LENGTHS,
@@ -130,6 +130,16 @@ const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => res
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+// Runs work one at a time, in the order it was asked for. A failure does not hold up what comes after it.
+const oneAtATime = () => {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const run = queue.then(work);
+    queue = run.catch(() => undefined);
+    return run;
+  };
+};
+
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 // Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
@@ -140,13 +150,9 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
-  private queue: Promise<unknown> = Promise.resolve();
-
-  private serial<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(work);
-    this.queue = run.catch(() => undefined);
-    return run;
-  }
+  private serial = oneAtATime();
+  // The alerts and /seednow run one at a time, so a check never sends the seeding alert while a seeding call is going out.
+  private alerting = oneAtATime();
 
   // The player records the website's pages read. Past days and finished matches only change through /removematch,
   // which clears them, so they are kept in memory and each read only fetches the last two days and any new matches.
@@ -249,7 +255,7 @@ export class Watcher extends DurableObject<Env> {
         matchEnded: (match, at) => this.recordMatchEnd(match, at),
       },
     });
-    await poll();
+    await this.alerting(poll);
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.updateVip(config));
@@ -624,9 +630,14 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put('nextMap', staged);
   }
 
-  // When staff sent /seednow, so the automatic seeding alert does not ping the role again straight after.
-  async seedCalled(at: number): Promise<void> {
-    await this.ctx.storage.put('seedCall', at);
+  // Posts a /seednow call. Its time is saved first, so the automatic seeding alert holds back even when the post times
+  // out after Discord took it.
+  async seedCall(message: DiscordMessage): Promise<void> {
+    const { webhookUrl } = loadConfig(stringVars(this.env));
+    await this.alerting(async () => {
+      await this.ctx.storage.put('seedCall', Date.now());
+      await postWebhook(webhookUrl, message);
+    });
   }
 
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
@@ -737,13 +748,7 @@ export default {
           lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
           seeders: (days) => watcher().seeders(days),
           removeMatch: (endedAt) => watcher().removeMatch(endedAt),
-          seedCall: async (message) => {
-            await postWebhook(loadConfig(vars).webhookUrl, message);
-            // The call is out, so a failure here only costs holding back the automatic alert; the reply still says it posted.
-            await watcher()
-              .seedCalled(Date.now())
-              .catch((error: unknown) => console.error(`/seednow posted, but its time was not saved: ${errorText(error)}`));
-          },
+          seedCall: (message) => watcher().seedCall(message),
           records,
           now: Date.now,
           log: console,
