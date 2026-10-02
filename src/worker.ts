@@ -17,8 +17,8 @@ import {
   isBotBan,
   modLogKey,
   parseBanBook,
+  joinWork,
   parseModLog,
-  waitingBansFor,
   type BanRecord,
   type ModEntry,
 } from './moderation.ts';
@@ -433,30 +433,55 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Bans staff made while the player was not in game, which the game refuses: they go on the server, with a kick, at
-  // the first check that sees the player. One that fails is tried again at the next check.
+  // the first check that sees the player. A ban or kick that fails is tried again at the next check, and a kick until
+  // the player has gone.
   private async applyWaitingBans(config: Config, snapshot: Snapshot | null): Promise<void> {
     if (snapshot === null) return;
-    const book = parseBanBook(await this.ctx.storage.get('bans'));
-    const due = waitingBansFor(book, snapshot.players.map((p) => p.steamId), Date.now());
-    if (due.length === 0) return;
-    const http = socketHttp(connect);
-    for (const steamId of due) {
-      const ban = book[steamId];
-      if (ban === undefined) continue;
-      const label = `${JSON.stringify(ban.name)} (${steamId})`;
-      try {
-        await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
-      } catch (error) {
-        // Left again before the ban went in: it waits for the next time they join.
-        if (!isNotInGame(error)) console.error(`Waiting ban on ${label} failed: ${errorText(error)}`);
-        continue;
+    try {
+      const book = parseBanBook(await this.ctx.storage.get('bans'));
+      const work = joinWork(book, snapshot.players.map((p) => p.steamId), Date.now());
+      const http = socketHttp(connect);
+      const label = (steamId: string): string => `${JSON.stringify(book[steamId]?.name ?? '')} (${steamId})`;
+      // Saves the ban as on the server, with a kick still owed or not.
+      const applied = async (steamId: string, kicking: boolean): Promise<void> => {
+        const old = book[steamId];
+        if (old === undefined) return;
+        const { waiting: _waiting, kicking: _kicking, ...ban } = old;
+        book[steamId] = kicking ? { ...ban, kicking } : ban;
+        await this.record(steamId, null, { ban: book[steamId] });
+      };
+      for (const steamId of work.gone) await applied(steamId, false);
+      const kick = [...work.kick];
+      for (const steamId of work.ban) {
+        const ban = book[steamId];
+        if (ban === undefined) continue;
+        try {
+          await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
+        } catch (error) {
+          // Left again before the ban went in: it waits for the next time they join.
+          if (!isNotInGame(error)) console.error(`Waiting ban on ${label(steamId)} failed: ${errorText(error)}`);
+          continue;
+        }
+        await applied(steamId, true);
+        console.info(`Ban put on the server as they joined: ${label(steamId)}`);
+        kick.push(steamId);
       }
-      const { waiting: _waiting, ...applied } = ban;
-      await this.record(steamId, null, { ban: applied });
-      console.info(`Ban put on the server as they joined: ${label}`);
-      await kickPlayer(config.rconUrl, config.rconPassword, steamId, banKickReason(ban.reason, config.siteUrl), http).catch((error: unknown) => {
-        if (!isNotInGame(error)) console.error(`Kick after the waiting ban on ${label} failed: ${errorText(error)}`);
-      });
+      for (const steamId of kick) {
+        const ban = book[steamId];
+        if (ban === undefined) continue;
+        try {
+          await kickPlayer(config.rconUrl, config.rconPassword, steamId, banKickReason(ban.reason, config.siteUrl), http);
+        } catch (error) {
+          // Not in game any more is as good as kicked: the ban keeps them out.
+          if (!isNotInGame(error)) {
+            console.error(`Kick after the waiting ban on ${label(steamId)} failed, trying again next check: ${errorText(error)}`);
+            continue;
+          }
+        }
+        await applied(steamId, false);
+      }
+    } catch (error) {
+      console.error(`Waiting bans failed: ${errorText(error)}`);
     }
   }
 

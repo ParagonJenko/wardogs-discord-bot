@@ -237,7 +237,8 @@ works when it matches exactly one player.
   game is kicked too. A player who is already banned is left as they are; to change a ban, `/unban` them first.
 - The game only bans players who are in game: for anyone else it answers `404 player_not_found`. So when staff ban
   someone who is not on, the bot keeps the ban and puts it on the server, with a kick, at the first check that sees
-  them join (within a minute), logging `Ban put on the server as they joined: …`. The ban's time runs from when staff
+  them join (within a minute), logging `Ban put on the server as they joined: …`. A kick that fails is tried again
+  at each check until they have gone. The ban's time runs from when staff
   made it, so a timed ban that ends before they join is dropped. `/player` shows such a ban as not on the server yet.
 - **`/unban`** lists the banned players. It works on any ban, however it was made, and also cancels a ban still
   waiting for the player to join (type their name or Steam ID: the list only shows the server's bans).
