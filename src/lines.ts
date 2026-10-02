@@ -43,7 +43,7 @@ export const HALFWAY: Record<string, string[]> = {
     'Lonestar leads on {score}! Nightmare mode, and blue is winning it.',
     'Lonestar leads on {score}! Somebody finally parked the spawn truck.',
     'Lonestar leads on {score}! Two fronts, bright blue kit, still in front.',
-    'Lonestar leads on {score}! "Dumbest people on the planet," said Reddit. Not today.',
+    'Lonestar leads on {score}! Reddit wrote blue off. Reddit was wrong.',
   ],
   manticore: [
     'Manticore leads on {score}. Green winning? Shocking. Truly.',
