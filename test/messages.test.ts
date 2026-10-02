@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as lines from '../src/lines.ts';
-import { milestones, nextMessage, type MatchMessages } from '../src/messages.ts';
+import { milestones, nextMessage, seedingMessage, seedingMessageDue, type MatchMessages } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const MINUTE = 60_000;
@@ -135,6 +135,12 @@ describe('the lines', () => {
     expect(lines.TEN_MINUTES.every((line) => line.includes('Discord') && line.includes('{site}'))).toBe(true);
   });
 
+  it('has seeding lines that only use {needed}', () => {
+    expect(lines.SEEDING.length).toBeGreaterThan(0);
+    expect(lines.SEEDING.every((line) => [...line.matchAll(/\{(\w+)\}/g)].every((m) => m[1] === 'needed'))).toBe(true);
+    expect(lines.SEEDING.every((line) => line.includes('{needed}'))).toBe(true);
+  });
+
   it('fits every message in the game with its call to action, without cutting it', () => {
     const texts = [0, 0.25, 0.5, 0.75, 0.99].flatMap((r) => [
       ...milestones(match({ factionScores: [{ name: 'Manticore', score: 95 }] }), 10 * MINUTE, rule, vip, () => r),
@@ -144,6 +150,45 @@ describe('the lines', () => {
     ]);
 
     expect(texts.every((m) => m.text.length <= 200 && !m.text.endsWith('…'))).toBe(true);
+  });
+});
+
+describe('seedingMessage', () => {
+  const site = { everyMs: 5 * MINUTE, siteHost: 'gaminginit.com' };
+  const noSite = { everyMs: 5 * MINUTE, siteHost: null };
+
+  it('says how many more players are needed to go live, and what seeding earns', () => {
+    expect(seedingMessage(5, 20, site, vip, first)).toBe(
+      "We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How at gaminginit.com",
+    );
+    expect(seedingMessage(19, 20, noSite, vip, first)).toBe(
+      "We're seeding! 1 more player and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot.",
+    );
+  });
+
+  it('points at the top seeders board without VIP, and just thanks seeders without a website either', () => {
+    expect(seedingMessage(5, 20, site, null, first)).toBe("We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com");
+    expect(seedingMessage(5, 20, noSite, null, first)).toBe("We're seeding! 15 more players and we go live. Thanks for helping get it live!");
+  });
+
+  it('picks the line at random', () => {
+    const picked = lines.SEEDING.map((_, i) => seedingMessage(17, 20, noSite, null, () => i / lines.SEEDING.length).split(' Thanks for helping')[0]);
+
+    expect(picked).toEqual(lines.SEEDING.map((line) => line.replace('{needed}', '3 more players')));
+  });
+
+  it('fits every line in the game with the longest reward, without cutting it', () => {
+    const rule = { everyMs: 5 * MINUTE, siteHost: 'community.example-gaming-site.com' };
+    const texts = lines.SEEDING.map((_, i) => seedingMessage(1, 100, rule, { ...vip, seedMinutes: 120 }, () => i / lines.SEEDING.length));
+
+    expect(texts.every((text) => text.length <= 200 && !text.endsWith('…'))).toBe(true);
+  });
+
+  it('is due every few minutes, allowing for checks that land a little early', () => {
+    expect(seedingMessageDue(null, 0, site, MINUTE)).toBe(true);
+    expect(seedingMessageDue(0, 4 * MINUTE, site, MINUTE)).toBe(false);
+    expect(seedingMessageDue(0, 5 * MINUTE - 20_000, site, MINUTE)).toBe(true);
+    expect(seedingMessageDue(0, 5 * MINUTE, site, MINUTE)).toBe(true);
   });
 });
 

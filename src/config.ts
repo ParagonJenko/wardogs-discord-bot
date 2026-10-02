@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AlertRules } from './alerts.ts';
-import type { MessageRule } from './messages.ts';
+import type { MessageRule, SeedingMessageRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
 // Just the listener's address; the bot adds /v1/status itself. Pasted values often carry quotes, stray
@@ -61,6 +61,8 @@ const EnvSchema = z
     MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
     // The score a faction needs to win, for "halfway" and "nearly there" messages.
     SCORE_TO_WIN: z.coerce.number().int().min(2).default(100),
+    // While the server seeds, an in-game message about seeding and what it earns, every this many minutes. 0 turns it off.
+    SEEDING_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(5),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -95,6 +97,8 @@ export type Config = {
   vip: VipRule | null;
   // Null when MATCH_MESSAGES is off or there is no SITE_URL to point players at.
   matchMessages: MessageRule | null;
+  // Null when SEEDING_MESSAGE_MINUTES is 0.
+  seedingMessages: SeedingMessageRule | null;
 };
 
 export const loadConfig = (env: Record<string, string | undefined>): Config => {
@@ -133,6 +137,10 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
         ? { siteHost: new URL(e.SITE_URL).host, scoreToWin: e.SCORE_TO_WIN }
+        : null,
+    seedingMessages:
+      e.SEEDING_MESSAGE_MINUTES > 0
+        ? { everyMs: e.SEEDING_MESSAGE_MINUTES * 60_000, siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null }
         : null,
   };
 };

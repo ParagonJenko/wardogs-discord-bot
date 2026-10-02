@@ -416,6 +416,24 @@ Automatic VIP is Cloudflare only.
 
 ## In-game messages
 
+While the server seeds, the bot broadcasts a seeding message in game every 5 minutes (`SEEDING_MESSAGE_MINUTES`):
+how many more players it needs to go live, and what seeding earns.
+
+| VIP and website                     | Message                                                                       |
+| ----------------------------------- | ----------------------------------------------------------------------------- |
+| Automatic VIP on, `SITE_URL` set    | We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How at gaminginit.com |
+| Automatic VIP off, `SITE_URL` set   | We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com |
+| Neither                             | We're seeding! 15 more players and we go live. Thanks for helping get it live! |
+
+- The first goes out on the check that finds the server seeding, then one every 5 minutes until it goes live or
+  empties. It is the same whether the server is filling up from empty or building back up after dropping from live.
+- The opening line is picked at random from `SEEDING` in `src/lines.ts`; `{needed}` is filled in, such as
+  "15 more players". The reward after it comes from `VIP_SEED_DAYS` and `VIP_SEED_MINUTES`, so it always matches what
+  the bot does.
+- When a match message (below) is due on the same check, it goes first and the seeding message waits a minute.
+- Set `SEEDING_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to
+  turn them off. They do not need `SITE_URL`.
+
 During a match, the bot broadcasts short messages in game that point players at the website (`SITE_URL`) for the
 leaderboard, the Discord and seeding:
 
@@ -425,7 +443,7 @@ leaderboard, the Discord and seeding:
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
-- Every line the bot says in game is in one list, `src/lines.ts`: the 10-minute lines, and for halfway and 90 points
+- Every line the bot says in game is in one list, `src/lines.ts`: the seeding lines, the 10-minute lines, and for halfway and 90 points
   a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any other
   faction. Each time a message goes out, one line is picked at random from its list (for halfway and 90 points, from
   the leading faction's list). Add, remove or reword lines there and `npm run deploy`; `{team}`, `{score}` and
@@ -436,7 +454,8 @@ leaderboard, the Discord and seeding:
   message is for the first team to get there only, not one per team.
 - After the bot restarts or is deployed mid-match, milestones the match already passed are not announced late.
   The 10-minute message only goes out for a match the bot saw go live.
-- A message that fails to send is logged (`In-game message failed: …`) and not tried again.
+- A message that fails to send is logged (`In-game message failed: …`) and not tried again. A seeding message
+  that fails waits for its next turn, 5 minutes later.
 - They use the RCON password's write access (`POST /v1/broadcast`), like `/broadcast`.
 
 Set `MATCH_MESSAGES` to `"off"` in the `vars` block of `wrangler.jsonc` to stop them, and `SCORE_TO_WIN` if a match

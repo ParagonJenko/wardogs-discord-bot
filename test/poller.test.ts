@@ -21,6 +21,7 @@ const config: Config = {
   seedMinutes: 10,
   vip: null,
   matchMessages: null,
+  seedingMessages: null,
 };
 
 const player = (steamId: string, kills = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths: 0 });
@@ -240,6 +241,7 @@ describe('poller', () => {
       match: null,
       unsentSummary: null,
       messages: null,
+      seedMessageAt: null,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -607,6 +609,7 @@ describe('parseState', () => {
       match: null,
       unsentSummary: null,
       messages: null,
+      seedMessageAt: null,
     });
   });
 
@@ -615,7 +618,7 @@ describe('parseState', () => {
 
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
-    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null });
+    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null, seedMessageAt: null });
   });
 
   it('keeps the side each player in the match is on, and reads state saved before sides were kept', () => {
@@ -707,6 +710,81 @@ describe('in-game messages', () => {
     // Halfway fails once and is not tried again; ten minutes in is a different message, due on the last check.
     expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com']);
     expect(log.error).toHaveBeenCalledWith('In-game message failed: RCON request timed out after 8000ms');
+  });
+
+  describe('while seeding', () => {
+    const every5 = { everyMs: 5 * 60_000, siteHost: 'gaminginit.com' };
+
+    // A minute a check; records the minute of each message.
+    const seedingPoller = (snapshots: Snapshot[], overrides: Partial<Config> = {}) => {
+      const queue = [...snapshots];
+      let clock = 0;
+      const sent: [minute: number, message: string][] = [];
+      const broadcast = vi.fn(async (message: string) => {
+        sent.push([clock / 60_000, message]);
+      });
+      const tick = createPoller({
+        config: { ...config, seedingMessages: every5, ...overrides },
+        fetchSnapshot: async () => queue.shift() ?? snapshot([]),
+        send: vi.fn(async () => {}),
+        now: () => (clock += 60_000),
+        log: { info: vi.fn(), error: vi.fn() },
+        store: memoryStore(),
+        broadcast,
+        random: () => 0,
+      });
+      return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, sent, broadcast };
+    };
+
+    it('sends a seeding message when seeding starts and every 5 minutes after, until the server is live', async () => {
+      const { run, sent } = seedingPoller([
+        snapshot([]),
+        ...Array.from({ length: 6 }, () => snapshot(crowd(5))),
+        ...Array.from({ length: 5 }, () => snapshot(crowd(12))),
+        ...Array.from({ length: 6 }, () => snapshot(crowd(22))),
+      ]);
+
+      await run(18);
+
+      expect(sent).toEqual([
+        [2, "We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
+        [7, "We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
+        [12, "We're seeding! 8 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
+      ]);
+    });
+
+    it('sends nothing while the server is empty, or when seeding messages are off', async () => {
+      const empty = seedingPoller(Array.from({ length: 8 }, () => snapshot([])));
+      const off = seedingPoller(Array.from({ length: 8 }, () => snapshot(crowd(5))), { seedingMessages: null });
+
+      await empty.run(8);
+      await off.run(8);
+
+      expect(empty.broadcast).not.toHaveBeenCalled();
+      expect(off.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('lets a match message go first, and sends the seeding message on the next check', async () => {
+      const { run, sent } = seedingPoller(
+        [
+          snapshot([]),
+          ...Array.from({ length: 5 }, () => withScores(crowd(5), 10, 5)),
+          // Minute 7: halfway, as the next seeding message is due.
+          withScores(crowd(5), 52, 30),
+          withScores(crowd(5), 53, 30),
+          withScores(crowd(5), 54, 30),
+        ],
+        { matchMessages: on },
+      );
+
+      await run(9);
+
+      expect(sent.map(([minute, m]) => [minute, m.split('!')[0]])).toEqual([
+        [2, "We're seeding"],
+        [7, 'Halfway there'],
+        [8, "We're seeding"],
+      ]);
+    });
   });
 
   it('sends nothing when messages are off', async () => {

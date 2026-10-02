@@ -31,6 +31,7 @@ const config: Config = {
   seedMinutes: 10,
   vip: null,
   matchMessages: null,
+  seedingMessages: null,
 };
 
 // A fake RCON server keyed by path; records what was sent.

@@ -3,7 +3,16 @@
 // call to action the bot adds after it.
 //
 // Placeholders: {team} is the faction's name, {score} its points and {site} the website (SITE_URL, such as
-// gaminginit.com).
+// gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players".
+
+// Every few minutes while the server seeds. The bot puts what seeding earns after the line.
+export const SEEDING = [
+  "We're seeding! {needed} and we go live.",
+  'Seeding now: {needed} to go live. Stick around and bring a friend.',
+  "Quiet, isn't it? {needed} and it won't be.",
+  '{needed} until we go live. Every player counts while we seed.',
+  'Seeding in progress: {needed} to go live. Get your squad on.',
+];
 
 // 10 minutes after the match goes live. These are the whole message, so they point at the rules and the site.
 export const TEN_MINUTES = [

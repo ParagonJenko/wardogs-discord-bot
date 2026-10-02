@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { initialState, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
-import { MatchMessagesSchema, nextMessage, type MatchMessages } from './messages.ts';
+import { MatchMessagesSchema, nextMessage, seedingMessage, seedingMessageDue, type MatchMessages } from './messages.ts';
 import type { SeedCredit } from './players.ts';
 import type { Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
@@ -26,6 +26,8 @@ export type BotState = {
   unsentSummary: MatchSummary | null;
   // Which in-game messages the current match has had.
   messages: MatchMessages | null;
+  // When the last in-game seeding message went out.
+  seedMessageAt: number | null;
 };
 
 export type StateStore = {
@@ -110,6 +112,8 @@ const BotStateSchema = z.object({
     .default(null),
   // Missing from state saved before in-game messages.
   messages: MatchMessagesSchema.nullable().default(null),
+  // Missing from state saved before seeding messages.
+  seedMessageAt: z.number().nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -122,6 +126,7 @@ const StoredStateSchema = z.union([
       match: null,
       unsentSummary: null,
       messages: null,
+      seedMessageAt: null,
     }),
   ),
 ]);
@@ -168,7 +173,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       const seeding = seedingNow ? tallySeeding({}, players) : {};
       const messages =
         config.matchMessages === null ? null : nextMessage(null, match, time, config.matchMessages, config.vip).messages;
-      await store.save({ alerts, seeding, match, unsentSummary: null, messages });
+      await store.save({ alerts, seeding, match, unsentSummary: null, messages, seedMessageAt: null });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
@@ -202,11 +207,24 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     if (credits.length > 0) await stats?.seeded(credits, time);
     if (finished !== null) await stats?.matchEnded(finished, time);
 
-    // In-game messages go out whatever happens to the Discord posts. A failed one is not retried.
-    const { messages, send: message } =
+    // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
+    // a check: a match message first, and a seeding message that is due then waits for the next check.
+    const { messages, send: milestone } =
       config.matchMessages !== null && broadcast !== undefined && status.players > 0
         ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random)
         : { messages: state.messages, send: null };
+    const seedingRule = config.seedingMessages;
+    const seedingText =
+      milestone === null &&
+      seedingRule !== null &&
+      broadcast !== undefined &&
+      seedingNow &&
+      status.players > 0 &&
+      seedingMessageDue(state.seedMessageAt, time, seedingRule, config.pollIntervalMs)
+        ? seedingMessage(status.players, config.rules.live, seedingRule, config.vip, random)
+        : null;
+    const seedMessageAt = seedingText === null ? state.seedMessageAt : time;
+    const message = milestone ?? seedingText;
     if (message !== null && broadcast !== undefined) {
       try {
         await broadcast(message);
@@ -224,6 +242,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       seeding: tallied ?? (after === 'live' ? state.seeding : {}),
       match,
       messages,
+      seedMessageAt,
       unsentSummary: finished === null ? state.unsentSummary : summarise(finished),
     };
     try {
@@ -252,7 +271,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       throw error;
     }
     // The alert state is only saved after a successful send, so a failed alert is retried on the next check.
-    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, messages });
+    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, messages, seedMessageAt });
   };
 
   return async (): Promise<void> => {
