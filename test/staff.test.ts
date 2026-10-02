@@ -26,6 +26,7 @@ const config: Config = {
   seedMinutes: 10,
   vip: null,
   matchMessages: null,
+  seedingMessages: null,
 };
 
 const NOW = Date.UTC(2026, 8, 30, 12);

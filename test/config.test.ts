@@ -23,6 +23,7 @@ describe('loadConfig', () => {
       seedMinutes: 10,
       vip: null,
       matchMessages: null,
+      seedingMessages: { everyMs: 300_000, siteHost: null },
     });
   });
 
@@ -48,6 +49,16 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com', SCORE_TO_WIN: '150' }).matchMessages?.scoreToWin).toBe(150);
     expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com', MATCH_MESSAGES: 'off' }).matchMessages).toBeNull();
     expect(loadConfig(required).matchMessages).toBeNull();
+  });
+
+  it('sends seeding messages every 5 minutes by default, with or without a website, unless set to 0', () => {
+    expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com/' }).seedingMessages).toEqual({
+      everyMs: 300_000,
+      siteHost: 'gaminginit.com',
+    });
+    expect(loadConfig({ ...required, SEEDING_MESSAGE_MINUTES: '10' }).seedingMessages).toEqual({ everyMs: 600_000, siteHost: null });
+    expect(loadConfig({ ...required, SEEDING_MESSAGE_MINUTES: '0' }).seedingMessages).toBeNull();
+    expect(() => loadConfig({ ...required, SEEDING_MESSAGE_MINUTES: '-1' })).toThrow(/SEEDING_MESSAGE_MINUTES/);
   });
 
   it('turns on automatic VIP when VIP_SEED_DAYS is set', () => {

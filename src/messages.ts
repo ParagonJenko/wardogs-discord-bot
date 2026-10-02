@@ -6,9 +6,13 @@ import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
 // seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (with a line about the team
-// in front), and when the first team is close to winning. Each goes out once per match.
+// in front), and when the first team is close to winning. Each goes out once per match. While the server seeds, a
+// seeding message goes out every few minutes too.
 
 export type MessageRule = { siteHost: string; scoreToWin: number };
+
+// The seeding message goes out every `everyMs`, and points at the website when there is one.
+export type SeedingMessageRule = { everyMs: number; siteHost: string | null };
 
 // Which match the sent messages belong to (its start time) and which were sent.
 export type MatchMessages = { match: number; sent: string[] };
@@ -24,6 +28,7 @@ const MAX_LENGTH = 200;
 const fit = (text: string): string => (text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text);
 
 const days = (count: number): string => `${count} day${count === 1 ? '' : 's'}`;
+const morePlayers = (count: number): string => `${count} more player${count === 1 ? '' : 's'}`;
 
 type Milestone = { key: string; text: string };
 
@@ -110,3 +115,29 @@ export const nextMessage = (
   if (next === undefined) return { messages: previous, send: null };
   return { messages: { ...previous, sent: [...previous.sent, next.key] }, send: next.text };
 };
+
+// What seeding earns, after the seeding line: a reserved slot when automatic VIP is on, otherwise a place on the
+// website's top seeders board.
+const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
+  if (vip) {
+    const offer = `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a reserved slot.`;
+    return siteHost ? `${offer} How at ${siteHost}` : offer;
+  }
+  return siteHost ? `Top seeders make the leaderboard at ${siteHost}` : 'Thanks for helping get it live!';
+};
+
+// "We're seeding! 5 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How
+// at gaminginit.com"
+export const seedingMessage = (
+  players: number,
+  live: number,
+  rule: SeedingMessageRule,
+  vip: VipRule | null,
+  random: () => number = Math.random,
+): string =>
+  fit(`${pickLine(lines.SEEDING, { needed: morePlayers(Math.max(1, live - players)) }, random)} ${seedingReward(rule.siteHost, vip)}`);
+
+// Whether the seeding message is due. Checks land a little early or late, so one within half a check of the time
+// counts: every 5 minutes stays every 5 minutes, not 6.
+export const seedingMessageDue = (lastAt: number | null, now: number, rule: SeedingMessageRule, checkMs: number): boolean =>
+  lastAt === null || now - lastAt >= rule.everyMs - checkMs / 2;
