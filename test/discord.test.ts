@@ -632,6 +632,17 @@ describe('buildPlayerEmbed', () => {
     );
   });
 
+  it('shows a ban waiting for the player to join, until the server has it', () => {
+    const ban = { name: 'Ash', until: null, reason: 'Cheating', serverReason: 'Cheating', by: '42', at: NOW, waiting: true };
+    const waiting = buildPlayerEmbed({ ...profile, record: { ...record, ban } });
+
+    expect(field(waiting, 'Ban')).toBe('🔨 Banned permanently by <@42>: Cheating\n(Not on the server yet: the bot bans them when they next join.)');
+    expect(waiting.color).toBe(0xe74c3c);
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, ban }, serverBan: { steamId: ID, reason: 'Cheating', bannedBy: 'rcon' } }), 'Ban')).toBe(
+      '🔨 Banned permanently by <@42>: Cheating',
+    );
+  });
+
   it('shows VIP from the bot, and when staff blocked automatic VIP', () => {
     const vip = { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY };
 

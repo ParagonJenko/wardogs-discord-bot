@@ -79,14 +79,39 @@ export type HttpClient = (
 
 type Write = { method: HttpMethod; body?: string; headers?: Record<string, string> };
 
-// A request the server answered with an error status, such as 404 for a ban that does not exist.
+// A request the server answered with an error status, such as 404 for a ban that does not exist. `code` is the
+// server's own name for the error, such as "ban_not_found", when it gives one.
 export class RconError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code: string | null;
+  constructor(message: string, status: number, code: string | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
+
+// Errors come as { error: { code, message } }; some are documented without the wrapper, so both are read.
+const ErrorBodySchema = z.object({ code: z.string().nullish(), message: z.string().nullish() });
+const WrappedErrorSchema = z.object({ error: ErrorBodySchema });
+
+const errorBody = (body: string): { code: string | null; message: string | null } => {
+  try {
+    const raw: unknown = JSON.parse(body);
+    const wrapped = WrappedErrorSchema.safeParse(raw);
+    const parsed = ErrorBodySchema.safeParse(wrapped.success ? wrapped.data.error : raw);
+    if (!parsed.success) return { code: null, message: null };
+    const { code, message } = parsed.data;
+    // Kept to one short line: it ends up in logs and in staff replies.
+    return { code: code ?? null, message: message ? message.replace(/\s+/g, ' ').trim().slice(0, 200) : null };
+  } catch {
+    return { code: null, message: null };
+  }
+};
+
+// The game refuses to act on a player who is not in game, bans included: 404 player_not_found.
+export const isNotInGame = (error: unknown): boolean =>
+  error instanceof RconError && error.status === 404 && error.code === 'player_not_found';
 
 const rconRequest = async (
   rconUrl: string,
@@ -105,7 +130,13 @@ const rconRequest = async (
     throw new RconError(`RCON rejected the password (${response.status})`, response.status);
   }
   if (response.status < 200 || response.status >= 300) {
-    throw new RconError(`RCON request failed: ${path} ${response.status}`, response.status);
+    const { code, message } = errorBody(response.body);
+    const said = [code, message].filter((part) => part !== null).join(': ');
+    throw new RconError(
+      `RCON request failed: ${write?.method ?? 'GET'} ${path} ${response.status}${said ? ` (${said})` : ''}`,
+      response.status,
+      code,
+    );
   }
   // A write may succeed with an empty body (e.g. 204); reads still fail their schema check on null.
   return response.body.trim() === '' ? null : JSON.parse(response.body);
@@ -198,7 +229,8 @@ export const fetchBans = async (rconUrl: string, password: string, http: HttpCli
     bannedBy: b.bannedBy ?? null,
   }));
 
-// Bans are permanent on the server (they go into ServerSettings.ini); the bot lifts timed ones itself.
+// Bans are permanent on the server (they go into ServerSettings.ini); the bot lifts timed ones itself. The game only
+// bans a player who is in game: anyone else is refused with 404 player_not_found (see isNotInGame).
 export const addBan = async (rconUrl: string, password: string, steamId: string, reason: string, http: HttpClient) => {
   if (!STEAM_ID.test(steamId)) throw new Error(`Not a Steam ID: ${steamId}`);
   await rconRequest(rconUrl, password, '/v1/bans', http, json('POST', { steamId, reason }));

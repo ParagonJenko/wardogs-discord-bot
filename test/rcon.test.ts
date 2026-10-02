@@ -17,6 +17,7 @@ import {
   switchFaction,
   fetchRotation,
   fetchStatus,
+  isNotInGame,
   putConfig,
   sendBroadcast,
   validateConfig,
@@ -99,6 +100,14 @@ describe('fetchStatus', () => {
     const { get } = respondWith(429, { error: { code: 'rate_limited', message: 'Slow down' } });
 
     await expect(fetchStatus('http://203.0.113.10:7776', 'secret', get)).rejects.toThrow(/429/);
+  });
+
+  it("says which request failed, with the server's error code and message", async () => {
+    const { get } = respondWith(404, { error: { code: 'not_found', message: 'No such\nendpoint.' } });
+
+    await expect(fetchStatus('http://203.0.113.10:7776', 'secret', get)).rejects.toThrow(
+      'RCON request failed: GET /v1/status 404 (not_found: No such endpoint.)',
+    );
   });
 
   it('throws when the response is not a status document', async () => {
@@ -294,6 +303,20 @@ describe('staff actions', () => {
       ['DELETE', `/v1/bans/${ASH}`, undefined],
       ['DELETE', `/v1/bans/${ASH}`, undefined],
     ]);
+  });
+
+  it('tells a ban refused because the player is not in game from any other refusal', async () => {
+    const notOn = { error: { code: 'player_not_found', message: `Error: no player matching '${ASH}'.` } };
+    const { http } = server([404, notOn], [404, { error: { code: 'not_found', message: 'No such endpoint.' } }], [500, 'oops']);
+
+    const refused = await addBan(RCON, 'secret', ASH, 'Cheating', http).catch((error: unknown) => error);
+    const missing = await addBan(RCON, 'secret', ASH, 'Cheating', http).catch((error: unknown) => error);
+    const broken = await addBan(RCON, 'secret', ASH, 'Cheating', http).catch((error: unknown) => error);
+
+    expect(String(refused)).toContain(`POST /v1/bans 404 (player_not_found: Error: no player matching '${ASH}'.)`);
+    expect([refused, missing, broken].map(isNotInGame)).toEqual([true, false, false]);
+    expect(String(broken)).toContain('POST /v1/bans 500');
+    expect(isNotInGame(new Error('player_not_found'))).toBe(false);
   });
 
   it('still throws when removing a ban fails for another reason', async () => {

@@ -8,6 +8,7 @@ import {
   modLogKey,
   parseBanBook,
   parseModLog,
+  waitingBansFor,
   type ModEntry,
 } from '../src/moderation.ts';
 
@@ -57,6 +58,20 @@ describe('ban book', () => {
     expect(isBotBan('Cheating (ends 2026-10-07 12:30 UTC)', ban)).toBe(true);
     expect(isBotBan('Cheating', ban)).toBe(false);
     expect(isBotBan(null, ban)).toBe(false);
+  });
+
+  it('finds the waiting bans of players now in game, unless they ran out first', () => {
+    const CY = '76561198000000003';
+    const book = parseBanBook({
+      [ASH]: { name: 'Ash', until: 100, reason: 'x', serverReason: 'x (ends …)', by: '1', at: 0, waiting: true },
+      [BO]: { name: 'Bo', until: null, reason: 'y', serverReason: 'y', by: '1', at: 0, waiting: true },
+      [CY]: { name: 'Cy', until: null, reason: 'z', serverReason: 'z', by: '1', at: 0 },
+    });
+
+    expect(book[BO]?.waiting).toBe(true);
+    expect(waitingBansFor(book, [ASH, BO, CY], 99)).toEqual([ASH, BO]);
+    expect(waitingBansFor(book, [ASH, BO, CY], 100)).toEqual([BO]);
+    expect(waitingBansFor(book, [CY], 0)).toEqual([]);
   });
 
   it('offers lengths from an hour to permanent', () => {

@@ -34,8 +34,17 @@ export const parseModLog = (raw: unknown): ModEntry[] => {
 export const appendMod = (log: ModEntry[], entry: ModEntry): ModEntry[] => [...log, entry].slice(-MAX_ENTRIES);
 
 // Bans the bot made, by Steam ID. `until` is null for a permanent ban. `serverReason` is the reason exactly as the bot
-// gave it to the server, which is how the bot knows the ban there is still its own.
-export type BanRecord = { name: string; until: number | null; reason: string; serverReason: string; by: string; at: number };
+// gave it to the server, which is how the bot knows the ban there is still its own. `waiting` marks a ban the server
+// does not have yet: the game only bans players who are in game, so the bot bans them when it next sees them.
+export type BanRecord = {
+  name: string;
+  until: number | null;
+  reason: string;
+  serverReason: string;
+  by: string;
+  at: number;
+  waiting?: boolean;
+};
 export type BanBook = Record<string, BanRecord>;
 
 const BanBookSchema = z.record(
@@ -47,6 +56,7 @@ const BanBookSchema = z.record(
     serverReason: z.string(),
     by: z.string(),
     at: z.number(),
+    waiting: z.boolean().optional(),
   }),
 );
 
@@ -60,6 +70,13 @@ export const expiredBans = (book: BanBook, now: number): string[] =>
   Object.entries(book)
     .filter(([, ban]) => ban.until !== null && ban.until <= now)
     .map(([steamId]) => steamId);
+
+// The waiting bans to put on the server now: players in game whose ban has not run out yet.
+export const waitingBansFor = (book: BanBook, inGame: string[], now: number): string[] =>
+  inGame.filter((steamId) => {
+    const ban = book[steamId];
+    return ban?.waiting === true && (ban.until === null || ban.until > now);
+  });
 
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
