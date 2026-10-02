@@ -42,7 +42,7 @@ import {
   type RankedPlayer,
   type SeedCredit,
 } from './players.ts';
-import { createPoller, parseState } from './poller.ts';
+import { createJoinCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
 import {
   buildProfile,
   directory,
@@ -62,6 +62,7 @@ import {
   addBan,
   fetchBans,
   fetchConfig,
+  fetchPlayers,
   fetchRotation,
   fetchSnapshot,
   putConfig,
@@ -187,6 +188,48 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
+  private stateStore(): StateStore {
+    const storage = this.ctx.storage;
+    return {
+      // A /seednow call is kept apart from 'state', so a check that saves 'state' never overwrites it.
+      load: async () => {
+        const stored = await storage.get(['state', 'seedCall']);
+        const state = parseState(stored.get('state'));
+        const calledAt = stored.get('seedCall');
+        return state && typeof calledAt === 'number' ? { ...state, alerts: withSeedCall(state.alerts, calledAt) } : state;
+      },
+      save: (state) => storage.put('state', state),
+    };
+  }
+
+  // While the server seeds, an alarm reads who is in game every few seconds between the checks, so the seeding message
+  // goes out 30 seconds after someone joins. The check starts them when it finds the server seeding, and they stop
+  // themselves once a check finds it is not.
+  private async startJoinChecks(config: Config): Promise<void> {
+    if (config.seedingMessages === null) return;
+    try {
+      const storage = this.ctx.storage;
+      if (parseState(await storage.get('state'))?.alerts.phase !== 'seeding') return;
+      if ((await storage.getAlarm()) === null) await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
+    } catch (error) {
+      console.error(`Starting join checks failed: ${errorText(error)}`);
+    }
+  }
+
+  // One quick join check. It runs with the alerts, so it never saves the state while a check is part-way through.
+  async alarm(): Promise<void> {
+    const { config, http } = this.rcon();
+    const joinCheck = createJoinCheck({
+      config,
+      fetchPlayers: () => fetchPlayers(config.rconUrl, config.rconPassword, http),
+      broadcast: (message) => sendBroadcast(config.rconUrl, config.rconPassword, message, http),
+      now: Date.now,
+      log: console,
+      store: this.stateStore(),
+    });
+    if (await this.alerting(joinCheck)) await this.ctx.storage.setAlarm(Date.now() + JOIN_CHECK_MS);
+  }
+
   private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {
     const storage = this.ctx.storage;
     await storage.put('stats', change(parseStats(await storage.get('stats'))));
@@ -239,16 +282,7 @@ export class Watcher extends DurableObject<Env> {
       broadcast: (message) => sendBroadcast(config.rconUrl, config.rconPassword, message, socketHttp(connect)),
       now: Date.now,
       log: console,
-      store: {
-        // A /seednow call is kept apart from 'state', so a check that saves 'state' never overwrites it.
-        load: async () => {
-          const stored = await storage.get(['state', 'seedCall']);
-          const state = parseState(stored.get('state'));
-          const calledAt = stored.get('seedCall');
-          return state && typeof calledAt === 'number' ? { ...state, alerts: withSeedCall(state.alerts, calledAt) } : state;
-        },
-        save: (state) => storage.put('state', state),
-      },
+      store: this.stateStore(),
       stats: {
         check: (observation) => this.recordCheck(observation, minutesPerCheck, config.busyThreshold),
         seeded: (seeders, at) => this.recordSeed(seeders, at, config.seedMinutes),
@@ -256,6 +290,7 @@ export class Watcher extends DurableObject<Env> {
       },
     });
     await this.alerting(poll);
+    await this.startJoinChecks(config);
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.updateVip(config));

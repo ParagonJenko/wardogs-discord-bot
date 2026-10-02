@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
-import { createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
+import { createJoinCheck, createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
 import type { SeedCredit } from '../src/players.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
 import type { Observation } from '../src/stats.ts';
@@ -242,6 +242,7 @@ describe('poller', () => {
       unsentSummary: null,
       messages: null,
       seedMessageAt: null,
+      joins: null,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -610,6 +611,7 @@ describe('parseState', () => {
       unsentSummary: null,
       messages: null,
       seedMessageAt: null,
+      joins: null,
     });
   });
 
@@ -618,7 +620,7 @@ describe('parseState', () => {
 
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
-    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null, seedMessageAt: null });
+    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null, seedMessageAt: null, joins: null });
   });
 
   it('keeps the side each player in the match is on, and reads state saved before sides were kept', () => {
@@ -736,11 +738,11 @@ describe('in-game messages', () => {
       return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, sent, broadcast };
     };
 
-    it('sends a seeding message when seeding starts and every 5 minutes after, until the server is live', async () => {
+    it('sends a seeding message every 5 minutes while seeding, until the server is live', async () => {
+      // The bot starts watching a server already seeding; then two players leave, and it fills up.
       const { run, sent } = seedingPoller([
-        snapshot([]),
-        ...Array.from({ length: 6 }, () => snapshot(crowd(5))),
-        ...Array.from({ length: 5 }, () => snapshot(crowd(12))),
+        ...Array.from({ length: 7 }, () => snapshot(crowd(5))),
+        ...Array.from({ length: 5 }, () => snapshot(crowd(3))),
         ...Array.from({ length: 6 }, () => snapshot(crowd(22))),
       ]);
 
@@ -749,7 +751,7 @@ describe('in-game messages', () => {
       expect(sent).toEqual([
         [2, "We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
         [7, "We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
-        [12, "We're seeding! 8 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
+        [12, "We're seeding! 17 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
       ]);
     });
 
@@ -767,8 +769,7 @@ describe('in-game messages', () => {
     it('lets a match message go first, and sends the seeding message on the next check', async () => {
       const { run, sent } = seedingPoller(
         [
-          snapshot([]),
-          ...Array.from({ length: 5 }, () => withScores(crowd(5), 10, 5)),
+          ...Array.from({ length: 6 }, () => withScores(crowd(5), 10, 5)),
           // Minute 7: halfway, as the next seeding message is due.
           withScores(crowd(5), 52, 30),
           withScores(crowd(5), 53, 30),
@@ -784,6 +785,158 @@ describe('in-game messages', () => {
         [7, 'Halfway there'],
         [8, "We're seeding"],
       ]);
+    });
+  });
+
+  describe('when someone joins while seeding', () => {
+    const every5 = { everyMs: 5 * 60_000, siteHost: 'gaminginit.com' };
+    const short = (message: string) => message.split(' and we go live')[0];
+
+    // The checks the bot runs, on one clock and store: a check on each whole minute, and a quick join check every 5
+    // seconds between them. `who` says who is in game at each second.
+    const joinBot = (who: (second: number) => Player[], overrides: Partial<Config> = {}) => {
+      let second = 0;
+      const sent: [second: number, message: string][] = [];
+      const broadcast = vi.fn(async (message: string) => {
+        sent.push([second, short(message)]);
+      });
+      const fetchPlayers = vi.fn(async () => who(second));
+      const log = { info: vi.fn(), error: vi.fn() };
+      const deps = {
+        config: { ...config, seedingMessages: every5, ...overrides },
+        now: () => second * 1000,
+        log,
+        store: memoryStore(),
+        broadcast,
+        random: () => 0,
+      };
+      const check = createPoller({ ...deps, fetchSnapshot: async () => snapshot(who(second)), send: vi.fn(async () => {}) });
+      const joinCheck = createJoinCheck({ ...deps, fetchPlayers });
+      const runUntil = async (until: number) => {
+        for (; second <= until; second += 5) {
+          if (second % 60 === 0) await check();
+          else await joinCheck();
+        }
+      };
+      return { runUntil, sent, fetchPlayers, joinCheck, log };
+    };
+
+    // n players, and from these seconds on, one more each.
+    const joining = (n: number, ...joins: number[]) => (second: number) => crowd(n + joins.filter((at) => second >= at).length);
+
+    it('sends one 30 seconds after someone joins, and the 5-minute ones count from it', async () => {
+      const { runUntil, sent } = joinBot(joining(3, 100));
+
+      await runUntil(450);
+
+      expect(sent).toEqual([
+        [60, "We're seeding! 17 more players"],
+        // Joined at 100.
+        [130, "We're seeding! 16 more players"],
+        // 5 minutes after 130, on the next check.
+        [420, "We're seeding! 16 more players"],
+      ]);
+    });
+
+    it('sends one for several players joining together, 30 seconds after the last of them', async () => {
+      const { runUntil, sent } = joinBot(joining(3, 100, 110, 125));
+
+      await runUntil(200);
+
+      expect(sent).toEqual([
+        [60, "We're seeding! 17 more players"],
+        [155, "We're seeding! 14 more players"],
+      ]);
+    });
+
+    it('never sends one once the server has 20 players (LIVE_THRESHOLD), even before the next check', async () => {
+      // 18 players; one joins at 62 and another at 70, making 20. Their message would be due at 100, before the check
+      // at 120 finds the server live.
+      const { runUntil, sent } = joinBot((second) => crowd(second < 62 ? 18 : second < 70 ? 19 : second < 200 ? 20 : 22));
+
+      await runUntil(900);
+
+      expect(sent).toEqual([[60, "We're seeding! 2 more players"]]);
+    });
+
+    it('never sends one for a player joining a live server', async () => {
+      const { runUntil, sent, fetchPlayers } = joinBot((second) => crowd(second < 100 ? 25 : 26));
+
+      await runUntil(600);
+
+      expect(sent).toEqual([]);
+      // Quick checks only read the server while it seeds.
+      expect(fetchPlayers).not.toHaveBeenCalled();
+    });
+
+    describe('after a live server drops below 20 players, as at a map change', () => {
+      // DROP_GRACE_MINUTES, as in wrangler.jsonc.
+      const grace = { rules: { ...config.rules, graceMs: 5 * 60_000 } };
+
+      it('stays live while players reconnect within 5 minutes: no seeding messages, and no join checks', async () => {
+        // 25 players; the map changes at 120 and most drop out, then they are all back by 240.
+        const { runUntil, sent, fetchPlayers } = joinBot((second) => crowd(second < 120 ? 25 : second < 240 ? 8 : 25), grace);
+
+        await runUntil(900);
+
+        expect(sent).toEqual([]);
+        expect(fetchPlayers).not.toHaveBeenCalled();
+      });
+
+      it('goes back to seeding only once it has stayed below 20 for 5 minutes, and then the seeding messages start', async () => {
+        const { runUntil, sent, fetchPlayers } = joinBot((second) => crowd(second < 120 ? 25 : 15), grace);
+
+        await runUntil(415);
+        expect(sent).toEqual([]);
+        expect(fetchPlayers).not.toHaveBeenCalled();
+
+        // Below 20 since 120: seeding at 420, and the join checks start.
+        await runUntil(450);
+        expect(sent).toEqual([[420, "We're seeding! 5 more players"]]);
+        expect(fetchPlayers).toHaveBeenCalled();
+      });
+    });
+
+    it('holds a 5-minute message that is due while one for a join is waiting, so they do not both go out', async () => {
+      // 5 minutes after 60, the check at 360 finds someone joined at 345.
+      const { runUntil, sent } = joinBot(joining(3, 345));
+
+      await runUntil(400);
+
+      expect(sent).toEqual([
+        [60, "We're seeding! 17 more players"],
+        [375, "We're seeding! 16 more players"],
+      ]);
+    });
+
+    it("sends one for the player who starts the seed, once a check has found them", async () => {
+      const { runUntil, sent } = joinBot((second) => crowd(second < 40 ? 0 : 1));
+
+      await runUntil(200);
+
+      // The check at 60 finds them, and the server seeding.
+      expect(sent).toEqual([[90, "We're seeding! 19 more players"]]);
+    });
+
+    it('says whether to keep checking: only while the last check found the server seeding', async () => {
+      const seeding = joinBot(() => crowd(5));
+      const empty = joinBot(() => []);
+
+      await seeding.runUntil(60);
+      await empty.runUntil(60);
+
+      await expect(seeding.joinCheck()).resolves.toBe(true);
+      await expect(empty.joinCheck()).resolves.toBe(false);
+      expect(empty.fetchPlayers).not.toHaveBeenCalled();
+    });
+
+    it('logs a failed read and keeps checking', async () => {
+      const { runUntil, joinCheck, fetchPlayers, log } = joinBot(() => crowd(5));
+      await runUntil(60);
+      fetchPlayers.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+
+      await expect(joinCheck()).resolves.toBe(true);
+      expect(log.error).toHaveBeenCalledWith('Join check failed: RCON request timed out after 8000ms');
     });
   });
 
