@@ -12,6 +12,8 @@ export const SEEDING = [
   "Quiet, isn't it? {needed} and it won't be.",
   '{needed} until we go live. Every player counts while we seed.',
   'Seeding in progress: {needed} to go live. Get your squad on.',
+  "Seeding now: {needed} to go live. Green's got room, for once.",
+  '{needed} to go live. Pick any team. Yes, even blue.',
 ];
 
 // 10 minutes after the match goes live. These are the whole message, so they point at the rules and the site.
@@ -21,7 +23,14 @@ export const TEN_MINUTES = [
   'Enjoying the chaos? Read the rules in our Discord, soldier. Leaderboard at {site}',
   'Your squad lead wants you to read the rules. They are in our Discord at {site}',
   '10 minutes down. Rules in our Discord, bragging rights on the leaderboard at {site}',
+  '10 minutes in. Blue, park the spawn truck so people can spawn. Rules in our Discord, leaderboard at {site}',
+  'Still spamming the green button? We started 10 minutes ago. Rules in our Discord, leaderboard at {site}',
+  '10 minutes in. Cash is nice, the zone is nicer. Rules in our Discord, leaderboard at {site}',
 ];
+
+// The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
+// spawning in the south between the other two in bright kit, and losing; Manticore (green) is where the sweats queue
+// to get in, and wins most; Valkyra (red) is level with green, pushes hard and farms cash.
 
 // A team reaches half the winning score. The bot puts "Halfway there!" before the line, and the seeding or Discord
 // call to action after it.
@@ -31,18 +40,30 @@ export const HALFWAY: Record<string, string[]> = {
     'Lonestar leads on {score}! The default pick is cooking. Yeehaw.',
     "Lonestar leads on {score}! Somebody check the server isn't bugged.",
     "Lonestar leads on {score}! Everything's bigger in Texas, even the score.",
+    'Lonestar leads on {score}! Nightmare mode, and blue is winning it.',
+    'Lonestar leads on {score}! Somebody finally parked the spawn truck.',
+    'Lonestar leads on {score}! Two fronts, bright blue kit, still in front.',
+    'Lonestar leads on {score}! Reddit wrote blue off. Reddit was wrong.',
   ],
   manticore: [
     'Manticore leads on {score}. Green winning? Shocking. Truly.',
     'Manticore leads on {score}. The shadow army doing shadow army things.',
     'Manticore leads on {score}. Green is winning. Water is also wet.',
     "Manticore leads on {score}. Nobody saw them coming. That's the point.",
+    'Manticore leads on {score}. Worth all that spamming of the join button.',
+    'Manticore leads on {score}. Easy mode, played as intended.',
+    'Manticore leads on {score}. Blends into every bush, beats every team.',
+    'Manticore leads on {score}. Even the devs say green wins most of the time.',
   ],
   valkyra: [
     'Valkyra leads on {score}. Not my points, OUR points, comrade.',
     'Valkyra leads on {score}. Restoring greatness, one point at a time.',
     'Valkyra leads on {score}. The motherland is pleased. For now.',
     'Valkyra leads on {score}. Red is looking very red today.',
+    "Valkyra leads on {score}. Didn't get green? Red's doing just fine, comrade.",
+    'Valkyra leads on {score}. Normal mode, abnormal results.',
+    'Valkyra leads on {score}. Somebody stopped farming cash and took the zone.',
+    'Valkyra leads on {score}. Dark armour: hard to spot, harder to stop.',
   ],
 };
 
@@ -51,6 +72,8 @@ export const HALFWAY_LEVEL = [
   "Halfway there and it's neck and neck!",
   "Halfway there and nobody's ahead. Sweaty.",
   'Halfway there and dead level. Somebody do something.',
+  "Halfway there and level. Nobody's on easy mode this match.",
+  'Halfway there and level. Blue, this is your moment.',
 ];
 
 // The first team to reach 90% of the winning score. The bot puts the leaderboard call to action after the line.
@@ -60,18 +83,30 @@ export const NEARLY: Record<string, string[]> = {
     'Lonestar has {score}! Nobody wanted blue, and look at them now. Yeehaw.',
     'Lonestar has {score}! Historians will study this match.',
     "Lonestar has {score}! Saddle up, it's nearly over.",
+    'Lonestar has {score}! Nightmare mode, nearly beaten. Somebody tell Reddit.',
+    'Lonestar has {score}! The devs said blue gets destroyed. Not this match.',
+    'Lonestar has {score}! Fighting from the south on two fronts, and nearly there.',
+    'Lonestar has {score}! Bright blue and nearly winning. Who needs camo?',
   ],
   manticore: [
     'Manticore has {score}. Green about to win again. Groundbreaking.',
     'Manticore has {score}. The shadow army is about to do it again.',
     'Manticore has {score}. The scorpion tail is about to sting.',
     'Manticore has {score}. Green diff incoming.',
+    'Manticore has {score}. Easy mode nearly complete.',
+    'Manticore has {score}. Towers taken, FOBs up, sweat everywhere.',
+    'Manticore has {score}. Can somebody else have a go on green next match?',
+    'Manticore has {score}. The green queue was worth it, apparently.',
   ],
   valkyra: [
     'Valkyra has {score}! Victory for the motherland is in sight, comrades.',
     'Valkyra has {score}! Greatness nearly restored.',
     'Valkyra has {score}! Almost there. Stay in formation, comrades.',
     'Valkyra has {score}! Start rehearsing the victory parade.',
+    'Valkyra has {score}! Green who? Red is about to take it.',
+    'Valkyra has {score}! Fairly even with green, said the devs. Red disagrees.',
+    'Valkyra has {score}! Less cash farming, more capping. Nearly there, comrades.',
+    'Valkyra has {score}! Pushing deep and, for once, playing the objective.',
   ],
 };
 
