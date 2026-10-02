@@ -20,6 +20,7 @@ describe('loadConfig', () => {
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000 },
       busyThreshold: 97,
+      scoreToWin: 100,
       seedMinutes: 10,
       vip: null,
       matchMessages: null,
@@ -39,6 +40,10 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com' }).siteUrl).toBe('https://gaminginit.com');
     expect(() => loadConfig({ ...required, SITE_URL: 'gaminginit' })).toThrow(/SITE_URL/);
     expect(() => loadConfig({ ...required, SITE_URL: 'javascript:alert(1)' })).toThrow(/SITE_URL/);
+  });
+
+  it('reads the winning score whether or not in-game messages are on', () => {
+    expect(loadConfig({ ...required, SCORE_TO_WIN: '150' }).scoreToWin).toBe(150);
   });
 
   it('turns on in-game messages when there is a website to point players at, unless they are off', () => {
