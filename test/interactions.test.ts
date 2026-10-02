@@ -285,6 +285,29 @@ describe('handleInteraction', () => {
     });
   });
 
+  it('keeps /seednow to staff, and tells them to check the channel if it may have posted', async () => {
+    const seednow = { ...broadcast(String(ADMINISTRATOR)), data: { name: 'seednow' } };
+    const outsider = { ...seednow, member: { user: { id: '42' }, permissions: '0' } };
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+    const run = async (payload: unknown) => {
+      const { body, signature, timestamp } = await signed(payload);
+      return handleInteraction(body, signature, timestamp, d);
+    };
+
+    const allowed = await run(seednow);
+    await allowed.followUp?.();
+    const refused = await run(outsider);
+
+    expect(allowed.body).toEqual({ type: 5, data: { flags: 64 } });
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
+      content: "Couldn't confirm /seednow worked (Discord webhook failed: 500). Check before trying again.",
+      allowed_mentions: { parse: [] },
+    });
+    expect(refused.body).toMatchObject({ type: 4, data: { content: 'Only Administrators and staff can use this.', flags: 64 } });
+    expect(d.runCommand).toHaveBeenCalledTimes(1);
+  });
+
   it('gives a failed /seeders the general error with its reason, as only staff see it', async () => {
     const { body, signature, timestamp } = await signed({ ...broadcast(String(ADMINISTRATOR)), data: { name: 'seeders' } });
     const d = deps();
@@ -444,6 +467,7 @@ describe('COMMANDS', () => {
       'rotation',
       'broadcast',
       'seeders',
+      'seednow',
       'removematch',
       'warn',
       'player',
@@ -467,6 +491,10 @@ describe('COMMANDS', () => {
     expect(COMMANDS.find((c) => c.name === 'seeders')).toMatchObject({
       default_member_permissions: '8',
       options: [{ name: 'days', type: 4, required: false, min_value: 1, max_value: 90 }],
+    });
+    expect(COMMANDS.find((c) => c.name === 'seednow')).toMatchObject({
+      default_member_permissions: '8',
+      options: [{ name: 'message', type: 3, required: false, max_length: 200 }],
     });
     expect(COMMANDS.find((c) => c.name === 'broadcast')).toMatchObject({
       default_member_permissions: '8',

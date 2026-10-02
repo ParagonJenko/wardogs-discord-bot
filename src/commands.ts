@@ -3,10 +3,12 @@ import {
   buildLastMatchEmbed,
   buildPlayersEmbed,
   buildRotationEmbed,
+  buildSeedCall,
   buildSeedersEmbed,
   buildStatusEmbed,
   matchChoice,
   removedMatchText,
+  type DiscordMessage,
   type SeederRow,
 } from './discord.ts';
 import {
@@ -28,6 +30,8 @@ type CommandDeps = {
   seeders: (days: number) => Promise<SeederRow[]>;
   // Deletes the recent match that ended at this time, with its records; null if there is none.
   removeMatch: (endedAt: number) => Promise<{ match: RecentMatch; players: number } | null>;
+  // Posts a /seednow call to the alerts channel, and holds back the automatic seeding alert for its cooldown.
+  seedCall: (message: DiscordMessage) => Promise<void>;
   records: StaffRecords;
   now: () => number;
   log: { info: (message: string) => void };
@@ -69,7 +73,7 @@ const dayCount = (value: string | undefined): number => {
 };
 
 export const runCommand =
-  ({ config, http, lastMatch, seeders, removeMatch, records, now, log }: CommandDeps) =>
+  ({ config, http, lastMatch, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
   async (request: CommandRequest): Promise<CommandReply> => {
     const { name, options, userId } = request;
     if (isStaffCommand(name)) return runStaffCommand({ config, http, records, now, log })(name, request);
@@ -92,12 +96,26 @@ export const runCommand =
       return { embeds: [buildSeedersEmbed(await seeders(days), days, seedMinutes, vip)] };
     }
 
-    const { rconUrl, rconPassword, rules, siteUrl } = config();
+    const { rconUrl, rconPassword, rules, siteUrl, roleId, vip } = config();
     if (name === 'serverstatus') {
       return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl)] };
     }
     if (name === 'players') return { embeds: [buildPlayersEmbed(await fetchPlayers(rconUrl, rconPassword, http))] };
     if (name === 'rotation') return { embeds: [buildRotationEmbed(await fetchRotation(rconUrl, rconPassword, http))] };
+    if (name === 'seednow') {
+      const status = await fetchStatus(rconUrl, rconPassword, http);
+      if (status.players >= rules.live) {
+        return { content: `The server is already live (${status.players}/${status.maxPlayers} players), so no seeding call was sent.` };
+      }
+      const note = (options['message'] ?? '').trim();
+      await seedCall(buildSeedCall(status, { lowPop: rules.lowPop, live: rules.live, roleId, vip, siteUrl, note, calledBy: userId }));
+      log.info(`/seednow by Discord user ${userId ?? 'unknown'} at ${status.players}/${status.maxPlayers} players`);
+      return {
+        content: roleId
+          ? `🌱 Seeding call posted, pinging <@&${roleId}>.`
+          : '🌱 Seeding call posted. No role is set (`DISCORD_ROLE_ID`), so nobody was pinged.',
+      };
+    }
 
     const message = (options['message'] ?? '').trim();
     if (!message) return { content: 'Nothing to send.' };

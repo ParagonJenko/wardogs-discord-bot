@@ -7,6 +7,7 @@ import {
   buildMessage,
   buildPlayersEmbed,
   buildRotationEmbed,
+  buildSeedCall,
   buildSeedersEmbed,
   buildLiveStatus,
   buildStatusEmbed,
@@ -22,6 +23,31 @@ const rule = "A seed counts when you're on for more than 10 min and the server g
 
 const embedOf = (message: DiscordMessage) => message.embeds[0];
 const field = (message: DiscordMessage, name: string) => embedOf(message)?.fields?.find((f) => f.name === name)?.value;
+
+describe('buildSeedCall', () => {
+  it('is the seeding alert, worded as a call to join now', () => {
+    const message = buildSeedCall({ ...server, map: 'Europe' }, { lowPop: 20, live: 20, roleId: '999', vip, siteUrl: 'https://gaminginit.com' });
+
+    expect(message).toMatchObject({ content: '<@&999>', allowed_mentions: { parse: [], roles: ['999'] } });
+    expect(embedOf(message)).toMatchObject({
+      title: '🌱 Seeding UK Wardogs #1 now',
+      description: "**We're going to try to seed now. Come join!**",
+      color: 0xf1c40f,
+      url: 'https://gaminginit.com',
+    });
+    expect(field(message, 'Players')).toBe('🟨⬛⬛⬛⬛⬛⬛⬛⬛⬛ **7**/64');
+    expect(field(message, 'To go live')).toBe('**13** more');
+    expect(field(message, '🎖️ Seeder VIP')).toBe(`${offer}\n${rule}`);
+  });
+
+  it("adds staff's note and who called it, and keeps a long server name within Discord's limit", () => {
+    const message = buildSeedCall({ ...server, name: 'x'.repeat(500) }, { lowPop: 20, note: 'Alpha squad', calledBy: '42' });
+
+    expect(embedOf(message)?.description).toBe("**We're going to try to seed now. Come join!**\n\nAlpha squad\n\nCalled by <@42>");
+    expect(embedOf(message)?.title.length).toBeLessThanOrEqual(256);
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+});
 
 describe('buildMessage', () => {
   it('announces seeding with a population bar, the map and how many more it needs', () => {

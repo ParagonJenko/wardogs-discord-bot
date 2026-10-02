@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, step, type AlertKind, type AlertRules, type MonitorState } from '../src/alerts.ts';
+import { initialState, step, withSeedCall, type AlertKind, type AlertRules, type MonitorState } from '../src/alerts.ts';
 
 const MINUTE = 60_000;
 
@@ -119,5 +119,23 @@ describe('grace for drops', () => {
 
   it('starts the grace time again after the players come back', () => {
     expect(run(60, [0, 0, 60, 0, 0, 60, 0, 0], grace)).toEqual(Array(8).fill(null));
+  });
+});
+
+describe('seeding call from staff', () => {
+  const empty = initialState(0, rules);
+
+  it('holds back the automatic seeding alert for its cooldown, so the role is not pinged twice', () => {
+    const called = withSeedCall(empty, 0);
+
+    expect(step(called, 1, 5 * MINUTE, rules)).toMatchObject({ alert: null, state: { phase: 'seeding' } });
+    expect(step(called, 1, 10 * MINUTE, rules).alert).toBe('seeding');
+  });
+
+  it('keeps a later automatic alert', () => {
+    const alerted = { ...empty, lastAlertAt: { seeding: 5 * MINUTE, live: MINUTE } };
+
+    expect(withSeedCall(alerted, 2 * MINUTE)).toBe(alerted);
+    expect(withSeedCall(alerted, 6 * MINUTE).lastAlertAt).toEqual({ seeding: 6 * MINUTE, live: MINUTE });
   });
 });

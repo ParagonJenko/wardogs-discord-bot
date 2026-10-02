@@ -1,5 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
+import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
@@ -134,8 +135,8 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
-// status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids) and 'online' (who
-// was in game at the last check that reached the server).
+// status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
+// was in game at the last check that reached the server) and 'seedCall' (when staff last sent /seednow).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
@@ -233,7 +234,13 @@ export class Watcher extends DurableObject<Env> {
       now: Date.now,
       log: console,
       store: {
-        load: async () => parseState(await storage.get('state')),
+        // A /seednow call is kept apart from 'state', so a check that saves 'state' never overwrites it.
+        load: async () => {
+          const stored = await storage.get(['state', 'seedCall']);
+          const state = parseState(stored.get('state'));
+          const calledAt = stored.get('seedCall');
+          return state && typeof calledAt === 'number' ? { ...state, alerts: withSeedCall(state.alerts, calledAt) } : state;
+        },
         save: (state) => storage.put('state', state),
       },
       stats: {
@@ -617,6 +624,11 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put('nextMap', staged);
   }
 
+  // When staff sent /seednow, so the automatic seeding alert does not ping the role again straight after.
+  async seedCalled(at: number): Promise<void> {
+    await this.ctx.storage.put('seedCall', at);
+  }
+
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
   async seeders(days: number): Promise<SeederRow[]> {
     const keys = recentDayKeys(Date.now(), days);
@@ -725,6 +737,13 @@ export default {
           lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
           seeders: (days) => watcher().seeders(days),
           removeMatch: (endedAt) => watcher().removeMatch(endedAt),
+          seedCall: async (message) => {
+            await postWebhook(loadConfig(vars).webhookUrl, message);
+            // The call is out, so a failure here only costs holding back the automatic alert; the reply still says it posted.
+            await watcher()
+              .seedCalled(Date.now())
+              .catch((error: unknown) => console.error(`/seednow posted, but its time was not saved: ${errorText(error)}`));
+          },
           records,
           now: Date.now,
           log: console,
