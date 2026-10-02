@@ -61,7 +61,8 @@ const EnvSchema = z
     MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
     // The score a faction needs to win, for "halfway" and "nearly there" messages.
     SCORE_TO_WIN: z.coerce.number().int().min(2).default(100),
-    // While the server seeds, an in-game message about seeding and what it earns, every this many minutes. 0 turns it off.
+    // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
+    // after someone joins. 0 turns both off.
     SEEDING_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(5),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {

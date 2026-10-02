@@ -416,8 +416,8 @@ Automatic VIP is Cloudflare only.
 
 ## In-game messages
 
-While the server seeds, the bot broadcasts a seeding message in game every 5 minutes (`SEEDING_MESSAGE_MINUTES`):
-how many more players it needs to go live, and what seeding earns.
+While the server seeds, the bot broadcasts a seeding message in game every 5 minutes (`SEEDING_MESSAGE_MINUTES`), and
+30 seconds after someone joins: how many more players it needs to go live, and what seeding earns.
 
 | VIP and website                     | Message                                                                       |
 | ----------------------------------- | ----------------------------------------------------------------------------- |
@@ -425,14 +425,28 @@ how many more players it needs to go live, and what seeding earns.
 | Automatic VIP off, `SITE_URL` set   | We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com |
 | Neither                             | We're seeding! 15 more players and we go live. Thanks for helping get it live! |
 
-- The first goes out on the check that finds the server seeding, then one every 5 minutes until it goes live or
-  empties. It is the same whether the server is filling up from empty or building back up after dropping from live.
+- **When someone joins:** 30 seconds after they join, so they have loaded in to see it. When several join close
+  together, it waits until 30 seconds after the last of them and goes out once. While the server seeds, the bot reads
+  who is in game every 5 seconds to see joins, so it goes out 30 to 35 seconds after the join. For the player who
+  starts the seed on an empty server, the bot only sees them at the next minute's check, then waits 30 seconds.
+- **Every 5 minutes:** 5 minutes after the last seeding message, including one for a join. A 5-minute message that is
+  due while one for a join is waiting holds back, so they never both go out.
+- **Never at 20 players:** no seeding message goes out once the server has `LIVE_THRESHOLD` (20) players, even in
+  the seconds before the next check marks it live. A join that takes it to 20, or a join while it is live, sends
+  nothing, and a message still waiting for an earlier join is dropped.
+- **Map changes:** a live server that drops below 20 players, such as while players reconnect after a map change,
+  stays live. It only counts as seeding again once it has stayed below 20 for `DROP_GRACE_MINUTES` (5) in a row, and
+  only then do seeding messages start. Until then nobody gets one, however many rejoin.
+- It is the same whether the server is filling up from empty or building back up after dropping from live.
 - The opening line is picked at random from `SEEDING` in `src/lines.ts`; `{needed}` is filled in, such as
   "15 more players". The reward after it comes from `VIP_SEED_DAYS` and `VIP_SEED_MINUTES`, so it always matches what
   the bot does.
 - When a match message (below) is due on the same check, it goes first and the seeding message waits a minute.
 - Set `SEEDING_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to
-  turn them off. They do not need `SITE_URL`.
+  turn them all off, the ones for joins too. They do not need `SITE_URL`.
+- The reads every 5 seconds only happen while the server seeds: on Cloudflare, a Durable Object alarm (12 a minute,
+  about 720 for each hour of seeding, within the free plan); with Node, a second timer. Each is one RCON request
+  (`GET /v1/players`).
 
 During a match, the bot broadcasts short messages in game that point players at the website (`SITE_URL`) for the
 leaderboard, the Discord and seeding:

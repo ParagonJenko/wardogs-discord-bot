@@ -2,9 +2,19 @@ import { z } from 'zod';
 import { initialState, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
-import { MatchMessagesSchema, nextMessage, seedingMessage, seedingMessageDue, type MatchMessages } from './messages.ts';
+import {
+  joinMessageDue,
+  JoinWatchSchema,
+  MatchMessagesSchema,
+  nextMessage,
+  seedingMessage,
+  seedingMessageDue,
+  watchJoins,
+  type JoinWatch,
+  type MatchMessages,
+} from './messages.ts';
 import type { SeedCredit } from './players.ts';
-import type { Snapshot } from './rcon.ts';
+import type { Player, Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
 import {
   observeMatch,
@@ -28,6 +38,8 @@ export type BotState = {
   messages: MatchMessages | null;
   // When the last in-game seeding message went out.
   seedMessageAt: number | null;
+  // Who is in game, and whether a seeding message is waiting for someone who just joined.
+  joins: JoinWatch | null;
 };
 
 export type StateStore = {
@@ -114,6 +126,8 @@ const BotStateSchema = z.object({
   messages: MatchMessagesSchema.nullable().default(null),
   // Missing from state saved before seeding messages.
   seedMessageAt: z.number().nullable().default(null),
+  // Missing from state saved before seeding messages on joining.
+  joins: JoinWatchSchema.nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -127,6 +141,7 @@ const StoredStateSchema = z.union([
       unsentSummary: null,
       messages: null,
       seedMessageAt: null,
+      joins: null,
     }),
   ),
 ]);
@@ -148,6 +163,15 @@ export const memoryStore = (initial: BotState | null = null): StateStore => {
 };
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+const steamIds = (players: Player[]): string[] => players.map((p) => p.steamId);
+
+// How often the quick join checks read who is in game while the server seeds.
+export const JOIN_CHECK_MS = 5_000;
+
+// A seeding message only ever goes out while the server seeds with fewer players than it needs to go live
+// (LIVE_THRESHOLD): never once it has that many, even before the next check marks it live.
+const canSeedMessage = (seeding: boolean, players: number, live: number): boolean => seeding && players > 0 && players < live;
 
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
 export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats, broadcast, random = Math.random }: PollerDeps) => {
@@ -173,7 +197,8 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       const seeding = seedingNow ? tallySeeding({}, players) : {};
       const messages =
         config.matchMessages === null ? null : nextMessage(null, match, time, config.matchMessages, config.vip).messages;
-      await store.save({ alerts, seeding, match, unsentSummary: null, messages, seedMessageAt: null });
+      const joins = watchJoins(null, steamIds(players), time, false);
+      await store.save({ alerts, seeding, match, unsentSummary: null, messages, seedMessageAt: null, joins });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
@@ -214,16 +239,21 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
         ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random)
         : { messages: state.messages, send: null };
     const seedingRule = config.seedingMessages;
+    const watched = watchJoins(state.joins, steamIds(players), time, canSeedMessage(seedingNow, status.players, config.rules.live));
+    // Someone joined 30 seconds ago (the quick join checks usually send this first), or it is time for the next one.
+    // While a message for someone who just joined is waiting, the timed one waits for it.
+    const seedingDue =
+      joinMessageDue(watched, time) ||
+      (canSeedMessage(seedingNow, status.players, config.rules.live) &&
+        watched.lastJoinAt === null &&
+        seedingRule !== null &&
+        seedingMessageDue(state.seedMessageAt, time, seedingRule, config.pollIntervalMs));
     const seedingText =
-      milestone === null &&
-      seedingRule !== null &&
-      broadcast !== undefined &&
-      seedingNow &&
-      status.players > 0 &&
-      seedingMessageDue(state.seedMessageAt, time, seedingRule, config.pollIntervalMs)
+      milestone === null && seedingRule !== null && broadcast !== undefined && seedingDue
         ? seedingMessage(status.players, config.rules.live, seedingRule, config.vip, random)
         : null;
     const seedMessageAt = seedingText === null ? state.seedMessageAt : time;
+    const joins = seedingText === null ? watched : { ...watched, lastJoinAt: null };
     const message = milestone ?? seedingText;
     if (message !== null && broadcast !== undefined) {
       try {
@@ -243,6 +273,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       match,
       messages,
       seedMessageAt,
+      joins,
       unsentSummary: finished === null ? state.unsentSummary : summarise(finished),
     };
     try {
@@ -271,7 +302,7 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
       throw error;
     }
     // The alert state is only saved after a successful send, so a failed alert is retried on the next check.
-    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, messages, seedMessageAt });
+    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, messages, seedMessageAt, joins });
   };
 
   return async (): Promise<void> => {
@@ -282,3 +313,47 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     }
   };
 };
+
+type JoinCheckDeps = {
+  config: Config;
+  fetchPlayers: () => Promise<Player[]>;
+  broadcast: (message: string) => Promise<void>;
+  now: () => number;
+  log: Logger;
+  store: StateStore;
+  random?: () => number;
+};
+
+// Returns a function that runs one quick join check: between the checks, while the server seeds, it reads who is in
+// game, so the seeding message goes out 30 seconds after someone joins (30 seconds after the last of them, when
+// several join together). It must not run at the same time as a check, as both save the state. It answers whether to
+// keep running them: only while the last check found the server seeding. It never throws.
+export const createJoinCheck =
+  ({ config, fetchPlayers, broadcast, now, log, store, random = Math.random }: JoinCheckDeps) =>
+  async (): Promise<boolean> => {
+    try {
+      const rule = config.seedingMessages;
+      const state = await store.load();
+      if (rule === null || state === null || state.alerts.phase !== 'seeding') return false;
+      const players = await fetchPlayers();
+      const time = now();
+      const count = players.length;
+      const watched = watchJoins(state.joins, steamIds(players), time, canSeedMessage(true, count, config.rules.live));
+      if (!joinMessageDue(watched, time)) {
+        await store.save({ ...state, joins: watched });
+        return true;
+      }
+      const message = seedingMessage(count, config.rules.live, rule, config.vip, random);
+      try {
+        await broadcast(message);
+        log.info(`Sent in game: ${message}`);
+      } catch (error) {
+        log.error(`In-game message failed: ${errorText(error)}`);
+      }
+      await store.save({ ...state, joins: { ...watched, lastJoinAt: null }, seedMessageAt: time });
+      return true;
+    } catch (error) {
+      log.error(`Join check failed: ${errorText(error)}`);
+      return true;
+    }
+  };

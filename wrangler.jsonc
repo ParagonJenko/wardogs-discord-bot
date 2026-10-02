@@ -24,7 +24,8 @@
     "MATCH_MESSAGES": "on",
     // The score a team needs to win: halfway is half of it, "near winning" is 90% of it.
     "SCORE_TO_WIN": "100",
-    // While the server seeds, an in-game message about seeding and what it earns, every this many minutes. "0" turns it off.
+    // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
+    // after someone joins (below 20 players). "0" turns both off.
     "SEEDING_MESSAGE_MINUTES": "5",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",

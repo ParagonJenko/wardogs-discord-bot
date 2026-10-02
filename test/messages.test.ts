@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as lines from '../src/lines.ts';
-import { milestones, nextMessage, seedingMessage, seedingMessageDue, type MatchMessages } from '../src/messages.ts';
+import { joinMessageDue, milestones, nextMessage, seedingMessage, seedingMessageDue, watchJoins, type MatchMessages } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const MINUTE = 60_000;
@@ -189,6 +189,31 @@ describe('seedingMessage', () => {
     expect(seedingMessageDue(0, 4 * MINUTE, site, MINUTE)).toBe(false);
     expect(seedingMessageDue(0, 5 * MINUTE - 20_000, site, MINUTE)).toBe(true);
     expect(seedingMessageDue(0, 5 * MINUTE, site, MINUTE)).toBe(true);
+  });
+});
+
+describe('watchJoins', () => {
+  it('counts nobody as joining on the first reading', () => {
+    expect(watchJoins(null, ['a', 'b'], 0, true)).toEqual({ online: ['a', 'b'], lastJoinAt: null });
+  });
+
+  it('notes when the latest player joined, and not when someone leaves', () => {
+    const first = watchJoins({ online: ['a'], lastJoinAt: null }, ['a', 'b'], 10_000, true);
+    const second = watchJoins(first, ['a', 'b', 'c'], 20_000, true);
+    const left = watchJoins(second, ['a', 'c'], 25_000, true);
+
+    expect([first.lastJoinAt, second.lastJoinAt, left.lastJoinAt]).toEqual([10_000, 20_000, 20_000]);
+    expect(left.online).toEqual(['a', 'c']);
+  });
+
+  it('drops a waiting message when one cannot go out', () => {
+    expect(watchJoins({ online: ['a'], lastJoinAt: 5_000 }, ['a', 'b'], 10_000, false)).toEqual({ online: ['a', 'b'], lastJoinAt: null });
+  });
+
+  it('is due 30 seconds after the latest join', () => {
+    expect(joinMessageDue({ online: [], lastJoinAt: null }, 60_000)).toBe(false);
+    expect(joinMessageDue({ online: [], lastJoinAt: 10_000 }, 39_999)).toBe(false);
+    expect(joinMessageDue({ online: [], lastJoinAt: 10_000 }, 40_000)).toBe(true);
   });
 });
 
