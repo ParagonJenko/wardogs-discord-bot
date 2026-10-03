@@ -168,6 +168,7 @@ import {
   type PublicStats,
   type RecentMatch,
   type SiteStats,
+  type Thresholds,
 } from './stats.ts';
 import { teamBoard } from './teams.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
@@ -410,10 +411,10 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // One write for the site's stats, who is online and today's player totals.
-  private async recordCheck(observation: Observation, minutes: number, busyThreshold: number): Promise<void> {
+  private async recordCheck(observation: Observation, minutes: number, thresholds: Pick<Thresholds, 'live' | 'busy'>): Promise<void> {
     const dayKey = playerDayKey(observation.at);
     const stored = await this.ctx.storage.get(['stats', dayKey]);
-    const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes, busyThreshold);
+    const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes, thresholds);
     const online: OnlineSnapshot = { at: observation.at, map: observation.status.map, players: observation.players };
     if (observation.phase === 'empty' || observation.players.length === 0) {
       await this.ctx.storage.put({ stats, online });
@@ -504,7 +505,8 @@ export class Watcher extends DurableObject<Env> {
       log: console,
       store: this.stateStore(),
       stats: {
-        check: (observation) => this.recordCheck(observation, minutesPerCheck, config.busyThreshold),
+        check: (observation) =>
+          this.recordCheck(observation, minutesPerCheck, { live: config.rules.live, busy: config.busyThreshold }),
         seeded: (seeders, at) => this.recordSeed(seeders, at, config.seedMinutes),
         matchEnded: (match, at) => this.recordMatchEnd(match, at),
       },

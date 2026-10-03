@@ -35,6 +35,10 @@ export type Hourly = { days: number; players: (number | null)[]; busy: (number |
 
 export type Thresholds = { seeding: number; live: number; busy: number };
 
+// A crash the hourly figures leave out: its readings from `from`, when the players fell, until `until`, when they were
+// back to `back`. Until they are back, `until` is CRASH_MS after the fall, so a server nobody comes back to counts again.
+export type Crash = { from: number; until: number; back: number };
+
 export type RecentMatch = MatchSummary & { endedAt: number };
 
 export type CurrentMatch = {
@@ -64,6 +68,8 @@ export type SiteStats = {
   days: DayStats[];
   // Kept for the site's busiest times, and sent to it as `hourly`.
   hours: HourTotals[];
+  // The crashes with readings still in the history, so recheckHours leaves out the same readings. Not sent to the site.
+  crashes: Crash[];
   matches: RecentMatch[];
   currentMatch: CurrentMatch | null;
   discord: DiscordCounts | null;
@@ -83,6 +89,9 @@ export type Observation = {
 const DAY_MS = 24 * 60 * 60_000;
 export const HISTORY_MS = DAY_MS;
 export const DAYS_KEPT = 14;
+// The longest a crash is left out of the hourly figures. A server nobody has come back to by then is quiet, not
+// recovering.
+export const CRASH_MS = 3 * 60 * 60_000;
 export const MATCHES_KEPT = 10;
 export const DISCORD_REFRESH_MS = 10 * 60_000;
 
@@ -91,6 +100,7 @@ export const emptyStats = (): SiteStats => ({
   history: [],
   days: [],
   hours: [],
+  crashes: [],
   matches: [],
   currentMatch: null,
   discord: null,
@@ -127,6 +137,8 @@ const SiteStatsSchema = z.object({
       }),
     )
     .optional(),
+  // Missing from stats saved before crashes were left out.
+  crashes: z.array(z.object({ from: z.number(), until: z.number(), back: z.number() })).optional(),
   matches: z.array(
     z.object({
       map: z.string(),
@@ -187,10 +199,12 @@ const recordHour = (hours: HourTotals[], at: number, players: number, busyThresh
 
 // Brings every day's busy counts to `busyThreshold`, dropping counts made under another threshold. An hour with more
 // readings in `recent` than were checked takes its counts from those readings, so after a new threshold, or the
-// deploy that started busy counts, the last 24 hours count straight away.
-const recheckHours = (hours: HourTotals[], recent: Sample[], busyThreshold: number): HourTotals[] => {
+// deploy that started busy counts, the last 24 hours count straight away. Readings during a crash are left out, as
+// they were when recorded.
+const recheckHours = (hours: HourTotals[], recent: Sample[], busyThreshold: number, crashes: Crash[]): HourTotals[] => {
   const fromRecent = new Map<string, { checked: number[]; busy: number[] }>();
   for (const [at, players] of recent) {
+    if (crashed(crashes, at)) continue;
     const day = dayOf(at);
     const counts = fromRecent.get(day) ?? { checked: noHours(), busy: noHours() };
     const hour = new Date(at).getUTCHours();
@@ -220,7 +234,7 @@ const recheckHours = (hours: HourTotals[], recent: Sample[], busyThreshold: numb
 export const parseStats = (raw: unknown): SiteStats => {
   const parsed = SiteStatsSchema.safeParse(raw);
   if (!parsed.success) return emptyStats();
-  const { hours, ...stats } = parsed.data;
+  const { hours, crashes, ...stats } = parsed.data;
   const fromHistory = () =>
     stats.history.reduce<HourTotals[]>((acc, [at, players]) => recordHour(acc, at, players, null), []);
   const saved = hours?.map((h) => ({
@@ -229,7 +243,7 @@ export const parseStats = (raw: unknown): SiteStats => {
     checked: h.checked ?? noHours(),
     busy: h.busy ?? noHours(),
   }));
-  return { ...stats, hours: saved ?? fromHistory() };
+  return { ...stats, hours: saved ?? fromHistory(), crashes: crashes ?? [] };
 };
 
 // Keeps the days inside the last DAYS_KEPT calendar days, so days from before an outage do not linger.
@@ -253,13 +267,47 @@ const currentMatch = (match: MatchState, status: ServerStatus): CurrentMatch | n
         top: topPlayers(match.players),
       };
 
+const crashed = (crashes: Crash[], at: number): boolean => crashes.some((c) => c.from <= at && at < c.until);
+
+// The server crashed when it was live and lost more than three quarters of its players from one reading to the next:
+// it restarted, or was unreachable for a while and came back nearly empty. Players leaving at the end of the night go
+// a few at a time, so they never look like this, but a map change that empties the server for a minute or two does,
+// and those minutes are left out too. After a gap longer than CRASH_MS a fall is not a crash: with no readings in
+// between, players leaving cannot be told apart from it. A crash ends at the reading with the players back to where
+// they were before it (at most the busy threshold), or CRASH_MS after the fall. Returns the crashes still in the
+// history, with this reading's.
+const trackCrashes = (
+  crashes: Crash[],
+  previous: Sample | undefined,
+  [at, players]: Sample,
+  thresholds: Pick<Thresholds, 'live' | 'busy'>,
+): Crash[] => {
+  const kept = crashes.filter((c) => c.until > at - HISTORY_MS);
+  const last = kept.at(-1);
+  const open = last !== undefined && at < last.until ? last : null;
+  const earlier = open === null ? kept : kept.slice(0, -1);
+  const fell =
+    previous !== undefined && at - previous[0] <= CRASH_MS && previous[1] >= thresholds.live && players < previous[1] / 4;
+  if (fell) {
+    // Falling again while recovering keeps the crash going, and it still ends once the players are back.
+    const back = Math.max(Math.min(previous[1], thresholds.busy), open?.back ?? 0);
+    return [...earlier, { from: open?.from ?? at, until: at + CRASH_MS, back }];
+  }
+  if (open !== null && players >= open.back) return [...earlier, { ...open, until: at }];
+  return kept;
+};
+
+// `thresholds.busy` counts busy readings for the hourly figures, and `thresholds.live` is where a crash can start from.
 export const recordObservation = (
   stats: SiteStats,
   obs: Observation,
   minutesPerCheck: number,
-  busyThreshold: number,
+  thresholds: Pick<Thresholds, 'live' | 'busy'>,
 ): SiteStats => {
   const recent = stats.history.filter(([at]) => at > obs.at - HISTORY_MS);
+  const reading: Sample = [obs.at, obs.status.players];
+  const crashes = trackCrashes(stats.crashes, recent.at(-1), reading, thresholds);
+  const hours = recheckHours(stats.hours, recent, thresholds.busy, crashes);
   return {
     ...stats,
     server: {
@@ -271,9 +319,10 @@ export const recordObservation = (
       factionScores: obs.status.factionScores,
       seenAt: obs.at,
     },
-    history: [...recent, [obs.at, obs.status.players]],
+    history: [...recent, reading],
     days: recordDay(stats.days, obs.at, obs.status.players, obs.phase === 'live' ? minutesPerCheck : 0),
-    hours: recordHour(recheckHours(stats.hours, recent, busyThreshold), obs.at, obs.status.players, busyThreshold),
+    hours: crashed(crashes, obs.at) ? hours : recordHour(hours, obs.at, obs.status.players, thresholds.busy),
+    crashes,
     currentMatch: currentMatch(obs.match, obs.status),
   };
 };
@@ -314,7 +363,7 @@ export type Public<T> = Omit<T, 'steamId'> & { id?: string };
 
 export type PublicMatch = Omit<RecentMatch, 'top'> & { top: Public<RankedStats>[] };
 
-export type PublicStats = Omit<SiteStats, 'hours' | 'matches' | 'currentMatch'> & {
+export type PublicStats = Omit<SiteStats, 'hours' | 'crashes' | 'matches' | 'currentMatch'> & {
   generatedAt: number;
   thresholds: Thresholds;
   hourly: Hourly;
@@ -360,11 +409,12 @@ const median = (values: number[]): number | null => {
   return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 };
 
-// Each hour is the median day's over the last DAYS_KEPT days (today included), so one bad day, like a crash or a quiet
-// evening, cannot drag a busy hour down. A day's average is its players summed over its readings in that hour, and its
-// busy share its busy readings over the readings checked against `busyThreshold`. Days with no readings in the hour
-// are left out, and from the busy shares so are days counted under another threshold, or before busy readings were
-// counted. Averages are rounded to a tenth and shares to a hundredth to keep the JSON short.
+// Each hour is the median day's over the last DAYS_KEPT days (today included), so one bad day, like a quiet evening,
+// cannot drag a busy hour down. Readings during a crash were never counted (see trackCrashes). A day's average is its
+// players summed over its readings in that hour, and its busy share its busy readings over the readings checked
+// against `busyThreshold`. Days with no readings in the hour are left out, and from the busy shares so are days
+// counted under another threshold, or before busy readings were counted. Averages are rounded to a tenth and shares
+// to a hundredth to keep the JSON short.
 export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number): Hourly => {
   const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
   const kept = hours.filter((h) => h.day >= oldest);
@@ -386,7 +436,7 @@ export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: 
 };
 
 export const publicStats = (
-  { hours, matches, currentMatch, ...stats }: SiteStats,
+  { hours, crashes: _crashes, matches, currentMatch, ...stats }: SiteStats,
   thresholds: Thresholds,
   now: number,
   { leaderboard, vip, seederVip, weapons, teams }: PublicExtras,
