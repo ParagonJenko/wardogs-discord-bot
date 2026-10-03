@@ -299,6 +299,9 @@ export class Watcher extends DurableObject<Env> {
   private alerting = oneAtATime();
   // A roundup is posted by one check at a time, so two checks close together cannot both post it.
   private roundingUp = oneAtATime();
+  // Steam checks, their alerts and /player's lookups run one at a time, so two checks close together cannot both post the
+  // same account, and an older answer from Steam is never saved over a newer one.
+  private steamChecking = oneAtATime();
 
   // The player records the website's pages read. Past days and finished matches only change through /removematch,
   // which clears them, so they are kept in memory and each read only fetches the last two days and any new matches.
@@ -553,7 +556,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
-    await this.checkSteam(seen.snapshot);
+    await this.steamChecking(() => this.checkSteam(seen.snapshot));
 
     const { inviteCode } = config;
     if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
@@ -822,12 +825,15 @@ export class Watcher extends DurableObject<Env> {
     return this.steamChecks;
   }
 
-  // Keeps the highest score posted so far, so a check saved from an earlier reading never makes an alert go out again.
+  // Keeps the highest score posted so far, so a check saved from an earlier reading never makes an alert go out again,
+  // and never saves a check over a newer one.
   private async saveSteam(checks: [string, SteamCheck][]): Promise<void> {
     for (let i = 0; i < checks.length; i += RECORDS_PER_WRITE) {
       const part = checks.slice(i, i + RECORDS_PER_WRITE).map(([steamId, check]): [string, SteamCheck] => {
-        const alerted = Math.max(check.alerted ?? 0, this.steamChecks.get(steamId)?.alerted ?? 0);
-        return [steamId, alerted > 0 ? { ...check, alerted } : check];
+        const saved = this.steamChecks.get(steamId) ?? null;
+        const latest = saved !== null && saved.at > check.at ? saved : check;
+        const alerted = Math.max(check.alerted ?? 0, saved?.alerted ?? 0);
+        return [steamId, alerted > 0 ? { ...latest, alerted } : latest];
       });
       await this.ctx.storage.put(Object.fromEntries(part.map(([steamId, check]) => [steamKey(steamId), check])));
       for (const [steamId, check] of part) this.steamChecks.set(steamId, check);
@@ -902,18 +908,20 @@ export class Watcher extends DurableObject<Env> {
   async steamLookup(steamId: string): Promise<SteamLookup> {
     const apiKey = this.steamApiKey();
     if (apiKey === null) return 'off';
-    const now = Date.now();
-    const saved = (await this.loadSteam([steamId])).get(steamId) ?? null;
-    if (saved !== null && now - saved.at < RECHECK_MS) return saved;
-    try {
-      const check = (await fetchSteamChecks(apiKey, [steamId], now)).get(steamId);
-      if (check === undefined) return saved ?? 'failed';
-      await this.saveSteam([[steamId, check]]);
-      return check;
-    } catch (error) {
-      console.error(`Steam check for /player failed (${steamId}): ${errorText(error)}`);
-      return saved ?? 'failed';
-    }
+    return this.steamChecking(async (): Promise<SteamLookup> => {
+      const now = Date.now();
+      const saved = (await this.loadSteam([steamId])).get(steamId) ?? null;
+      if (saved !== null && now - saved.at < RECHECK_MS) return saved;
+      try {
+        const check = (await fetchSteamChecks(apiKey, [steamId], now)).get(steamId);
+        if (check === undefined) return saved ?? 'failed';
+        await this.saveSteam([[steamId, check]]);
+        return this.steamChecks.get(steamId) ?? check;
+      } catch (error) {
+        console.error(`Steam check for /player failed (${steamId}): ${errorText(error)}`);
+        return saved ?? 'failed';
+      }
+    });
   }
 
   // The staff page's Steam checks: everyone seen in the period or in game now, and the kill feed's kills and headshots
