@@ -877,6 +877,12 @@ describe('buildModLogMessage', () => {
     expect(by({ action: 'ban', at: NOW, by: 'server', name: 'Ash' })).toBe('Outside the bot (in game, or in ServerSettings.ini)');
     expect(buildModLogMessage(ID, { action: 'kick', at: NOW, by: '42' }).embeds[0]?.title).toBe('👢 Kick · Unknown player');
   });
+
+  it("keeps a long detail from the server inside Discord's limit for a field", () => {
+    const message = buildModLogMessage(ID, { action: 'ban', at: NOW, by: 'server', detail: `By ${'_'.repeat(3000)}` });
+
+    expect(message.embeds[0]?.fields?.[1]?.value.length).toBeLessThanOrEqual(1024);
+  });
 });
 
 describe('buildGriefAlert', () => {
@@ -920,6 +926,29 @@ describe('buildGriefAlert', () => {
       description: `\`${ASH}\` · [Steam profile](https://steamcommunity.com/profiles/${ASH})\nKilled teammate **Bo** 2 times today · 3 team kills today`,
       fields: [{ name: 'Latest', value: `${t(NOW, 'R')} Killed teammate **Bo** with AK74 from 13 m on Ozeti` }],
     });
+  });
+
+  it("lists only the newest incidents that fit in Discord's limit for a field, when weapons and maps have long tags", () => {
+    const incident = (at: number) => ({
+      at,
+      kind: 'vehicle-suicide' as const,
+      map: `Map_${'x'.repeat(196)}`,
+      steamId: ASH,
+      name: 'Ash',
+      faction: 'Valkyra',
+      cause: 'Id.Item.Long',
+      distance: null,
+      tags: [],
+    });
+    const incidents = [1, 2, 3, 4, 5].map((n) => incident(NOW + n * 1000));
+
+    const message = buildGriefAlert({ steamId: ASH, name: 'Ash', teamKills: 0, vehicleSuicides: 6, sameTeammate: null, incidents }, () => 'w'.repeat(200));
+    const value = message.embeds[0]?.fields?.[0]?.value ?? '';
+
+    expect(value.length).toBeLessThanOrEqual(1024);
+    expect(value.split('\n').length).toBeLessThan(5);
+    expect(value.endsWith(`Map_${'x'.repeat(196)}`)).toBe(true);
+    expect(value).toContain(t(NOW + 5000, 'R'));
   });
 });
 

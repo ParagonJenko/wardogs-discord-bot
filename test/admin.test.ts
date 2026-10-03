@@ -142,6 +142,16 @@ describe('buildAdminOverview', () => {
     expect(buildAdminOverview(sources({ serverBans: null })).bans).toBeNull();
   });
 
+  it("trusts the server's ban list for who is banned, with bans waiting for the player to join", () => {
+    const stale: BanRecord = { name: 'Ash', until: null, reason: 'TK', serverReason: 'TK', by: '42', at: NOW - DAY };
+    const waiting: BanRecord = { ...stale, waiting: true };
+    const banned = (overrides: Partial<AdminSources>) => buildAdminOverview(sources(overrides)).players.find((p) => p.steamId === ASH)?.banned;
+
+    expect(banned({ serverBans: [], banBook: { [ASH]: stale } })).toBe(false);
+    expect(banned({ serverBans: [], banBook: { [ASH]: waiting } })).toBe(true);
+    expect(banned({ serverBans: null, banBook: { [ASH]: stale } })).toBe(true);
+  });
+
   it('names everyone it can', () => {
     const grief = sources().grief;
     const modLogs = new Map<string, ModEntry[]>([[DEE, []]]);

@@ -704,13 +704,14 @@ export class Watcher extends DurableObject<Env> {
       }
       for (const { steamId, ban } of lifted) {
         const name = names.get(steamId) ?? steamId;
-        await this.record(steamId, {
-          action: 'unban',
-          at: now,
-          by: 'server',
-          name,
-          ...(ban.reason ? { reason: `Was banned for: ${ban.reason}` } : {}),
-        });
+        // One of the bot's own bans, lifted some other way: the bot forgets it too, so it no longer counts as banned.
+        const ours = book[steamId];
+        const theirs = ours !== undefined && isBotBan(ban.reason, ours);
+        await this.record(
+          steamId,
+          { action: 'unban', at: now, by: 'server', name, ...(ban.reason ? { reason: `Was banned for: ${ban.reason}` } : {}) },
+          theirs ? { ban: null } : {},
+        );
         console.info(`Ban lifted outside the bot: ${JSON.stringify(name)} (${steamId})`);
       }
       await storage.put('serverBans', current);

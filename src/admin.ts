@@ -120,7 +120,13 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     const id = s.idOf(steamId);
     return { steamId, name: s.nameOf(steamId) ?? fallback ?? steamId, ...(id === undefined ? {} : { id }) };
   };
-  const banned = new Set([...(s.serverBans ?? []).map((b) => b.steamId), ...Object.keys(s.banBook)]);
+  // The server's list is the truth when it could be read, with the bans waiting for the player to join; otherwise the
+  // bot's own records.
+  const banned = new Set(
+    s.serverBans === null
+      ? Object.keys(s.banBook)
+      : [...s.serverBans.map((b) => b.steamId), ...Object.entries(s.banBook).flatMap(([steamId, ban]) => (ban.waiting ? [steamId] : []))],
+  );
   const context = new Map(totals(s.playerDays).map((t) => [t.steamId, t]));
   const rows = griefRows(s.grief);
   const players = rows.slice(0, PLAYERS_LISTED).map((r): AdminGriefRow => {

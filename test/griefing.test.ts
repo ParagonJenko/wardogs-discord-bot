@@ -58,6 +58,7 @@ describe('telling deaths apart', () => {
     expect(byVehicle(death(ASH, ASH, { tags: ['VehicleExplosion'], cause: null }))).toBe(true);
     expect(byVehicle(death(ASH, BO, { cause: 'Id.Vehicle.WeaponExtension.WHL_05.RingTurret' }))).toBe(false);
     expect(byVehicle(death(ASH, BO, { cause: 'Vehicle.Variant.Stationary.Mortar' }))).toBe(false);
+    expect(byVehicle(death(ASH, ASH, { cause: 'Vehicle.Variant.Stationary.Mortar', tags: ['VehicleExplosion'] }))).toBe(false);
     expect(byVehicle(death(ASH, BO))).toBe(false);
   });
 

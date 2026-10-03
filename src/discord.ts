@@ -903,7 +903,8 @@ export const buildModLogMessage = (steamId: string, entry: ModEntry, siteUrl?: s
         color: style.color,
         fields: [
           { name: 'By', value: entry.by === 'server' ? 'Outside the bot (in game, or in ServerSettings.ini)' : staffName(entry.by), inline: true },
-          ...(entry.detail ? [{ name: 'Details', value: escapeMarkdown(entry.detail), inline: true }] : []),
+          // Escaping at most doubles it, so it stays inside Discord's limit for a field.
+          ...(entry.detail ? [{ name: 'Details', value: escapeMarkdown(entry.detail.slice(0, MAX_FIELD / 2)), inline: true }] : []),
         ],
         timestamp: new Date(entry.at).toISOString(),
       },
@@ -930,7 +931,11 @@ export const buildGriefAlert = (alert: GriefAlert, weapon: (cause: string) => st
     ...(alert.teamKills > 0 ? [`${plural(alert.teamKills, 'team kill')} today`] : []),
     ...(alert.vehicleSuicides > 0 ? [`${plural(alert.vehicleSuicides, 'vehicle suicide')} today`] : []),
   ];
-  const latest = alert.incidents.slice(-INCIDENTS_LISTED).map((i) => incidentLine(i, weapon));
+  // The newest that fit in one field: a weapon or map the bot has no name for is named from its tag, which can be long.
+  const latest = alert.incidents
+    .slice(-INCIDENTS_LISTED)
+    .map((i) => incidentLine(i, weapon).slice(0, MAX_FIELD))
+    .reduceRight<string[]>((kept, line) => ([line, ...kept].join('\n').length <= MAX_FIELD ? [line, ...kept] : kept), []);
   return {
     embeds: [
       {

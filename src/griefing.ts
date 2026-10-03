@@ -103,11 +103,11 @@ export const isSuicide = (e: FeedEvent): boolean =>
   e.tags.includes('Suicide') || (e.killerSteamId !== null && e.killerSteamId === e.victimSteamId);
 
 // A death a vehicle made: run over, blown up, or by the vehicle itself rather than a gun on it. Emplacements such as
-// mortars are vehicles to the game, but not ones anyone drives, so they do not count.
-export const byVehicle = (e: FeedEvent): boolean =>
-  e.tags.includes('VehicleExplosion') ||
-  e.tags.includes('RoadKill') ||
-  (e.cause !== null && weaponKind(e.cause) === 'vehicle' && !/^Vehicle\.Variant\.Stationary\./i.test(e.cause));
+// mortars are vehicles to the game, but not ones anyone drives, so they never count, whatever the tags say.
+export const byVehicle = (e: FeedEvent): boolean => {
+  if (e.cause !== null && /^Vehicle\.Variant\.Stationary\./i.test(e.cause)) return false;
+  return e.tags.includes('VehicleExplosion') || e.tags.includes('RoadKill') || (e.cause !== null && weaponKind(e.cause) === 'vehicle');
+};
 
 // Whether two players are on the same side, as the bot last saw them. Unknown sides are never the same.
 export const sameSide = (a: string | null, b: string | null): boolean => a !== null && b !== null && factionKey(a) === factionKey(b);
