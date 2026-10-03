@@ -54,6 +54,15 @@ describe('reservedIds', () => {
     expect(reservedIds(text)).toEqual([ADMIN]);
     expect(reservedIds('[/Script/Engine.GameSession]\nMaxPlayers=100\n')).toEqual([]);
   });
+
+  it('reads the lines in order, as the game does: ! empties the list so far, - takes a player off, + adds them once', () => {
+    const list = (lines: string[]) => reservedIds(ini(['[/Script/WDGame.WDGameSession]', ...lines]));
+
+    expect(list(['!DefaultReservedPlayerIds=ClearArray', `+DefaultReservedPlayerIds=${ADMIN}`, `+DefaultReservedPlayerIds=${ASH}`])).toEqual([ADMIN, ASH]);
+    expect(list([`+DefaultReservedPlayerIds=${ADMIN}`, '!DefaultReservedPlayerIds=ClearArray', `+DefaultReservedPlayerIds=${ASH}`])).toEqual([ASH]);
+    expect(list([`+DefaultReservedPlayerIds=${ADMIN}`, `+DefaultReservedPlayerIds=${ASH}`, `-DefaultReservedPlayerIds=${ADMIN}`])).toEqual([ASH]);
+    expect(list([`-DefaultReservedPlayerIds=${ADMIN}`, `+DefaultReservedPlayerIds=${ADMIN}`, `.DefaultReservedPlayerIds=${ADMIN}`])).toEqual([ADMIN]);
+  });
 });
 
 describe('editReserved', () => {
@@ -87,9 +96,39 @@ describe('editReserved', () => {
     );
   });
 
+  it('keeps a list that starts with ClearArray, adding after its last line so nothing before takes the player off', () => {
+    const before = ini([
+      '[/Script/WDGame.WDGameSession]',
+      '!DefaultReservedPlayerIds=ClearArray',
+      `+DefaultReservedPlayerIds=${ADMIN}`,
+      `+DefaultReservedPlayerIds=${BO}`,
+      `-DefaultReservedPlayerIds=${ASH}`,
+      'MaxReservedSlots=2',
+    ]);
+
+    const after = editReserved(before, [ASH], [BO]);
+
+    expect(after).toBe(
+      ini([
+        '[/Script/WDGame.WDGameSession]',
+        '!DefaultReservedPlayerIds=ClearArray',
+        `+DefaultReservedPlayerIds=${ADMIN}`,
+        `-DefaultReservedPlayerIds=${ASH}`,
+        `+DefaultReservedPlayerIds=${ASH}`,
+        'MaxReservedSlots=2',
+      ]),
+    );
+    expect(reservedIds(after)).toEqual([ADMIN, ASH]);
+  });
+
+  it('takes a player off by deleting every line that adds them', () => {
+    const text = ini(['[/Script/WDGame.WDGameSession]', `+DefaultReservedPlayerIds=${ASH}`, '!DefaultReservedPlayerIds=ClearArray', `.DefaultReservedPlayerIds=${ASH}`, `+DefaultReservedPlayerIds=${ADMIN}`]);
+
+    expect(editReserved(text, [], [ASH])).toBe(ini(['[/Script/WDGame.WDGameSession]', '!DefaultReservedPlayerIds=ClearArray', `+DefaultReservedPlayerIds=${ADMIN}`]));
+  });
+
   it('refuses anything that is not a Steam ID, and files it cannot read safely', () => {
     expect(() => editReserved(settings, ['7656\n[Evil]'], [])).toThrow(/Steam ID/);
-    expect(() => editReserved(ini(['[/Script/WDGame.WDGameSession]', `-DefaultReservedPlayerIds=${ADMIN}`]), [ASH], [])).toThrow(/by hand/);
     expect(() => editReserved(`${settings}[/Script/WDGame.WDGameSession]\n`, [ASH], [])).toThrow(/more than once/);
   });
 });
@@ -190,6 +229,18 @@ describe('syncVip', () => {
     expect(log.info).toHaveBeenCalledWith(
       `VIP added: Ash (${ASH}). The server uses the new reserved list after its next restart.`,
     );
+  });
+
+  it('keeps working when the list starts with !DefaultReservedPlayerIds=ClearArray', async () => {
+    const cleared = settings.replace(`+DefaultReservedPlayerIds=${ADMIN}`, `!DefaultReservedPlayerIds=ClearArray\n+DefaultReservedPlayerIds=${ADMIN}`);
+    const rcon = server(cleared);
+
+    const result = await syncVip({ rule, days: earned, state: parseVipState(undefined), now: NOW, rcon, log });
+
+    expect(result.added).toEqual([{ steamId: ASH, name: 'Ash' }]);
+    const written = rcon.put.mock.calls[0]?.[0].text ?? '';
+    expect(written).toContain(`!DefaultReservedPlayerIds=ClearArray\n+DefaultReservedPlayerIds=${ADMIN}\n+DefaultReservedPlayerIds=${ASH}\n`);
+    expect(reservedIds(written)).toEqual([ADMIN, ASH]);
   });
 
   it('takes a player off the list once their week is up, if they did not earn it again', async () => {
@@ -344,24 +395,23 @@ describe('addVip and removeVip', () => {
 });
 
 describe('reservedListing', () => {
-  it('lists everyone on the reserved list, the lines removing players, and the slots held back, whatever the file holds', () => {
+  it('lists who the lines leave on the reserved list, and the slots held back', () => {
     const text = [
       '[/Script/WDGame.WDGameSession]',
       'MaxReservedSlots=2',
+      '!DefaultReservedPlayerIds=ClearArray',
       '+DefaultReservedPlayerIds=76561198000000001',
       'DefaultReservedPlayerIds="76561198000000002"',
+      '+DefaultReservedPlayerIds=76561198000000003',
       '-DefaultReservedPlayerIds=76561198000000003',
       '+DefaultReservedPlayerIds=76561198000000001',
       '[/Script/Other]',
       '+DefaultReservedPlayerIds=76561198000000009',
     ].join('\r\n');
 
-    expect(reservedListing(text)).toEqual({
-      ids: ['76561198000000001', '76561198000000002'],
-      removals: ['-DefaultReservedPlayerIds=76561198000000003'],
-      maxSlots: 2,
-    });
-    expect(() => reservedIds(text)).toThrow();
-    expect(reservedListing('')).toEqual({ ids: [], removals: [], maxSlots: null });
+    expect(reservedListing(text)).toEqual({ ids: ['76561198000000001', '76561198000000002'], maxSlots: 2 });
+    expect(reservedIds(text)).toEqual(['76561198000000001', '76561198000000002']);
+    expect(reservedListing('')).toEqual({ ids: [], maxSlots: null });
+    expect(() => reservedListing('[/Script/WDGame.WDGameSession]\n[/Script/WDGame.WDGameSession]\n')).toThrow(/more than once/);
   });
 });

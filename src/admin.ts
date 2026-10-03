@@ -73,11 +73,9 @@ export type AdminBan = {
 };
 
 // Everyone on the server's reserved list. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
-// when it ends; without it, the slot was added by hand. `removals` are lines in ServerSettings.ini that remove players
-// from the list, which stop automatic VIP until someone edits them out.
+// when it ends; without it, the slot was added by hand.
 export type AdminReserved = {
   players: { player: AdminPlayer; bot: { since: number; until: number } | null }[];
-  removals: string[];
   maxSlots: number | null;
 };
 
@@ -290,7 +288,6 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
                 };
               })
               .sort((a, b) => a.player.name.localeCompare(b.player.name)),
-            removals: s.reserved.removals,
             maxSlots: s.reserved.maxSlots,
           },
     totals: {

@@ -41,13 +41,33 @@ export const qualified = (days: PlayerDay[], rule: VipRule): { steamId: string; 
 
 // The reserved list lives in this section as `+DefaultReservedPlayerIds=<Steam ID>` lines.
 const SECTION = '[/Script/WDGame.WDGameSession]';
-const ENTRY = /^\s*[+.]?DefaultReservedPlayerIds\s*=\s*"?(.*?)"?\s*$/i;
-// `-Key=` and `!Key=` remove entries; the bot does not try to work out what they leave, so it stops instead.
-const OTHER_EDIT = /^\s*[-!]DefaultReservedPlayerIds\s*=/i;
+// The game reads the list's lines in order, as Unreal does: `+` adds a player (once), `.` or no prefix adds them too,
+// `-` takes one off, and `!` (as in `!DefaultReservedPlayerIds=ClearArray`) empties the list so far.
+const LIST_LINE = /^\s*([+.!-]?)DefaultReservedPlayerIds\s*=\s*"?(.*?)"?\s*$/i;
 const STEAM_ID = /^\d{17}$/;
 
+type ListLine = { op: 'add' | 'remove' | 'clear'; id: string };
+
 const isHeader = (line: string): boolean => /^\s*\[.*\]\s*$/.test(line);
-const entryId = (line: string): string | null => ENTRY.exec(line)?.[1] ?? null;
+const listLine = (line: string): ListLine | null => {
+  const match = LIST_LINE.exec(line);
+  if (match === null) return null;
+  return { op: match[1] === '!' ? 'clear' : match[1] === '-' ? 'remove' : 'add', id: match[2] ?? '' };
+};
+const addsId = (line: string): string | null => {
+  const parsed = listLine(line);
+  return parsed?.op === 'add' ? parsed.id : null;
+};
+
+// Who the lines leave on the list.
+const applyLines = (lines: string[]): string[] =>
+  lines.reduce<string[]>((ids, line) => {
+    const parsed = listLine(line);
+    if (parsed === null) return ids;
+    if (parsed.op === 'clear') return [];
+    if (parsed.op === 'remove') return ids.filter((id) => id !== parsed.id);
+    return ids.includes(parsed.id) ? ids : [...ids, parsed.id];
+  }, []);
 
 const sectionRange = (lines: string[]): { start: number; end: number } => {
   const starts = lines.flatMap((line, i) => (line.trim().toLowerCase() === SECTION.toLowerCase() ? [i] : []));
@@ -55,49 +75,31 @@ const sectionRange = (lines: string[]): { start: number; end: number } => {
   const start = starts[0] ?? -1;
   if (start === -1) return { start, end: -1 };
   const next = lines.findIndex((line, i) => i > start && isHeader(line));
-  const end = next === -1 ? lines.length : next;
-  if (lines.slice(start + 1, end).some((line) => OTHER_EDIT.test(line))) {
-    throw new Error('ServerSettings.ini removes reserved players with - or ! lines; edit those by hand first');
-  }
-  return { start, end };
+  return { start, end: next === -1 ? lines.length : next };
 };
 
-// The reserved list for the staff page to show, read whatever the file holds: everyone on it, the lines that remove
-// players from it (which stop automatic VIP until someone edits them out), and how many slots are held back for them
+const sectionLines = (text: string): string[] => {
+  const lines = text.split(/\r?\n/);
+  const { start, end } = sectionRange(lines);
+  return start === -1 ? [] : lines.slice(start + 1, end);
+};
+
+export const reservedIds = (text: string): string[] => applyLines(sectionLines(text));
+
+// The reserved list for the staff page to show: everyone on it, and how many slots are held back for them
 // (MaxReservedSlots, null when the file does not say).
-export type ReservedListing = { ids: string[]; removals: string[]; maxSlots: number | null };
+export type ReservedListing = { ids: string[]; maxSlots: number | null };
 
 const MAX_SLOTS = /^\s*MaxReservedSlots\s*=\s*"?(\d+)"?\s*$/i;
 
 export const reservedListing = (text: string): ReservedListing => {
-  const lines = text.split(/\r?\n/);
-  const ids: string[] = [];
-  const removals: string[] = [];
-  let maxSlots: number | null = null;
-  let inSection = false;
-  for (const line of lines) {
-    if (isHeader(line)) {
-      inSection = line.trim().toLowerCase() === SECTION.toLowerCase();
-      continue;
-    }
-    if (!inSection) continue;
-    if (OTHER_EDIT.test(line)) removals.push(line.trim());
-    const id = entryId(line);
-    if (id !== null && !ids.includes(id)) ids.push(id);
-    const slots = MAX_SLOTS.exec(line)?.[1];
-    if (slots !== undefined) maxSlots = Number(slots);
-  }
-  return { ids, removals, maxSlots };
+  const lines = sectionLines(text);
+  const slots = lines.flatMap((line) => MAX_SLOTS.exec(line)?.[1] ?? []).at(-1);
+  return { ids: applyLines(lines), maxSlots: slots === undefined ? null : Number(slots) };
 };
 
-export const reservedIds = (text: string): string[] => {
-  const lines = text.split(/\r?\n/);
-  const { start, end } = sectionRange(lines);
-  if (start === -1) return [];
-  return lines.slice(start + 1, end).flatMap((line) => entryId(line) ?? []);
-};
-
-// Adds and removes reserved players, leaving every other line as it was.
+// Adds and removes reserved players, leaving every other line as it was. A player is removed by deleting the lines
+// that add them; one is added by a line after the list's last line, so no `-` or `!` line before it takes them off.
 export const editReserved = (text: string, add: string[], remove: string[]): string => {
   if (![...add, ...remove].every((id) => STEAM_ID.test(id))) throw new Error('refusing to write something that is not a Steam ID');
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
@@ -109,9 +111,9 @@ export const editReserved = (text: string, add: string[], remove: string[]): str
     return [...body, ...(body.length > 0 ? [''] : []), SECTION, ...added, ''].join(eol);
   }
   const drop = new Set(remove);
-  const section = lines.slice(start + 1, end).filter((line) => !drop.has(entryId(line) ?? ''));
-  // New entries go after the last existing one, or straight under the section header.
-  const last = section.findLastIndex((line) => entryId(line) !== null);
+  const section = lines.slice(start + 1, end).filter((line) => !drop.has(addsId(line) ?? ''));
+  // New entries go after the list's last line, or straight under the section header.
+  const last = section.findLastIndex((line) => listLine(line) !== null);
   section.splice(last + 1, 0, ...added);
   return [...lines.slice(0, start + 1), ...section, ...lines.slice(end)].join(eol);
 };
