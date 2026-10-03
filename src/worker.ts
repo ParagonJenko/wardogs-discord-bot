@@ -1,11 +1,19 @@
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
+import { handleAdmin, type TenantAdmin, type TenantView } from './admin.ts';
 import { withSeedCall } from './alerts.ts';
-import { loadConfig } from './config.ts';
+import { loadConfig, loadSettings, parseSecrets, SECRET_NAMES, SETTING_NAMES, type SecretName, type Settings } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
 import { buildLiveStatus, buildRoundupMessage, buildVipMessage, mapName, postWebhook } from './discord.ts';
-import { editOriginalReply, handleInteraction } from './interactions.ts';
+import {
+  editOriginalReply,
+  handleInteraction,
+  type Choice,
+  type CommandReply,
+  type CommandRequest,
+  type TenantHandlers,
+} from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
@@ -66,6 +74,7 @@ import {
   fetchPlayers,
   fetchRotation,
   fetchSnapshot,
+  fetchStatus,
   isNotInGame,
   kickPlayer,
   putConfig,
@@ -88,6 +97,17 @@ import {
   type Roundup,
   type RoundupChoice,
 } from './roundup.ts';
+import {
+  changeSettings,
+  isSettingName,
+  mergeSecrets,
+  rconChanged,
+  settingsEmbed,
+  setupReply,
+  webhookProblem,
+  webhooksChanged,
+  type SaveSecretsResult,
+} from './setup.ts';
 import { socketHttp } from './socket-http.ts';
 import {
   banKickReason,
@@ -115,11 +135,27 @@ import {
   type RecentMatch,
   type SiteStats,
 } from './stats.ts';
+import {
+  afterCheck,
+  applyTenantInput,
+  maxTenants,
+  MinuteBudget,
+  objectName,
+  parseHealth,
+  parseTenantRecord,
+  TENANT_ID,
+  type Health,
+  type TenantRecord,
+} from './tenants.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
+import { masterKeys, seal, unseal } from './vault.ts';
 import { addVip, parseVipState, removeVip, syncVip, vipDue, type VipState } from './vip.ts';
 
+// Secrets: DISCORD_PUBLIC_KEY (the Discord application every community uses), TENANT_SECRETS_KEY (encrypts each
+// community's secrets) and ADMIN_TOKEN (the operator's API). See the README.
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
+  REGISTRY: DurableObjectNamespace<Registry>;
   [key: string]: unknown;
 };
 
@@ -148,6 +184,25 @@ const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => res
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+type Log = { info: (message: string) => void; error: (message: string) => void };
+
+// Every line a community's Durable Object logs starts with its id, so the operator can tell communities apart.
+const tenantLog = (id: string): Log => ({
+  info: (message) => console.info(`[${id}] ${message}`),
+  error: (message) => console.error(`[${id}] ${message}`),
+});
+
+// Suggestions are allowed this many times a community's command limit: Discord asks for them as staff type.
+const SUGGESTIONS_PER_COMMAND = 5;
+const SLOW_DOWN = 'The bot is getting a lot of commands from this server right now. Try again in a minute.';
+const PAUSED = 'The bot is paused for this server. Ask whoever runs the bot.';
+
+// A community's settings, and its secrets once decrypted, as stored in its Durable Object.
+type Stored = { settings: Record<string, string>; secrets: Partial<Record<SecretName, string>> };
+
+const pick = (values: Partial<Record<string, string>>, names: readonly string[]): Record<string, string> =>
+  Object.fromEntries(names.flatMap((name) => (values[name] ? [[name, values[name]]] : [])));
+
 // Runs work one at a time, in the order it was asked for. A failure does not hold up what comes after it.
 const oneAtATime = () => {
   let queue: Promise<unknown> = Promise.resolve();
@@ -158,8 +213,12 @@ const oneAtATime = () => {
   };
 };
 
-// A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
-// Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
+// Each community has a Durable Object of its own, which holds everything the bot knows about it, so one community's
+// records, settings and secrets are never in the same storage as another's. The first community it is used for owns it
+// for good: it refuses to act for any other. Storage keys: 'tenant' (the community, as the operator last set it),
+// 'settings' (what its admins set with /settings), 'secrets' (the RCON address and password and the webhooks,
+// encrypted), 'health' (whether the game server answers, to check one that does not less often), 'purgedAt' (when the
+// operator deleted the community), 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
 // records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
@@ -168,6 +227,14 @@ const oneAtATime = () => {
 // (set once the matches saved before settleWin have been put right) and 'roundups' (the first day of the last week and
 // month whose roundup went out).
 export class Watcher extends DurableObject<Env> {
+  private tenant: TenantRecord | null = null;
+  private log: Log = console;
+  private stored: Promise<Stored> | null = null;
+  // Limits on what the community's website and Discord server can ask of it each minute.
+  private reads = new MinuteBudget();
+  private commands = new MinuteBudget();
+  private suggestions = new MinuteBudget();
+
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
   private serial = oneAtATime();
@@ -175,6 +242,8 @@ export class Watcher extends DurableObject<Env> {
   private alerting = oneAtATime();
   // A roundup is posted by one check at a time, so two checks close together cannot both post it.
   private roundingUp = oneAtATime();
+  // Settings and secrets change one at a time, so two changes made together cannot undo each other.
+  private configuring = oneAtATime();
 
   // The player records the website's pages read. Past days and finished matches only change through /removematch,
   // which clears them, so they are kept in memory and each read only fetches the last two days and any new matches.
@@ -187,8 +256,88 @@ export class Watcher extends DurableObject<Env> {
   // Saves reading 'winsSettled' on every check once it is set.
   private winsSettled = false;
 
-  private rcon(): { config: Config; http: HttpClient } {
-    return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
+  // Takes the community this call is for, and returns it as it now stands. The object belongs to the first community
+  // it is used for, and refuses any other, so a mistake in routing can never mix two communities' records. A
+  // community the operator deleted and added again (created later) starts afresh. Worker instances can hold a copy of
+  // the community up to a minute old, so the newest copy wins: an older one never undoes a suspension or a limit.
+  private async adopt(record: TenantRecord): Promise<TenantRecord> {
+    if (this.tenant !== null && this.tenant.id !== record.id) {
+      throw new Error(`This Durable Object belongs to "${this.tenant.id}", not "${record.id}"`);
+    }
+    if (this.tenant !== null && this.tenant.updatedAt >= record.updatedAt) return this.tenant;
+    const storage = this.ctx.storage;
+    const stored = await storage.get(['tenant', 'purgedAt']);
+    const known = parseTenantRecord(stored.get('tenant'));
+    if (known !== null && known.id !== record.id) throw new Error(`This Durable Object belongs to "${known.id}", not "${record.id}"`);
+    const purgedAt = stored.get('purgedAt');
+    if (typeof purgedAt === 'number' && record.createdAt <= purgedAt) throw new Error(`"${record.id}" was deleted`);
+    const current = known !== null && known.updatedAt >= record.updatedAt ? known : record;
+    if (current !== known) {
+      await storage.put('tenant', current);
+      if (purgedAt !== undefined) await storage.delete('purgedAt');
+    }
+    this.tenant = current;
+    this.log = tenantLog(current.id);
+    return current;
+  }
+
+  private get id(): string {
+    if (this.tenant === null) throw new Error('No community yet');
+    return this.tenant.id;
+  }
+
+  // The settings and decrypted secrets, read once and kept until they change. The community the bot ran for alone
+  // takes its settings and secrets from the Worker's environment the first time, then keeps its own.
+  private load(): Promise<Stored> {
+    this.stored ??= (async () => {
+      const storage = this.ctx.storage;
+      const raw = await storage.get(['settings', 'secrets']);
+      const settings = (raw.get('settings') ?? {}) as Record<string, string>;
+      const sealed = raw.get('secrets');
+      if (sealed === undefined) return (await this.importLegacy()) ?? { settings, secrets: {} };
+      const keys = masterKeys(this.env);
+      const opened = await unseal(keys, this.id, sealed);
+      if (opened.stale) {
+        await storage.put('secrets', await seal(keys, this.id, opened.values));
+        this.log.info('Secrets sealed again with the current TENANT_SECRETS_KEY');
+      }
+      return { settings, secrets: pick(opened.values, SECRET_NAMES) };
+    })().catch((error: unknown) => {
+      this.stored = null;
+      throw error;
+    });
+    return this.stored;
+  }
+
+  private async importLegacy(): Promise<Stored | null> {
+    const record = this.tenant;
+    if (record === null || !record.legacy || this.env['LEGACY_TENANT'] !== record.id) return null;
+    const vars = stringVars(this.env);
+    const secrets = parseSecrets(pick(vars, SECRET_NAMES));
+    if ('problems' in secrets) return null;
+    const settings = pick(vars, SETTING_NAMES);
+    await this.ctx.storage.put({ settings, secrets: await seal(masterKeys(this.env), record.id, pick(secrets.values, SECRET_NAMES)) });
+    this.log.info(`Took its settings (${Object.keys(settings).join(', ') || 'none'}) and secrets from the Worker's environment`);
+    return { settings, secrets: secrets.values };
+  }
+
+  private async config(): Promise<Config> {
+    const { settings, secrets } = await this.load();
+    if (secrets.RCON_URL === undefined) throw new Error('Not connected to a game server yet: an Administrator can run /setup');
+    return loadConfig({ ...settings, ...secrets });
+  }
+
+  // Without the secrets, for the website.
+  private async settings(): Promise<Settings> {
+    return loadSettings((await this.load()).settings);
+  }
+
+  private async hasSecrets(): Promise<boolean> {
+    return (await this.load()).secrets.RCON_URL !== undefined;
+  }
+
+  private async rcon(): Promise<{ config: Config; http: HttpClient }> {
+    return { config: await this.config(), http: socketHttp(connect) };
   }
 
   private vipRcon({ config, http }: { config: Config; http: HttpClient }) {
@@ -228,26 +377,39 @@ export class Watcher extends DurableObject<Env> {
   // While the server seeds, an alarm reads who is in game every few seconds between the checks, so the seeding message
   // goes out 30 seconds after someone joins. The check starts them when it finds the server seeding, and they stop
   // themselves once a check finds it is not.
-  private async startJoinChecks(config: Config): Promise<void> {
-    if (config.seedingMessages === null) return;
+  // The operator can turn them off for a community (joinChecks), as they are the most Durable Object alarms it uses.
+  private async startJoinChecks(config: Config, record: TenantRecord): Promise<void> {
+    if (config.seedingMessages === null || !record.limits.joinChecks) return;
     try {
       const storage = this.ctx.storage;
       if (parseState(await storage.get('state'))?.alerts.phase !== 'seeding') return;
       if ((await storage.getAlarm()) === null) await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
     } catch (error) {
-      console.error(`Starting join checks failed: ${errorText(error)}`);
+      this.log.error(`Starting join checks failed: ${errorText(error)}`);
     }
   }
 
-  // One quick join check. It runs with the alerts, so it never saves the state while a check is part-way through.
+  // One quick join check. It runs with the alerts, so it never saves the state while a check is part-way through. A
+  // suspended community, or one whose join checks were turned off, stops having them.
   async alarm(): Promise<void> {
-    const { config, http } = this.rcon();
+    const stored = this.tenant ?? parseTenantRecord(await this.ctx.storage.get('tenant'));
+    if (stored === null) return;
+    const record = await this.adopt(stored);
+    if (record.status !== 'active' || !record.limits.joinChecks) return;
+    let rcon: { config: Config; http: HttpClient };
+    try {
+      rcon = await this.rcon();
+    } catch (error) {
+      this.log.error(`Join check skipped: ${errorText(error)}`);
+      return;
+    }
+    const { config, http } = rcon;
     const joinCheck = createJoinCheck({
       config,
       fetchPlayers: () => fetchPlayers(config.rconUrl, config.rconPassword, http),
       broadcast: (message) => sendBroadcast(config.rconUrl, config.rconPassword, message, http),
       now: Date.now,
-      log: console,
+      log: this.log,
       store: this.stateStore(),
     });
     if (await this.alerting(joinCheck)) await this.ctx.storage.setAlarm(Date.now() + JOIN_CHECK_MS);
@@ -330,17 +492,23 @@ export class Watcher extends DurableObject<Env> {
       await storage.put({ ...(recent > 0 ? { stats: { ...stats, matches } } : {}), winsSettled: true });
       this.matchCache.clear();
       this.winsSettled = true;
-      console.info(`Settled wins saved one point short: ${records} match records, ${recent} recent matches`);
+      this.log.info(`Settled wins saved one point short: ${records} match records, ${recent} recent matches`);
     } catch (error) {
-      console.error(`Settling saved wins failed: ${errorText(error)}`);
+      this.log.error(`Settling saved wins failed: ${errorText(error)}`);
     }
   }
 
-  async check(): Promise<void> {
-    // The cron fires every minute whatever POLL_INTERVAL_SECONDS says, and seeding minutes are counted per check.
-    const config = { ...loadConfig(stringVars(this.env)), pollIntervalMs: 60_000 };
-    await this.settleSavedWins(config.scoreToWin);
+  // The cron calls this every minute for each active community. Nothing happens until the community has set up its
+  // game server, and a game server that stops answering is checked less often (see afterCheck).
+  async check(given: TenantRecord): Promise<void> {
+    const record = await this.adopt(given);
+    if (record.status !== 'active' || !(await this.hasSecrets())) return;
     const storage = this.ctx.storage;
+    const health = parseHealth(await storage.get('health'));
+    if (health.nextCheckAt > Date.now()) return;
+    // The cron fires every minute whatever POLL_INTERVAL_SECONDS says, and seeding minutes are counted per check.
+    const config = { ...(await this.config()), pollIntervalMs: 60_000 };
+    await this.settleSavedWins(config.scoreToWin);
     const minutesPerCheck = config.pollIntervalMs / 60_000;
     // What this check read from the server, for the live status.
     const seen: { snapshot: Snapshot | null } = { snapshot: null };
@@ -350,7 +518,7 @@ export class Watcher extends DurableObject<Env> {
       send: (message) => postWebhook(config.webhookUrl, message),
       broadcast: (message) => sendBroadcast(config.rconUrl, config.rconPassword, message, socketHttp(connect)),
       now: Date.now,
-      log: console,
+      log: this.log,
       store: this.stateStore(),
       stats: {
         check: (observation) => this.recordCheck(observation, minutesPerCheck, config.busyThreshold),
@@ -359,7 +527,8 @@ export class Watcher extends DurableObject<Env> {
       },
     });
     await this.alerting(poll);
-    await this.startJoinChecks(config);
+    await this.recordHealth(health, seen.snapshot !== null);
+    await this.startJoinChecks(config, record);
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
@@ -371,10 +540,20 @@ export class Watcher extends DurableObject<Env> {
         const counts = await fetchInviteCounts(inviteCode, Date.now());
         await this.updateStats((stats) => recordDiscord(stats, counts));
       } catch (error) {
-        console.error(`Discord member count failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.log.error(`Discord member count failed: ${errorText(error)}`);
       }
     }
     await this.roundingUp(() => this.postRoundups(config));
+  }
+
+  private async recordHealth(health: Health, reached: boolean): Promise<void> {
+    const next = afterCheck(health, reached, Date.now());
+    if (next.failures === health.failures && next.nextCheckAt === health.nextCheckAt) return;
+    await this.ctx.storage.put('health', next);
+    if (reached && health.failures >= 15) this.log.info(`The game server answers again, after ${health.failures} checks: checking every minute`);
+    if (next.failures === 15 || next.failures === 60) {
+      this.log.error(`The game server has not answered ${next.failures} checks in a row: checking every ${next.failures === 15 ? 5 : 15} minutes`);
+    }
   }
 
   // The roundup of the week or month just ended, once, from ROUNDUP_HOUR (UTC) on the first day of the next one. A post
@@ -394,13 +573,13 @@ export class Watcher extends DurableObject<Env> {
           if (roundup !== null) await postWebhook(rule.webhookUrl, buildRoundupMessage(roundup, config.siteUrl));
           posted = markPosted(posted, period);
           await storage.put('roundups', posted);
-          console.info(roundup === null ? `No ${label}: nobody played` : `Posted the ${label}`);
+          this.log.info(roundup === null ? `No ${label}: nobody played` : `Posted the ${label}`);
         } catch (error) {
-          console.error(`The ${label} failed, trying again next check: ${errorText(error)}`);
+          this.log.error(`The ${label} failed, trying again next check: ${errorText(error)}`);
         }
       }
     } catch (error) {
-      console.error(`Roundups failed: ${errorText(error)}`);
+      this.log.error(`Roundups failed: ${errorText(error)}`);
     }
   }
 
@@ -413,7 +592,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // For /roundup.
-  async roundup(choice: RoundupChoice): Promise<Roundup | null> {
+  private async roundup(choice: RoundupChoice): Promise<Roundup | null> {
     const now = Date.now();
     return this.roundupFor(periodFor(choice, now), now);
   }
@@ -449,10 +628,10 @@ export class Watcher extends DurableObject<Env> {
       const shown = await showBoard(webhookUrl, message, ref);
       if (shown.messageId !== ref?.messageId) {
         await storage.put('board', shown);
-        console.info(`Posted the live status (message ${shown.messageId})`);
+        this.log.info(`Posted the live status (message ${shown.messageId})`);
       }
     } catch (error) {
-      console.error(`Live status update failed: ${errorText(error)}`);
+      this.log.error(`Live status update failed: ${errorText(error)}`);
     }
   }
 
@@ -476,15 +655,15 @@ export class Watcher extends DurableObject<Env> {
           // waiting for the player to join was never on the server.
           await this.record(steamId, null, { ban: null });
           const why = current !== undefined ? 'has a newer ban, left alone' : ban.waiting ? 'ran out before they joined' : 'was already unbanned';
-          console.info(`Ban ended: ${label} ${why}`);
+          this.log.info(`Ban ended: ${label} ${why}`);
           continue;
         }
         await removeBan(config.rconUrl, config.rconPassword, steamId, http);
         await this.record(steamId, { action: 'unban', at: now, by: 'bot', name: ban.name, reason: 'The ban ran out' }, { ban: null });
-        console.info(`Ban ended: ${label}`);
+        this.log.info(`Ban ended: ${label}`);
       }
     } catch (error) {
-      console.error(`Lifting ended bans failed: ${errorText(error)}`);
+      this.log.error(`Lifting ended bans failed: ${errorText(error)}`);
     }
   }
 
@@ -515,11 +694,11 @@ export class Watcher extends DurableObject<Env> {
           await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
         } catch (error) {
           // Left again before the ban went in: it waits for the next time they join.
-          if (!isNotInGame(error)) console.error(`Waiting ban on ${label(steamId)} failed: ${errorText(error)}`);
+          if (!isNotInGame(error)) this.log.error(`Waiting ban on ${label(steamId)} failed: ${errorText(error)}`);
           continue;
         }
         await applied(steamId, true);
-        console.info(`Ban put on the server as they joined: ${label(steamId)}`);
+        this.log.info(`Ban put on the server as they joined: ${label(steamId)}`);
         kick.push(steamId);
       }
       for (const steamId of kick) {
@@ -530,14 +709,14 @@ export class Watcher extends DurableObject<Env> {
         } catch (error) {
           // Not in game any more is as good as kicked: the ban keeps them out.
           if (!isNotInGame(error)) {
-            console.error(`Kick after the waiting ban on ${label(steamId)} failed, trying again next check: ${errorText(error)}`);
+            this.log.error(`Kick after the waiting ban on ${label(steamId)} failed, trying again next check: ${errorText(error)}`);
             continue;
           }
         }
         await applied(steamId, false);
       }
     } catch (error) {
-      console.error(`Waiting bans failed: ${errorText(error)}`);
+      this.log.error(`Waiting bans failed: ${errorText(error)}`);
     }
   }
 
@@ -565,18 +744,18 @@ export class Watcher extends DurableObject<Env> {
       // Posted once, after the list is saved: a failed post is logged, not retried, so nobody is announced twice.
       if (rule !== null && (next.added.length > 0 || next.renewed.length > 0)) {
         await postWebhook(config.webhookUrl, buildVipMessage(next.added, next.renewed, rule, config.siteUrl)).catch((error: unknown) =>
-          console.error(`VIP announcement failed: ${errorText(error)}`),
+          this.log.error(`VIP announcement failed: ${errorText(error)}`),
         );
       }
     } catch (error) {
-      console.error(`VIP update failed: ${errorText(error)}`);
+      this.log.error(`VIP update failed: ${errorText(error)}`);
       // Try again at the next 10-minute mark rather than on every check.
       await storage.put('vip', { ...state, checkedAt: now });
     }
   }
 
-  async stats(): Promise<PublicStats> {
-    const config = loadConfig(stringVars(this.env));
+  private async stats(): Promise<PublicStats> {
+    const config = await this.settings();
     const now = Date.now();
     const [stored, days] = await Promise.all([this.ctx.storage.get('stats'), this.recentDays(now)]);
     const stats = parseStats(stored);
@@ -650,7 +829,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Everyone seen in the last PROFILE_DAYS days, to find a player page in.
-  async players(): Promise<PlayerDirectory> {
+  private async players(): Promise<PlayerDirectory> {
     const now = Date.now();
     const [days, stored] = await Promise.all([this.recentDays(now), this.ctx.storage.get('online')]);
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
@@ -659,7 +838,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // One player's page, by public id. Null when nobody seen in the last PROFILE_DAYS days has that id.
-  async profile(id: string): Promise<PlayerProfile | null> {
+  private async profile(id: string): Promise<PlayerProfile | null> {
     const now = Date.now();
     const days = await this.recentDays(now);
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
@@ -678,7 +857,7 @@ export class Watcher extends DurableObject<Env> {
             kills: tracked?.kills ?? inGame.kills ?? 0,
             deaths: tracked?.deaths ?? inGame.deaths ?? 0,
           };
-    const config = loadConfig(stringVars(this.env));
+    const config = await this.settings();
     return buildProfile({
       steamId,
       id,
@@ -693,13 +872,13 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Recent matches, newest first, to pick from in /removematch.
-  async recentMatches(): Promise<RecentMatch[]> {
+  private async recentMatches(): Promise<RecentMatch[]> {
     return parseStats(await this.ctx.storage.get('stats')).matches;
   }
 
   // Deletes a match recorded by mistake: from the recent matches, its private record, and its players' totals for
   // the day it was credited to. Returns null if no recent match ended at that time.
-  async removeMatch(endedAt: number): Promise<{ match: RecentMatch; players: number } | null> {
+  private async removeMatch(endedAt: number): Promise<{ match: RecentMatch; players: number } | null> {
     const storage = this.ctx.storage;
     const { stats, removed } = removeRecentMatch(parseStats(await storage.get('stats')), endedAt);
     if (removed === null) return null;
@@ -721,7 +900,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // What the bot knows about one player, for /player.
-  async playerRecord(steamId: string): Promise<PlayerRecord> {
+  private async playerRecord(steamId: string): Promise<PlayerRecord> {
     const keys = recentDayKeys(Date.now(), PROFILE_DAYS);
     const key = modLogKey(steamId);
     const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans']);
@@ -740,7 +919,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Players seen in the last 30 days, with VIP from the bot or banned by it, newest name first.
-  async knownPlayers(): Promise<Named[]> {
+  private async knownPlayers(): Promise<Named[]> {
     const keys = recentDayKeys(Date.now(), KNOWN_PLAYER_DAYS);
     const stored = await this.ctx.storage.get([...keys, 'vip', 'bans']);
     const seen = totals(keys.map((k) => parsePlayerDay(stored.get(k))));
@@ -751,18 +930,18 @@ export class Watcher extends DurableObject<Env> {
     return all.filter((p) => !ids.has(p.steamId) && ids.add(p.steamId)).map(({ steamId, name }) => ({ steamId, name }));
   }
 
-  async logAction(steamId: string, entry: ModEntry): Promise<void> {
+  private async logAction(steamId: string, entry: ModEntry): Promise<void> {
     await this.record(steamId, entry);
   }
 
   // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A player who is already
   // banned is left as they are, so no ban is ever lifted to change it: staff /unban first. The game only bans players
   // who are in game, so for anyone else the ban waits, and the check that next sees them puts it on the server.
-  async ban({ steamId, name, length, reason, by }: BanRequest): Promise<BanResult> {
+  private async ban({ steamId, name, length, reason, by }: BanRequest): Promise<BanResult> {
     const option = BAN_LENGTHS.find((l) => l.value === length);
     if (option === undefined) throw new Error(`Unknown ban length: ${length}`);
     return this.serial(async () => {
-      const { config, http } = this.rcon();
+      const { config, http } = await this.rcon();
       const at = Date.now();
       const until = option.ms === null ? null : at + option.ms;
       const current = (await fetchBans(config.rconUrl, config.rconPassword, http)).find((b) => b.steamId === steamId);
@@ -796,9 +975,9 @@ export class Watcher extends DurableObject<Env> {
 
   // False when they had no ban: none on the server, and none waiting for them to join. The bot forgets its own record
   // of the ban either way.
-  async unban({ steamId, name }: Named, by: string): Promise<boolean> {
+  private async unban({ steamId, name }: Named, by: string): Promise<boolean> {
     return this.serial(async () => {
-      const { config, http } = this.rcon();
+      const { config, http } = await this.rcon();
       const waiting = parseBanBook(await this.ctx.storage.get('bans'))[steamId]?.waiting === true;
       const removed = (await removeBan(config.rconUrl, config.rconPassword, steamId, http)) || waiting;
       await this.record(steamId, removed ? { action: 'unban', at: Date.now(), by, name } : null, { ban: null });
@@ -806,11 +985,11 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async vipAdd({ steamId, name, days, by }: Named & { days: number; by: string }): Promise<VipAddResult> {
+  private async vipAdd({ steamId, name, days, by }: Named & { days: number; by: string }): Promise<VipAddResult> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
-      const change = await addVip({ steamId, name, days, now, state, rcon: this.vipRcon(this.rcon()) });
+      const change = await addVip({ steamId, name, days, now, state, rcon: this.vipRcon(await this.rcon()) });
       if (change.outcome === 'already-reserved') {
         // Nothing given, but any block from /vip remove is lifted.
         await this.record(steamId, null, { vip: change.state });
@@ -822,11 +1001,11 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async vipRemove({ steamId, name, by }: Named & { by: string }): Promise<VipRemoveResult> {
+  private async vipRemove({ steamId, name, by }: Named & { by: string }): Promise<VipRemoveResult> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
-      const change = await removeVip({ steamId, now, state, rcon: this.vipRcon(this.rcon()) });
+      const change = await removeVip({ steamId, now, state, rcon: this.vipRcon(await this.rcon()) });
       const outcome = change.outcome === 'removed' ? 'removed' : 'not-reserved';
       await this.record(steamId, { action: 'vip-remove', at: now, by, name }, { vip: change.state });
       return { outcome };
@@ -835,7 +1014,7 @@ export class Watcher extends DurableObject<Env> {
 
   // Notes the map staff set to play next, and the map being played now: once the server leaves that, it has been played.
   // The map being played comes from the server when staff set it, or else from the last check.
-  async stageNextMap(map: string, playing: string | null): Promise<void> {
+  private async stageNextMap(map: string, playing: string | null): Promise<void> {
     const match = playing ? null : (parseState(await this.ctx.storage.get('state'))?.match ?? null);
     const fromMap = playing || (match === null ? '' : matchMap(match));
     if (fromMap === '') return;
@@ -845,8 +1024,8 @@ export class Watcher extends DurableObject<Env> {
 
   // Posts a /seednow call. Its time is saved first, so the automatic seeding alert holds back even when the post times
   // out after Discord took it.
-  async seedCall(message: DiscordMessage): Promise<void> {
-    const { webhookUrl } = loadConfig(stringVars(this.env));
+  private async seedCall(message: DiscordMessage): Promise<void> {
+    const { webhookUrl } = await this.config();
     await this.alerting(async () => {
       await this.ctx.storage.put('seedCall', Date.now());
       await postWebhook(webhookUrl, message);
@@ -854,7 +1033,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
-  async seeders(days: number): Promise<SeederRow[]> {
+  private async seeders(days: number): Promise<SeederRow[]> {
     const keys = recentDayKeys(Date.now(), days);
     const stored = await this.ctx.storage.get([...keys, 'vip']);
     const { granted } = parseVipState(stored.get('vip'));
@@ -866,25 +1045,244 @@ export class Watcher extends DurableObject<Env> {
       vipUntil: granted[p.steamId]?.expiresAt ?? null,
     }));
   }
+
+  private staffRecords(): StaffRecords {
+    return {
+      player: (steamId) => this.playerRecord(steamId),
+      knownPlayers: () => this.knownPlayers(),
+      log: (steamId, entry) => this.logAction(steamId, entry),
+      ban: (ban) => this.ban(ban),
+      unban: (target, by) => this.unban(target, by),
+      vipAdd: (grant) => this.vipAdd(grant),
+      vipRemove: (target) => this.vipRemove(target),
+      nextMap: (map, playing) => this.stageNextMap(map, playing),
+    };
+  }
+
+  // The community's website: its stats, everyone to find a player page for, and one player's page. Null is a 404.
+  async publicRead(
+    given: TenantRecord,
+    what: 'stats' | 'players' | 'player',
+    id = '',
+  ): Promise<{ status: 200; value: unknown } | { status: 404 | 429 }> {
+    const record = await this.adopt(given);
+    if (record.status !== 'active' || !record.limits.publicApi) return { status: 404 };
+    if (!this.reads.take(record.limits.publicReadsPerMinute, Date.now())) return { status: 429 };
+    if (what === 'stats') return { status: 200, value: await this.stats() };
+    if (what === 'players') return { status: 200, value: await this.players() };
+    const profile = await this.profile(id);
+    return profile === null ? { status: 404 } : { status: 200, value: profile };
+  }
+
+  // A slash command from the community's Discord server. It runs here, so the RCON password never leaves this object.
+  async command(given: TenantRecord, request: CommandRequest): Promise<CommandReply> {
+    const record = await this.adopt(given);
+    if (record.status !== 'active') return { content: PAUSED };
+    if (!this.commands.take(record.limits.commandsPerMinute, Date.now())) return { content: SLOW_DOWN };
+    if (request.name === 'settings') return this.settingsCommand(record, request);
+    // Read lazily, so /lastmatch and /roundup still work before the game server is set up.
+    const loaded: Config | Error = await this.config().catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+    const config = (): Config => {
+      if (loaded instanceof Error) throw loaded;
+      return loaded;
+    };
+    return runCommand({
+      config,
+      http: socketHttp(connect),
+      lastMatch: async () => (await this.recentMatches())[0] ?? null,
+      roundup: (choice) => this.roundup(choice),
+      seeders: (days) => this.seeders(days),
+      removeMatch: (endedAt) => this.removeMatch(endedAt),
+      seedCall: (message) => this.seedCall(message),
+      records: this.staffRecords(),
+      now: Date.now,
+      log: this.log,
+    })(request);
+  }
+
+  async suggest(given: TenantRecord, request: CommandRequest): Promise<Choice[]> {
+    const record = await this.adopt(given);
+    if (record.status !== 'active') return [];
+    if (!this.suggestions.take(record.limits.commandsPerMinute * SUGGESTIONS_PER_COMMAND, Date.now())) return [];
+    const config = await this.config();
+    return suggestOptions({
+      recentMatches: () => this.recentMatches(),
+      config: () => config,
+      http: socketHttp(connect, SUGGEST_TIMEOUT_MS),
+      records: this.staffRecords(),
+    })(request);
+  }
+
+  async adminRoleIds(record: TenantRecord): Promise<string[]> {
+    await this.adopt(record);
+    return (await this.settings()).adminRoleIds;
+  }
+
+  private async settingsCommand(record: TenantRecord, { options, userId }: CommandRequest): Promise<CommandReply> {
+    const subcommand = options['subcommand'];
+    if (subcommand === 'set' || subcommand === 'reset') {
+      const name = options['name'];
+      if (!isSettingName(name)) return { content: 'Pick a setting from the list.' };
+      const result = await this.saveSettings(record, { [name]: subcommand === 'set' ? (options['value'] ?? '') : null }, `Discord user ${userId ?? 'unknown'}`);
+      if (!result.ok) return { content: `❌ Not changed: ${result.problem}` };
+      const value = result.settings[name];
+      return { content: value === undefined ? `✅ \`${name}\` is back to its default.` : `✅ \`${name}\` is now **${value}**.` };
+    }
+    const { settings, secrets } = await this.load();
+    const server = parseStats(await this.ctx.storage.get('stats')).server;
+    const connected = secrets.RCON_URL === undefined ? null : (server?.name ?? 'your game server (not reached yet)');
+    const secretsSet = SECRET_NAMES.filter((name) => secrets[name] !== undefined);
+    return { embeds: [settingsEmbed(settings, secretsSet, record.limits, connected)] };
+  }
+
+  // From /settings or the operator's API.
+  async saveSettings(
+    given: TenantRecord,
+    changes: Record<string, string | null>,
+    by: string,
+  ): Promise<{ ok: true; settings: Record<string, string> } | { ok: false; problem: string }> {
+    await this.adopt(given);
+    return this.configuring(async () => {
+      const result = changeSettings((await this.load()).settings, changes);
+      if ('problem' in result) return { ok: false as const, problem: result.problem };
+      await this.ctx.storage.put('settings', result.settings);
+      this.stored = null;
+      const said = Object.entries(changes).map(([name, value]) => `${name}=${value === null ? 'default' : JSON.stringify(value)}`);
+      this.log.info(`Settings changed by ${by}: ${said.join(', ')}`);
+      return { ok: true as const, settings: result.settings };
+    });
+  }
+
+  // From the /setup form or the operator's API. A new RCON address or password is only saved once the game server
+  // answers to it, and a new webhook once Discord says it is in the community's own server. Only the names of what
+  // changed are logged.
+  async saveSecrets(given: TenantRecord, change: Record<string, string>, by: string): Promise<SaveSecretsResult> {
+    const record = await this.adopt(given);
+    return this.configuring(async (): Promise<SaveSecretsResult> => {
+      const merged = mergeSecrets((await this.load()).secrets, change);
+      if ('problems' in merged) return { ok: false, problems: merged.problems };
+      if (merged.changed.length === 0) return { ok: true, changed: [], server: null };
+      const { values } = merged;
+      let server: { name: string; players: number; maxPlayers: number } | null = null;
+      if (rconChanged(merged.changed)) {
+        try {
+          const status = await fetchStatus(values.RCON_URL ?? '', values.RCON_PASSWORD ?? '', socketHttp(connect));
+          server = { name: status.name, players: status.players, maxPlayers: status.maxPlayers };
+        } catch (error) {
+          return { ok: false, problems: [`The game server did not answer: ${errorText(error)}`] };
+        }
+      }
+      for (const name of webhooksChanged(merged.changed)) {
+        const url = values[name];
+        const problem = url === undefined ? null : await webhookProblem(url, record.guildId);
+        if (problem !== null) return { ok: false, problems: [`${name}: ${problem}`] };
+      }
+      await this.ctx.storage.put('secrets', await seal(masterKeys(this.env), record.id, pick(values, SECRET_NAMES)));
+      this.stored = null;
+      this.log.info(`Secrets changed by ${by}: ${merged.changed.join(', ')}`);
+      return { ok: true, changed: merged.changed, server };
+    });
+  }
+
+  async submitSetup(given: TenantRecord, values: Record<string, string>, userId: string | null): Promise<CommandReply> {
+    const record = await this.adopt(given);
+    if (record.status !== 'active') return { content: PAUSED };
+    // Each one may open a connection to the address given, so it counts as a command.
+    if (!this.commands.take(record.limits.commandsPerMinute, Date.now())) return { content: SLOW_DOWN };
+    return { content: setupReply(await this.saveSecrets(record, values, `Discord user ${userId ?? 'unknown'}`)) };
+  }
+
+  // For the operator: settings, which secrets are set (never what they are), and whether the game server answers.
+  async view(record: TenantRecord): Promise<TenantView> {
+    await this.adopt(record);
+    const [{ settings, secrets }, stored] = await Promise.all([this.load(), this.ctx.storage.get(['health', 'stats'])]);
+    const server = parseStats(stored.get('stats')).server;
+    return {
+      settings,
+      secretsSet: SECRET_NAMES.filter((name) => secrets[name] !== undefined),
+      health: parseHealth(stored.get('health')),
+      server: server === null ? null : { name: server.name, seenAt: server.seenAt },
+    };
+  }
+
+  async testConnection(record: TenantRecord): ReturnType<TenantAdmin['test']> {
+    await this.adopt(record);
+    try {
+      const { config, http } = await this.rcon();
+      const status = await fetchStatus(config.rconUrl, config.rconPassword, http);
+      return { ok: true, server: { name: status.name, players: status.players, maxPlayers: status.maxPlayers } };
+    } catch (error) {
+      return { ok: false, problem: errorText(error) };
+    }
+  }
+
+  // Deletes everything the bot holds for the community. The object then refuses it, unless it is added again.
+  async purge(record: TenantRecord): Promise<void> {
+    await this.adopt(record);
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.put('purgedAt', Date.now());
+    this.log.info('Deleted every record');
+    this.tenant = null;
+    this.stored = null;
+    this.dayCache.clear();
+    this.matchCache.clear();
+    this.ids.clear();
+    this.idKey = null;
+    this.winsSettled = false;
+  }
+}
+
+// The list of communities: who they are, their Discord server, and the operator's limits. No secrets, settings or
+// records: those are in each community's own Durable Object. One instance, named 'registry'.
+export class Registry extends DurableObject<Env> {
+  async list(): Promise<TenantRecord[]> {
+    const stored = await this.ctx.storage.list({ prefix: 'tenant:' });
+    return [...stored.values()].flatMap((raw) => {
+      const record = parseTenantRecord(raw);
+      return record === null ? [] : [record];
+    });
+  }
+
+  // Only storage is awaited between reading the list and writing, so two changes cannot interleave.
+  async put(id: string, input: unknown): Promise<{ record: TenantRecord } | { error: string }> {
+    const result = applyTenantInput(await this.list(), id, input, Date.now(), maxTenants(this.env['MAX_TENANTS']));
+    if ('record' in result) await this.ctx.storage.put(`tenant:${id}`, result.record);
+    return result;
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.ctx.storage.delete(`tenant:${id}`);
+  }
 }
 
 // The stats only change once a minute. Each Worker instance keeps its last answers for a short while so a busy page
 // does not wake the Durable Object on every request. Requests that arrive while a refresh is in flight wait for that
-// one instead of starting their own.
+// one instead of starting their own. Answers are kept by community, so one community's are never served for another.
 const CACHE_MS = 30_000;
 // One answer per player page; past this many, the oldest are dropped.
-const CACHE_ENTRIES = 200;
-const cache = new Map<string, { body: Promise<string | null>; at: number }>();
+const CACHE_ENTRIES = 500;
+type Answer = { status: number; body: string };
+const cache = new Map<string, { answer: Promise<Answer>; at: number }>();
 
 // Public, read-only numbers, so any site may show them.
-const PUBLIC_HEADERS = { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' };
+const PUBLIC_HEADERS = { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30', 'x-content-type-options': 'nosniff' };
 
-// `load` answers null when there is no such thing, which is a 404.
-const serveJson = async (key: string, load: () => Promise<unknown>, ctx: ExecutionContext): Promise<Response> => {
+const ERRORS: Record<number, string> = { 404: 'Not found', 429: 'Too many requests for this community; try again in a minute' };
+
+const publicError = (status: number, error = ERRORS[status] ?? 'Stats are unavailable'): Response =>
+  Response.json({ error }, { status, headers: { ...PUBLIC_HEADERS, ...(status === 429 ? { 'retry-after': '30' } : {}) } });
+
+type Read = { status: 200; value: unknown } | { status: 404 | 429 };
+
+const serveJson = async (key: string, load: () => Promise<Read>, ctx: ExecutionContext): Promise<Response> => {
   const now = Date.now();
   let entry = cache.get(key);
   if (entry === undefined || now - entry.at >= CACHE_MS) {
-    const fresh = { body: load().then((value) => (value === null ? null : JSON.stringify(value))), at: now };
+    const fresh = {
+      answer: load().then((read): Answer => (read.status === 200 ? { status: 200, body: JSON.stringify(read.value) } : { status: read.status, body: '' })),
+      at: now,
+    };
     entry = fresh;
     // Re-added, so the oldest answers are always first.
     cache.delete(key);
@@ -896,93 +1294,166 @@ const serveJson = async (key: string, load: () => Promise<unknown>, ctx: Executi
     // Other requests may be waiting on this refresh, so it must finish even if this request is cancelled.
     // A failed refresh is dropped so the next request tries again.
     ctx.waitUntil(
-      fresh.body.catch(() => {
+      fresh.answer.catch(() => {
         if (cache.get(key) === fresh) cache.delete(key);
       }),
     );
   }
-  const body = await entry.body;
-  if (body === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });
-  return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...PUBLIC_HEADERS } });
+  const answer = await entry.answer;
+  if (answer.status !== 200) return publicError(answer.status);
+  return new Response(answer.body, { headers: { 'content-type': 'application/json; charset=utf-8', ...PUBLIC_HEADERS } });
 };
 
-// The website's JSON: the server's stats, everyone to find a player page for, and one player's page.
-const publicRoute = (url: URL, watcher: () => DurableObjectStub<Watcher>): { key: string; load: () => Promise<unknown> } | null => {
-  if (url.pathname === '/api/stats') return { key: 'stats', load: () => watcher().stats() };
-  if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
-  const id = url.searchParams.get('id') ?? '';
-  if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
-  return null;
+// The communities, by id and by Discord server. Each Worker instance reads the list at most once a minute, so a request
+// for a community or Discord server that does not exist never reaches a Durable Object, however many are made.
+type TenantIndex = { byId: Map<string, TenantRecord>; byGuild: Map<string, TenantRecord> };
+const INDEX_MS = 60_000;
+let index: { at: number; value: Promise<TenantIndex> } | null = null;
+
+const registry = (env: Env) => env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
+
+const buildIndex = (tenants: TenantRecord[]): TenantIndex => ({
+  byId: new Map(tenants.map((t) => [t.id, t])),
+  byGuild: new Map(tenants.map((t) => [t.guildId, t])),
+});
+
+const tenantIndex = (env: Env): Promise<TenantIndex> => {
+  const now = Date.now();
+  if (index === null || now - index.at >= INDEX_MS) {
+    const fresh = { at: now, value: registry(env).list().then(buildIndex) };
+    index = fresh;
+    fresh.value.catch(() => {
+      if (index === fresh) index = null;
+    });
+  }
+  return index.value;
+};
+
+const watcherOf = (env: Env, record: TenantRecord) => env.WATCHER.get(env.WATCHER.idFromName(objectName(record)));
+
+const PUBLIC_PATH = /^\/t\/([^/]+)\/api\/(stats|players|player)$/;
+const LEGACY_PATH = /^\/api\/(stats|players|player)$/;
+
+// GET /t/<community>/api/stats, /players and /player?id=<id>. /api/... is DEFAULT_TENANT's, for websites made before
+// the bot served several communities.
+const servePublic = async (url: URL, env: Env, ctx: ExecutionContext): Promise<Response> => {
+  const scoped = PUBLIC_PATH.exec(url.pathname);
+  const legacy = scoped === null ? LEGACY_PATH.exec(url.pathname) : null;
+  const tenantId = scoped?.[1] ?? (legacy === null ? undefined : String(env['DEFAULT_TENANT'] ?? ''));
+  const what = (scoped?.[2] ?? legacy?.[1]) as 'stats' | 'players' | 'player' | undefined;
+  if (tenantId === undefined || what === undefined || !TENANT_ID.test(tenantId)) return publicError(404);
+  try {
+    const record = (await tenantIndex(env)).byId.get(tenantId);
+    if (record === undefined || record.status !== 'active' || !record.limits.publicApi) return publicError(404);
+    const id = url.searchParams.get('id') ?? '';
+    if (what === 'player' && !PLAYER_ID.test(id)) return publicError(404);
+    const key = `${record.id}:${what === 'player' ? `player:${id}` : what}`;
+    return await serveJson(key, () => watcherOf(env, record).publicRead(record, what, id), ctx);
+  } catch (error) {
+    console.error(`${url.pathname} failed: ${errorText(error)}`);
+    return publicError(503);
+  }
+};
+
+// The commands of the community a Discord server belongs to. A suspended community gets none.
+const tenantHandlers =
+  (env: Env) =>
+  async (guildId: string): Promise<TenantHandlers | null> => {
+    const record = (await tenantIndex(env)).byGuild.get(guildId);
+    if (record === undefined || record.status !== 'active') return null;
+    const watcher = () => watcherOf(env, record);
+    return {
+      runCommand: (request) => watcher().command(record, request),
+      suggest: (request) => watcher().suggest(record, request),
+      adminRoleIds: () => watcher().adminRoleIds(record),
+      submitSetup: (values, userId) => watcher().submitSetup(record, values, userId),
+    };
+  };
+
+const adminTenant = (env: Env, record: TenantRecord): TenantAdmin => {
+  const watcher = () => watcherOf(env, record);
+  return {
+    view: () => watcher().view(record),
+    saveSecrets: (values, by) => watcher().saveSecrets(record, values, by),
+    saveSettings: (changes, by) => watcher().saveSettings(record, changes, by),
+    test: () => watcher().testConnection(record),
+    purge: () => watcher().purge(record),
+  };
+};
+
+// Discord's interactions are small; anything much bigger is not one.
+const MAX_INTERACTION_BYTES = 64 * 1024;
+
+// The community the bot ran for before it served several (LEGACY_TENANT) is added the first time, with the Discord
+// server in DISCORD_GUILD_ID. Its Durable Object takes its settings and secrets from the Worker's environment.
+const ensureLegacyTenant = async (env: Env, tenants: TenantRecord[]): Promise<TenantRecord[]> => {
+  const id = String(env['LEGACY_TENANT'] ?? '').trim();
+  if (id === '' || tenants.some((t) => t.id === id)) return tenants;
+  const result = await registry(env).put(id, { guildId: String(env['DISCORD_GUILD_ID'] ?? '').trim(), legacy: true });
+  if ('error' in result) {
+    console.error(`[${id}] Could not add the legacy community: ${result.error}`);
+    return tenants;
+  }
+  console.info(`[${id}] Added as the legacy community, with its existing records`);
+  return [...tenants, result.record];
 };
 
 export default {
+  // Every minute, each active community's Durable Object checks its game server. They run side by side, and one that
+  // fails or is slow does not hold up the others.
   async scheduled(_controller, env) {
-    await env.WATCHER.get(env.WATCHER.idFromName('watcher')).check();
+    const tenants = await ensureLegacyTenant(env, await registry(env).list());
+    index = { at: Date.now(), value: Promise.resolve(buildIndex(tenants)) };
+    const active = tenants.filter((t) => t.status === 'active');
+    const results = await Promise.allSettled(active.map((record) => watcherOf(env, record).check(record)));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') console.error(`[${active[i]?.id}] Check failed: ${errorText(result.reason)}`);
+    });
   },
 
-  // GET /api/stats, /api/players and /api/player feed the community website. Slash commands: Discord POSTs signed
-  // interactions to this Worker's URL.
+  // GET /t/<community>/api/... feeds each community's website. POST / (or /interactions): Discord's signed slash
+  // commands, for every community. /admin/...: the operator's API.
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
-    if (request.method === 'GET' && url.pathname.startsWith('/api/')) {
-      const route = publicRoute(url, watcher);
-      if (route === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });
+    if (url.pathname.startsWith('/admin/')) {
       try {
-        return await serveJson(route.key, route.load, ctx);
+        return await handleAdmin(request, {
+          token: typeof env['ADMIN_TOKEN'] === 'string' ? env['ADMIN_TOKEN'] : undefined,
+          registry: {
+            list: () => registry(env).list(),
+            put: (id, input) => registry(env).put(id, input),
+            remove: (id) => registry(env).remove(id),
+          },
+          tenant: (record) => adminTenant(env, record),
+          changed: () => {
+            index = null;
+            cache.clear();
+          },
+          log: console,
+        });
       } catch (error) {
-        console.error(`${url.pathname} failed: ${error instanceof Error ? error.message : String(error)}`);
-        return Response.json({ error: 'Stats are unavailable' }, { status: 503, headers: { 'access-control-allow-origin': '*' } });
+        console.error(`${request.method} ${url.pathname} failed: ${errorText(error)}`);
+        return Response.json({ error: errorText(error) }, { status: 500, headers: { 'cache-control': 'no-store' } });
       }
     }
-    if (request.method !== 'POST') return new Response('Not found', { status: 404 });
-    const vars = stringVars(env);
-    const publicKey = vars['DISCORD_PUBLIC_KEY'];
+    if (request.method === 'GET' && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/t/'))) {
+      return servePublic(url, env, ctx);
+    }
+    if (request.method !== 'POST' || (url.pathname !== '/' && url.pathname !== '/interactions')) {
+      return new Response('Not found', { status: 404 });
+    }
+    const publicKey = typeof env['DISCORD_PUBLIC_KEY'] === 'string' ? env['DISCORD_PUBLIC_KEY'] : '';
     if (!publicKey) return new Response('DISCORD_PUBLIC_KEY is not set', { status: 500 });
-    const records: StaffRecords = {
-      player: (steamId) => watcher().playerRecord(steamId),
-      knownPlayers: () => watcher().knownPlayers(),
-      log: (steamId, entry) => watcher().logAction(steamId, entry),
-      ban: (ban) => watcher().ban(ban),
-      unban: (target, by) => watcher().unban(target, by),
-      vipAdd: (grant) => watcher().vipAdd(grant),
-      vipRemove: (target) => watcher().vipRemove(target),
-      nextMap: (map, playing) => watcher().stageNextMap(map, playing),
-    };
-    const result = await handleInteraction(
-      await request.text(),
-      request.headers.get('x-signature-ed25519'),
-      request.headers.get('x-signature-timestamp'),
-      {
-        publicKey,
-        runCommand: runCommand({
-          config: () => loadConfig(vars),
-          http: socketHttp(connect),
-          lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
-          roundup: (choice) => watcher().roundup(choice),
-          seeders: (days) => watcher().seeders(days),
-          removeMatch: (endedAt) => watcher().removeMatch(endedAt),
-          seedCall: (message) => watcher().seedCall(message),
-          records,
-          now: Date.now,
-          log: console,
-        }),
-        suggest: suggestOptions({
-          recentMatches: () => watcher().recentMatches(),
-          config: () => loadConfig(vars),
-          http: socketHttp(connect, SUGGEST_TIMEOUT_MS),
-          records,
-        }),
-        editReply: editOriginalReply(),
-        log: console,
-        now: Date.now,
-        adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
-        adminRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
-          .split(',')
-          .map((id) => id.trim())
-          .filter((id) => /^\d+$/.test(id)),
-      },
-    );
+    if (Number(request.headers.get('content-length') ?? 0) > MAX_INTERACTION_BYTES) return new Response('Too large', { status: 413 });
+    const body = await request.text();
+    if (body.length > MAX_INTERACTION_BYTES) return new Response('Too large', { status: 413 });
+    const result = await handleInteraction(body, request.headers.get('x-signature-ed25519'), request.headers.get('x-signature-timestamp'), {
+      publicKey,
+      tenantFor: tenantHandlers(env),
+      editReply: editOriginalReply(),
+      log: console,
+      now: Date.now,
+    });
     if (result.followUp) {
       ctx.waitUntil(result.followUp().catch((error: unknown) => console.error(`Command reply failed: ${String(error)}`)));
     }

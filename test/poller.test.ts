@@ -13,6 +13,7 @@ const config: Config = {
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   statusWebhookUrl: undefined,
   roleId: undefined,
+  adminRoleIds: [],
   inviteCode: undefined,
   siteUrl: undefined,
   pollIntervalMs: 60_000,

@@ -7,47 +7,55 @@
     "crons": ["* * * * *"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "WATCHER", "class_name": "Watcher" }]
+    "bindings": [
+      // One per community, named tenant:<id>: its settings, encrypted secrets and records.
+      { "name": "WATCHER", "class_name": "Watcher" },
+      // The list of communities. One instance.
+      { "name": "REGISTRY", "class_name": "Registry" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Watcher"] },
+    { "tag": "v2", "new_sqlite_classes": ["Registry"] }
+  ],
   "observability": { "enabled": true },
-  // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So are
-  // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status, and DISCORD_ROUNDUP_WEBHOOK_URL, the
-  // optional channel for the weekly and monthly roundups.
+  // Secrets (npx wrangler secret put <NAME>), never in this file:
+  //   DISCORD_PUBLIC_KEY  the Discord application every community uses
+  //   TENANT_SECRETS_KEY  encrypts each community's RCON password and webhooks: openssl rand -base64 32
+  //   ADMIN_TOKEN         the operator's API, for adding communities: openssl rand -base64 32
+  // Each community's own secrets (RCON address and password, webhooks) are set with /setup or the operator's API, and
+  // kept encrypted in its Durable Object.
   "vars": {
-    // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop.
+    // The most communities this bot takes. Each one's check is a Durable Object call from the cron every minute, and the
+    // free plan allows 50 such calls per cron run.
+    "MAX_TENANTS": "25",
+    // Optional: the community whose stats GET /api/stats serves, for websites made before the bot served several
+    // communities. New websites use /t/<community>/api/stats.
+    "DEFAULT_TENANT": "gaminginit",
+
+    // Moving from one community to several. The community this bot ran for alone is added as LEGACY_TENANT on the
+    // first check after the deploy, with the Discord server in DISCORD_GUILD_ID, keeping all its records. It takes its
+    // secrets (RCON_URL, RCON_PASSWORD and the webhooks, still set as Worker secrets) and the settings below once, keeps
+    // them encrypted in its own storage, and ignores them after that: change them with /settings and /setup. Once
+    // `npm run tenant -- show gaminginit` shows its secrets set, delete these vars and the old Worker secrets.
+    "LEGACY_TENANT": "gaminginit",
+    "DISCORD_GUILD_ID": "1552990539455144086",
     "DISCORD_ROLE_ID": "1554801355015594025",
-    // Optional: an invite link that never expires, for the member counts in /api/stats.
     "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",
-    // Optional: the community website. Discord posts link to it, and in-game messages point players at it.
     "SITE_URL": "https://gaminginit.com",
-    // In-game messages during a match (10 minutes in, halfway, a team near winning): "on" or "off".
     "MATCH_MESSAGES": "on",
-    // The score a team needs to win: halfway is half of it, "near winning" is 90% of it.
     "SCORE_TO_WIN": "100",
-    // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
-    // after someone joins (below 20 players). "0" turns both off.
     "SEEDING_MESSAGE_MINUTES": "5",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",
-    // The website's busy times: the hours when the server usually has at least this many players.
     "BUSY_THRESHOLD": "97",
     "ALERT_COOLDOWN_MINUTES": "10",
-    // A drop in players only counts once it lasts this long, so a crash or restart that fills again quickly pings nobody.
     "DROP_GRACE_MINUTES": "5",
-    // Required for the staff commands: your Discord server's ID (right-click the server icon → Copy Server ID).
-    "DISCORD_GUILD_ID": "1552990539455144086",
-    // Optional: role IDs (comma-separated) that may use the admin commands as well as Administrators. Staff.
     "DISCORD_ADMIN_ROLE_IDS": "1552990722976649296",
-    // Automatic VIP: seed on this many days in a week to get a reserved slot for a week. "0" turns it off.
     "VIP_SEED_DAYS": "3",
-    // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.
     "VIP_SEED_MINUTES": "10",
-    // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
     "ROUNDUPS": "on",
-    // The hour (UTC, 0 to 23) on Mondays, and on the 1st of the month, when the roundups go out. 17 is 6pm in the UK in
-    // summer, 5pm in winter.
     "ROUNDUP_HOUR": "17"
   }
 }

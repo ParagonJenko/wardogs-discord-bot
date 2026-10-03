@@ -38,7 +38,14 @@ every finished match's full scoreboard, and each player's seeding, play time, ki
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
 
+**One deployment serves any number of communities** (see [Hosting several communities](#hosting-several-communities)).
+Each community has its own Discord server, game server, settings, records and website stats, kept apart from every
+other's. Whoever runs the bot (the operator) adds a community; its admins then connect their game server themselves
+with `/setup` in their Discord server.
+
 ## Setup
+
+What a community needs to connect the bot (with `/setup`, see [Add a community](#add-a-community)):
 
 1. **RCON address and password.** From your host's control panel (QONZER, BisectHosting, xREALM), or
    `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini`. The address is the server IP and RCON port,
@@ -47,42 +54,170 @@ Alerts and summaries go through a Discord webhook. Every 60 seconds the bot read
    it gives you. Quotes, spaces and a missing `http://` are tidied up automatically.
 2. **Webhook.** In Discord: channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
 3. **Role to ping (optional).** Enable Developer Mode (User Settings → Advanced), then Server Settings →
-   Roles → right-click the role → Copy Role ID.
+   Roles → right-click the role → Copy Role ID, and `/settings set` `DISCORD_ROLE_ID` to it.
 
-## Run on Cloudflare Workers (free)
+## Hosting several communities
 
-A cron trigger runs the check every minute. A Durable Object keeps the alert state between runs. Both are
-on the Workers free plan, and the bot uses about 1,440 invocations a day against a 100,000 limit.
+One Worker, one Discord application and one cron serve every community. Each community (a *tenant*) has:
 
-1. Create a free Cloudflare account, then log in from this folder:
+- An id, such as `gaminginit`: lowercase letters, digits and dashes.
+- Its Discord server. Slash commands from that server only ever reach that community, and a Discord server no
+  community has gets nothing from the bot.
+- A Durable Object of its own (`tenant:<id>`), holding everything the bot knows about it: settings, encrypted secrets,
+  players, matches, bans and VIP.
+- Website stats at `GET <worker url>/t/<id>/api/stats` (and `/t/<id>/api/players`, `/t/<id>/api/player?id=…`).
+- Limits the operator sets, so no one community can run up the bill for the others (see
+  [Cost limits](#cost-limits)).
+
+### Deploy (operator, once)
+
+A cron trigger runs the checks every minute. Both the cron and Durable Objects are on the Workers free plan, but to
+host communities other than your own, use the [Workers Paid plan](https://developers.cloudflare.com/workers/platform/pricing/)
+($5 a month): on the free plan, one community's busy website using up the account's 100,000 requests a day would stop
+the bot for every community until the next day.
+
+1. Create a Cloudflare account, then log in from this folder:
    ```bash
    npm ci
    npx wrangler login
    ```
-2. Store the RCON address, RCON password and webhook as secrets, so they are never committed:
+2. Make two long random keys, and store them and the Discord application's public key (step 1 of
+   [Slash commands](#slash-commands)) as secrets:
    ```bash
-   npx wrangler secret put RCON_URL
-   npx wrangler secret put RCON_PASSWORD
-   npx wrangler secret put DISCORD_WEBHOOK_URL
+   openssl rand -base64 32   # run twice: one for each of the next two
+   npx wrangler secret put TENANT_SECRETS_KEY   # encrypts every community's RCON password and webhooks
+   npx wrangler secret put ADMIN_TOKEN          # your key to the operator API
+   npx wrangler secret put DISCORD_PUBLIC_KEY
    ```
-3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`, and `SITE_URL` (your community
-   website, such as `https://gaminginit.com`): post titles then link to it, and their footer points people there.
-4. Deploy:
+   Keep `TENANT_SECRETS_KEY` somewhere safe too: without it, no stored secret can be read again.
+3. In `wrangler.jsonc`, set `MAX_TENANTS` (default 25), and remove `DEFAULT_TENANT`, `LEGACY_TENANT` and the settings
+   under it unless you are [moving from one community](#moving-from-one-community-to-several).
+4. Deploy, then register the slash commands (see [Slash commands](#slash-commands)):
    ```bash
    npm run deploy
+   npm run register
    ```
-   Wrangler prints the Worker's URL, like `https://wardogs-discord-bot.<you>.workers.dev`. You need it
-   for `/serverstatus`.
+   Wrangler prints the Worker's URL, like `https://wardogs-discord-bot.<you>.workers.dev`.
+5. Put `BOT_URL` (that URL) and `ADMIN_TOKEN` in `.env` for `npm run tenant`, the operator's command line.
 
-Logs are under Workers & Pages → wardogs-discord-bot → Logs in the Cloudflare dashboard. The first run
-logs `Watching "<server name>": N/M players`. `RCON rejected the password (401)` means the password
-is wrong; `timed out` means the address or port is wrong or the host's firewall blocks it. On Workers the check always runs every minute;
-`POLL_INTERVAL_SECONDS` is not used.
+Logs are under Workers & Pages → wardogs-discord-bot → Logs in the Cloudflare dashboard. Every line about a community
+starts with its id, like `[gaminginit] Watching "UK #1": 12/100 players`.
 
-To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` again.
+### Add a community
 
-Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
-socket to the RCON listener and sends the HTTP request itself.
+1. Get the community's Discord server ID (Developer Mode on, right-click the server icon → Copy Server ID), and add it:
+   ```bash
+   npm run tenant -- add alpha 123456789012345678 Alpha Squad
+   ```
+2. Give its admins the link to add the bot to their Discord server:
+   `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
+3. An Administrator of their Discord server runs **`/setup`**. It opens a form for:
+
+   | Field                       | What                                                                        |
+   | --------------------------- | --------------------------------------------------------------------------- |
+   | RCON address                | From the host's control panel, like `http://203.0.113.10:7776`              |
+   | RCON password               | From the host's control panel                                               |
+   | Alerts channel webhook URL  | Channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL |
+   | Live status webhook URL     | Optional: a webhook in a channel of its own (see [Live server status](#live-server-status)) |
+   | Roundups webhook URL        | Optional: where the [roundups](#roundups) go, if not to the alerts channel   |
+
+   The bot tests the RCON address and password against the game server, checks each webhook is in that same Discord
+   server, then saves them encrypted. The reply says what was saved and the server it reached, never the values.
+   Fields left blank keep what is set, so a password can be changed without typing the rest again; `off` removes an
+   optional webhook.
+4. They change anything else with **`/settings`**: `/settings show` lists every setting and which secrets are set,
+   `/settings set` changes one, `/settings reset` puts one back to its default. Every setting named in this README,
+   such as `VIP_SEED_DAYS` or `SITE_URL`, is set this way, for that community only.
+5. Their website reads `https://<worker url>/t/alpha/api/stats`.
+
+The operator can do all of this too, from the command line:
+
+| Command                                              | What                                                       |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| `npm run tenant -- list`                             | Every community                                            |
+| `npm run tenant -- show alpha`                       | Settings, which secrets are set, whether the server answers |
+| `npm run tenant -- secrets alpha < secrets.json`     | Set secrets from a JSON file, such as `{"RCON_URL": "…", "RCON_PASSWORD": "…", "DISCORD_WEBHOOK_URL": "…"}`; delete the file after |
+| `npm run tenant -- settings alpha LIVE_THRESHOLD=40` | Change settings; `NAME=` puts one back to its default      |
+| `npm run tenant -- test alpha`                       | Check the bot can reach its game server                    |
+| `npm run tenant -- update alpha '{"status":"suspended"}'` | Pause a community: no checks, no commands, no website stats. Nothing is deleted. `"active"` resumes it |
+| `npm run tenant -- update alpha '{"limits":{"joinChecks":false}}'` | Change its [limits](#cost-limits)               |
+| `npm run tenant -- delete alpha --confirm=alpha`     | Delete the community and every record the bot has for it   |
+
+Each is a call to the operator API, `<worker url>/admin/tenants/…`, with `Authorization: Bearer <ADMIN_TOKEN>`.
+
+### Security and isolation
+
+**Secrets.** A community's RCON address and password and its webhooks are:
+
+- Sent once: through the `/setup` form (from an Administrator of the community's own Discord server, straight to the
+  bot over HTTPS, signed by Discord) or the operator API (HTTPS only, `ADMIN_TOKEN`). They are never posted in a
+  channel or typed in a command.
+- Encrypted before they are stored, with AES-256-GCM. Each community has its own key, derived from
+  `TENANT_SECRETS_KEY` and its id, and its id is bound into the ciphertext, so one community's secrets can never be
+  decrypted as another's.
+- Only decrypted inside the community's own Durable Object, which is also where every RCON request for it is made. The
+  Worker that receives Discord's commands never sees them.
+- Never sent back: `/settings show` and the operator API say which are set, not what they are, and logs only name what
+  changed.
+
+To change `TENANT_SECRETS_KEY`, set the old one as `TENANT_SECRETS_KEY_PREVIOUS` (comma-separated if several) and the
+new one as `TENANT_SECRETS_KEY`. Each community's secrets are sealed again with the new key the next time they are
+read; then remove `TENANT_SECRETS_KEY_PREVIOUS`.
+
+**Isolation.** Nothing one community does can reach another's data:
+
+- Each community's records are in its own Durable Object. A Durable Object belongs to the first community it is used
+  for and refuses any other, so a routing mistake fails rather than mixing records.
+- Slash commands are routed by the Discord server they came from. Staff roles are each community's own, so a staff
+  role in one Discord server means nothing in another.
+- Website stats are cached by community. Player ids are made with a key of each community's own, so the same player
+  has different ids in different communities, and nobody can tell they are the same.
+- A Discord server belongs to one community at most, and each webhook must be in the community's own Discord server,
+  so alerts can never be sent to another community's channels by mistake.
+- The RCON address must be a public address on port 80, 443 or 1024 and up: not private, loopback, link-local
+  (such as cloud metadata), or a local name. Answers larger than 4 MB are refused.
+
+### Cost limits
+
+The bot keeps any one community from running up costs for everyone:
+
+| Limit                        | What                                                                                |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| Communities                  | Only ones the operator adds use anything. `MAX_TENANTS` (default 25) caps how many. A request for a community or Discord server that does not exist never reaches a Durable Object |
+| `publicReadsPerMinute`       | Website reads that reach the community's Durable Object, each minute (default 60). Answers are cached for 30 seconds, so this counts different player pages, not page views. Past it: 429 |
+| `commandsPerMinute`          | Slash commands from the community's Discord server each minute (default 20), and five times that for suggestions while staff type |
+| `joinChecks`                 | Whether its server is read every 5 seconds while seeding (default on): the most Durable Object alarms a community uses, about 720 an hour of seeding |
+| `publicApi`                  | Whether it has website stats at all (default on)                                    |
+| `status`                     | `suspended` stops everything for it at once                                         |
+| Unreachable game servers     | Checked every minute for the first 15 failures, then every 5 minutes, then every 15 after an hour. A community whose server has gone costs almost nothing |
+| RCON answers                 | Time out after 8 seconds, and are refused past 4 MB                                 |
+
+Set limits with `npm run tenant -- update <id> '{"limits":{…}}'`. Also, on the Cloudflare account: turn on billing
+notifications, and if the Worker has a custom domain, add a rate limiting rule for `/t/*` (the free WAF plan includes
+one).
+
+### Moving from one community to several
+
+A bot deployed before this keeps everything. On the first check after deploying this version:
+
+- `LEGACY_TENANT` (in `wrangler.jsonc`, `gaminginit` here) is added as a community, with the Discord server in
+  `DISCORD_GUILD_ID`. It keeps the Durable Object it always had, with all its records.
+- It takes its secrets (`RCON_URL`, `RCON_PASSWORD`, `DISCORD_WEBHOOK_URL` and the optional webhooks, still Worker
+  secrets) and the settings in `vars`, once, and keeps them encrypted in its own storage. After that, change them with
+  `/setup` and `/settings`.
+- `GET /api/stats`, `/api/players` and `/api/player` keep working for `DEFAULT_TENANT`, so its website needs no change.
+
+Before deploying, set `TENANT_SECRETS_KEY`, `ADMIN_TOKEN` and (unchanged) `DISCORD_PUBLIC_KEY`, then run
+`npm run register` after the deploy to add `/setup` and `/settings`. Once `npm run tenant -- show gaminginit` lists its
+secrets as set, you can delete the old Worker secrets (`npx wrangler secret delete RCON_URL`, and the others) and the
+settings under `LEGACY_TENANT` in `wrangler.jsonc`.
+
+### How a check runs
+
+Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP socket to the
+RCON listener and sends the HTTP request itself. The first check logs `Watching "<server name>": N/M players`.
+`RCON rejected the password (401)` means the password is wrong; `timed out` means the address or port is wrong or the
+host's firewall blocks it. On Workers the check always runs every minute; `POLL_INTERVAL_SECONDS` is not used.
 
 ## Live server status
 
@@ -103,10 +238,7 @@ To set it up:
    status stays the only message there.
 2. In that channel: settings → Integrations → Webhooks → New Webhook → Copy Webhook URL. Make a new webhook rather
    than reusing the alerts one, or alerts would push the status up the channel.
-3. Store it as a secret:
-   ```bash
-   npx wrangler secret put DISCORD_STATUS_WEBHOOK_URL
-   ```
+3. Run `/setup` and paste it in **Live status channel webhook URL**.
 
 The next check posts the message, and every check after that edits it.
 
@@ -116,7 +248,7 @@ The next check posts the message, and every check after that edits it.
   shows the server as offline.
 - **Next map:** the rotation's next map, or the map staff set with `/setnextmap` or `/changemap` while this match
   is on.
-- **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
+- **Turning it off:** run `/setup` and type `off` in **Live status channel webhook URL**.
 
 It costs one more RCON request (the rotation) and one Discord edit a minute. The Node/Docker version does not
 have it.
@@ -149,18 +281,15 @@ every month a roundup of the month before. Each one celebrates:
 - Anyone can see a roundup any time with `/roundup`: last week, last month, or this week or month so far.
 - They come from the [player records](#player-records), so they cover matches since those started.
 
-Set them in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
+Set them with `/settings set`:
 
-| Variable       | What                                                       | Default |
+| Setting        | What                                                       | Default |
 | -------------- | ---------------------------------------------------------- | ------- |
 | `ROUNDUPS`     | `"on"` or `"off"`                                          | `"on"`  |
 | `ROUNDUP_HOUR` | The hour (UTC, 0 to 23) the roundups go out                 | `"17"`  |
 
-To post them in a channel of their own, such as `#hall-of-fame`, make a webhook there and store it as a secret:
-
-```bash
-npx wrangler secret put DISCORD_ROUNDUP_WEBHOOK_URL
-```
+To post them in a channel of their own, such as `#hall-of-fame`, make a webhook there and paste it in `/setup` under
+**Roundups channel webhook URL**.
 
 The Node/Docker version does not post roundups.
 
@@ -187,11 +316,14 @@ The Node/Docker version does not post roundups.
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
 | `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days                      |
 | `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days |
+| `/setup`        | Administrators only  | Connects the bot to the game server and Discord channels: a form for the RCON address and password and the webhooks (see [Add a community](#add-a-community)) |
+| `/settings`     | Administrators only  | `show` every setting and which secrets are set, `set` one, or `reset` one to its default |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
 
 Slash commands need a Discord application, because webhooks cannot receive commands. Discord sends each
-command to the Worker's URL; nothing has to stay connected.
+command to the Worker's URL; nothing has to stay connected. The operator makes one application, and every community
+adds it to their Discord server.
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → New Application.
 2. On **General Information**, copy the **Application ID** and **Public Key**. Store the public key:
@@ -199,7 +331,8 @@ command to the Worker's URL; nothing has to stay connected.
    npx wrangler secret put DISCORD_PUBLIC_KEY
    npm run deploy
    ```
-3. Still on **General Information**, set **Interactions Endpoint URL** to the Worker's URL and save.
+3. Still on **General Information**, set **Interactions Endpoint URL** to the Worker's URL and save
+   (`https://<worker url>/interactions`, or the bare Worker URL).
    Discord checks the endpoint straight away; if saving fails, the public key is wrong or not deployed.
 4. On **Bot**, click **Reset Token** and copy the token. It is only used to register the command, so
    it does not need to be stored anywhere.
@@ -217,8 +350,10 @@ command to the Worker's URL; nothing has to stay connected.
    Reset Token**, not the Public Key or the OAuth2 Client Secret.
    This replaces the app's whole command list, so running it again after an update also removes
    commands that no longer exist (such as the old `/status`).
-6. Add the app to your Discord server by opening this link:
+6. Each community adds the app to their Discord server by opening this link:
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
+   To control who can add it, turn off **Public Bot** on the **Bot** page: then only you can add it, to servers you
+   are in. Either way, a Discord server that is not a community's gets nothing from the bot.
 
 Commands reply publicly in the channel, except the staff commands, whose replies only the sender sees. If the game
 server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
@@ -226,14 +361,15 @@ commands, run `npm run register` again.
 
 Staff commands use the RCON password's write access, change the records or show Steam IDs, so they are locked down:
 
-- It only works in your own Discord server. Set `DISCORD_GUILD_ID` in the `vars` block of `wrangler.jsonc`
-  (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
-  set, staff commands are refused everywhere. Commands are registered globally, so without this an admin in any
-  other server that added the app could control your game server.
-- Only staff can use them: members with Discord's **Administrator** permission, or with a role listed in
-  `DISCORD_ADMIN_ROLE_IDS` in the `vars` block of `wrangler.jsonc` (comma-separated role IDs; right-click the
-  role in Server Settings → Roles → Copy Role ID). The Worker checks this on every use, so letting other roles
-  see the commands in Discord still does not let them use them.
+- Every command, public or not, only reaches the community whose Discord server it was used in. Commands are
+  registered globally, so this is what stops an admin in any other server that added the app from controlling a
+  community's game server.
+- Only staff can use them: members with Discord's **Administrator** permission, or with a role in the community's
+  `DISCORD_ADMIN_ROLE_IDS` (`/settings set`, comma-separated role IDs; right-click the role in Server Settings →
+  Roles → Copy Role ID). The bot checks this on every use, so letting other roles see the commands in Discord still
+  does not let them use them.
+- `/setup` and `/settings` are for Administrators only, not staff roles: they hold the RCON password and say who is
+  staff.
 - Discord only shows staff commands to Administrators at first. To show them to a staff role too: Server
   Settings → Integrations → the bot → pick each staff command (or the whole app) → Add Roles or Members → the
   role → ✓. It lasts across deploys and `npm run register`, but new commands need it once each.
@@ -321,7 +457,7 @@ There is no chat log command: the game's RCON API has no way to read chat.
 
 ## Website stats
 
-`GET <worker url>/api/stats` returns public JSON for a community website, such as
+`GET <worker url>/t/<community>/api/stats` returns public JSON for a community website, such as
 [gaminginit](https://github.com/ParagonJenko/gaminginit). Any site may read it (CORS `*`). It contains:
 
 | Field          | What                                                                                   |
@@ -345,16 +481,20 @@ leaderboard and in the current and recent matches has their name, their totals a
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
 
 The site's busy times are the hours when the server usually has `BUSY_THRESHOLD` players or more (default 97). Set
-it in the `vars` block of `wrangler.jsonc`. Changing it counts busy readings again from the last 24 hours, and older
+it with `/settings set`. Changing it counts busy readings again from the last 24 hours, and older
 readings counted under another threshold, or from before busy counts were kept, are left out.
 
-For the Discord counts, set `DISCORD_INVITE` in the `vars` block of `wrangler.jsonc` to an invite link that
-does not expire (`https://discord.gg/abc123` or just `abc123`), then `npm run deploy`. Leave it empty to skip
-them.
+For the Discord counts, set `DISCORD_INVITE` with `/settings set` to an invite link that does not expire
+(`https://discord.gg/abc123` or just `abc123`). Leave it unset to skip them.
 
-Every page view that loads the stats is a Worker request, and the free plan allows 100,000 a day,
-including the bot's own 1,440 cron runs. Each Worker instance reuses its last answer for 30 seconds, and the
-gaminginit site only polls once a minute while its tab is visible, which is plenty for a community site.
+Every page view that loads the stats is a Worker request: the paid plan includes 10 million a month, the free plan
+100,000 a day shared by every community and the bot's own 1,440 cron runs. Each Worker instance reuses its last answer
+for 30 seconds, and the gaminginit site only polls once a minute while its tab is visible. Reads the cache misses
+count towards the community's `publicReadsPerMinute`; past it the answer is `429` with `Retry-After: 30` (see
+[Cost limits](#cost-limits)). A community that does not exist, is suspended or has `publicApi` off gets `404`.
+
+`GET /api/stats` (and `/api/players`, `/api/player`) without `/t/<community>` serves `DEFAULT_TENANT`, for websites made
+before the bot served several communities.
 
 The Node/Docker version does not serve `/api/stats`.
 
@@ -364,8 +504,8 @@ Two more public endpoints let a website show every player's stats, not only the 
 
 | Endpoint                 | What                                                                                   |
 | ------------------------ | -------------------------------------------------------------------------------------- |
-| `GET /api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now |
-| `GET /api/player?id=<id>` | One player's page, or 404 for an id nobody seen in the last 90 days has              |
+| `GET /t/<community>/api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now |
+| `GET /t/<community>/api/player?id=<id>` | One player's page, or 404 for an id nobody seen in the last 90 days has              |
 
 A player page has:
 
@@ -437,11 +577,11 @@ Players who seed get a reserved slot, so they skip the queue when the server is 
   ("🎖️ Reserved slots for seeders: **Ash and Bo** earned reserved slots for a week by seeding.") with what seeding
   earns. It never pings anyone. If the post fails it is logged, not retried, so nobody is announced twice.
 
-Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
+Set it with `/settings set`:
 
-| Variable           | What                                                                   | Default in `wrangler.jsonc` |
+| Setting            | What                                                                   | Default                     |
 | ------------------ | ---------------------------------------------------------------------- | --------------------------- |
-| `VIP_SEED_DAYS`    | Days with a successful seed needed in a week. `0` turns automatic VIP off | `3`                      |
+| `VIP_SEED_DAYS`    | Days with a successful seed needed in a week. `0` turns automatic VIP off | `0` (off); try `3`       |
 | `VIP_SEED_MINUTES` | A seed counts when a player is on for more than this, and it goes live | `10`                        |
 
 How it changes the server:
@@ -462,7 +602,7 @@ How it changes the server:
 - Each change is logged (`VIP added: …`, `VIP ended: …`), and `/seeders` shows who has VIP from the bot and until when.
 - Staff can give or take away VIP by hand with [`/vip add` and `/vip remove`](#staff-commands).
 
-Turning it off (`VIP_SEED_DAYS` `"0"`) stops players earning it. VIP the bot already gave, by seeding or through
+Turning it off (`VIP_SEED_DAYS` `0`) stops players earning it. VIP the bot already gave, by seeding or through
 `/vip add`, still ends on time.
 Automatic VIP is Cloudflare only.
 
@@ -494,7 +634,7 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
   "15 more players". The reward after it comes from `VIP_SEED_DAYS` and `VIP_SEED_MINUTES`, so it always matches what
   the bot does.
 - When a match message (below) is due on the same check, it goes first and the seeding message waits a minute.
-- Set `SEEDING_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to
+- Set `SEEDING_MESSAGE_MINUTES` to another number of minutes with `/settings set`, or `0` to
   turn them all off, the ones for joins too. They do not need `SITE_URL`.
 - The reads every 5 seconds only happen while the server seeds: on Cloudflare, a Durable Object alarm (12 a minute,
   about 720 for each hour of seeding, within the free plan); with Node, a second timer. Each is one RCON request
@@ -524,7 +664,7 @@ leaderboard, the Discord and seeding:
   that fails waits for its next turn, 5 minutes later.
 - They use the RCON password's write access (`POST /v1/broadcast`), like `/broadcast`.
 
-Set `MATCH_MESSAGES` to `"off"` in the `vars` block of `wrangler.jsonc` to stop them, and `SCORE_TO_WIN` if a match
+Set `MATCH_MESSAGES` to `off` with `/settings set` to stop them, and `SCORE_TO_WIN` if a match
 is won at a score other than 100. They need `SITE_URL`; without it none are sent.
 
 ## Run with Node or Docker
@@ -587,10 +727,11 @@ reserved list in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT 
 when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
 [staff command](#staff-commands). Still:
 
-- Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.
+- Give the password to the bot through `/setup` (or the operator API), or `.env` for the Node version, never in
+  `wrangler.jsonc`, a Discord message or the repo. See [Security and isolation](#security-and-isolation).
 - Over `http://`, the password is sent unencrypted on every check. Use an `https://` RCON address if
   your host offers one.
-- `/serverstatus` requests are only accepted with a valid Discord signature (checked against
+- Slash commands are only accepted with a valid Discord signature (checked against
   `DISCORD_PUBLIC_KEY`) and a timestamp within 5 minutes, so nobody else can make the Worker call your
   server and a captured request cannot be replayed later.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { COMMANDS, editOriginalReply, handleInteraction, type CommandRequest } from '../src/interactions.ts';
+import { COMMANDS, editOriginalReply, handleInteraction, type CommandRequest, type TenantHandlers } from '../src/interactions.ts';
 
 const encoder = new TextEncoder();
 const hex = (bytes: ArrayBuffer): string => Buffer.from(bytes).toString('hex');
@@ -23,19 +23,27 @@ const signed = async (payload: unknown, timestamp = String(NOW_MS / 1000)) => {
   return { body, signature, timestamp };
 };
 
-const statusCommand = { type: 2, application_id: '111', token: 'tok', data: { name: 'serverstatus' } };
+const statusCommand = { type: 2, application_id: '111', token: 'tok', guild_id: '777', data: { name: 'serverstatus' } };
 const embed = { title: 'UK Wardogs #1', description: '🟢 **Live** · **24/98** players', color: 1 };
 
-const deps = () => ({
-  publicKey,
-  runCommand: vi.fn(async (_request: CommandRequest) => ({ embeds: [embed] })),
-  suggest: vi.fn(async (_request: CommandRequest) => [{ name: 'Ozeti · 69 min', value: '1790776000000' }]),
-  editReply: vi.fn(async () => undefined),
-  log: { error: vi.fn() },
-  now: () => NOW_MS,
-  adminGuildId: '777' as string | undefined,
-  adminRoleIds: ['555'],
-});
+// The community whose Discord server is 777, with Staff (role 555). No other Discord server has a community.
+const deps = () => {
+  const d = {
+    publicKey,
+    runCommand: vi.fn(async (_request: CommandRequest) => ({ embeds: [embed] })),
+    suggest: vi.fn(async (_request: CommandRequest) => [{ name: 'Ozeti · 69 min', value: '1790776000000' }]),
+    adminRoleIds: vi.fn(async () => ['555']),
+    submitSetup: vi.fn(async (_values: Record<string, string>, _userId: string | null) => ({ content: '✅ Connected' })),
+    editReply: vi.fn(async () => undefined),
+    log: { error: vi.fn() },
+    now: () => NOW_MS,
+    tenantFor: vi.fn(
+      async (guildId: string): Promise<TenantHandlers | null> =>
+        guildId === '777' ? { runCommand: d.runCommand, suggest: d.suggest, adminRoleIds: d.adminRoleIds, submitSetup: d.submitSetup } : null,
+    ),
+  };
+  return d;
+};
 
 describe('handleInteraction', () => {
   it('rejects a request without a valid Discord signature', async () => {
@@ -109,8 +117,9 @@ describe('handleInteraction', () => {
     expect(d.runCommand).toHaveBeenCalledWith({ name, options: {}, userId: null });
   });
 
+  const { guild_id: _guild, ...outsideServers } = statusCommand;
   const broadcast = (permissions: string | undefined, guildId: string | null = '777') => ({
-    ...statusCommand,
+    ...outsideServers,
     ...(guildId === null ? {} : { guild_id: guildId }),
     data: { name: 'broadcast', options: [{ name: 'message', type: 3, value: 'Seeding now!' }] },
     member: { user: { id: '42' }, ...(permissions === undefined ? {} : { permissions }) },
@@ -143,24 +152,76 @@ describe('handleInteraction', () => {
     expect(d.runCommand).not.toHaveBeenCalled();
   });
 
-  it('refuses /broadcast from any other Discord server, or when no server is configured', async () => {
-    const cases: [string | null, string | undefined][] = [
-      ['888', '777'],
-      [null, '777'],
-      ['777', undefined],
-    ];
+  it('refuses /broadcast from a Discord server no community has, or outside a server', async () => {
     const d = deps();
     const results = await Promise.all(
-      cases.map(async ([guildId, adminGuildId]) => {
+      ['888', null].map(async (guildId) => {
         const { body, signature, timestamp } = await signed(broadcast(String(ADMINISTRATOR), guildId));
-        return handleInteraction(body, signature, timestamp, { ...d, adminGuildId });
+        return handleInteraction(body, signature, timestamp, d);
       }),
     );
 
-    results.forEach((result) => {
-      expect(result.body).toMatchObject({ type: 4, data: { flags: 64 } });
-    });
+    expect(results.map((r) => r.body)).toEqual([
+      { type: 4, data: { content: "This Discord server isn't connected to the bot. Ask whoever runs the bot to add it.", flags: 64 } },
+      { type: 4, data: { content: "Use the bot's commands in your community's Discord server.", flags: 64 } },
+    ]);
     expect(d.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses even public commands from a Discord server no community has, so none can read another's game server", async () => {
+    const { body, signature, timestamp } = await signed({ ...statusCommand, guild_id: '888' });
+    const d = deps();
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(result.body).toMatchObject({ type: 4, data: { flags: 64 } });
+    expect(result.followUp).toBeUndefined();
+    expect(d.tenantFor).toHaveBeenCalledWith('888');
+    expect(d.runCommand).not.toHaveBeenCalled();
+  });
+
+  it('says to try again, and logs why, when the list of communities cannot be read', async () => {
+    const d = deps();
+    d.tenantFor.mockRejectedValueOnce(new Error('registry unavailable'));
+    const { body, signature, timestamp } = await signed(statusCommand);
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(result.body).toMatchObject({ type: 4, data: { content: expect.stringMatching(/Try again in a minute/), flags: 64 } });
+    expect(d.log.error).toHaveBeenCalledWith('Looking up the community for Discord server 777 failed: registry unavailable');
+  });
+
+  it('sends each command to the community of the Discord server it came from', async () => {
+    const other = { runCommand: vi.fn(async () => ({ content: 'other' })), suggest: vi.fn(), adminRoleIds: vi.fn(), submitSetup: vi.fn() };
+    const d = deps();
+    const tenantFor = async (guildId: string) => (guildId === '999' ? other : d.tenantFor(guildId));
+    const { body, signature, timestamp } = await signed({ ...statusCommand, guild_id: '999' });
+
+    await (await handleInteraction(body, signature, timestamp, { ...d, tenantFor })).followUp?.();
+
+    expect(other.runCommand).toHaveBeenCalledWith({ name: 'serverstatus', options: {}, userId: null });
+    expect(d.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("only looks up the staff roles for someone who is not an Administrator", async () => {
+    const d = deps();
+    const { body, signature, timestamp } = await signed(broadcast(String(ADMINISTRATOR)));
+
+    await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.adminRoleIds).not.toHaveBeenCalled();
+  });
+
+  it('refuses staff, and logs why, when the staff roles cannot be read', async () => {
+    const d = deps();
+    d.adminRoleIds.mockRejectedValueOnce(new Error('storage unavailable'));
+    const staff = { ...broadcast('0'), member: { user: { id: '42' }, permissions: '0', roles: ['555'] } };
+    const { body, signature, timestamp } = await signed(staff);
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(result.body).toMatchObject({ type: 4, data: { content: 'Only Administrators and staff can use this.' } });
+    expect(d.log.error).toHaveBeenCalledWith('Staff roles could not be read: storage unavailable');
   });
 
   it('runs admin commands for members with an admin role, such as Staff, without Administrator', async () => {
@@ -189,7 +250,7 @@ describe('handleInteraction', () => {
 
     expect(results.map((r) => r.body)).toEqual([
       { type: 4, data: { content: 'Only Administrators and staff can use this.', flags: 64 } },
-      { type: 4, data: { content: 'This command can only be used in the Discord server that runs this bot.', flags: 64 } },
+      { type: 4, data: { content: "This Discord server isn't connected to the bot. Ask whoever runs the bot to add it.", flags: 64 } },
     ]);
     expect(d.runCommand).not.toHaveBeenCalled();
   });
@@ -407,6 +468,100 @@ describe('handleInteraction', () => {
     });
   });
 
+  describe('/setup and /settings', () => {
+    const owner = (name: string, permissions: string, roles: string[] = []) => ({
+      ...statusCommand,
+      data: { name },
+      member: { user: { id: '42' }, permissions, roles },
+    });
+    const form = (permissions: string, guildId = '777') => ({
+      type: 5,
+      application_id: '111',
+      token: 'tok',
+      guild_id: guildId,
+      data: {
+        custom_id: 'setup',
+        components: [
+          { type: 1, components: [{ type: 4, custom_id: 'RCON_URL', value: 'http://203.0.113.10:7776' }] },
+          { type: 1, components: [{ type: 4, custom_id: 'RCON_PASSWORD', value: 'hunter2' }] },
+        ],
+      },
+      member: { user: { id: '42' }, permissions },
+    });
+    const run = async (d: ReturnType<typeof deps>, payload: unknown) => {
+      const { body, signature, timestamp } = await signed(payload);
+      return handleInteraction(body, signature, timestamp, d);
+    };
+
+    it('opens the form for an Administrator, straight away and without any secret in it', async () => {
+      const d = deps();
+
+      const result = await run(d, owner('setup', String(ADMINISTRATOR)));
+
+      expect(result).toMatchObject({ status: 200, body: { type: 9, data: { custom_id: 'setup', title: 'Connect the bot' } } });
+      expect(result.followUp).toBeUndefined();
+      expect(JSON.stringify(result.body)).not.toContain('"value"');
+    });
+
+    it('keeps /setup and /settings to Administrators, not staff roles', async () => {
+      const d = deps();
+
+      for (const name of ['setup', 'settings']) {
+        const result = await run(d, owner(name, '0', ['555']));
+        expect(result.body).toEqual({ type: 4, data: { content: 'Only Administrators can use this.', flags: 64 } });
+      }
+      expect(d.runCommand).not.toHaveBeenCalled();
+    });
+
+    it('saves the form for an Administrator, replying only to them', async () => {
+      const d = deps();
+
+      const result = await run(d, form(String(ADMINISTRATOR)));
+      await result.followUp?.();
+
+      expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
+      expect(d.submitSetup).toHaveBeenCalledWith({ RCON_URL: 'http://203.0.113.10:7776', RCON_PASSWORD: 'hunter2' }, '42');
+      expect(d.editReply).toHaveBeenCalledWith('111', 'tok', { content: '✅ Connected', allowed_mentions: { parse: [] } });
+    });
+
+    it('refuses the form from anyone else, or from a Discord server no community has', async () => {
+      const d = deps();
+
+      expect((await run(d, form(String(1 << 5)))).body).toMatchObject({ type: 4, data: { content: 'Only Administrators can connect the bot.' } });
+      expect((await run(d, form(String(ADMINISTRATOR), '888'))).body).toMatchObject({ type: 4, data: { flags: 64 } });
+      expect((await run(d, { ...form(String(ADMINISTRATOR)), data: { custom_id: 'other' } })).body).toMatchObject({
+        type: 4,
+        data: { content: 'Unknown form.' },
+      });
+      expect(d.submitSetup).not.toHaveBeenCalled();
+    });
+
+    it('says the form was not saved when saving fails, without echoing what was typed', async () => {
+      const d = deps();
+      d.submitSetup.mockRejectedValueOnce(new Error('storage unavailable'));
+
+      await (await run(d, form(String(ADMINISTRATOR)))).followUp?.();
+
+      const reply = JSON.stringify(d.editReply.mock.calls);
+      expect(reply).toContain("Couldn't save that (storage unavailable)");
+      expect(reply).not.toContain('hunter2');
+    });
+
+    it('runs /settings privately for an Administrator', async () => {
+      const d = deps();
+      const payload = {
+        ...owner('settings', String(ADMINISTRATOR)),
+        data: { name: 'settings', options: [{ name: 'set', type: 1, options: [{ name: 'name', type: 3, value: 'LIVE_THRESHOLD' }, { name: 'value', type: 3, value: '40' }] }] },
+      };
+
+      const result = await run(d, payload);
+      await result.followUp?.();
+
+      expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
+      expect(d.runCommand).toHaveBeenCalledWith({ name: 'settings', options: { subcommand: 'set', name: 'LIVE_THRESHOLD', value: '40' }, userId: '42' });
+    });
+  });
+
   it('answers an unknown command privately', async () => {
     const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name: 'other' } });
 
@@ -479,17 +634,27 @@ describe('COMMANDS', () => {
       'setnextmap',
       'changemap',
       'vip',
+      'setup',
+      'settings',
     ]);
-    for (const command of COMMANDS.slice(5)) {
+    for (const command of COMMANDS.slice(5, -2)) {
       expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
       expect(command.description).toMatch(/\(staff only\)$/);
       expect(command.description.length).toBeLessThanOrEqual(100);
     }
+    for (const command of COMMANDS.slice(-2)) {
+      expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
+      expect(command.description).toMatch(/\(Administrators only\)$/);
+    }
+    // Every command reaches the community of the Discord server it is used in, so none work outside a server.
+    for (const command of COMMANDS) expect(command).toMatchObject({ integration_types: [0], contexts: [0] });
     // Public: anyone can see the roundups.
     expect(COMMANDS.find((c) => c.name === 'roundup')).toEqual({
       name: 'roundup',
       description: 'The best players and team of the week or month',
       type: 1,
+      integration_types: [0],
+      contexts: [0],
       options: [
         {
           type: 3,

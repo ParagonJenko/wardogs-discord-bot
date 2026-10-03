@@ -2,7 +2,7 @@
   "name": "wardogs-discord-bot",
   "version": "1.0.0",
   "private": true,
-  "description": "Posts Discord alerts when a WARDOGS server starts seeding, goes live, or drops below a population threshold.",
+  "description": "Posts Discord alerts when a WARDOGS server starts seeding, goes live, or drops below a population threshold. One deployment serves many communities.",
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -12,7 +12,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
     "deploy": "wrangler deploy",
-    "register": "node --env-file-if-exists=.env scripts/register-commands.ts"
+    "register": "node --env-file-if-exists=.env scripts/register-commands.ts",
+    "tenant": "node --env-file-if-exists=.env scripts/tenant.ts"
   },
   "dependencies": {
     "zod": "^4.6.5"

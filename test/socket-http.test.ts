@@ -116,4 +116,11 @@ describe('socketHttp', () => {
 
     await expect(socketHttp(server.connect)(url, {})).rejects.toThrow(/HTTP/);
   });
+
+  it('stops reading, and closes the socket, when the answer is far larger than any game server sends', async () => {
+    const server = fakeServer(['HTTP/1.1 200 OK\r\n\r\n', 'x'.repeat(600), 'x'.repeat(600)]);
+
+    await expect(socketHttp(server.connect, 1_000, 1_000)(url, {})).rejects.toThrow(/larger than 1000 bytes/);
+    expect(server.isClosed()).toBe(true);
+  });
 });
