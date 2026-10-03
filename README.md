@@ -464,7 +464,7 @@ The Node/Docker version does not have the staff page.
 | `server`       | Name, players, max players, map, phase (`empty`/`seeding`/`live`), score, `seenAt`     |
 | `history`      | `[time, players]` for every check in the last 24 hours                                 |
 | `days`         | Peak players and minutes live for each of the last 14 days (UTC)                       |
-| `hourly`       | `{ "days": 14, "players": [24 numbers], "busy": [24 numbers] }`: for each UTC hour (0 to 23) over the last 14 days, the average players and the share of readings (0 to 1) with at least `thresholds.busy` players. `null` for an hour with no readings (for `busy`: none checked against that threshold) |
+| `hourly`       | `{ "days": 14, "players": [24 numbers], "busy": [24 numbers] }`: for each UTC hour (0 to 23) over the last 14 days, the average players and the share of readings (0 to 1) with at least `thresholds.busy` players, each on the median day, so one bad day does not drag an hour down. `null` for an hour with no readings (for `busy`: none checked against that threshold) |
 | `currentMatch` | Map, start time, peak, score and the top 5 players by kills                            |
 | `matches`      | The last 10 match summaries, newest first                                              |
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
@@ -506,8 +506,10 @@ coloured as in their latest match. The records start when the bot started keepin
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
 
-The site's busy times are the hours when the server usually has `BUSY_THRESHOLD` players or more (default 97). Set
-it in the `vars` block of `wrangler.jsonc`. Changing it counts busy readings again from the last 24 hours, and older
+The site's busy times are the hours when the server usually has `BUSY_THRESHOLD` players or more (default 97). Each
+hour is taken from the median day of the last 14, not from all their readings together, so one bad day, like a crash
+or a quiet evening, does not take an hour off the busy times. Set `BUSY_THRESHOLD` in the `vars` block of
+`wrangler.jsonc`. Changing it counts busy readings again from the last 24 hours, and older
 readings counted under another threshold, or from before busy counts were kept, are left out.
 
 For the Discord counts, set `DISCORD_INVITE` in the `vars` block of `wrangler.jsonc` to an invite link that
