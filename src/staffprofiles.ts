@@ -22,6 +22,10 @@ export const parseStaffProfiles = (raw: unknown): StaffProfiles => {
 // Every linked staff member's Steam ID.
 export const staffSteamIds = (profiles: StaffProfiles): Set<string> => new Set(Object.values(profiles).map((p) => p.steamId));
 
+// The same, with the name each goes by on Discord, for their staff spots (see vip.ts).
+export const staffBySteam = (profiles: StaffProfiles): Map<string, string> =>
+  new Map(Object.values(profiles).map((p) => [p.steamId, p.name]));
+
 // A Steam64 ID: 17 digits, starting 7656119.
 const STEAM64 = /^7656119\d{10}$/;
 const PROFILE_LINK = /^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/profiles\/(\d+)\/?(?:[?#].*)?$/i;

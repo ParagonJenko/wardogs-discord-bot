@@ -6,6 +6,7 @@ import {
   addVip,
   editReserved,
   parseVipState,
+  planStaffSpots,
   planVip,
   qualified,
   removeVip,
@@ -197,8 +198,8 @@ describe('vipDue and parseVipState', () => {
   it('checks every 10 minutes, starting straight away', () => {
     const state = parseVipState(undefined);
 
-    expect(state).toEqual({ granted: {}, checkedAt: 0, revoked: {} });
-    expect(parseVipState({ granted: {}, checkedAt: 5 })).toEqual({ granted: {}, checkedAt: 5, revoked: {} });
+    expect(state).toEqual({ granted: {}, checkedAt: 0, revoked: {}, staffSpots: {} });
+    expect(parseVipState({ granted: {}, checkedAt: 5 })).toEqual({ granted: {}, checkedAt: 5, revoked: {}, staffSpots: {} });
     expect(vipDue(state, NOW)).toBe(true);
     expect(vipDue({ ...state, checkedAt: NOW - 9 * 60_000 }, NOW)).toBe(false);
   });
@@ -242,6 +243,29 @@ describe('seederVip', () => {
   });
 });
 
+describe('planStaffSpots', () => {
+  it('adds linked staff, takes over a slot already on the list, and ends the spot of staff who unlinked', () => {
+    const staff = new Map([
+      [ADMIN, 'Sarge'],
+      [BO, 'Kestrel'],
+      [CY, 'Moth'],
+    ]);
+    const spots = { [CY]: { name: 'Moth', since: NOW - DAY }, [DEE]: { name: 'Pike', since: NOW - DAY }, [ASH]: { name: 'Ash', since: NOW - DAY } };
+
+    // ADMIN is on the list by hand; CY already has a spot; DEE unlinked; ASH unlinked and was taken off by an admin.
+    expect(planStaffSpots(staff, [ADMIN, CY, DEE], spots, NOW)).toEqual({
+      add: [{ steamId: BO, name: 'Kestrel' }],
+      adopted: [{ steamId: ADMIN, name: 'Sarge' }],
+      remove: [DEE],
+      staffSpots: {
+        [ADMIN]: { name: 'Sarge', since: NOW },
+        [BO]: { name: 'Kestrel', since: NOW },
+        [CY]: { name: 'Moth', since: NOW - DAY },
+      },
+    });
+  });
+});
+
 describe('syncVip', () => {
   const server = (text = settings, overrides: Partial<ServerConfig> = {}) => {
     const accepted: ConfigResult = { ok: true, errors: [], ignored: [] };
@@ -260,7 +284,7 @@ describe('syncVip', () => {
     const result = await syncVip({ rule, days: earned, state: parseVipState(undefined), now: NOW, rcon, log });
 
     expect(result).toEqual({
-      state: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'seeding' } }, checkedAt: NOW, revoked: {} },
+      state: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'seeding' } }, checkedAt: NOW, revoked: {}, staffSpots: {} },
       added: [{ steamId: ASH, name: 'Ash' }],
       renewed: [],
     });
@@ -287,24 +311,80 @@ describe('syncVip', () => {
   it('takes a player off the list once their week is up, if they did not earn it again', async () => {
     const onList = editReserved(settings, [ASH], []);
     const rcon = server(onList);
-    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: NOW - 600_000, revoked: {} };
+    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: NOW - 600_000, revoked: {}, staffSpots: {} };
 
     const result = await syncVip({ rule, days: [{ [ASH]: row('Ash', 2) }], state, now: NOW, rcon, log });
 
     expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings });
-    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {} }, added: [], renewed: [] });
+    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {}, staffSpots: {} }, added: [], renewed: [] });
     expect(log.info).toHaveBeenCalledWith(`VIP ended: Ash (${ASH}). The server uses the new reserved list after its next restart.`);
   });
 
   it('keeps a player on the list for another week if they earned it again, without writing', async () => {
     const rcon = server(editReserved(settings, [ASH], []));
-    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: 0, revoked: {} };
+    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 60_000 } }, checkedAt: 0, revoked: {}, staffSpots: {} };
 
     const result = await syncVip({ rule, days: earned, state, now: NOW, rcon, log });
 
     expect(rcon.put).not.toHaveBeenCalled();
     expect(result.renewed).toEqual([{ steamId: ASH, name: 'Ash' }]);
     expect(result.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'seeding' });
+  });
+
+  it('keeps a staff spot for linked staff, taking over a slot added by hand, and never announces them', async () => {
+    const rcon = server();
+    const staff = new Map([
+      [ADMIN, 'Sarge'],
+      [BO, 'Kestrel'],
+    ]);
+
+    const result = await syncVip({ rule, days: [], state: parseVipState(undefined), now: NOW, staff, rcon, log });
+
+    expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: editReserved(settings, [BO], []) });
+    expect(result).toEqual({
+      state: {
+        granted: {},
+        checkedAt: NOW,
+        revoked: {},
+        staffSpots: { [ADMIN]: { name: 'Sarge', since: NOW }, [BO]: { name: 'Kestrel', since: NOW } },
+      },
+      added: [],
+      renewed: [],
+    });
+    expect(log.info).toHaveBeenCalledWith(`Staff spots taken over from the reserved list: Sarge (${ADMIN}).`);
+    expect(log.info).toHaveBeenCalledWith(`Staff spots added: Kestrel (${BO}). The server uses the new reserved list after its next restart.`);
+  });
+
+  it('turns VIP a staff member had from the bot into their staff spot, which does not run out', async () => {
+    const rcon = server(editReserved(settings, [ASH], []));
+    const state = {
+      ...parseVipState(undefined),
+      granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 7 * DAY, expiresAt: NOW - 1, source: 'seeding' as const } },
+    };
+
+    const result = await syncVip({ rule, days: earned, state, now: NOW, staff: new Map([[ASH, 'Sarge']]), rcon, log });
+
+    expect(rcon.put).not.toHaveBeenCalled();
+    expect(result.state.granted).toEqual({});
+    expect(result.state.staffSpots).toEqual({ [ASH]: { name: 'Sarge', since: NOW } });
+    expect(result.renewed).toEqual([]);
+  });
+
+  it('takes the spot of staff who unlinked off the list, unless they earned VIP by seeding', async () => {
+    const rcon = server(editReserved(settings, [ASH, BO], []));
+    const state = {
+      ...parseVipState(undefined),
+      staffSpots: { [ASH]: { name: 'Sarge', since: NOW - DAY }, [BO]: { name: 'Kestrel', since: NOW - DAY } },
+    };
+
+    // Ash seeded on 3 days since being unlinked; Bo did not.
+    const result = await syncVip({ rule, days: earned, state, now: NOW, staff: new Map(), rcon, log });
+
+    const written = rcon.put.mock.calls[0]?.[0].text ?? '';
+    expect(reservedIds(written)).toEqual([ADMIN, ASH]);
+    expect(result.state.staffSpots).toEqual({});
+    expect(result.state.granted[ASH]).toMatchObject({ source: 'seeding', expiresAt: NOW + 7 * DAY });
+    expect(result.added).toEqual([{ steamId: ASH, name: 'Ash' }]);
   });
 
   it('forgets blocks that have run out', async () => {
@@ -317,12 +397,12 @@ describe('syncVip', () => {
 
   it('ends VIP staff gave on time even when automatic VIP is off', async () => {
     const rcon = server(editReserved(settings, [ASH], []));
-    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 30 * DAY, expiresAt: NOW - 1 } }, checkedAt: 0, revoked: {} };
+    const state = { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - 30 * DAY, expiresAt: NOW - 1 } }, checkedAt: 0, revoked: {}, staffSpots: {} };
 
     const result = await syncVip({ rule: null, days: [{ [ASH]: row('Ash', 7) }], state, now: NOW, rcon, log });
 
     expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings });
-    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {} }, added: [], renewed: [] });
+    expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {}, staffSpots: {} }, added: [], renewed: [] });
   });
 
   it('writes nothing when nothing changed', async () => {

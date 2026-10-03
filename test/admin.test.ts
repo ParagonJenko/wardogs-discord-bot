@@ -59,7 +59,7 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     staffNames: {},
     staffProfiles: {},
     reserved: null,
-    vip: { granted: {}, checkedAt: 0, revoked: {} },
+    vip: { granted: {}, checkedAt: 0, revoked: {}, staffSpots: {} },
     steam: null,
     server: null,
     online: null,
@@ -190,18 +190,24 @@ describe('buildAdminOverview', () => {
     });
   });
 
-  it('lists the reserved players, with the VIP the bot gave and when it ends', () => {
+  it('lists the reserved players, with the VIP the bot gave and when it ends, and the staff spots', () => {
     const overview = buildAdminOverview(
       sources({
-        reserved: { ids: [DEE, ASH], maxSlots: 2 },
-        vip: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY } }, checkedAt: 0, revoked: {} },
+        reserved: { ids: [DEE, ASH, CY], maxSlots: 2 },
+        vip: {
+          granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY } },
+          checkedAt: 0,
+          revoked: {},
+          staffSpots: { [CY]: { name: 'Cy', since: NOW - 2 * DAY } },
+        },
       }),
     );
 
     expect(overview.reserved).toEqual({
       players: [
-        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY } },
-        { player: { steamId: DEE, name: 'Dee' }, bot: null },
+        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY }, staff: null },
+        { player: { steamId: CY, name: 'Cy' }, bot: null, staff: { since: NOW - 2 * DAY } },
+        { player: { steamId: DEE, name: 'Dee' }, bot: null, staff: null },
       ],
       maxSlots: 2,
     });

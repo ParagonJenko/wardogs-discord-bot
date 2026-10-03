@@ -198,7 +198,7 @@ The Node/Docker version does not post roundups.
 | `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
 | `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days, or for good with `permanent` |
-| `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days |
+| `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
@@ -530,10 +530,16 @@ account to their Discord sign-in, and the bot then counts their time on the serv
   `/seeders`, the roundups' top seeders, the website's seeding board and its list of who has VIP from seeding. Its
   seeding time counts as time played, so time played stays the same. Its player page shows no seed days and no
   progress towards seeder VIP. Everything else (kills, K/D, matches, time played) shows as for anyone.
-- VIP a staff member earned before linking runs out on time and is not renewed. VIP staff give with `/vip add` is not
-  changed.
+- **Staff spots.** Each linked staff member gets a reserved slot on the server's reserved list for as long as they are
+  linked, in place of one an admin adds by hand. A slot they already had (added by hand, or VIP from the bot) is taken
+  over as it is, so nothing changes in `ServerSettings.ini` for them, and VIP the bot gave them stops running out. The
+  bot puts it on (or takes it off) at the check after they link (or unlink), within a minute, and the server uses it
+  after its next restart. It is never announced in Discord. `/vip remove` leaves a staff spot alone and says to unlink
+  their Steam account instead; an admin who takes one off by hand sees it put back. Each change is logged
+  (`Staff spots added: …`, `Staff spots taken over from the reserved list: …`, `Staff spots ended: …`).
 - A Steam account can only be linked to one staff member. Any staff member can unlink anyone's, for someone who is no
-  longer staff: their time then counts as seeding again, including before they were unlinked, as the bot keeps the
+  longer staff: their staff spot comes off the reserved list (unless they have earned seeder VIP, which they then keep
+  as a seeder), and their time counts as seeding again, including before they were unlinked, as the bot keeps the
   records as they were.
 - The page sends `POST /api/admin/profile` (`{"action": "link", "steamId": "…"}`, or `{"action": "unlink"}` with
   an optional `userId`), and the overview lists everyone linked (`staffProfiles`). Each change is logged
@@ -894,8 +900,9 @@ How it changes the server:
   `PUT /v1/config`. Every other line stays exactly as it was.
 - It writes with the revision it read, so if someone edits the file in between, the server refuses the write and
   the bot tries again 10 minutes later.
-- It only removes players it added itself. Reserved slots an admin gave out by hand are never touched, and a
-  player who already has one is left as they are.
+- It only removes players it added itself, and the [staff spots](#staff-steam-accounts) of staff who unlinked. Reserved
+  slots an admin gave out by hand are never touched, unless they are a linked staff member's, which the bot takes over
+  as their staff spot. A player who already has one is left as they are.
 - If an admin takes a bot-given VIP off the list, the bot forgets it. It adds them again only if they earn it again.
 - It reads the list's lines in order, as the game does: `!DefaultReservedPlayerIds=ClearArray` empties the list so
   far, `-DefaultReservedPlayerIds=<Steam ID>` takes a player off, and `+` adds one. It leaves those lines as they are.
