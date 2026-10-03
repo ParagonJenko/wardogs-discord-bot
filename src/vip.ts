@@ -42,10 +42,11 @@ export const vipDue = (state: VipState, now: number): boolean => now - state.che
 export type SeederVip = { steamId: string; name: string; until: number };
 
 // Who has VIP from seeding now, for the website: the latest to earn it first. By when they earned it, not when it
-// ends, since staff can extend a seeder's VIP.
-export const seederVip = (state: VipState, now: number): SeederVip[] =>
+// ends, since staff can extend a seeder's VIP. Staff (`staff`, by Steam ID) are left off: one who earned it before
+// linking their Steam account keeps it until it runs out, but it is not shown as a seeder's.
+export const seederVip = (state: VipState, now: number, staff: ReadonlySet<string> = new Set()): SeederVip[] =>
   Object.entries(state.granted)
-    .filter(([, g]) => g.source !== 'staff' && g.expiresAt > now)
+    .filter(([steamId, g]) => g.source !== 'staff' && g.expiresAt > now && !staff.has(steamId))
     .sort(([, a], [, b]) => b.grantedAt - a.grantedAt)
     .map(([steamId, g]) => ({ steamId, name: g.name, until: g.expiresAt }));
 

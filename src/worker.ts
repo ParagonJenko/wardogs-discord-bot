@@ -92,6 +92,7 @@ import {
   recordMatchPlayers,
   recordSeed,
   unrecordMatchPlayers,
+  withoutStaffSeeding,
   type MatchRecord,
   type PlayerDay,
   type PlayerTotals,
@@ -175,6 +176,15 @@ import {
   withFailures,
   type StaffNames,
 } from './staffnames.ts';
+import {
+  linkSteam,
+  parseStaffProfiles,
+  readProfileAction,
+  STAFF_PROFILES_KEY,
+  staffSteamIds,
+  unlinkSteam,
+  type ProfileAction,
+} from './staffprofiles.ts';
 import {
   banKickReason,
   PROFILE_DAYS,
@@ -319,7 +329,8 @@ const oneAtATime = () => {
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last check, to
 // notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page),
-// 'staffLookupsFailed' (when asking Discord about each of those last failed), 'steam:<Steam ID>' (what Steam said about
+// 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam account each
+// staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what Steam said about
 // that player's account, for risky accounts) and 'rotations' (the saved map rotations, the week's plan and the rotation
 // put on the server today).
 export class Watcher extends DurableObject<Env> {
@@ -374,6 +385,11 @@ export class Watcher extends DurableObject<Env> {
       validate: (text: string) => validateConfig(config.rconUrl, config.rconPassword, text, http),
       put: (serverConfig: ServerConfig) => putConfig(config.rconUrl, config.rconPassword, serverConfig, http),
     };
+  }
+
+  // The Steam accounts staff linked (see staffprofiles.ts). Their time counts as playing, never seeding.
+  private async staffSteam(): Promise<Set<string>> {
+    return staffSteamIds(parseStaffProfiles(await this.ctx.storage.get(STAFF_PROFILES_KEY)));
   }
 
   // Adds to a player's log, and changes their ban (null lifts it), the VIP state or the bot's copy of the server's ban
@@ -592,6 +608,7 @@ export class Watcher extends DurableObject<Env> {
       now: Date.now,
       log: console,
       store: this.stateStore(),
+      staff: () => this.staffSteam(),
       stats: {
         check: (observation) =>
           this.recordCheck(observation, minutesPerCheck, { live: config.rules.live, busy: config.busyThreshold }),
@@ -1153,11 +1170,13 @@ export class Watcher extends DurableObject<Env> {
     if (rule === null && Object.keys(state.granted).length === 0) return;
     if (!vipDue(state, now)) return;
     const keys = rule === null ? [] : recentDayKeys(now, rule.windowDays);
-    const stored = await storage.get(keys);
+    const stored = await storage.get([...keys, STAFF_PROFILES_KEY]);
+    // Staff never earn it. One who earned it before linking their Steam account keeps it until it runs out.
+    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
     try {
       const next = await syncVip({
         rule,
-        days: keys.map((key) => parsePlayerDay(stored.get(key))),
+        days: keys.map((key) => withoutStaffSeeding(parsePlayerDay(stored.get(key)), staff)),
         state,
         now,
         rcon: this.settingsFile({ config, http: socketHttp(connect) }),
@@ -1307,7 +1326,7 @@ export class Watcher extends DurableObject<Env> {
     const config = loadConfig(stringVars(this.env));
     const now = Date.now();
     const [stored, days, weaponDays, records] = await Promise.all([
-      this.ctx.storage.get(['stats', 'killFeedSince', 'vip']),
+      this.ctx.storage.get(['stats', 'killFeedSince', 'vip', STAFF_PROFILES_KEY]),
       this.recentDays(now),
       this.recentWeaponDays(now, LEADERBOARD_DAYS),
       this.matchRecords(now),
@@ -1315,7 +1334,8 @@ export class Watcher extends DurableObject<Env> {
     const stats = parseStats(stored.get('stats'));
     const since = stored.get('killFeedSince');
     const board = leaderboard(days.slice(-LEADERBOARD_DAYS).map((d) => d.players), LEADERBOARD_DAYS, LEADERBOARD_SIZE);
-    const seeders = config.vip === null ? null : seederVip(parseVipState(stored.get('vip')), now);
+    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const seeders = config.vip === null ? null : seederVip(parseVipState(stored.get('vip')), now, staff);
     const ids = await this.idsFor([
       ...namedSteamIds(stats, board),
       ...weaponHolders(weaponDays),
@@ -1354,17 +1374,19 @@ export class Watcher extends DurableObject<Env> {
     return this.ids;
   }
 
-  // Each player's totals for every UTC day of the player pages, oldest first, today last.
+  // Each player's totals for every UTC day of the player pages, oldest first, today last. Staff's time counts as
+  // playing, never seeding (see withoutStaffSeeding); the cache keeps the records as they are.
   private async recentDays(now: number): Promise<DayRecords[]> {
     const keys = recentDayKeys(now, PROFILE_DAYS);
     const fresh = keys.slice(-2);
     const read = keys.filter((key) => fresh.includes(key) || !this.dayCache.has(key));
-    const stored = await this.ctx.storage.get(read);
+    const stored = await this.ctx.storage.get([...read, STAFF_PROFILES_KEY]);
+    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
     for (const key of this.dayCache.keys()) if (!keys.includes(key)) this.dayCache.delete(key);
     for (const key of read) if (!fresh.includes(key)) this.dayCache.set(key, parsePlayerDay(stored.get(key)));
     return keys.map((key) => ({
       day: dayOfKey(key),
-      players: fresh.includes(key) ? parsePlayerDay(stored.get(key)) : (this.dayCache.get(key) ?? {}),
+      players: withoutStaffSeeding(fresh.includes(key) ? parsePlayerDay(stored.get(key)) : (this.dayCache.get(key) ?? {}), staff),
     }));
   }
 
@@ -1405,9 +1427,10 @@ export class Watcher extends DurableObject<Env> {
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
     const steamId = [...ids].find(([, known]) => known === id)?.[0];
     if (steamId === undefined) return null;
-    const [matches, stored] = await Promise.all([
+    const [matches, stored, staff] = await Promise.all([
       this.matchRecords(now),
       this.ctx.storage.get(['state', 'vip', 'online', 'killFeedSince', playerWeaponsKey(steamId)]),
+      this.staffSteam(),
     ]);
     const snapshot = this.onlineNow(now, stored.get('online'));
     const inGame = snapshot?.players.find((p) => p.steamId === steamId);
@@ -1432,7 +1455,8 @@ export class Watcher extends DurableObject<Env> {
       rankDays: LEADERBOARD_DAYS,
       online,
       vip: parseVipState(stored.get('vip')).granted[steamId] ?? null,
-      rule: config.vip,
+      // Staff cannot earn seeder VIP, so their page does not count them towards it.
+      rule: staff.has(steamId) ? null : config.vip,
       weapons:
         typeof since === 'string'
           ? { since, used: playerWeaponDays(parsePlayerWeapons(stored.get(playerWeaponsKey(steamId))), days[0]?.day ?? since) }
@@ -1449,7 +1473,17 @@ export class Watcher extends DurableObject<Env> {
     const { config } = this.rcon();
     const http = socketHttp(connect, SUGGEST_TIMEOUT_MS);
     const [stored, recent, logs, serverBans, serverConfig] = await Promise.all([
-      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', 'vip', 'online', 'state', 'stats', STAFF_NAMES_KEY]),
+      this.ctx.storage.get([
+        ...griefKeys,
+        'killFeedSince',
+        'bans',
+        'vip',
+        'online',
+        'state',
+        'stats',
+        STAFF_NAMES_KEY,
+        STAFF_PROFILES_KEY,
+      ]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
       fetchBans(config.rconUrl, config.rconPassword, http).catch((error: unknown) => {
@@ -1477,8 +1511,10 @@ export class Watcher extends DurableObject<Env> {
     const online = this.onlineNow(now, stored.get('online'));
     const playerDays = recent.slice(-days).map((d) => d.players);
     const steam = await this.steamSources(playerDays, online, now, days);
+    const staffProfiles = parseStaffProfiles(stored.get(STAFF_PROFILES_KEY));
     const steamIds = [
       ...adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []),
+      ...staffSteamIds(staffProfiles),
       ...(online?.players.map((p) => p.steamId) ?? []),
       ...(steam === null ? [] : riskySteamIds(steamPlayers(playerDays, steam.inGame), steam.checks, now).slice(0, STEAM_ACCOUNTS_LISTED)),
     ];
@@ -1507,6 +1543,7 @@ export class Watcher extends DurableObject<Env> {
       nameOf: (steamId) => names.get(steamId),
       idOf: (steamId) => ids.get(steamId),
       staffNames,
+      staffProfiles,
       reserved,
       vip,
       steam,
@@ -1553,6 +1590,30 @@ export class Watcher extends DurableObject<Env> {
     return learned.length === 0 ? null : merged;
   }
 
+  // Links the signed-in staff member's Steam account, or unlinks theirs or another staff member's (see staffprofiles.ts).
+  // `player` is the name that account last had in game, when the bot has seen it, so the page can say whose it is.
+  async staffProfile(
+    action: ProfileAction,
+    user: { id: string; name: string },
+  ): Promise<{ steamId: string | null; player: string | null } | { problem: string }> {
+    const storage = this.ctx.storage;
+    const profiles = parseStaffProfiles(await storage.get(STAFF_PROFILES_KEY));
+    if (action.action === 'unlink') {
+      const target = action.userId ?? user.id;
+      const was = profiles[target];
+      if (was === undefined) return { steamId: null, player: null };
+      await storage.put(STAFF_PROFILES_KEY, unlinkSteam(profiles, target));
+      console.info(`Staff page: ${JSON.stringify(user.name)} unlinked Steam account ${was.steamId} from Discord user ${target}`);
+      return { steamId: null, player: null };
+    }
+    const linked = linkSteam(profiles, user, action.steamId, Date.now());
+    if ('problem' in linked) return linked;
+    await storage.put(STAFF_PROFILES_KEY, linked.profiles);
+    console.info(`Staff page: ${JSON.stringify(user.name)} (Discord user ${user.id}) linked Steam account ${linked.steamId}`);
+    const seen = (await this.recentDays(Date.now())).findLast((d) => d.players[linked.steamId] !== undefined);
+    return { steamId: linked.steamId, player: seen?.players[linked.steamId]?.name ?? null };
+  }
+
   // A staff member's name, as seen when they sign in to the staff page or use a staff command. Only written when it
   // changed, or has not been seen for a while.
   async noteStaff(id: string, name: string, username: string | null): Promise<void> {
@@ -1592,8 +1653,9 @@ export class Watcher extends DurableObject<Env> {
   async playerRecord(steamId: string): Promise<PlayerRecord> {
     const keys = recentDayKeys(Date.now(), PROFILE_DAYS);
     const key = modLogKey(steamId);
-    const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans']);
-    const found = totals(keys.map((k) => parsePlayerDay(stored.get(k)))).find((p) => p.steamId === steamId);
+    const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans', STAFF_PROFILES_KEY]);
+    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const found = totals(keys.map((k) => withoutStaffSeeding(parsePlayerDay(stored.get(k)), staff))).find((p) => p.steamId === steamId);
     const vip = parseVipState(stored.get('vip'));
     const log = parseModLog(stored.get(key));
     const ban = parseBanBook(stored.get('bans'))[steamId] ?? null;
@@ -1730,9 +1792,10 @@ export class Watcher extends DurableObject<Env> {
   // The top seeders over the last `days` UTC days, including today, and who has VIP from the bot.
   async seeders(days: number): Promise<SeederRow[]> {
     const keys = recentDayKeys(Date.now(), days);
-    const stored = await this.ctx.storage.get([...keys, 'vip']);
+    const stored = await this.ctx.storage.get([...keys, 'vip', STAFF_PROFILES_KEY]);
     const { granted } = parseVipState(stored.get('vip'));
-    return rankSeeders(keys.map((key) => parsePlayerDay(stored.get(key))), SEEDERS_LISTED).map((p) => ({
+    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    return rankSeeders(keys.map((key) => withoutStaffSeeding(parsePlayerDay(stored.get(key)), staff)), SEEDERS_LISTED).map((p) => ({
       steamId: p.steamId,
       name: p.name,
       seedingMinutes: p.seedingMinutes,
@@ -1977,6 +2040,19 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page rotations failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the rotations right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // A staff member links their Steam account, so the bot never counts them as a seeder, or unlinks one.
+  if (route === 'POST /api/admin/profile') {
+    const action = await readProfileAction(request);
+    if (action === null) return Response.json({ error: 'Not a staff profile request' }, { status: 400, headers });
+    try {
+      const result = await watcher().staffProfile(action, { id: session.userId, name: session.name });
+      if ('problem' in result) return Response.json({ error: result.problem }, { status: 400, headers });
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff profile change failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
     }
   }
   if (route !== 'GET /api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });

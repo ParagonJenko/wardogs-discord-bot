@@ -43,7 +43,13 @@ const snapshot = (players: Player[], map = 'Kavkazi'): Snapshot => ({
   players,
 });
 
-const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: StatsSink, overrides: Partial<Config> = {}) => {
+const setup = (
+  snapshots: (Snapshot | Error)[],
+  store = memoryStore(),
+  stats?: StatsSink,
+  overrides: Partial<Config> = {},
+  staff?: () => Promise<ReadonlySet<string>>,
+) => {
   const queue = [...snapshots];
   const sent: DiscordMessage[] = [];
   const send = vi.fn(async (message: DiscordMessage) => {
@@ -63,6 +69,7 @@ const setup = (snapshots: (Snapshot | Error)[], store = memoryStore(), stats?: S
     log,
     store,
     stats,
+    staff,
   });
   const run = async (times: number) => {
     for (let i = 0; i < times; i++) await tick();
@@ -127,6 +134,28 @@ describe('poller', () => {
     await run(5);
 
     expect(field(sent[1], 'Top seeders')).toBe('🥇 Pa · 3 min\n🥈 Pb · 2 min\n🥉 Px0 · 1 min');
+  });
+
+  it('never names staff as top seeders, but still hands their seed on to the records', async () => {
+    const a = player('a');
+    const b = player('b');
+    const staff = vi.fn(async () => new Set(['a']));
+    const seeded = vi.fn(async (_seeders: SeedCredit[], _at: number) => {});
+    const stats: StatsSink = { check: async () => {}, seeded, matchEnded: async () => {} };
+    const { run, sent } = setup(
+      [snapshot([]), snapshot([a]), snapshot([a, b]), snapshot(crowd(20, [a, b]))],
+      memoryStore(),
+      stats,
+      {},
+      staff,
+    );
+
+    await run(4);
+
+    expect(field(sent[1], 'Top seeders')).toBe('🥇 Pb · 1 min');
+    // Asked once, when the server went live.
+    expect(staff).toHaveBeenCalledTimes(1);
+    expect(seeded.mock.calls[0]?.[0].map((s) => s.steamId)).toEqual(['a', 'b']);
   });
 
   it('does not credit players who only joined on the check that went live', async () => {

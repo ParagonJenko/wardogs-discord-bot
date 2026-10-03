@@ -14,6 +14,7 @@ import {
   recordSeed,
   totals,
   unrecordMatchPlayers,
+  withoutStaffSeeding,
   type PlayerDay,
   type PlayerTotals,
 } from '../src/players.ts';
@@ -187,6 +188,24 @@ describe('totals and rankings', () => {
     expect(board.playtime.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
     expect(board.seeding.map((p) => p.name)).toEqual(['Ash2', 'Bo']);
     expect(board.kills.map((p) => p.steamId)).toEqual(['c', 'a']);
+  });
+
+  it('counts staff time as playing, never seeding, so they are off the seeders and keep their time played', () => {
+    const staff = new Set(['a']);
+    const days = [monday, tuesday].map((d) => withoutStaffSeeding(d, staff));
+
+    expect(days[0]?.a).toEqual(row('Ash', { liveMinutes: 90, matches: 2, kills: 20, deaths: 5 }));
+    expect(days[0]?.b).toBe(monday.b);
+    expect(rankSeeders(days, 5).map((p) => p.steamId)).toEqual(['b']);
+    expect(leaderboard(days, 30, 5).seeding.map((p) => p.steamId)).toEqual(['b']);
+    expect(leaderboard(days, 30, 5).playtime.map((p) => [p.steamId, p.seedingMinutes + p.liveMinutes])).toEqual([
+      ['a', 140],
+      ['c', 90],
+      ['b', 50],
+    ]);
+    expect(ranks(totals(days), 'a', 30).seeding).toBeNull();
+    // A day without staff is left as it was.
+    expect(withoutStaffSeeding(monday, new Set(['z']))).toBe(monday);
   });
 
   it('leaves players with too few matches off the K/D board', () => {

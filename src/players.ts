@@ -185,6 +185,20 @@ export const parseMatchRecord = (raw: unknown): MatchRecord | null => {
   return parsed.success ? parsed.data : null;
 };
 
+// A day as everything but the records themselves sees it: staff (see staffprofiles.ts) never seed, so their seeding
+// minutes count as live ones, keeping their time played, and they have no seed days. Seeder VIP, the top seeders and
+// the seeding ranks are then for the players who seed. The records keep what happened, so unlinking a staff member's
+// Steam account gives them their seeding back.
+export const withoutStaffSeeding = (day: PlayerDay, staff: ReadonlySet<string>): PlayerDay => {
+  if (!Object.keys(day).some((steamId) => staff.has(steamId))) return day;
+  return Object.fromEntries(
+    Object.entries(day).map(([steamId, t]) => [
+      steamId,
+      staff.has(steamId) ? { ...t, seedingMinutes: 0, liveMinutes: t.liveMinutes + t.seedingMinutes, seedDays: 0 } : t,
+    ]),
+  );
+};
+
 // Adds up days, oldest first, so each player keeps the name they used most recently.
 export const totals = (days: PlayerDay[]): RankedPlayer[] => {
   const sum = new Map<string, PlayerTotals>();

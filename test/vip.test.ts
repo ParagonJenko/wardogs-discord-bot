@@ -237,6 +237,8 @@ describe('seederVip', () => {
       { steamId: ASH, name: 'Ash', until: NOW + 30 * DAY },
       { steamId: CY, name: 'Cy', until: NOW + 2 * DAY },
     ]);
+    // Staff who earned it before linking their Steam account keep it, but are not shown as seeders.
+    expect(seederVip(state, NOW, new Set([ASH])).map((p) => p.steamId)).toEqual([BO, CY]);
   });
 });
 
