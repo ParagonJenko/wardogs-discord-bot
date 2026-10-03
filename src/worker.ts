@@ -342,7 +342,7 @@ export class Watcher extends DurableObject<Env> {
 
   // Bans, the reserved list and the map rotation all live in the server's settings file. Changes to them run one at a
   // time, so one never overwrites another, or the VIP state or the saved rotations, with what it read before the other
-  // finished.
+  // finished. Staff Steam accounts change in turn too, as the VIP updates read them.
   private serial = oneAtATime();
   // The alerts and /seednow run one at a time, so a check never sends the seeding alert while a seeding call is going out.
   private alerting = oneAtATime();
@@ -1596,22 +1596,30 @@ export class Watcher extends DurableObject<Env> {
     action: ProfileAction,
     user: { id: string; name: string },
   ): Promise<{ steamId: string | null; player: string | null } | { problem: string }> {
-    const storage = this.ctx.storage;
-    const profiles = parseStaffProfiles(await storage.get(STAFF_PROFILES_KEY));
-    if (action.action === 'unlink') {
-      const target = action.userId ?? user.id;
-      const was = profiles[target];
-      if (was === undefined) return { steamId: null, player: null };
-      await storage.put(STAFF_PROFILES_KEY, unlinkSteam(profiles, target));
-      console.info(`Staff page: ${JSON.stringify(user.name)} unlinked Steam account ${was.steamId} from Discord user ${target}`);
-      return { steamId: null, player: null };
-    }
-    const linked = linkSteam(profiles, user, action.steamId, Date.now());
-    if ('problem' in linked) return linked;
-    await storage.put(STAFF_PROFILES_KEY, linked.profiles);
-    console.info(`Staff page: ${JSON.stringify(user.name)} (Discord user ${user.id}) linked Steam account ${linked.steamId}`);
-    const seen = (await this.recentDays(Date.now())).findLast((d) => d.players[linked.steamId] !== undefined);
-    return { steamId: linked.steamId, player: seen?.players[linked.steamId]?.name ?? null };
+    // One at a time with the VIP updates: one that read the staff before this change and is still writing the reserved
+    // list would otherwise save VIP for an account linked meanwhile. Waiting for it makes it come before the link.
+    const changed = await this.serial(async (): Promise<{ steamId: string | null } | { problem: string }> => {
+      const storage = this.ctx.storage;
+      const profiles = parseStaffProfiles(await storage.get(STAFF_PROFILES_KEY));
+      if (action.action === 'unlink') {
+        const target = action.userId ?? user.id;
+        const was = profiles[target];
+        if (was === undefined) return { steamId: null };
+        await storage.put(STAFF_PROFILES_KEY, unlinkSteam(profiles, target));
+        console.info(`Staff page: ${JSON.stringify(user.name)} unlinked Steam account ${was.steamId} from Discord user ${target}`);
+        return { steamId: null };
+      }
+      const linked = linkSteam(profiles, user, action.steamId, Date.now());
+      if ('problem' in linked) return linked;
+      await storage.put(STAFF_PROFILES_KEY, linked.profiles);
+      console.info(`Staff page: ${JSON.stringify(user.name)} (Discord user ${user.id}) linked Steam account ${linked.steamId}`);
+      return { steamId: linked.steamId };
+    });
+    if ('problem' in changed) return changed;
+    const { steamId } = changed;
+    if (steamId === null) return { steamId, player: null };
+    const seen = (await this.recentDays(Date.now())).findLast((d) => d.players[steamId] !== undefined);
+    return { steamId, player: seen?.players[steamId]?.name ?? null };
   }
 
   // A staff member's name, as seen when they sign in to the staff page or use a staff command. Only written when it
