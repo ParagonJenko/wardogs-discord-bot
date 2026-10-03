@@ -1434,11 +1434,10 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     'cache-control': 'no-store',
     vary: 'origin',
   };
+  // Logged on the browser's preflight too: without SITE_URL the browser stops there and never sends the request.
+  if ('missing' in config) console.error(notSetUpText(config.missing));
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-  if ('missing' in config) {
-    console.error(notSetUpText(config.missing));
-    return Response.json({ error: notSetUpText(config.missing) }, { status: 503, headers });
-  }
+  if ('missing' in config) return Response.json({ error: notSetUpText(config.missing) }, { status: 503, headers });
   if (request.method !== 'GET') return Response.json({ error: 'Not found' }, { status: 404, headers });
   const session = await readSession(config.clientSecret, request.headers.get('authorization'), Date.now());
   if (session === null) return Response.json({ error: 'Sign in again' }, { status: 401, headers });
