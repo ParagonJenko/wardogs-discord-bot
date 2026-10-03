@@ -13,7 +13,9 @@
   "observability": { "enabled": true },
   // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So are
   // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status, DISCORD_ROUNDUP_WEBHOOK_URL, the
-  // optional channel for the weekly and monthly roundups, and KILL_FEED_TOKEN, which turns on the weapon stats.
+  // optional channel for the weekly and monthly roundups, KILL_FEED_TOKEN, which turns on the weapon stats,
+  // DISCORD_MODLOG_WEBHOOK_URL, the optional staff channel for the moderation log, and DISCORD_CLIENT_SECRET, for the
+  // staff page's Discord sign-in.
   "vars": {
     // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop.
     "DISCORD_ROLE_ID": "1554801355015594025",
@@ -40,6 +42,10 @@
     "DISCORD_GUILD_ID": "1552990539455144086",
     // Optional: role IDs (comma-separated) that may use the admin commands as well as Administrators. Staff.
     "DISCORD_ADMIN_ROLE_IDS": "1552990722976649296",
+    // For the staff page's Discord sign-in: the application's ID (Developer Portal → General Information). Not a secret.
+    "DISCORD_APPLICATION_ID": "",
+    // Posts to the moderation log when a player passes a griefing flag (3 team kills, 2 vehicle suicides): "on" or "off".
+    "GRIEF_ALERTS": "on",
     // Automatic VIP: seed on this many days in a week to get a reserved slot for a week. "0" turns it off.
     "VIP_SEED_DAYS": "3",
     // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.

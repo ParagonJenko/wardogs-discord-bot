@@ -46,7 +46,7 @@ export type PlayerRecord = {
   ban: BanRecord | null;
 };
 
-export type BanRequest = Named & { length: string; reason: string; by: string };
+export type BanRequest = Named & { length: string; reason: string; by: string; byName?: string };
 // `already-banned`: the player has a ban already, which stays as it is. `byBot` says whether the bot made it, and
 // then `until` is when it ends. `waiting`: the server does not have the ban yet, as the player is not in game; the bot
 // bans them when it next sees them.
@@ -62,7 +62,7 @@ export type StaffRecords = {
   knownPlayers: () => Promise<Named[]>;
   log: (steamId: string, entry: ModEntry) => Promise<void>;
   ban: (request: BanRequest) => Promise<BanResult>;
-  unban: (target: Named, by: string) => Promise<boolean>;
+  unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
   vipAdd: (request: Named & { days: number; by: string }) => Promise<VipAddResult>;
   vipRemove: (request: Named & { by: string }) => Promise<VipRemoveResult>;
   // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
@@ -239,10 +239,12 @@ const lengthOf = (value: string | undefined) => BAN_LENGTHS.find((l) => l.value 
 
 export const runStaffCommand =
   ({ config, http, records, now, log }: StaffDeps) =>
-  async (name: StaffCommand, { options, userId }: CommandRequest): Promise<CommandReply> => {
+  async (name: StaffCommand, { options, userId, userName }: CommandRequest): Promise<CommandReply> => {
     const { rconUrl, rconPassword, siteUrl } = config();
     const rules = rulesNote(siteUrl);
     const by = userId ?? 'unknown';
+    // For the moderation log: who did it, by the name they go by in the server.
+    const named = userName === undefined ? {} : { byName: userName };
     const staff = `Discord user ${by}`;
     const online = (): Promise<Player[]> => fetchPlayers(rconUrl, rconPassword, http);
     const text = (key: string): string => (options[key] ?? '').trim();
@@ -269,7 +271,7 @@ export const runStaffCommand =
       const { player } = target;
       log.info(`/warn by ${staff} to ${logged(player)}: ${JSON.stringify(message)}`);
       await messagePlayer(rconUrl, rconPassword, player.steamId, `${WARNING_PREFIX}${message} | ${rules}`, http);
-      await records.log(player.steamId, { action: 'warn', at: now(), by, name: player.name, reason: message });
+      await records.log(player.steamId, { action: 'warn', at: now(), by, ...named, name: player.name, reason: message });
       return { content: `⚠️ Warned ${who(player)} in game: ${message}` };
     }
 
@@ -281,7 +283,7 @@ export const runStaffCommand =
       const { player } = target;
       log.info(`/kick by ${staff}: ${logged(player)}: ${JSON.stringify(reason)}`);
       await kickPlayer(rconUrl, rconPassword, player.steamId, `${reason} | ${rules}`, http);
-      await records.log(player.steamId, { action: 'kick', at: now(), by, name: player.name, reason });
+      await records.log(player.steamId, { action: 'kick', at: now(), by, ...named, name: player.name, reason });
       return { content: `👢 Kicked ${who(player)}: ${reason}` };
     }
 
@@ -308,6 +310,7 @@ export const runStaffCommand =
         action: 'switchteam',
         at: now(),
         by,
+        ...named,
         name: player.name,
         detail: current ? `${current} to ${team}` : `to ${team}`,
       });
@@ -323,7 +326,7 @@ export const runStaffCommand =
       if ('problem' in found) return { content: found.problem };
       const { player } = found;
       log.info(`/ban by ${staff}: ${logged(player)} for ${length.name}: ${JSON.stringify(reason)}`);
-      const result = await records.ban({ ...player, length: length.value, reason, by });
+      const result = await records.ban({ ...player, length: length.value, reason, by, ...named });
       const joining = 'the bot bans and kicks them within a minute of them joining';
       if (result.outcome === 'already-banned') {
         const current = !result.byBot
@@ -355,7 +358,7 @@ export const runStaffCommand =
       if ('problem' in found) return { content: found.problem };
       const { player } = found;
       log.info(`/unban by ${staff}: ${logged(player)}`);
-      return (await records.unban(player, by))
+      return (await records.unban(player, by, userName))
         ? { content: `✅ Unbanned ${who(player)}. They can join again.` }
         : { content: `${who(player)} isn't banned.` };
     }

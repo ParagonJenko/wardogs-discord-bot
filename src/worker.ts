@@ -4,7 +4,29 @@ import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
-import { buildLiveStatus, buildRoundupMessage, buildVipMessage, mapName, postWebhook } from './discord.ts';
+import { ADMIN_DEFAULT_DAYS, ADMIN_PERIODS, adminSteamIds, buildAdminOverview, type AdminOverview } from './admin.ts';
+import {
+  adminAuthConfig,
+  ADMIN_PAGE,
+  CALLBACK_PATH,
+  checkState,
+  CLEAR_LOGIN_COOKIE,
+  createSession,
+  finishLogin,
+  readSession,
+  returnAddress,
+  startLogin,
+} from './adminauth.ts';
+import {
+  buildGriefAlert,
+  buildLiveStatus,
+  buildModLogMessage,
+  buildRoundupMessage,
+  buildVipMessage,
+  mapName,
+  postWebhook,
+} from './discord.ts';
+import { griefDayKey, hasGrief, parseGriefDay, recordGrief, type GriefAlert } from './griefing.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
@@ -12,15 +34,20 @@ import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
   appendMod,
   BAN_LENGTHS,
+  banChanges,
   banReason,
   expiredBans,
   isBotBan,
   modLogKey,
   parseBanBook,
+  parseServerBans,
   joinWork,
   parseModLog,
+  POSTED_ACTIONS,
   type BanRecord,
   type ModEntry,
+  type ServerBan,
+  type ServerBans,
 } from './moderation.ts';
 import {
   dayOfKey,
@@ -134,6 +161,7 @@ import {
   weaponBoard,
   weaponDayKey,
   weaponHolders,
+  weaponName,
   type FeedEvent,
   type WeaponDay,
 } from './weapons.ts';
@@ -195,7 +223,9 @@ const oneAtATime = () => {
 // (set once the matches saved before settleWin have been put right), 'roundups' (the first day of the last week and
 // month whose roundup went out), and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
-// UTC date of the first kill the feed sent) and 'live' (the match going on now, for the live page).
+// UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
+// (team kills and suicides that day, for the staff page), and 'serverBans' (the server's ban list at the last check, to
+// notice bans made or lifted outside the bot).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -238,16 +268,70 @@ export class Watcher extends DurableObject<Env> {
     };
   }
 
-  // Adds to a player's log, and changes their ban (null lifts it) or the VIP state in the same write.
-  private async record(steamId: string, entry: ModEntry | null, change: { ban?: BanRecord | null; vip?: VipState } = {}): Promise<void> {
+  // Adds to a player's log, and changes their ban (null lifts it), the VIP state or the bot's copy of the server's ban
+  // list (`serverBan`: the ban the bot just put on the server, or null for one it lifted) in the same write. The bot's
+  // own bans go on that copy as it makes them, so the next check does not take them for bans made outside the bot.
+  // Warnings, kicks, bans, unbans and team moves then go to the moderation log channel.
+  private async record(
+    steamId: string,
+    entry: ModEntry | null,
+    change: { ban?: BanRecord | null; vip?: VipState; serverBan?: ServerBan | null } = {},
+  ): Promise<void> {
     const key = modLogKey(steamId);
-    const stored = await this.ctx.storage.get([key, 'bans']);
+    const stored = await this.ctx.storage.get([key, 'bans', 'serverBans']);
     const { [steamId]: _old, ...others } = parseBanBook(stored.get('bans'));
+    // Before the first check has read the server's list there is no copy to change.
+    const serverBans = change.serverBan === undefined ? null : parseServerBans(stored.get('serverBans'));
+    const { [steamId]: _was, ...otherServerBans } = serverBans ?? {};
     await this.ctx.storage.put({
       ...(entry === null ? {} : { [key]: appendMod(parseModLog(stored.get(key)), entry) }),
       ...(change.ban === undefined ? {} : { bans: change.ban === null ? others : { ...others, [steamId]: change.ban } }),
       ...(change.vip === undefined ? {} : { vip: change.vip }),
+      ...(serverBans === null || change.serverBan === undefined
+        ? {}
+        : { serverBans: change.serverBan === null ? otherServerBans : { ...otherServerBans, [steamId]: change.serverBan } }),
     });
+    if (entry !== null) this.postModLog(steamId, entry);
+  }
+
+  // Where the moderation log goes. A configuration problem only stops the posts: what they report is saved already.
+  private posting(): Pick<Config, 'modLogWebhookUrl' | 'griefAlerts' | 'siteUrl'> {
+    try {
+      return loadConfig(stringVars(this.env));
+    } catch (error) {
+      console.error(`Moderation log: ${errorText(error)}`);
+      return { modLogWebhookUrl: undefined, griefAlerts: false, siteUrl: undefined };
+    }
+  }
+
+  // Posted in the background, so a slow Discord never holds up a ban or the VIP update queued behind it. A post that
+  // fails is logged, not retried: the staff history has the entry either way.
+  private postModLog(steamId: string, entry: ModEntry): void {
+    if (!POSTED_ACTIONS.includes(entry.action)) return;
+    const { modLogWebhookUrl, siteUrl } = this.posting();
+    if (modLogWebhookUrl === undefined) return;
+    this.ctx.waitUntil(
+      postWebhook(modLogWebhookUrl, buildModLogMessage(steamId, entry, siteUrl)).catch((error: unknown) =>
+        console.error(`Moderation log post failed (${entry.action} ${steamId}): ${errorText(error)}`),
+      ),
+    );
+  }
+
+  // Possible griefing, to the moderation log channel, when GRIEF_ALERTS is on.
+  private postGriefAlerts(alerts: GriefAlert[]): void {
+    const { modLogWebhookUrl, griefAlerts, siteUrl } = this.posting();
+    for (const alert of alerts) {
+      console.info(
+        `Possible griefing: ${JSON.stringify(alert.name)} (${alert.steamId}) has ${alert.teamKills} team kills and ` +
+          `${alert.vehicleSuicides} vehicle suicides today`,
+      );
+      if (modLogWebhookUrl === undefined || !griefAlerts) continue;
+      this.ctx.waitUntil(
+        postWebhook(modLogWebhookUrl, buildGriefAlert(alert, weaponName, siteUrl)).catch((error: unknown) =>
+          console.error(`Griefing alert failed (${alert.steamId}): ${errorText(error)}`),
+        ),
+      );
+    }
   }
 
   private stateStore(): StateStore {
@@ -402,6 +486,7 @@ export class Watcher extends DurableObject<Env> {
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
+    await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
 
     const { inviteCode } = config;
@@ -521,7 +606,11 @@ export class Watcher extends DurableObject<Env> {
           continue;
         }
         await removeBan(config.rconUrl, config.rconPassword, steamId, http);
-        await this.record(steamId, { action: 'unban', at: now, by: 'bot', name: ban.name, reason: 'The ban ran out' }, { ban: null });
+        await this.record(
+          steamId,
+          { action: 'unban', at: now, by: 'bot', name: ban.name, reason: 'The ban ran out' },
+          { ban: null, serverBan: null },
+        );
         console.info(`Ban ended: ${label}`);
       }
     } catch (error) {
@@ -539,13 +628,13 @@ export class Watcher extends DurableObject<Env> {
       const work = joinWork(book, snapshot.players.map((p) => p.steamId), Date.now());
       const http = socketHttp(connect);
       const label = (steamId: string): string => `${JSON.stringify(book[steamId]?.name ?? '')} (${steamId})`;
-      // Saves the ban as on the server, with a kick still owed or not.
-      const applied = async (steamId: string, kicking: boolean): Promise<void> => {
+      // Saves the ban as on the server, with a kick still owed or not. `banned` is set when it has just gone on the server.
+      const applied = async (steamId: string, kicking: boolean, banned = false): Promise<void> => {
         const old = book[steamId];
         if (old === undefined) return;
         const { waiting: _waiting, kicking: _kicking, ...ban } = old;
         book[steamId] = kicking ? { ...ban, kicking } : ban;
-        await this.record(steamId, null, { ban: book[steamId] });
+        await this.record(steamId, null, { ban: book[steamId], ...(banned ? { serverBan: { reason: ban.serverReason, bannedBy: null } } : {}) });
       };
       for (const steamId of work.gone) await applied(steamId, false);
       const kick = [...work.kick];
@@ -559,7 +648,7 @@ export class Watcher extends DurableObject<Env> {
           if (!isNotInGame(error)) console.error(`Waiting ban on ${label(steamId)} failed: ${errorText(error)}`);
           continue;
         }
-        await applied(steamId, true);
+        await applied(steamId, true, true);
         console.info(`Ban put on the server as they joined: ${label(steamId)}`);
         kick.push(steamId);
       }
@@ -580,6 +669,73 @@ export class Watcher extends DurableObject<Env> {
     } catch (error) {
       console.error(`Waiting bans failed: ${errorText(error)}`);
     }
+  }
+
+  // Bans made or lifted outside the bot (in game, in ServerSettings.ini, or by another tool) go in the player's staff
+  // history and to the moderation log. The first reading is only saved, so a deploy does not post every ban there is.
+  // It runs one at a time with the bot's own ban changes, which keep the saved list up to date as they make them. Skipped
+  // while the server is not answering; a failure is tried again at the next check.
+  private async watchBans(config: Config, snapshot: Snapshot | null): Promise<void> {
+    if (snapshot === null) return;
+    const storage = this.ctx.storage;
+    try {
+      const onServer = await fetchBans(config.rconUrl, config.rconPassword, socketHttp(connect));
+      const stored = await storage.get(['serverBans', 'bans']);
+      const saved = parseServerBans(stored.get('serverBans'));
+      const current: ServerBans = Object.fromEntries(onServer.map(({ steamId, reason, bannedBy }) => [steamId, { reason, bannedBy }]));
+      if (saved === null) {
+        await storage.put('serverBans', current);
+        console.info(`Watching the server's ban list: ${onServer.length} bans`);
+        return;
+      }
+      const { added, lifted } = banChanges(saved, onServer);
+      if (added.length === 0 && lifted.length === 0) return;
+      const book = parseBanBook(stored.get('bans'));
+      const names = await this.namesFor([...added, ...lifted].map((b) => b.steamId), snapshot);
+      const now = Date.now();
+      const by = (ban: ServerBan) => (ban.bannedBy ? { detail: `By ${ban.bannedBy}` } : {});
+      for (const { steamId, ban } of added) {
+        // One of the bot's own that the saved list missed, such as a ban that timed out but went through.
+        const ours = book[steamId];
+        if (ours !== undefined && isBotBan(ban.reason, ours)) continue;
+        const name = names.get(steamId) ?? steamId;
+        await this.record(steamId, { action: 'ban', at: now, by: 'server', name, ...(ban.reason ? { reason: ban.reason } : {}), ...by(ban) });
+        console.info(`Ban made outside the bot: ${JSON.stringify(name)} (${steamId}): ${JSON.stringify(ban.reason ?? '')}`);
+      }
+      for (const { steamId, ban } of lifted) {
+        const name = names.get(steamId) ?? steamId;
+        // One of the bot's own bans, lifted some other way: the bot forgets it too, so it no longer counts as banned.
+        const ours = book[steamId];
+        const theirs = ours !== undefined && isBotBan(ban.reason, ours);
+        await this.record(
+          steamId,
+          { action: 'unban', at: now, by: 'server', name, ...(ban.reason ? { reason: `Was banned for: ${ban.reason}` } : {}) },
+          theirs ? { ban: null } : {},
+        );
+        console.info(`Ban lifted outside the bot: ${JSON.stringify(name)} (${steamId})`);
+      }
+      await storage.put('serverBans', current);
+    } catch (error) {
+      console.error(`Watching the ban list failed: ${errorText(error)}`);
+    }
+  }
+
+  // The best name the bot has for each Steam ID: in game now, then the newest of the last 90 days' records, its bans and
+  // staff history.
+  private async namesFor(steamIds: string[], snapshot: Snapshot | null): Promise<Map<string, string>> {
+    const wanted = new Set(steamIds);
+    const names = new Map<string, string>();
+    const stored = await this.ctx.storage.get(['bans', ...steamIds.map(modLogKey)]);
+    for (const steamId of wanted) {
+      const logged = parseModLog(stored.get(modLogKey(steamId))).findLast((e) => e.name !== undefined && e.name !== steamId)?.name;
+      if (logged !== undefined) names.set(steamId, logged);
+    }
+    for (const [steamId, ban] of Object.entries(parseBanBook(stored.get('bans')))) if (wanted.has(steamId)) names.set(steamId, ban.name);
+    for (const day of await this.recentDays(Date.now())) {
+      for (const [steamId, t] of Object.entries(day.players)) if (wanted.has(steamId)) names.set(steamId, t.name);
+    }
+    for (const p of snapshot?.players ?? []) if (wanted.has(p.steamId)) names.set(p.steamId, p.name);
+    return names;
   }
 
   // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their time is up. VIP staff
@@ -626,7 +782,8 @@ export class Watcher extends DurableObject<Env> {
     const dayKey = weaponDayKey(now);
     const kills = fresh.filter(isKill);
     const killers = [...new Set(kills.map((k) => k.killerSteamId))];
-    const stored = await this.ctx.storage.get([dayKey, 'killFeedSince', 'live', 'online', 'state', ...killers.map(playerWeaponsKey)]);
+    const griefKey = griefDayKey(now);
+    const stored = await this.ctx.storage.get([dayKey, griefKey, 'killFeedSince', 'live', 'online', 'state', ...killers.map(playerWeaponsKey)]);
     const oldest = dayOf(now - (PROFILE_DAYS - 1) * DAY_MS);
     const first = typeof stored.get('killFeedSince') !== 'string';
     // The feed does not say who is on which side: the bot's last check does.
@@ -634,8 +791,10 @@ export class Watcher extends DurableObject<Env> {
     const tracked = parseState(stored.get('state'))?.match?.players ?? {};
     const factionOf = (steamId: string): string | null =>
       online?.players.find((p) => p.steamId === steamId)?.faction ?? tracked[steamId]?.faction ?? null;
+    const grief = hasGrief(fresh, factionOf) ? recordGrief(parseGriefDay(stored.get(griefKey)), fresh, now, factionOf) : null;
     const write = this.ctx.storage.put({
       live: recordLive(parseLiveMatch(stored.get('live')), fresh, now, factionOf),
+      ...(grief === null ? {} : { [griefKey]: grief.day }),
       ...(first ? { killFeedSince: day } : {}),
       ...(kills.length === 0 ? {} : { [dayKey]: recordWeaponDay(parseWeaponDay(stored.get(dayKey)), kills) }),
       ...Object.fromEntries(
@@ -659,6 +818,7 @@ export class Watcher extends DurableObject<Env> {
       throw error;
     }
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
+    if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     await this.broadcastLive();
     return fresh.length;
   }
@@ -868,6 +1028,49 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
+  // The staff page: possible griefers and their incidents over the last `days` UTC days, what staff did in them, and the
+  // bans on the server now. The ban list is read from the server; without it the rest still shows.
+  async adminOverview(days: number): Promise<AdminOverview> {
+    const now = Date.now();
+    const griefKeys = Array.from({ length: days }, (_, i) => griefDayKey(now - (days - 1 - i) * DAY_MS));
+    const { config } = this.rcon();
+    const [stored, recent, logs, serverBans] = await Promise.all([
+      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans']),
+      this.recentDays(now),
+      this.ctx.storage.list({ prefix: 'mod:' }),
+      fetchBans(config.rconUrl, config.rconPassword, socketHttp(connect, SUGGEST_TIMEOUT_MS)).catch((error: unknown) => {
+        console.error(`Staff page: the ban list could not be read: ${errorText(error)}`);
+        return null;
+      }),
+    ]);
+    const grief = griefKeys.map((key) => parseGriefDay(stored.get(key)));
+    const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
+    const banBook = parseBanBook(stored.get('bans'));
+    const steamIds = adminSteamIds(grief, modLogs, serverBans, banBook);
+    const names = new Map<string, string>();
+    for (const [steamId, log] of modLogs) {
+      const logged = log.findLast((e) => e.name !== undefined && e.name !== steamId)?.name;
+      if (logged !== undefined) names.set(steamId, logged);
+    }
+    for (const [steamId, ban] of Object.entries(banBook)) names.set(steamId, ban.name);
+    for (const day of grief) for (const [steamId, t] of Object.entries(day.players)) if (t.name !== '') names.set(steamId, t.name);
+    for (const day of recent) for (const [steamId, t] of Object.entries(day.players)) names.set(steamId, t.name);
+    const ids = await this.idsFor(steamIds);
+    const since = stored.get('killFeedSince');
+    return buildAdminOverview({
+      now,
+      days,
+      feedSince: typeof since === 'string' ? since : null,
+      grief,
+      playerDays: recent.slice(-days).map((d) => d.players),
+      modLogs,
+      serverBans,
+      banBook,
+      nameOf: (steamId) => names.get(steamId),
+      idOf: (steamId) => ids.get(steamId),
+    });
+  }
+
   // Recent matches, newest first, to pick from in /removematch.
   async recentMatches(): Promise<RecentMatch[]> {
     return parseStats(await this.ctx.storage.get('stats')).matches;
@@ -934,9 +1137,10 @@ export class Watcher extends DurableObject<Env> {
   // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A player who is already
   // banned is left as they are, so no ban is ever lifted to change it: staff /unban first. The game only bans players
   // who are in game, so for anyone else the ban waits, and the check that next sees them puts it on the server.
-  async ban({ steamId, name, length, reason, by }: BanRequest): Promise<BanResult> {
+  async ban({ steamId, name, length, reason, by, byName }: BanRequest): Promise<BanResult> {
     const option = BAN_LENGTHS.find((l) => l.value === length);
     if (option === undefined) throw new Error(`Unknown ban length: ${length}`);
+    const named = byName === undefined ? {} : { byName };
     return this.serial(async () => {
       const { config, http } = this.rcon();
       const at = Date.now();
@@ -959,25 +1163,30 @@ export class Watcher extends DurableObject<Env> {
       } catch (error) {
         if (isNotInGame(error)) {
           const detail = `${option.name}, waits for them to join`;
-          await this.record(steamId, { action: 'ban', at, by, name, reason, detail }, { ban: { ...ban, waiting: true } });
+          await this.record(steamId, { action: 'ban', at, by, ...named, name, reason, detail }, { ban: { ...ban, waiting: true } });
           return { outcome: 'banned', until, byBot: true, waiting: true };
         }
         if (error instanceof RconError) await this.record(steamId, null, { ban: null });
         throw error;
       }
-      await this.record(steamId, { action: 'ban', at, by, name, reason, detail: option.name });
+      await this.record(
+        steamId,
+        { action: 'ban', at, by, ...named, name, reason, detail: option.name },
+        { serverBan: { reason: ban.serverReason, bannedBy: null } },
+      );
       return { outcome: 'banned', until, byBot: true };
     });
   }
 
   // False when they had no ban: none on the server, and none waiting for them to join. The bot forgets its own record
   // of the ban either way.
-  async unban({ steamId, name }: Named, by: string): Promise<boolean> {
+  async unban({ steamId, name }: Named, by: string, byName?: string): Promise<boolean> {
     return this.serial(async () => {
       const { config, http } = this.rcon();
       const waiting = parseBanBook(await this.ctx.storage.get('bans'))[steamId]?.waiting === true;
       const removed = (await removeBan(config.rconUrl, config.rconPassword, steamId, http)) || waiting;
-      await this.record(steamId, removed ? { action: 'unban', at: Date.now(), by, name } : null, { ban: null });
+      const entry: ModEntry = { action: 'unban', at: Date.now(), by, ...(byName === undefined ? {} : { byName }), name };
+      await this.record(steamId, removed ? entry : null, { ban: null, serverBan: null });
       return removed;
     });
   }
@@ -1098,6 +1307,87 @@ const publicRoute = (
   return null;
 };
 
+// The staff page's sign-in (see adminauth.ts): Discord sends the browser back to CALLBACK_PATH on this Worker, which must
+// be listed under OAuth2 → Redirects in the Discord Developer Portal.
+const callbackUrl = (request: Request): string => `${new URL(request.url).origin}${CALLBACK_PATH}`;
+
+const notSetUp = (missing: string[]): Response =>
+  new Response(`Staff sign-in is not set up. Missing: ${missing.join(', ')}. See the README, "Staff page".`, {
+    status: 503,
+    headers: { 'content-type': 'text/plain; charset=utf-8' },
+  });
+
+const staffLogin = async (request: Request, vars: Record<string, string>): Promise<Response> => {
+  const config = adminAuthConfig(vars);
+  if ('missing' in config) return notSetUp(config.missing);
+  const returnTo = returnAddress(new URL(request.url).searchParams.get('return'), config.siteOrigin);
+  const { location, cookie } = await startLogin(config, callbackUrl(request), returnTo, Date.now());
+  return new Response(null, { status: 302, headers: { location, 'set-cookie': cookie, 'cache-control': 'no-store' } });
+};
+
+const staffCallback = async (request: Request, vars: Record<string, string>): Promise<Response> => {
+  const config = adminAuthConfig(vars);
+  if ('missing' in config) return notSetUp(config.missing);
+  const url = new URL(request.url);
+  // Back to the page, with the session or what went wrong after the #, which no server sees.
+  const back = (returnTo: string, fragment: string): Response =>
+    new Response(null, {
+      status: 302,
+      headers: {
+        location: `${returnTo}#${fragment}`,
+        'set-cookie': CLEAR_LOGIN_COOKIE,
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      },
+    });
+  const returnTo = await checkState(config.clientSecret, url.searchParams.get('state'), request.headers.get('cookie'), Date.now());
+  if (returnTo === null) return back(`${config.siteOrigin}${ADMIN_PAGE}`, 'error=expired');
+  const code = url.searchParams.get('code');
+  if (code === null) return back(returnTo, `error=${url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'}`);
+  try {
+    const result = await finishLogin(config, code, callbackUrl(request));
+    if ('problem' in result) {
+      console.info(`Staff sign-in refused: ${result.problem}`);
+      return back(returnTo, `error=${result.problem}`);
+    }
+    console.info(`Staff signed in: ${JSON.stringify(result.user.name)} (Discord user ${result.user.id})`);
+    return back(returnTo, `session=${await createSession(config.clientSecret, result.user, Date.now())}`);
+  } catch (error) {
+    console.error(`Staff sign-in failed: ${errorText(error)}`);
+    return back(returnTo, 'error=failed');
+  }
+};
+
+// The staff page's data, for a signed-in session only. Only the website may read it from a browser, and nothing keeps a
+// copy.
+const staffApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
+  const config = adminAuthConfig(vars);
+  const headers = {
+    'access-control-allow-origin': 'missing' in config ? 'null' : config.siteOrigin,
+    'access-control-allow-headers': 'authorization',
+    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-max-age': '600',
+    'cache-control': 'no-store',
+    vary: 'origin',
+  };
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  if ('missing' in config) return Response.json({ error: 'Staff sign-in is not set up' }, { status: 503, headers });
+  if (request.method !== 'GET') return Response.json({ error: 'Not found' }, { status: 404, headers });
+  const session = await readSession(config.clientSecret, request.headers.get('authorization'), Date.now());
+  if (session === null) return Response.json({ error: 'Sign in again' }, { status: 401, headers });
+  const url = new URL(request.url);
+  if (url.pathname !== '/api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
+  const asked = Number(url.searchParams.get('days'));
+  const days = ADMIN_PERIODS.find((d) => d === asked) ?? ADMIN_DEFAULT_DAYS;
+  try {
+    const overview = await watcher().adminOverview(days);
+    return Response.json({ ...overview, user: { id: session.userId, name: session.name } }, { headers });
+  } catch (error) {
+    console.error(`Staff page failed: ${errorText(error)}`);
+    return Response.json({ error: 'The staff page is unavailable' }, { status: 503, headers });
+  }
+};
+
 // A refused kill feed post is logged at most this often, so a wrong token does not fill the logs every two seconds.
 const REFUSAL_LOG_MS = 10 * 60_000;
 let refusalLoggedAt = 0;
@@ -1144,12 +1434,15 @@ export default {
   },
 
   // GET /api/stats, /api/players and /api/player feed the community website. The game POSTs its kill feed to
-  // /api/ingest/events, after whatever path its Url has. Slash commands: Discord POSTs signed interactions to this
-  // Worker's URL.
+  // /api/ingest/events, after whatever path its Url has. Staff sign in to the website's staff page through /auth/login
+  // and read its data from /api/admin/. Slash commands: Discord POSTs signed interactions to this Worker's URL.
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
     if (request.method === 'POST' && url.pathname.endsWith(FEED_PATH)) return ingestKills(request, stringVars(env), watcher);
+    if (request.method === 'GET' && url.pathname === '/auth/login') return staffLogin(request, stringVars(env));
+    if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env));
+    if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.
     if (request.method === 'GET' && url.pathname === '/api/live/socket') return watcher().fetch(request);
     if (request.method === 'GET' && url.pathname.startsWith('/api/')) {
@@ -1171,7 +1464,7 @@ export default {
       knownPlayers: () => watcher().knownPlayers(),
       log: (steamId, entry) => watcher().logAction(steamId, entry),
       ban: (ban) => watcher().ban(ban),
-      unban: (target, by) => watcher().unban(target, by),
+      unban: (target, by, byName) => watcher().unban(target, by, byName),
       vipAdd: (grant) => watcher().vipAdd(grant),
       vipRemove: (target) => watcher().vipRemove(target),
       nextMap: (map, playing) => watcher().stageNextMap(map, playing),

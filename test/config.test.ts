@@ -14,6 +14,8 @@ describe('loadConfig', () => {
       rconPassword: 'secret',
       webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123',
       statusWebhookUrl: undefined,
+      modLogWebhookUrl: undefined,
+      griefAlerts: true,
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,

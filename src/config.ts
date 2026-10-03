@@ -42,6 +42,8 @@ const EnvSchema = z
     DISCORD_STATUS_WEBHOOK_URL: webhookUrl.optional(),
     // Where the weekly and monthly roundups go, when not to the alerts channel.
     DISCORD_ROUNDUP_WEBHOOK_URL: webhookUrl.optional(),
+    // A staff-only channel for the moderation log: warnings, kicks, bans and unbans, and possible griefing.
+    DISCORD_MODLOG_WEBHOOK_URL: webhookUrl.optional(),
     DISCORD_ROLE_ID: numericId.optional(),
     DISCORD_INVITE: invite.optional(),
     // The community website; Discord posts link to it.
@@ -71,6 +73,8 @@ const EnvSchema = z
     ROUNDUPS: z.enum(['on', 'off']).default('on'),
     // The hour (UTC) on Mondays, and on the 1st of the month, when the roundups go out.
     ROUNDUP_HOUR: z.coerce.number().int().min(0).max(23).default(17),
+    // Posts to the moderation log when a player passes a griefing flag (team kills, vehicle suicides): "on" or "off".
+    GRIEF_ALERTS: z.enum(['on', 'off']).default('on'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -93,6 +97,10 @@ export type Config = {
   webhookUrl: string;
   // Where the live server status is kept, when there is one.
   statusWebhookUrl: string | undefined;
+  // The staff-only moderation log channel, when there is one.
+  modLogWebhookUrl: string | undefined;
+  // Whether possible griefing is posted to the moderation log.
+  griefAlerts: boolean;
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
@@ -131,6 +139,8 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     rconPassword: e.RCON_PASSWORD,
     webhookUrl: e.DISCORD_WEBHOOK_URL,
     statusWebhookUrl: e.DISCORD_STATUS_WEBHOOK_URL,
+    modLogWebhookUrl: e.DISCORD_MODLOG_WEBHOOK_URL,
+    griefAlerts: e.GRIEF_ALERTS === 'on',
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,

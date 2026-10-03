@@ -17,6 +17,8 @@ const config: Config = {
   rconPassword: 'secret',
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   statusWebhookUrl: undefined,
+  modLogWebhookUrl: undefined,
+  griefAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
@@ -250,7 +252,22 @@ describe('runStaffCommand', () => {
 
     await expect(run('unban', { steam_id: OLD })).resolves.toEqual({ content: '✅ Unbanned **Oldtimer**. They can join again.' });
     await expect(run('unban', { steam_id: BO })).resolves.toEqual({ content: "**Bo** isn't banned." });
-    expect(records.unban).toHaveBeenCalledWith({ steamId: OLD, name: 'Oldtimer' }, '42');
+    expect(records.unban).toHaveBeenCalledWith({ steamId: OLD, name: 'Oldtimer' }, '42', undefined);
+  });
+
+  it("keeps the staff member's name in the server with what they did, for the moderation log", async () => {
+    const server = rcon();
+    const records = fakeRecords();
+    const run = runStaffCommand({ config: () => config, http: server.http, records, now: () => NOW, log: { info: vi.fn() } });
+    const as = (name: StaffCommand, options: Record<string, string>) => run(name, { name, options, userId: '42', userName: 'Paragon' });
+
+    await as('kick', { player: ASH, reason: 'Teamkilling' });
+    await as('ban', { player: ASH, duration: '1d', reason: 'Teamkilling' });
+    await as('unban', { steam_id: OLD });
+
+    expect(records.log).toHaveBeenCalledWith(ASH, { action: 'kick', at: NOW, by: '42', byName: 'Paragon', name: 'Ash', reason: 'Teamkilling' });
+    expect(records.ban).toHaveBeenCalledWith(expect.objectContaining({ steamId: ASH, by: '42', byName: 'Paragon' }));
+    expect(records.unban).toHaveBeenCalledWith({ steamId: OLD, name: 'Oldtimer' }, '42', 'Paragon');
   });
 
   it('/setnextmap queues the map; /changemap also ends the match', async () => {
