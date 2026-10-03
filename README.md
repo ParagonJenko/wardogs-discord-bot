@@ -20,7 +20,7 @@ It also posts:
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, and the highlights.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban and team
   move with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
-  in game with a [risky Steam account](#risky-steam-accounts).
+  in game with one of the [riskiest Steam accounts](#risky-steam-accounts).
 
 It also keeps **[map rotations](#map-rotations)** (Cloudflare only): staff save rotations by name, such as "Rotation 1"
 and "Weekend", pick which one plays on each day of the week, and swap between them with one command.
@@ -411,8 +411,8 @@ A staff-only Discord channel where the bot posts, as they happen:
 | ⚠️ Warning, 👢 Kick, 🔨 Ban, ✅ Unban, 🔀 Team move | Staff use `/warn`, `/kick`, `/ban`, `/unban` or `/switchteam`. With the player, their Steam ID, the reason, the length of a ban and who did it |
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
-| 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. With their latest incidents. Needs the [kill feed](#weapon-stats) |
-| 🕵️ Risky Steam account   | A player in game has a high-risk Steam account, such as a recent VAC ban, or a new account that hides its profile. Once, and again if it gets riskier. Needs `STEAM_API_KEY`: see [Risky Steam accounts](#risky-steam-accounts) |
+| 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
+| 🕵️ Risky Steam account   | A player in game has one of the riskiest Steam accounts (7 points or more), such as a new account with a VAC ban, or VAC and game bans with one recent. Once, and again if it gets riskier. Needs `STEAM_API_KEY`: see [Risky Steam accounts](#risky-steam-accounts) |
 
 To set it up:
 
@@ -543,8 +543,8 @@ The Node/Docker version does not have the staff page.
 ## Risky Steam accounts
 
 With a Steam Web API key, the bot checks each player's Steam account for the signs of a cheater: bans on the account, and
-accounts that are new or show nothing. Staff see it in [`/player`](#staff-commands), on the [staff page](#staff-page)
-and, for a high-risk account, in the [moderation log](#moderation-log) channel.
+accounts that are new or show nothing. Staff see it in [`/player`](#staff-commands), on the [staff page](#staff-page),
+on griefing posts and, for the riskiest accounts, in the [moderation log](#moderation-log) channel.
 
 To turn it on:
 
@@ -577,10 +577,13 @@ The next check asks Steam about everyone in game. Each account gets points for w
 - **When.** Each check (every minute) asks Steam about the players in game it has not checked, or not for a day, so a
   new ban shows within a day. That is two requests (`GetPlayerBans` and `GetPlayerSummaries`) for up to 100 players, and
   none while nobody new is on. Steam allows 100,000 a day.
-- **The moderation log** gets a 🕵️ post for each player in game with a high-risk account, up to 10 players a post. Each
+- **The moderation log** gets a 🕵️ post only for the riskiest accounts: **7 points or more**, such as a new account
+  with a VAC ban, VAC and game bans with one recent, or a recent VAC ban on a hidden profile that is also banned from
+  the Steam Community. High-risk accounts below that are not posted on their own, as there are too many: staff see them
+  in `/player`, on the staff page, and on any 🚩 Possible griefing post for that player. Up to 10 players a post. Each
   account is posted once, and again only if it gets riskier, such as with a new ban. A post that fails is logged
   (`Risky Steam account alert failed`) and not retried. Set `STEAM_ALERTS` to `"off"` in the `vars` block of
-  `wrangler.jsonc` to stop them; `/player` and the staff page still show the checks.
+  `wrangler.jsonc` to stop them; `/player`, griefing posts and the staff page still show the checks.
 - **`/player`** shows the risk, the bans, how old the account is, the profile and when it was checked. For a player the
   bot has not checked, or not for a day, it asks Steam there and then, so staff can check anyone by Steam ID.
 - **The staff page** lists everyone seen in the period, or in game now, whose account is worth a look or high risk,

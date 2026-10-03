@@ -244,7 +244,7 @@ describe('risky Steam accounts on the staff page', () => {
   it('lists everyone seen or in game whose account is worth a look, riskiest first, with their play for scale', () => {
     const overview = buildAdminOverview(sources({ steam, playerDays, serverBans: [{ steamId: BO, reason: 'Cheating', bannedBy: null }] }));
 
-    expect(overview.steam).toMatchObject({ players: 4, checked: 4, high: 2, medium: 1, risk: { high: 4, medium: 2 } });
+    expect(overview.steam).toMatchObject({ players: 4, checked: 4, high: 2, medium: 1, risk: { alert: 7, high: 4, medium: 2 } });
     expect(overview.steam?.flags.vacBan).toBe(3);
     expect(overview.steam?.accounts.map((a) => [a.name, a.risk, a.score])).toEqual([
       ['Ash', 'high', 4],

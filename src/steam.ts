@@ -86,9 +86,10 @@ export type SteamFlag = keyof typeof STEAM_FLAGS;
 
 export const STEAM_MARKS = { recentBanDays: 365, newAccountDays: 30, youngAccountDays: 180 } as const;
 
-// From `high` points an account is high risk, and posted to the moderation log channel. From `medium` it is worth a look,
-// and listed on the staff page.
-export const RISK = { high: 4, medium: 2 } as const;
+// From `medium` points an account is worth a look, and from `high` it is high risk: both are listed on the staff page and
+// shown on griefing posts. Only from `alert`, the riskiest of the high, is it posted to the moderation log channel on its
+// own, such as a new account with a VAC ban, or VAC and game bans with one recent.
+export const RISK = { alert: 7, high: 4, medium: 2 } as const;
 
 export type Risk = 'high' | 'medium' | 'low';
 
@@ -118,10 +119,10 @@ export const assess = (c: SteamCheck, now: number): { flags: SteamFlag[]; score:
   return { flags, score, risk: riskOf(score) };
 };
 
-// Whether to post the account to the moderation log channel: high risk, and riskier than when it was last posted.
+// Whether to post the account to the moderation log channel: at the alert mark, and riskier than when it was last posted.
 export const alertDue = (c: SteamCheck, now: number): boolean => {
-  const { score, risk } = assess(c, now);
-  return risk === 'high' && score > (c.alerted ?? 0);
+  const { score } = assess(c, now);
+  return score >= RISK.alert && score > (c.alerted ?? 0);
 };
 
 // The players in game to ask Steam about: never checked, or not for a day. At most a batch.
@@ -164,7 +165,7 @@ export const RISK_LABELS: Record<Risk, string> = { high: 'High risk', medium: 'W
 // What /player shows: the check, 'failed' when Steam could not be asked and none is saved, or 'off' without STEAM_API_KEY.
 export type SteamLookup = SteamCheck | 'failed' | 'off';
 
-// A player in game with a high-risk account, for the moderation log channel.
+// A player in game with an account at the alert mark, for the moderation log channel.
 export type SteamAlert = { steamId: string; name: string; check: SteamCheck };
 
 const BansSchema = z.object({

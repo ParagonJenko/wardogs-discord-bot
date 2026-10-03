@@ -1007,8 +1007,15 @@ const incidentLine = (i: Incident, weapon: (cause: string) => string): string =>
   return `${when(i.at, 'R')} ${what}${how}${far}${i.map ? ` on ${mapName(i.map)}` : ''}`;
 };
 
-// A player passing a griefing flag's mark today. `weapon` names a cause tag.
-export const buildGriefAlert = (alert: GriefAlert, weapon: (cause: string) => string, siteUrl?: string): DiscordMessage => {
+// A player passing a griefing flag's mark today. `weapon` names a cause tag. `steam` is the player's saved Steam check:
+// an account worth a look or high risk is shown, as griefing on one is more telling.
+export const buildGriefAlert = (
+  alert: GriefAlert,
+  weapon: (cause: string) => string,
+  siteUrl?: string,
+  steam: SteamCheck | null = null,
+): DiscordMessage => {
+  const at = alert.incidents.at(-1)?.at ?? Date.now();
   const reasons = [
     ...(alert.sameTeammate === null
       ? []
@@ -1028,9 +1035,12 @@ export const buildGriefAlert = (alert: GriefAlert, weapon: (cause: string) => st
         ...staffPage(siteUrl),
         description: [steamLine(alert.steamId), reasons.join(' · ')].join('\n'),
         color: 0xe67e22,
-        fields: latest.length === 0 ? [] : [{ name: 'Latest', value: latest.join('\n') }],
+        fields: [
+          ...(latest.length === 0 ? [] : [{ name: 'Latest', value: latest.join('\n') }]),
+          ...(steam === null || assess(steam, at).risk === 'low' ? [] : [{ name: 'Steam account', value: steamText(steam, at) }]),
+        ],
         footer: { text: 'From the kill feed. Sides come from the last check, up to a minute old: check before acting.' },
-        timestamp: new Date(alert.incidents.at(-1)?.at ?? Date.now()).toISOString(),
+        timestamp: new Date(at).toISOString(),
       },
     ],
     allowed_mentions: NO_PINGS,
@@ -1040,7 +1050,7 @@ export const buildGriefAlert = (alert: GriefAlert, weapon: (cause: string) => st
 // Discord takes up to 10 embeds in one message.
 const EMBEDS_PER_MESSAGE = 10;
 
-// Players in game with a high-risk Steam account, one embed each, in as few messages as Discord allows.
+// Players in game with a Steam account at the alert mark, one embed each, in as few messages as Discord allows.
 export const buildSteamAlerts = (alerts: SteamAlert[], now: number, siteUrl?: string): DiscordMessage[] => {
   const embeds = alerts.map(
     ({ steamId, name, check }): Embed => ({

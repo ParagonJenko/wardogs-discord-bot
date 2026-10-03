@@ -83,12 +83,31 @@ describe('scoring an account', () => {
 });
 
 describe('alerts', () => {
-  const risky = clean({ vacBans: 1, lastBanAt: NOW - 10 * DAY });
+  // A new account with a recent VAC ban: 7 points.
+  const riskiest = clean({ vacBans: 1, lastBanAt: NOW - 10 * DAY, createdAt: NOW - 20 * DAY });
 
-  it('posts a high-risk account once, and again only when it gets riskier', () => {
-    expect(alertDue(risky, NOW)).toBe(true);
-    expect(alertDue({ ...risky, alerted: 4 }, NOW)).toBe(false);
-    expect(alertDue({ ...risky, public: false, alerted: 4 }, NOW)).toBe(true);
+  it('posts one of the riskiest accounts once, and again only when it gets riskier', () => {
+    expect(assess(riskiest, NOW).score).toBe(7);
+    expect(alertDue(riskiest, NOW)).toBe(true);
+    expect(alertDue({ ...riskiest, alerted: 7 }, NOW)).toBe(false);
+    expect(alertDue({ ...riskiest, setUp: false, alerted: 7 }, NOW)).toBe(true);
+    // Posted at 4 points before the mark went up, and now at it.
+    expect(alertDue({ ...riskiest, alerted: 4 }, NOW)).toBe(true);
+  });
+
+  it('never posts a high-risk account below the mark on its own', () => {
+    const below = [
+      // A recent VAC ban: 4 points.
+      clean({ vacBans: 1, lastBanAt: NOW - 10 * DAY }),
+      // A brand new account that hides itself: 4.
+      clean({ createdAt: NOW - 3 * DAY, setUp: false }),
+      // A recent VAC ban on a hidden profile: 5.
+      clean({ vacBans: 1, lastBanAt: NOW - 10 * DAY, public: false, createdAt: null }),
+      // Old VAC and game bans: 6.
+      clean({ vacBans: 1, gameBans: 1, lastBanAt: NOW - 800 * DAY }),
+    ];
+    expect(below.map((c) => assess(c, NOW))).toMatchObject(below.map(() => ({ risk: 'high' })));
+    expect(below.map((c) => alertDue(c, NOW))).toEqual([false, false, false, false]);
     expect(alertDue(clean({ vacBans: 1, lastBanAt: NOW - 800 * DAY }), NOW)).toBe(false);
   });
 });
