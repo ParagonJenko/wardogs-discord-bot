@@ -90,7 +90,8 @@ export type StaffRecords = {
   log: (steamId: string, entry: ModEntry) => Promise<void>;
   ban: (request: BanRequest) => Promise<BanResult>;
   unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
-  vipAdd: (request: Named & { days: number; by: string }) => Promise<VipAddResult>;
+  // `days` null: permanent, until staff remove it.
+  vipAdd: (request: Named & { days: number | null; by: string }) => Promise<VipAddResult>;
   vipRemove: (request: Named & { by: string }) => Promise<VipRemoveResult>;
   // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
   // the server was on when staff set it, or null when that could not be read.
@@ -476,17 +477,21 @@ export const runStaffCommand =
           ? { content: `🎖️ Took ${who(player)} off the reserved list. It takes effect after the server's next restart. ${blocked}` }
           : { content: `${who(player)} wasn't on the reserved list. ${blocked}` };
       }
-      const days = Math.trunc(Number(options['days']));
-      if (!Number.isFinite(days) || days < 1 || days > VIP_MAX_DAYS) return { content: `Give VIP for 1 to ${VIP_MAX_DAYS} days.` };
-      log.info(`/vip add by ${staff}: ${logged(player)} for ${days} days`);
+      const permanent = options['permanent'] === 'true';
+      if (permanent && options['days'] !== undefined) return { content: 'Pick a number of days or permanent, not both.' };
+      const days = permanent ? null : Math.trunc(Number(options['days']));
+      if (days !== null && (!Number.isFinite(days) || days < 1 || days > VIP_MAX_DAYS)) {
+        return { content: `Give VIP for 1 to ${VIP_MAX_DAYS} days, or set permanent to True.` };
+      }
+      log.info(`/vip add by ${staff}: ${logged(player)} ${days === null ? 'permanently' : `for ${days} days`}`);
       const result = await records.vipAdd({ ...player, days, by });
       if (result.outcome === 'already-reserved') {
-        return { content: `${who(player)} already has a reserved slot that was added by hand, with no end date. Nothing changed.` };
+        return { content: `${who(player)} already has a permanent reserved slot, with no end date. Nothing changed.` };
       }
-      const until = result.until === undefined ? '' : ` until <t:${unix(result.until)}:f>`;
+      const until = result.until === undefined ? ', with no end date' : ` until <t:${unix(result.until)}:f>`;
       return result.outcome === 'extended'
         ? { content: `🎖️ ${who(player)} keeps their reserved slot${until}.` }
-        : { content: `🎖️ Gave ${who(player)} a reserved slot${until}. It starts after the server's next restart.` };
+        : { content: `🎖️ Gave ${who(player)} a${days === null ? ' permanent' : ''} reserved slot${until}. It starts after the server's next restart.` };
     }
 
     // /player: what the bot knows, and what the server says now. The server's parts are left out if it cannot be read.

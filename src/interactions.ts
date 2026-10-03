@@ -230,10 +230,11 @@ export const COMMANDS = [
       {
         type: SUBCOMMAND,
         name: 'add',
-        description: 'Give a player a reserved slot for a number of days',
+        description: 'Give a player a reserved slot for a number of days, or permanently',
         options: [
           steamId('Pick the player, or type a name or Steam ID'),
-          { type: INTEGER, name: 'days', description: 'How many days', required: true, min_value: 1, max_value: VIP_MAX_DAYS },
+          { type: INTEGER, name: 'days', description: 'How many days (leave out when permanent)', required: false, min_value: 1, max_value: VIP_MAX_DAYS },
+          { type: BOOLEAN, name: 'permanent', description: 'No end date, until staff remove it (default: off)', required: false },
         ],
       },
       {

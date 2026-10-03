@@ -861,7 +861,7 @@ const vipText = ({ record, reserved, now }: PlayerProfile): string => {
       : record.vip !== null && reserved
         ? `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}`
         : reserved
-          ? '🎖️ Reserved slot added by hand, no end date'
+          ? '🎖️ Permanent reserved slot, no end date'
           : 'None',
     ...(record.vipBlockedUntil !== null && record.vipBlockedUntil > now
       ? [`Staff removed VIP: automatic VIP is off for them until ${when(record.vipBlockedUntil, 'f')}`]

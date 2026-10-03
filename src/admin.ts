@@ -76,7 +76,7 @@ export type AdminBan = {
 };
 
 // Everyone on the server's reserved list. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
-// when it ends; without it, the slot was added by hand.
+// when it ends; without it, the slot is permanent (added by hand, or with /vip add permanent).
 export type AdminReserved = {
   players: { player: AdminPlayer; bot: { since: number; until: number } | null }[];
   maxSlots: number | null;
