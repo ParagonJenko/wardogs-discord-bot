@@ -119,7 +119,7 @@ export type AdminSteam = {
   checked: number;
   high: number;
   medium: number;
-  // Riskiest first.
+  // In game first, then riskiest.
   accounts: AdminSteamRow[];
 };
 
