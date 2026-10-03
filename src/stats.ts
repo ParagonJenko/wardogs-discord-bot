@@ -5,6 +5,7 @@ import { mapName } from './discord.ts';
 import type { Leaderboard, RankedPlayer } from './players.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 import { topPlayers, type MatchState, type MatchSummary, type RankedStats } from './tracking.ts';
+import type { TeamBoard } from './teams.ts';
 import type { SeederVip } from './vip.ts';
 import type { WeaponBoard } from './weapons.ts';
 
@@ -296,8 +297,14 @@ export const recordDiscord = (stats: SiteStats, discord: DiscordCounts): SiteSta
 
 // The leaderboard and what seeding earns come from the player records, which are read separately. The weapons come
 // from the kill feed's records, already with public ids; null when the bot has never had the feed. `seederVip`: who has
-// VIP from seeding now; null when automatic VIP is off.
-export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null; seederVip: SeederVip[] | null; weapons: WeaponBoard | null };
+// VIP from seeding now; null when automatic VIP is off. `teams`: which team wins most, from the match records.
+export type PublicExtras = {
+  leaderboard: Leaderboard;
+  vip: VipRule | null;
+  seederVip: SeederVip[] | null;
+  weapons: WeaponBoard | null;
+  teams: TeamBoard;
+};
 
 // Looks up a player's public id by Steam ID (see profiles.ts).
 export type IdOf = (steamId: string) => string | undefined;
@@ -317,6 +324,7 @@ export type PublicStats = Omit<SiteStats, 'hours' | 'matches' | 'currentMatch'> 
   vip: VipRule | null;
   seederVip: Public<SeederVip>[] | null;
   weapons: WeaponBoard | null;
+  teams: TeamBoard;
 };
 
 const named = <T extends { steamId?: string }>(rows: T[], idOf: IdOf): Public<T>[] =>
@@ -371,7 +379,7 @@ export const publicStats = (
   { hours, matches, currentMatch, ...stats }: SiteStats,
   thresholds: Thresholds,
   now: number,
-  { leaderboard, vip, seederVip, weapons }: PublicExtras,
+  { leaderboard, vip, seederVip, weapons, teams }: PublicExtras,
   idOf: IdOf,
 ): PublicStats => ({
   generatedAt: now,
@@ -391,4 +399,5 @@ export const publicStats = (
   vip,
   seederVip: seederVip === null ? null : named(seederVip, idOf),
   weapons,
+  teams,
 });
