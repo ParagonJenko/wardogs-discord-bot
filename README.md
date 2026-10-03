@@ -387,8 +387,14 @@ To set it up, with the [slash commands](#slash-commands) app:
      ```bash
      npx wrangler secret put DISCORD_CLIENT_SECRET
      ```
-2. In the `vars` block of `wrangler.jsonc`, set `DISCORD_APPLICATION_ID` to the app's **Application ID** (General
-   Information; the same one as in `.env`). `DISCORD_GUILD_ID` and `SITE_URL` must be set too.
+2. Store the app's **Application ID** (General Information; the same one as in `.env`):
+   ```bash
+   npx wrangler secret put DISCORD_APPLICATION_ID
+   ```
+   It is not secret, so it can go in the `vars` block of `wrangler.jsonc` instead. Don't set it in the Cloudflare
+   dashboard: every deploy replaces the dashboard's variables with `wrangler.jsonc`'s. `DISCORD_GUILD_ID` and `SITE_URL`
+   must be set too. If one is missing, the staff page and the Worker logs say which (`Staff sign-in is not set up on the
+   bot. Missing: …`).
 3. Optionally, so the page names every staff member (see below), store the bot token from `.env` as a secret:
    ```bash
    npx wrangler secret put DISCORD_BOT_TOKEN

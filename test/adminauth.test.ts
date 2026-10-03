@@ -5,9 +5,11 @@ import {
   createSession,
   finishLogin,
   LOGIN_COOKIE,
+  notSetUpText,
   readSession,
   returnAddress,
   SESSION_HOURS,
+  siteOriginOf,
   startLogin,
   type AdminAuthConfig,
 } from '../src/adminauth.ts';
@@ -38,6 +40,17 @@ describe('adminAuthConfig', () => {
         SITE_URL: 'https://gaminginit.com/',
       }),
     ).toEqual({ ...config, adminRoleIds: ['555', '666'] });
+  });
+});
+
+describe('when sign-in is not set up', () => {
+  it('names what is missing, and still knows the website, so the page can be told why', () => {
+    expect(notSetUpText(['DISCORD_APPLICATION_ID'])).toBe(
+      'Staff sign-in is not set up on the bot. Missing: DISCORD_APPLICATION_ID. See the bot\'s README, "Staff page".',
+    );
+    expect(siteOriginOf({ SITE_URL: 'https://gaminginit.com/' })).toBe(SITE);
+    expect(siteOriginOf({ SITE_URL: 'nope' })).toBeNull();
+    expect(siteOriginOf({})).toBeNull();
   });
 });
 
