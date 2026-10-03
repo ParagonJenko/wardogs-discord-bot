@@ -16,6 +16,8 @@ It also posts:
   length, peak population, and the top 5 players by kills with deaths and K/D.
 - **A [live server status](#live-server-status)** (Cloudflare only): one message in a channel of its own,
   edited every minute with the state, players, map, next map, score and top players.
+- **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
+  kills, K/D, kills in a match, wins, MVPs, time played and seeding, and the highlights.
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
 pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
@@ -23,7 +25,7 @@ other faction gets a dot in its in-game colour), each map with its own colour (�
 the same as on the website; `/rotation` takes the colour of the map being played), and match summaries in the winning
 faction's colour.
 
-And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation` and, for admins,
+And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/rotation`, `/roundup` and, for admins,
 `/broadcast`, `/seeders`, `/seednow` and `/removematch` (Cloudflare only; see [Slash commands](#slash-commands)).
 
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
@@ -119,6 +121,49 @@ The next check posts the message, and every check after that edits it.
 It costs one more RCON request (the rotation) and one Discord edit a minute. The Node/Docker version does not
 have it.
 
+## Roundups
+
+Every Monday the bot posts a roundup of the week before (Monday to Sunday, UTC) to the alerts channel, and on the 1st of
+every month a roundup of the month before. Each one celebrates:
+
+| Section                 | What                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| Summary                 | Matches, time played, players and the peak                                              |
+| 🏆 Team of the week     | The side with the best win rate, from 3 matches up. None when the top two are level     |
+| ⚔️ Teams                | Every side's wins, losses, draws and win rate, best first                               |
+| 🔫 Most kills           | The top 3 by kills                                                                     |
+| 🎯 Best K/D             | The top 3 by K/D, from 3 matches up, like the website's leaderboard                    |
+| 💥 Most kills in a match | Each player's best match, top 3, with the map                                         |
+| 🏅 Most wins            | Matches won on the winning side, out of the matches they played                         |
+| ⭐ Most MVPs            | Times top of a match's scoreboard (most kills, then fewest deaths; players level share it) |
+| ⏱️ Most time played     | Seeding and live time                                                                  |
+| 🌱 Top seeders          | Seed days, then seeding time                                                           |
+| ✨ Highlights           | The biggest win, the closest finish, the map played most and the busiest day           |
+
+- Names link to each player's page on the website when `SITE_URL` is set. Posts never ping anyone.
+- It goes out at `ROUNDUP_HOUR` (UTC, default `17`: 6pm in the UK in summer, 5pm in winter), on the Monday, and on the
+  1st for the month. When the 1st is a Monday, both go out.
+- A match counts in the week it ended, like the leaderboard. A week or month nobody played in gets no post.
+- If the post fails, the bot tries again at each check until the end of that day. A bot deployed after that day waits
+  for the next week, rather than posting a late one.
+- Anyone can see a roundup any time with `/roundup`: last week, last month, or this week or month so far.
+- They come from the [player records](#player-records), so they cover matches since those started.
+
+Set them in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
+
+| Variable       | What                                                       | Default |
+| -------------- | ---------------------------------------------------------- | ------- |
+| `ROUNDUPS`     | `"on"` or `"off"`                                          | `"on"`  |
+| `ROUNDUP_HOUR` | The hour (UTC, 0 to 23) the roundups go out                 | `"17"`  |
+
+To post them in a channel of their own, such as `#hall-of-fame`, make a webhook there and store it as a secret:
+
+```bash
+npx wrangler secret put DISCORD_ROUNDUP_WEBHOOK_URL
+```
+
+The Node/Docker version does not post roundups.
+
 ## Slash commands
 
 | Command         | Who                  | What                                                               |
@@ -127,6 +172,7 @@ have it.
 | `/players`      | Everyone             | Who is online, with kills and deaths (top 30)                      |
 | `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
+| `/roundup`      | Everyone             | The [roundup](#roundups) of last week (default), last month, or this week or month so far |
 | `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
 | `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
 | `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |

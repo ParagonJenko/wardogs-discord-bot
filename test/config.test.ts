@@ -25,7 +25,18 @@ describe('loadConfig', () => {
       vip: null,
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
+      roundups: { hour: 17, webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123' },
     });
+  });
+
+  it('posts roundups to their own channel when one is set, at the hour given, or not at all', () => {
+    const url = 'https://discord.com/api/webhooks/333/roundup-Token_9';
+    expect(loadConfig({ ...required, DISCORD_ROUNDUP_WEBHOOK_URL: url, ROUNDUP_HOUR: '9' }).roundups).toEqual({ hour: 9, webhookUrl: url });
+    expect(loadConfig({ ...required, ROUNDUPS: 'off' }).roundups).toBeNull();
+    expect(() => loadConfig({ ...required, ROUNDUP_HOUR: '24' })).toThrow(/ROUNDUP_HOUR/);
+    expect(() => loadConfig({ ...required, DISCORD_ROUNDUP_WEBHOOK_URL: 'https://example.com/hook' })).toThrow(
+      /DISCORD_ROUNDUP_WEBHOOK_URL/,
+    );
   });
 
   it('reads the webhook for the live status, which must be a Discord webhook too', () => {

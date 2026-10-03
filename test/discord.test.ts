@@ -7,6 +7,7 @@ import {
   buildMessage,
   buildPlayersEmbed,
   buildRotationEmbed,
+  buildRoundupMessage,
   buildSeedCall,
   buildSeedersEmbed,
   buildLiveStatus,
@@ -15,6 +16,7 @@ import {
   postWebhook,
   type DiscordMessage,
 } from '../src/discord.ts';
+import type { Roundup } from '../src/roundup.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
@@ -519,6 +521,158 @@ describe('buildLastMatchEmbed', () => {
       timestamp: '2024-09-30T09:53:20.000Z',
     });
     expect(embed.fields?.at(-1)).toEqual({ name: 'Top players', value: '🥇 **Cy** · 12 kills · 3 deaths · 4.00 K/D' });
+  });
+});
+
+describe('buildRoundupMessage', () => {
+  // Monday 28 Sep to Sunday 4 Oct 2026.
+  const week: Roundup = {
+    kind: 'week',
+    start: Date.UTC(2026, 8, 28),
+    end: Date.UTC(2026, 9, 5),
+    partial: false,
+    matches: 14,
+    playedMs: (32 * 60 + 5) * 60_000,
+    players: 186,
+    peakPlayers: 98,
+    busiestDay: { day: '2026-10-03', players: 84 },
+    teams: [
+      { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5, draws: 0 },
+      { name: 'Lonestar', matches: 10, wins: 4, losses: 5, draws: 1 },
+    ],
+    bestTeam: { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5, draws: 0 },
+    teamMinMatches: 3,
+    kdMinMatches: 3,
+    kills: [
+      { name: 'Ash', id: 'aaaaaaaaaaaa', kills: 54 },
+      { name: 'Bo_b', kills: 41 },
+    ],
+    kd: [{ name: 'Ash', id: 'aaaaaaaaaaaa', kd: 3.2 }],
+    playtime: [{ name: 'Cy', id: 'cccccccccccc', minutes: 845 }],
+    seeding: [{ name: 'Di', id: 'dddddddddddd', seedDays: 4, minutes: 185 }],
+    wins: [{ name: 'Ash', id: 'aaaaaaaaaaaa', wins: 9, played: 12 }],
+    mvps: [],
+    bestMatch: [{ name: 'Ash', id: 'aaaaaaaaaaaa', kills: 32, deaths: 4, map: 'Ozeti' }],
+    biggestWin: {
+      map: 'Ozeti',
+      endedAt: 0,
+      factionScores: [
+        { name: 'Lonestar', score: 23 },
+        { name: 'Valkyra', score: 100, colorHex: '#3366ff' },
+      ],
+    },
+    closestMatch: { map: 'Bakurani', endedAt: 0, factionScores: [{ name: 'Lonestar', score: 100 }, { name: 'Valkyra', score: 98 }] },
+    topMap: { map: 'Ozeti', matches: 8 },
+  };
+
+  it('celebrates the best team and players of the week, linking names to their player pages', () => {
+    const message = buildRoundupMessage(week, 'https://gaminginit.com/');
+
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(embedOf(message)).toMatchObject({
+      title: '🏆 Weekly roundup · 28 Sep – 4 Oct',
+      description:
+        '**14 matches** · **32 h** played · **186 players** · peak **98**\n' +
+        '🏆 Team of the week: 🐻 **Valkyra** · won 9 of 14 matches (64%)',
+      color: 0x3366ff,
+      url: 'https://gaminginit.com/',
+    });
+    expect(field(message, '⚔️ Teams')).toBe('🐻 **Valkyra** · 9 W · 5 L · 64%\n🤠 Lonestar · 4 W · 5 L · 1 D · 40%');
+    expect(field(message, '🔫 Most kills')).toBe(
+      '🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 54\n🥈 **Bo\\_b** · 41',
+    );
+    expect(field(message, '🎯 Best K/D (3+ matches)')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 3.20');
+    expect(field(message, '💥 Most kills in a match')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 32 · 🟦 Ozeti');
+    expect(field(message, '🏅 Most wins')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 9 of 12');
+    expect(field(message, '⭐ Most MVPs')).toBe('–');
+    expect(field(message, '⏱️ Most time played')).toBe('🥇 **[Cy](https://gaminginit.com/player?id=cccccccccccc)** · 14 h 5 min');
+    expect(field(message, '🌱 Top seeders · thanks for getting us live!')).toBe(
+      '🥇 **[Di](https://gaminginit.com/player?id=dddddddddddd)** · 4 seed days · 3 h 5 min',
+    );
+    expect(field(message, '✨ Highlights')).toBe(
+      [
+        '💪 Biggest win: 🐻 **Valkyra** 100 – 23 Lonestar · 🟦 Ozeti',
+        '😬 Closest finish: 🤠 **Lonestar** 100 – 98 Valkyra · 🟧 Bakurani',
+        '🗺️ Most played: 🟦 Ozeti · 8 matches',
+        '📅 Busiest day: Sat 3 Oct · 84 players',
+      ].join('\n'),
+    );
+    expect(embedOf(message)?.fields?.filter((f) => f.inline)).toHaveLength(6);
+    expect(embedOf(message)?.footer?.text).toBe(
+      "Weeks run Monday to Sunday, UTC.\nMVP: top of a match's scoreboard. Team of the week: best win rate, 3+ matches.\n" +
+        'Live stats and leaderboard: gaminginit.com',
+    );
+  });
+
+  it('names the month, or a week or month still going', () => {
+    const title = (r: Partial<Roundup>) => embedOf(buildRoundupMessage({ ...week, ...r }))?.title;
+    expect(title({ kind: 'month', start: Date.UTC(2026, 8, 1), end: Date.UTC(2026, 9, 1) })).toBe('🏆 Monthly roundup · September 2026');
+    expect(title({ partial: true, end: Date.UTC(2026, 9, 3, 15) })).toBe('🏆 This week so far · 28 Sep – 3 Oct');
+    expect(title({ partial: true, end: Date.UTC(2026, 8, 28, 9) })).toBe('🏆 This week so far · 28 Sep');
+    expect(title({ kind: 'month', partial: true, start: Date.UTC(2026, 9, 1), end: Date.UTC(2026, 9, 3) })).toBe(
+      '🏆 This month so far · October 2026',
+    );
+  });
+
+  it('leaves the names unlinked without a website, and the team line out without a clear best team', () => {
+    const message = buildRoundupMessage({ ...week, bestTeam: null });
+    expect(embedOf(message)?.description).toBe('**14 matches** · **32 h** played · **186 players** · peak **98**');
+    expect(embedOf(message)?.color).toBe(0xf1c40f);
+    expect(field(message, '⚔️ Teams')).toBe('🐻 Valkyra · 9 W · 5 L · 64%\n🤠 Lonestar · 4 W · 5 L · 1 D · 40%');
+    expect(field(message, '🔫 Most kills')).toBe('🥇 **Ash** · 54\n🥈 **Bo\\_b** · 41');
+    expect(embedOf(message)).not.toHaveProperty('url');
+  });
+
+  it('shows time played and seeding for a week without matches', () => {
+    const quiet = buildRoundupMessage({
+      ...week,
+      matches: 0,
+      playedMs: 0,
+      peakPlayers: null,
+      teams: [],
+      bestTeam: null,
+      kills: [],
+      kd: [],
+      wins: [],
+      bestMatch: [],
+      biggestWin: null,
+      closestMatch: null,
+      topMap: null,
+    });
+    expect(embedOf(quiet)?.description).toBe('**186 players** · no matches went live');
+    expect(embedOf(quiet)?.fields?.map((f) => [f.name, f.inline])).toEqual([
+      ['⏱️ Most time played', undefined],
+      ['🌱 Top seeders · thanks for getting us live!', undefined],
+      ['✨ Highlights', undefined],
+    ]);
+  });
+
+  it('drops the links rather than go over Discord limits', () => {
+    // 40 characters that all need escaping, on every board, with a long website address.
+    const name = '_'.repeat(60);
+    const three = <T extends object>(row: T) => [1, 2, 3].map(() => ({ name, id: 'aaaaaaaaaaaa', ...row }));
+    const longest: Roundup = {
+      ...week,
+      kills: three({ kills: 999 }),
+      kd: three({ kd: 99.99 }),
+      playtime: three({ minutes: 99_999 }),
+      seeding: three({ seedDays: 7, minutes: 99_999 }),
+      wins: three({ wins: 99, played: 99 }),
+      mvps: three({ mvps: 99 }),
+      bestMatch: three({ kills: 999, deaths: 999, map: 'Zestafona' }),
+    };
+    const site = `https://gaminginit.com/${'x'.repeat(250)}`;
+    const embed = embedOf(buildRoundupMessage(longest, site));
+    const length = (e: typeof embed) =>
+      (e?.title.length ?? 0) +
+      (e?.description?.length ?? 0) +
+      (e?.footer?.text.length ?? 0) +
+      (e?.fields ?? []).reduce((sum, f) => sum + f.name.length + f.value.length, 0);
+    expect(length(embed)).toBeLessThanOrEqual(6000);
+    expect(embed?.fields?.every((f) => f.value.length <= 1024)).toBe(true);
+    expect(field(buildRoundupMessage(longest, site), '🔫 Most kills')).not.toContain('player?id=');
+    // With a short address the links fit.
+    expect(field(buildRoundupMessage(longest, 'https://gaminginit.com'), '🔫 Most kills')).toContain('player?id=');
   });
 });
 

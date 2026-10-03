@@ -3,6 +3,7 @@ import { runCommand, suggestOptions } from '../src/commands.ts';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import type { HttpClient } from '../src/rcon.ts';
+import type { Roundup, RoundupChoice } from '../src/roundup.ts';
 import type { StaffRecords } from '../src/staff.ts';
 
 // The staff commands' records are tested in staff.test.ts.
@@ -33,6 +34,7 @@ const config: Config = {
   vip: null,
   matchMessages: null,
   seedingMessages: null,
+  roundups: null,
 };
 
 // A fake RCON server keyed by path; records what was sent.
@@ -45,16 +47,23 @@ const rcon = (responses: Record<string, unknown>) => {
   return { http, sent };
 };
 
-const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = null, settings: Config = config) => {
+const setup = (
+  responses: Record<string, unknown> = {},
+  lastMatch: unknown = null,
+  settings: Config = config,
+  found: Roundup | null = null,
+) => {
   const server = rcon(responses);
   const log = { info: vi.fn() };
   const seeders = vi.fn(async (_days: number) => [{ steamId: '7656', name: 'Ash', seedingMinutes: 95, seedDays: 2, vipUntil: null }]);
   const removeMatch = vi.fn(async (endedAt: number) => (endedAt === ozeti.endedAt ? { match: ozeti, players: 96 } : null));
   const seedCall = vi.fn(async (_message: DiscordMessage) => undefined);
+  const roundup = vi.fn(async (_choice: RoundupChoice): Promise<Roundup | null> => found);
   const run = runCommand({
     config: () => settings,
     http: server.http,
     lastMatch: async () => lastMatch as never,
+    roundup,
     seeders,
     removeMatch,
     seedCall,
@@ -62,7 +71,7 @@ const setup = (responses: Record<string, unknown> = {}, lastMatch: unknown = nul
     now: () => 0,
     log,
   });
-  return { run, sent: server.sent, log, seeders, removeMatch, seedCall };
+  return { run, sent: server.sent, log, seeders, removeMatch, seedCall, roundup };
 };
 
 // 2026-09-30T14:05:00Z
@@ -114,6 +123,52 @@ describe('runCommand', () => {
     expect(reply.embeds?.[0]?.title).toBe('🏁 Last match · 🟦 Ozeti');
   });
 
+  it('/roundup shows the roundup picked, last week by default', async () => {
+    const found: Roundup = {
+      kind: 'week',
+      start: Date.UTC(2026, 8, 21),
+      end: Date.UTC(2026, 8, 28),
+      partial: false,
+      matches: 0,
+      playedMs: 0,
+      players: 3,
+      peakPlayers: null,
+      busiestDay: null,
+      teams: [],
+      bestTeam: null,
+      teamMinMatches: 3,
+      kdMinMatches: 3,
+      kills: [],
+      kd: [],
+      playtime: [],
+      seeding: [],
+      wins: [],
+      mvps: [],
+      bestMatch: [],
+      biggestWin: null,
+      closestMatch: null,
+      topMap: null,
+    };
+    const { run, roundup } = setup({}, null, config, found);
+
+    const reply = await run({ name: 'roundup', options: {}, userId: null });
+    await run({ name: 'roundup', options: { period: 'this-month' }, userId: null });
+    await run({ name: 'roundup', options: { period: 'junk' }, userId: null });
+
+    expect(reply.embeds?.[0]?.title).toBe('🏆 Weekly roundup · 21 Sep – 27 Sep');
+    expect(roundup.mock.calls).toEqual([['week'], ['this-month'], ['week']]);
+  });
+
+  it('/roundup says when nobody played', async () => {
+    const { run } = setup();
+    expect(await run({ name: 'roundup', options: { period: 'month' }, userId: null })).toEqual({
+      content: 'Nobody played on the server last month.',
+    });
+    expect(await run({ name: 'roundup', options: { period: 'this-week' }, userId: null })).toEqual({
+      content: 'Nobody has played on the server this week yet.',
+    });
+  });
+
   it('/lastmatch links to the website when there is one, and still works when the settings do not load', async () => {
     const match = { map: 'Ozeti', endedAt: 0, durationMs: 60_000, peakPlayers: 30, factionScores: [], top: [] };
     const run = (settings: () => Config) =>
@@ -121,6 +176,7 @@ describe('runCommand', () => {
         config: settings,
         http: rcon({}).http,
         lastMatch: async () => match,
+        roundup: async () => null,
         seeders: async () => [],
         removeMatch: async () => null,
         seedCall: async () => undefined,
@@ -283,6 +339,7 @@ describe('runCommand', () => {
         throw new Error('RCON request timed out after 8000ms');
       },
       lastMatch: async () => null,
+      roundup: async () => null,
       seeders: async () => [],
       removeMatch: async () => null,
       seedCall: async () => undefined,

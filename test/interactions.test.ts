@@ -98,7 +98,7 @@ describe('handleInteraction', () => {
     expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('timed out'));
   });
 
-  it.each(['players', 'lastmatch', 'rotation'])('defers /%s publicly and runs it', async (name) => {
+  it.each(['players', 'lastmatch', 'rotation', 'roundup'])('defers /%s publicly and runs it', async (name) => {
     const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name } });
     const d = deps();
 
@@ -465,6 +465,7 @@ describe('COMMANDS', () => {
       'players',
       'lastmatch',
       'rotation',
+      'roundup',
       'broadcast',
       'seeders',
       'seednow',
@@ -479,11 +480,31 @@ describe('COMMANDS', () => {
       'changemap',
       'vip',
     ]);
-    for (const command of COMMANDS.slice(4)) {
+    for (const command of COMMANDS.slice(5)) {
       expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
       expect(command.description).toMatch(/\(staff only\)$/);
       expect(command.description.length).toBeLessThanOrEqual(100);
     }
+    // Public: anyone can see the roundups.
+    expect(COMMANDS.find((c) => c.name === 'roundup')).toEqual({
+      name: 'roundup',
+      description: 'The best players and team of the week or month',
+      type: 1,
+      options: [
+        {
+          type: 3,
+          name: 'period',
+          description: 'Which week or month (default: last week)',
+          required: false,
+          choices: [
+            { name: 'Last week', value: 'week' },
+            { name: 'Last month', value: 'month' },
+            { name: 'This week so far', value: 'this-week' },
+            { name: 'This month so far', value: 'this-month' },
+          ],
+        },
+      ],
+    });
     expect(COMMANDS.find((c) => c.name === 'removematch')).toMatchObject({
       default_member_permissions: '8',
       options: [{ name: 'match', type: 3, required: true, autocomplete: true }],

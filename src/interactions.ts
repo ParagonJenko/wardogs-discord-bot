@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
+import type { RoundupChoice } from './roundup.ts';
 import { STAFF_COMMANDS, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
@@ -10,6 +11,7 @@ const COMMAND_NAMES = [
   'players',
   'lastmatch',
   'rotation',
+  'roundup',
   'broadcast',
   'seeders',
   'seednow',
@@ -31,6 +33,14 @@ const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow
 
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
 const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
+
+// What /roundup can show, as Discord lists it.
+const ROUNDUP_PERIODS: { name: string; value: RoundupChoice }[] = [
+  { name: 'Last week', value: 'week' },
+  { name: 'Last month', value: 'month' },
+  { name: 'This week so far', value: 'this-week' },
+  { name: 'This month so far', value: 'this-month' },
+];
 
 export const SEEDERS_DEFAULT_DAYS = 7;
 export const SEEDERS_MAX_DAYS = 90;
@@ -62,6 +72,20 @@ export const COMMANDS = [
   { name: 'players', description: 'Who is on the server, with kills and deaths', type: 1 },
   { name: 'lastmatch', description: 'Summary of the last finished match', type: 1 },
   { name: 'rotation', description: 'The current map and what is coming next', type: 1 },
+  {
+    name: 'roundup',
+    description: 'The best players and team of the week or month',
+    type: 1,
+    options: [
+      {
+        type: STRING,
+        name: 'period',
+        description: 'Which week or month (default: last week)',
+        required: false,
+        choices: ROUNDUP_PERIODS,
+      },
+    ],
+  },
   {
     name: 'broadcast',
     description: 'Send a message to everyone in game (staff only)',

@@ -4,7 +4,7 @@ import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
-import { buildLiveStatus, buildVipMessage, mapName, postWebhook } from './discord.ts';
+import { buildLiveStatus, buildRoundupMessage, buildVipMessage, mapName, postWebhook } from './discord.ts';
 import { editOriginalReply, handleInteraction } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
@@ -77,6 +77,17 @@ import {
   type ServerConfig,
   type Snapshot,
 } from './rcon.ts';
+import {
+  buildRoundup,
+  dueRoundups,
+  markPosted,
+  parseRoundupsPosted,
+  periodDays,
+  periodFor,
+  type Period,
+  type Roundup,
+  type RoundupChoice,
+} from './roundup.ts';
 import { socketHttp } from './socket-http.ts';
 import {
   banKickReason,
@@ -153,14 +164,17 @@ const oneAtATime = () => {
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
 // status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
-// was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow) and 'winsSettled'
-// (set once the matches saved before settleWin have been put right).
+// was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow), 'winsSettled'
+// (set once the matches saved before settleWin have been put right) and 'roundups' (the first day of the last week and
+// month whose roundup went out).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
   private serial = oneAtATime();
   // The alerts and /seednow run one at a time, so a check never sends the seeding alert while a seeding call is going out.
   private alerting = oneAtATime();
+  // A roundup is posted by one check at a time, so two checks close together cannot both post it.
+  private roundingUp = oneAtATime();
 
   // The player records the website's pages read. Past days and finished matches only change through /removematch,
   // which clears them, so they are kept in memory and each read only fetches the last two days and any new matches.
@@ -360,6 +374,48 @@ export class Watcher extends DurableObject<Env> {
         console.error(`Discord member count failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    await this.roundingUp(() => this.postRoundups(config));
+  }
+
+  // The roundup of the week or month just ended, once, from ROUNDUP_HOUR (UTC) on the first day of the next one. A post
+  // that fails is tried again at the next check, until the end of that day.
+  private async postRoundups(config: Config): Promise<void> {
+    const rule = config.roundups;
+    const now = Date.now();
+    // Outside the hours a roundup can be due, storage is not read at all.
+    if (rule === null || dueRoundups({}, now, rule.hour).length === 0) return;
+    const storage = this.ctx.storage;
+    try {
+      let posted = parseRoundupsPosted(await storage.get('roundups'));
+      for (const period of dueRoundups(posted, now, rule.hour)) {
+        const label = `${period.kind === 'week' ? 'weekly' : 'monthly'} roundup from ${dayOf(period.start)}`;
+        try {
+          const roundup = await this.roundupFor(period, now);
+          if (roundup !== null) await postWebhook(rule.webhookUrl, buildRoundupMessage(roundup, config.siteUrl));
+          posted = markPosted(posted, period);
+          await storage.put('roundups', posted);
+          console.info(roundup === null ? `No ${label}: nobody played` : `Posted the ${label}`);
+        } catch (error) {
+          console.error(`The ${label} failed, trying again next check: ${errorText(error)}`);
+        }
+      }
+    } catch (error) {
+      console.error(`Roundups failed: ${errorText(error)}`);
+    }
+  }
+
+  // From the same records as the player pages. Null when nobody played in the period.
+  private async roundupFor(period: Period, now: number): Promise<Roundup | null> {
+    const [days, matches] = await Promise.all([this.recentDays(now), this.matchRecords(now)]);
+    const covered = new Set(periodDays(period));
+    const ids = await this.idsFor(days.flatMap((d) => (covered.has(d.day) ? Object.keys(d.players) : [])));
+    return buildRoundup({ period, days, matches, idOf: (steamId) => ids.get(steamId) });
+  }
+
+  // For /roundup.
+  async roundup(choice: RoundupChoice): Promise<Roundup | null> {
+    const now = Date.now();
+    return this.roundupFor(periodFor(choice, now), now);
   }
 
   // Brings the live status message up to date, after the check has saved the match and stats it shows. A failure
@@ -903,6 +959,7 @@ export default {
           config: () => loadConfig(vars),
           http: socketHttp(connect),
           lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
+          roundup: (choice) => watcher().roundup(choice),
           seeders: (days) => watcher().seeders(days),
           removeMatch: (endedAt) => watcher().removeMatch(endedAt),
           seedCall: (message) => watcher().seedCall(message),

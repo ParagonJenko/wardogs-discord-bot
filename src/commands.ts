@@ -3,6 +3,7 @@ import {
   buildLastMatchEmbed,
   buildPlayersEmbed,
   buildRotationEmbed,
+  buildRoundupMessage,
   buildSeedCall,
   buildSeedersEmbed,
   buildStatusEmbed,
@@ -19,6 +20,7 @@ import {
   type CommandRequest,
 } from './interactions.ts';
 import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from './rcon.ts';
+import { ROUNDUP_CHOICES, type Roundup, type RoundupChoice } from './roundup.ts';
 import { isStaffCommand, runStaffCommand, suggestStaff, type StaffRecords } from './staff.ts';
 import type { RecentMatch } from './stats.ts';
 
@@ -27,6 +29,8 @@ type CommandDeps = {
   config: () => Config;
   http: HttpClient;
   lastMatch: () => Promise<RecentMatch | null>;
+  // The best players and team of a week or month; null when nobody played in it.
+  roundup: (choice: RoundupChoice) => Promise<Roundup | null>;
   seeders: (days: number) => Promise<SeederRow[]>;
   // Deletes the recent match that ended at this time, with its records; null if there is none.
   removeMatch: (endedAt: number) => Promise<{ match: RecentMatch; players: number } | null>;
@@ -44,6 +48,13 @@ const websiteOf = (config: () => Config): string | undefined => {
   } catch {
     return undefined;
   }
+};
+
+const NOBODY: Record<RoundupChoice, string> = {
+  week: 'Nobody played on the server last week.',
+  month: 'Nobody played on the server last month.',
+  'this-week': 'Nobody has played on the server this week yet.',
+  'this-month': 'Nobody has played on the server this month yet.',
 };
 
 // Discord shows at most 25 choices.
@@ -73,13 +84,18 @@ const dayCount = (value: string | undefined): number => {
 };
 
 export const runCommand =
-  ({ config, http, lastMatch, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
+  ({ config, http, lastMatch, roundup, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
   async (request: CommandRequest): Promise<CommandReply> => {
     const { name, options, userId } = request;
     if (isStaffCommand(name)) return runStaffCommand({ config, http, records, now, log })(name, request);
     if (name === 'lastmatch') {
       const match = await lastMatch();
       return match ? { embeds: [buildLastMatchEmbed(match, websiteOf(config))] } : { content: 'No finished matches recorded yet.' };
+    }
+    if (name === 'roundup') {
+      const choice = ROUNDUP_CHOICES.find((c) => c === options['period']) ?? 'week';
+      const found = await roundup(choice);
+      return found ? { embeds: buildRoundupMessage(found, websiteOf(config)).embeds } : { content: NOBODY[choice] };
     }
     if (name === 'removematch') {
       const endedAt = Number(options['match']);
