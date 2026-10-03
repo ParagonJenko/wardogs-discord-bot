@@ -182,10 +182,10 @@ describe('buildAdminOverview', () => {
     });
   });
 
-  it('lists the reserved players, with the VIP the bot gave and when it ends, and the lines that stop automatic VIP', () => {
+  it('lists the reserved players, with the VIP the bot gave and when it ends', () => {
     const overview = buildAdminOverview(
       sources({
-        reserved: { ids: [DEE, ASH], removals: ['-DefaultReservedPlayerIds=76561198000000003'], maxSlots: 2 },
+        reserved: { ids: [DEE, ASH], maxSlots: 2 },
         vip: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY } }, checkedAt: 0, revoked: {} },
       }),
     );
@@ -195,7 +195,6 @@ describe('buildAdminOverview', () => {
         { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY } },
         { player: { steamId: DEE, name: 'Dee' }, bot: null },
       ],
-      removals: ['-DefaultReservedPlayerIds=76561198000000003'],
       maxSlots: 2,
     });
     expect(buildAdminOverview(sources()).reserved).toBeNull();

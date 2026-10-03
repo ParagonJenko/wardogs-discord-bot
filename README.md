@@ -375,8 +375,7 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
 - **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
   player to join.
 - **The reserved slots**: everyone on the reserved list in `ServerSettings.ini`, with VIP from the bot and when it ends,
-  or added by hand, how many slots `MaxReservedSlots` holds back, and any `-`/`!DefaultReservedPlayerIds` lines that
-  stop [automatic VIP](#automatic-vip) until someone edits them out.
+  or added by hand, and how many slots `MaxReservedSlots` holds back.
 - **Admin tools**: every staff slash command, run from the page: warn, kick, move team, ban, unban, look up a player,
   give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders, and
   remove a wrongly recorded match. See below.
@@ -702,8 +701,10 @@ How it changes the server:
 - It only removes players it added itself. Reserved slots an admin gave out by hand are never touched, and a
   player who already has one is left as they are.
 - If an admin takes a bot-given VIP off the list, the bot forgets it. It adds them again only if they earn it again.
-- If the file removes reserved players with `-DefaultReservedPlayerIds` or `!DefaultReservedPlayerIds` lines, the
-  bot stops and logs why, rather than guess. Remove those lines by hand to let it work.
+- It reads the list's lines in order, as the game does: `!DefaultReservedPlayerIds=ClearArray` empties the list so
+  far, `-DefaultReservedPlayerIds=<Steam ID>` takes a player off, and `+` adds one. It leaves those lines as they are.
+  It adds a player with a line after the list's last line, so nothing before it takes them off again, and removes one
+  by deleting the lines that add them.
 - `MaxReservedSlots` in the same section sets how many slots are held back for reserved players. The bot does not
   change it.
 - Each change is logged (`VIP added: …`, `VIP ended: …`), and `/seeders` shows who has VIP from the bot and until when.

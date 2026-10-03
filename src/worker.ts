@@ -170,7 +170,7 @@ import {
   type SiteStats,
 } from './stats.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
-import { addVip, parseVipState, removeVip, reservedListing, syncVip, vipDue, type VipState } from './vip.ts';
+import { addVip, parseVipState, removeVip, reservedListing, syncVip, vipDue, type ReservedListing, type VipState } from './vip.ts';
 import {
   FEED_PATH,
   feedAuthorized,
@@ -1075,7 +1075,15 @@ export class Watcher extends DurableObject<Env> {
         return null;
       }),
     ]);
-    const reserved = serverConfig === null ? null : reservedListing(serverConfig.text);
+    const reserved = ((): ReservedListing | null => {
+      if (serverConfig === null) return null;
+      try {
+        return reservedListing(serverConfig.text);
+      } catch (error) {
+        console.error(`Staff page: the reserved list could not be read: ${errorText(error)}`);
+        return null;
+      }
+    })();
     const vip = parseVipState(stored.get('vip'));
     const grief = griefKeys.map((key) => parseGriefDay(stored.get(key)));
     const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
