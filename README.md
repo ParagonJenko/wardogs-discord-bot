@@ -19,7 +19,8 @@ It also posts:
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, and the highlights.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban and team
-  move with its reason and who did it, bans made or lifted outside the bot, and possible griefing as it happens.
+  move with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
+  in game with a [risky Steam account](#risky-steam-accounts).
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
 pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
@@ -38,8 +39,9 @@ every finished match's full scoreboard, and each player's seeding, play time, ki
 kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
 [live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. It gives
 [automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week. And it runs the website's
-[staff page](#staff-page): staff sign in with Discord to see possible griefers (team kills, suicides in vehicles), the
-moderation log and the bans on the server.
+[staff page](#staff-page): staff sign in with Discord to see possible griefers (team kills, suicides in vehicles),
+[risky Steam accounts](#risky-steam-accounts) (VAC and game bans, new and hidden accounts), the moderation log and the bans
+on the server.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
@@ -184,7 +186,7 @@ The Node/Docker version does not post roundups.
 | `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |
 | `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
 | `/warn`         | Staff only           | Sends a player in game a private message: "Staff warning: …"       |
-| `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), VIP, ban and staff history |
+| `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), [Steam account](#risky-steam-accounts), VIP, ban and staff history |
 | `/kick`         | Staff only           | Removes a player from the server, with a reason they see; they can rejoin |
 | `/switchteam`   | Staff only           | Moves a player to another team (`team`, or the other one when there are two) and respawns them |
 | `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
@@ -316,7 +318,8 @@ works when it matches exactly one player.
   is. **`/vip remove`** takes a player off the list, however they got there, and automatic VIP does not give it back
   for 7 days (`/vip add` lifts that). Both take effect at the server's next restart, like automatic VIP.
 - **`/player`** shows the Steam ID with a link to the Steam profile, whether they are in game, their playtime,
-  seeding and matches over the last 90 days, VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
+  seeding and matches over the last 90 days, what Steam says about their account (see
+  [Risky Steam accounts](#risky-steam-accounts)), VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
   unbans, team moves and VIP changes, with who did each.
 
 The staff history covers what staff do through the bot, from the deploy with these commands on, and bans made or lifted
@@ -336,6 +339,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
 | 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. With their latest incidents. Needs the [kill feed](#weapon-stats) |
+| 🕵️ Risky Steam account   | A player in game has a high-risk Steam account, such as a recent VAC ban, or a new account that hides its profile. Once, and again if it gets riskier. Needs `STEAM_API_KEY`: see [Risky Steam accounts](#risky-steam-accounts) |
 
 To set it up:
 
@@ -355,6 +359,7 @@ To set it up:
 - **Kicks outside the bot** cannot be seen: the game's RCON does not report them, and its kill feed only has deaths.
 - **Possible griefing** posts can be turned off with `GRIEF_ALERTS` `"off"` in the `vars` block of `wrangler.jsonc`.
   They are a reason to look, not proof: sides come from the bot's last check (see [Staff page](#staff-page)).
+- **Risky Steam account** posts can be turned off with `STEAM_ALERTS` `"off"`. They are a reason to look, not proof too.
 - A post that fails is logged (`Moderation log post failed`) and not retried: the staff history has it either way.
 - **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_MODLOG_WEBHOOK_URL`). The staff history and
   the staff page still record everything.
@@ -370,6 +375,9 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
   or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
   suicides. Most flagged days first, with their matches, kills and time played for scale, and whether they are banned.
 - **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
+- **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, riskiest first,
+  with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
+  scale. With `STEAM_API_KEY` only.
 - **The moderation log**: every warning, kick, ban, unban and team move through the bot, with the reason and who did
   it, and bans made or lifted outside the bot.
 - **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
@@ -453,6 +461,60 @@ What the griefing figures can and cannot tell:
 - They start from the deploy with this feature. Like the other records, they are kept for good.
 
 The Node/Docker version does not have the staff page.
+
+## Risky Steam accounts
+
+With a Steam Web API key, the bot checks each player's Steam account for the signs of a cheater: bans on the account, and
+accounts that are new or show nothing. Staff see it in [`/player`](#staff-commands), on the [staff page](#staff-page)
+and, for a high-risk account, in the [moderation log](#moderation-log) channel.
+
+To turn it on:
+
+1. Get a key at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey), signed in to any Steam account
+   that has spent at least $5 on Steam (Steam gives no keys to other accounts). For the domain, put your website, such as
+   `gaminginit.com`.
+2. Store it as a secret:
+   ```bash
+   npx wrangler secret put STEAM_API_KEY
+   ```
+
+The next check asks Steam about everyone in game. Each account gets points for what Steam says about it:
+
+| Flag           | When                                                                                         | Points |
+| -------------- | -------------------------------------------------------------------------------------------- | ------ |
+| VAC ban        | VAC bans on the account, in any game                                                         | 3      |
+| Game ban       | Game bans: another game's anti-cheat or developer banned them                                 | 3      |
+| Recent ban     | The latest VAC or game ban was in the last year                                              | 1      |
+| Community ban  | Banned from the Steam Community                                                              | 2      |
+| Trade ban      | Banned from trading on Steam                                                                 | 1      |
+| New account    | Made in the last 30 days                                                                     | 3      |
+| Young account  | Made in the last 6 months, but not new                                                       | 1      |
+| Hidden profile | The profile is private, or was never set up: Steam shows nothing about it, not even its age  | 1      |
+
+- **4 points or more is high risk**: a VAC ban in the last year, an old VAC ban on a hidden profile, or a new account with
+  a hidden profile. **2 or 3 is worth a look**: an old VAC ban alone, or a new account with a public profile. Less is
+  nothing risky. Plenty of players keep their profile private, so a hidden profile alone is not enough.
+- **A reason to look, not proof.** A VAC ban may be years old and from another game, and honest players have new and
+  private accounts too. Watch how they play before acting.
+- **When.** Each check (every minute) asks Steam about the players in game it has not checked, or not for a day, so a
+  new ban shows within a day. That is two requests (`GetPlayerBans` and `GetPlayerSummaries`) for up to 100 players, and
+  none while nobody new is on. Steam allows 100,000 a day.
+- **The moderation log** gets a 🕵️ post for each player in game with a high-risk account, up to 10 players a post. Each
+  account is posted once, and again only if it gets riskier, such as with a new ban. A post that fails is logged
+  (`Risky Steam account alert failed`) and not retried. Set `STEAM_ALERTS` to `"off"` in the `vars` block of
+  `wrangler.jsonc` to stop them; `/player` and the staff page still show the checks.
+- **`/player`** shows the risk, the bans, how old the account is, the profile and when it was checked. For a player the
+  bot has not checked, or not for a day, it asks Steam there and then, so staff can check anyone by Steam ID.
+- **The staff page** lists everyone seen in the period, or in game now, whose account is worth a look or high risk,
+  riskiest first, with their matches, kills, K/D and, from the [kill feed](#weapon-stats), headshots over the period.
+- **Logs.** Each risky account found is logged (`Risky Steam account: …`). If Steam does not answer, the checks wait 10
+  minutes (`Steam checks failed, trying again in 10 minutes`). `Steam refused STEAM_API_KEY (403)` means the key is
+  wrong.
+- What Steam says is kept with the [player records](#player-records), keyed by Steam ID, so only staff see it: never the
+  website's public pages.
+- **Turning it off:** delete the secret (`npx wrangler secret delete STEAM_API_KEY`).
+
+The Node/Docker version does not check Steam accounts.
 
 ## Website stats
 
@@ -678,6 +740,7 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | The live match               | From the kill feed: the match on now, for the [live page](#live-match). Its last 40 deaths, and each player's totals and streaks |
 | Each UTC day's griefing      | From the kill feed, for the [staff page](#staff-page): each player's team kills (and whom), times team killed, suicides and vehicle suicides, and the day's latest 300 team kills and vehicle suicides |
 | The server's ban list        | As at the last check, to notice bans made or lifted outside the bot ([moderation log](#moderation-log)) |
+| Each player's Steam account  | From Steam, for [risky accounts](#risky-steam-accounts): their VAC, game, community and trading bans, whether the profile is public and set up, when the account was made, and when the bot checked |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
@@ -873,6 +936,8 @@ when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for b
   server and a captured request cannot be replayed later.
 - The [kill feed](#weapon-stats) is only taken with `KILL_FEED_TOKEN` as the bearer, so nobody else can add kills.
   Anyone who has the token can, so keep it secret like the password.
+- The [Steam checks](#risky-steam-accounts) only send `STEAM_API_KEY` and players' Steam IDs, to Steam
+  (`api.steampowered.com`). Keep the key secret: requests made with it count against its daily limit.
 - The [staff page](#staff-page)'s data is only served for a session the Worker signed after Discord confirmed the person
   is staff in `DISCORD_GUILD_ID`. Keep `DISCORD_CLIENT_SECRET` secret: anyone with it could sign their own sessions.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.

@@ -5,6 +5,7 @@ import { totals, type PlayerDay } from './players.ts';
 import type { Ban } from './rcon.ts';
 import { DISCORD_ID, type StaffNames } from './staffnames.ts';
 import type { IdOf } from './stats.ts';
+import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, type SteamCheck, type SteamFlag, type TradeBan } from './steam.ts';
 import type { ReservedListing, VipState } from './vip.ts';
 import { weaponKind, weaponName, type WeaponKind } from './weapons.ts';
 
@@ -79,6 +80,53 @@ export type AdminReserved = {
   maxSlots: number | null;
 };
 
+// A player whose Steam account is worth a look, with what Steam said and when, and their play over the period for scale.
+export type AdminSteamRow = AdminPlayer & {
+  risk: 'high' | 'medium';
+  score: number;
+  flags: SteamFlag[];
+  vacBans: number;
+  gameBans: number;
+  lastBanAt: number | null;
+  communityBanned: boolean;
+  tradeBan: TradeBan;
+  public: boolean;
+  setUp: boolean;
+  createdAt: number | null;
+  checkedAt: number;
+  inGame: boolean;
+  banned: boolean;
+  matches: number;
+  kills: number;
+  deaths: number;
+  minutes: number;
+  // From the kill feed over the period: their kills, and how many were headshots.
+  feedKills: number;
+  headshots: number;
+};
+
+// Risky Steam accounts among everyone seen in the period or in game now. `players` is how many that is, and `checked`
+// how many of them the bot has checked; `high` and `medium` how many are at each risk.
+export type AdminSteam = {
+  flags: typeof STEAM_FLAGS;
+  marks: typeof STEAM_MARKS;
+  risk: typeof RISK;
+  players: number;
+  checked: number;
+  high: number;
+  medium: number;
+  // Riskiest first.
+  accounts: AdminSteamRow[];
+};
+
+// The Steam checks the staff page needs. `checks` covers everyone seen in the period and everyone `inGame` at the last
+// check; `feed` is the kill feed's kills and headshots over the period, for the risky ones.
+export type AdminSteamSources = {
+  checks: Map<string, SteamCheck | null>;
+  inGame: Set<string>;
+  feed: Map<string, { kills: number; headshots: number }>;
+};
+
 // A staff member, by Discord user ID: the name they go by and their Discord username, when the bot knows them.
 export type AdminStaff = Record<string, { name: string; username: string | null }>;
 
@@ -100,6 +148,8 @@ export type AdminOverview = {
   staff: AdminStaff;
   // Null when ServerSettings.ini could not be read.
   reserved: AdminReserved | null;
+  // Null without STEAM_API_KEY.
+  steam: AdminSteam | null;
 };
 
 export type AdminSources = {
@@ -122,7 +172,29 @@ export type AdminSources = {
   // The reserved list in ServerSettings.ini, or null when it could not be read, and the VIP the bot gave.
   reserved: ReservedListing | null;
   vip: VipState;
+  // Null without STEAM_API_KEY.
+  steam: AdminSteamSources | null;
 };
+
+// The staff page lists at most this many risky accounts.
+export const STEAM_ACCOUNTS_LISTED = 100;
+
+// Everyone seen in the period or in game now.
+export const steamPlayers = (playerDays: PlayerDay[], inGame: Iterable<string>): string[] => [
+  ...new Set([...playerDays.flatMap((d) => Object.keys(d)), ...inGame]),
+];
+
+// Of `steamIds`, those whose account is worth a look or high risk, riskiest first.
+export const riskySteamIds = (steamIds: string[], checks: Map<string, SteamCheck | null>, now: number): string[] =>
+  steamIds
+    .flatMap((steamId) => {
+      const check = checks.get(steamId);
+      if (check === undefined || check === null) return [];
+      const { score, risk } = assess(check, now);
+      return risk === 'low' ? [] : [{ steamId, score }];
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((r) => r.steamId);
 
 const startOfDay = (at: number): number => Date.parse(`${new Date(at).toISOString().slice(0, 10)}T00:00:00Z`);
 
@@ -268,6 +340,51 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
               }),
             ),
         ].sort((a, b) => (b.bot?.at ?? 0) - (a.bot?.at ?? 0) || a.player.name.localeCompare(b.player.name));
+  const steam = ((): AdminSteam | null => {
+    if (s.steam === null) return null;
+    const { checks, inGame, feed } = s.steam;
+    const seen = steamPlayers(s.playerDays, inGame);
+    const risky = riskySteamIds(seen, checks, s.now);
+    const accounts = risky.slice(0, STEAM_ACCOUNTS_LISTED).flatMap((steamId): AdminSteamRow[] => {
+      const check = checks.get(steamId);
+      if (check === undefined || check === null) return [];
+      const { at, found: _found, alerted: _alerted, ...said } = check;
+      const { flags, score, risk } = assess(check, s.now);
+      const t = context.get(steamId);
+      return [
+        {
+          ...ref(steamId, t?.name),
+          risk: risk === 'high' ? 'high' : 'medium',
+          score,
+          flags,
+          ...said,
+          checkedAt: at,
+          inGame: inGame.has(steamId),
+          banned: banned.has(steamId),
+          matches: t?.matches ?? 0,
+          kills: t?.kills ?? 0,
+          deaths: t?.deaths ?? 0,
+          minutes: (t?.seedingMinutes ?? 0) + (t?.liveMinutes ?? 0),
+          feedKills: feed.get(steamId)?.kills ?? 0,
+          headshots: feed.get(steamId)?.headshots ?? 0,
+        },
+      ];
+    });
+    const high = risky.filter((steamId) => {
+      const check = checks.get(steamId);
+      return check !== undefined && check !== null && assess(check, s.now).risk === 'high';
+    }).length;
+    return {
+      flags: STEAM_FLAGS,
+      marks: STEAM_MARKS,
+      risk: RISK,
+      players: seen.length,
+      checked: seen.filter((steamId) => (checks.get(steamId) ?? null) !== null).length,
+      high,
+      medium: risky.length - high,
+      accounts,
+    };
+  })();
   const sum = (key: 'teamKills' | 'vehicleTeamKills' | 'suicides' | 'vehicleSuicides'): number => rows.reduce((n, r) => n + r[key], 0);
   return {
     generatedAt: s.now,
@@ -301,5 +418,6 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     incidents,
     moderation,
     bans,
+    steam,
   };
 };

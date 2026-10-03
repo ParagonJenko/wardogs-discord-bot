@@ -15,7 +15,8 @@
   // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status, DISCORD_ROUNDUP_WEBHOOK_URL, the
   // optional channel for the weekly and monthly roundups, KILL_FEED_TOKEN, which turns on the weapon stats,
   // DISCORD_MODLOG_WEBHOOK_URL, the optional staff channel for the moderation log, DISCORD_CLIENT_SECRET, for the staff
-  // page's Discord sign-in, and DISCORD_BOT_TOKEN, optional, so the staff page can name staff it has not seen.
+  // page's Discord sign-in, DISCORD_BOT_TOKEN, optional, so the staff page can name staff it has not seen, and
+  // STEAM_API_KEY, optional, which turns on the checks for risky Steam accounts.
   "vars": {
     // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop.
     "DISCORD_ROLE_ID": "1554801355015594025",
@@ -47,6 +48,9 @@
     "DISCORD_APPLICATION_ID": "1554816090452795484",
     // Posts to the moderation log when a player passes a griefing flag (3 team kills, 2 vehicle suicides): "on" or "off".
     "GRIEF_ALERTS": "on",
+    // Posts to the moderation log when a player with a high-risk Steam account is in game (needs STEAM_API_KEY): "on" or
+    // "off".
+    "STEAM_ALERTS": "on",
     // Automatic VIP: seed on this many days in a week to get a reserved slot for a week. "0" turns it off.
     "VIP_SEED_DAYS": "3",
     // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.

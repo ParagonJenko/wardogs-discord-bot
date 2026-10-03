@@ -5,7 +5,19 @@ import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
-import { ADMIN_DEFAULT_DAYS, ADMIN_PERIODS, adminStaffIds, adminSteamIds, buildAdminOverview, staffFor, type AdminOverview } from './admin.ts';
+import {
+  ADMIN_DEFAULT_DAYS,
+  ADMIN_PERIODS,
+  adminStaffIds,
+  adminSteamIds,
+  buildAdminOverview,
+  riskySteamIds,
+  staffFor,
+  STEAM_ACCOUNTS_LISTED,
+  steamPlayers,
+  type AdminOverview,
+  type AdminSteamSources,
+} from './admin.ts';
 import {
   adminAuthConfig,
   ADMIN_PAGE,
@@ -25,6 +37,7 @@ import {
   buildLiveStatus,
   buildModLogMessage,
   buildRoundupMessage,
+  buildSteamAlerts,
   buildVipMessage,
   mapName,
   postWebhook,
@@ -132,6 +145,21 @@ import {
 } from './roundup.ts';
 import { socketHttp } from './socket-http.ts';
 import {
+  alertDue,
+  assess,
+  checksDue,
+  fetchSteamChecks,
+  parseSteamCheck,
+  RECHECK_MS,
+  RISK_LABELS,
+  steamFacts,
+  steamKey,
+  STEAM_RETRY_MS,
+  type SteamAlert,
+  type SteamCheck,
+  type SteamLookup,
+} from './steam.ts';
+import {
   fetchDiscordUser,
   LOOKUP_FAILURES_KEY,
   lookupsDue,
@@ -176,6 +204,7 @@ import { addVip, parseVipState, removeVip, reservedListing, seederVip, syncVip, 
 import {
   FEED_PATH,
   feedAuthorized,
+  feedKillsSince,
   isKill,
   MAX_FEED_BYTES,
   MIN_FEED_TOKEN,
@@ -253,8 +282,9 @@ const oneAtATime = () => {
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last check, to
-// notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page) and
-// 'staffLookupsFailed' (when asking Discord about each of those last failed).
+// notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page),
+// 'staffLookupsFailed' (when asking Discord about each of those last failed) and 'steam:<Steam ID>' (what Steam said about
+// that player's account, for risky accounts).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -284,6 +314,11 @@ export class Watcher extends DurableObject<Env> {
   private killsSeen = new Set<string>();
   // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
   private weaponDayCache = new Map<string, WeaponDay>();
+  // Steam checks once read, by Steam ID; null for a player with none. Every write goes through saveSteam, so it is never
+  // stale.
+  private steamChecks = new Map<string, SteamCheck | null>();
+  // After Steam fails or refuses, the checks wait until then.
+  private steamRetryAt = 0;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -324,12 +359,12 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Where the moderation log goes. A configuration problem only stops the posts: what they report is saved already.
-  private posting(): Pick<Config, 'modLogWebhookUrl' | 'griefAlerts' | 'siteUrl'> {
+  private posting(): Pick<Config, 'modLogWebhookUrl' | 'griefAlerts' | 'steamAlerts' | 'siteUrl'> {
     try {
       return loadConfig(stringVars(this.env));
     } catch (error) {
       console.error(`Moderation log: ${errorText(error)}`);
-      return { modLogWebhookUrl: undefined, griefAlerts: false, siteUrl: undefined };
+      return { modLogWebhookUrl: undefined, griefAlerts: false, steamAlerts: false, siteUrl: undefined };
     }
   }
 
@@ -518,6 +553,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
+    await this.checkSteam(seen.snapshot);
 
     const { inviteCode } = config;
     if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
@@ -766,6 +802,132 @@ export class Watcher extends DurableObject<Env> {
     }
     for (const p of snapshot?.players ?? []) if (wanted.has(p.steamId)) names.set(p.steamId, p.name);
     return names;
+  }
+
+  // STEAM_API_KEY, the key for the Steam Web API, or null when it is not set: then nobody is checked.
+  private steamApiKey(): string | null {
+    return stringVars(this.env)['STEAM_API_KEY']?.trim() || null;
+  }
+
+  // The Steam checks for these players, read from storage once and then kept in memory.
+  private async loadSteam(steamIds: string[]): Promise<Map<string, SteamCheck | null>> {
+    const missing = [...new Set(steamIds)].filter((steamId) => !this.steamChecks.has(steamId));
+    // Reads take as many keys at once as writes.
+    for (let i = 0; i < missing.length; i += RECORDS_PER_WRITE) {
+      const part = missing.slice(i, i + RECORDS_PER_WRITE);
+      const stored = await this.ctx.storage.get(part.map(steamKey));
+      // One saved while this was being read is newer.
+      for (const steamId of part) if (!this.steamChecks.has(steamId)) this.steamChecks.set(steamId, parseSteamCheck(stored.get(steamKey(steamId))));
+    }
+    return this.steamChecks;
+  }
+
+  // Keeps the highest score posted so far, so a check saved from an earlier reading never makes an alert go out again.
+  private async saveSteam(checks: [string, SteamCheck][]): Promise<void> {
+    for (let i = 0; i < checks.length; i += RECORDS_PER_WRITE) {
+      const part = checks.slice(i, i + RECORDS_PER_WRITE).map(([steamId, check]): [string, SteamCheck] => {
+        const alerted = Math.max(check.alerted ?? 0, this.steamChecks.get(steamId)?.alerted ?? 0);
+        return [steamId, alerted > 0 ? { ...check, alerted } : check];
+      });
+      await this.ctx.storage.put(Object.fromEntries(part.map(([steamId, check]) => [steamKey(steamId), check])));
+      for (const [steamId, check] of part) this.steamChecks.set(steamId, check);
+    }
+  }
+
+  // Asks Steam about the players in game it has not checked, or not for a day, up to 100 at a check, and posts those with
+  // a high-risk account to the moderation log channel: once, and again only if it gets riskier. After Steam fails or
+  // refuses, it waits STEAM_RETRY_MS before asking again. A failure never stops the rest of the check.
+  private async checkSteam(snapshot: Snapshot | null): Promise<void> {
+    const apiKey = this.steamApiKey();
+    if (apiKey === null || snapshot === null || snapshot.players.length === 0) return;
+    const now = Date.now();
+    try {
+      const names = new Map(snapshot.players.map((p) => [p.steamId, p.name]));
+      const inGame = [...names.keys()];
+      const known = await this.loadSteam(inGame);
+      const due = now >= this.steamRetryAt ? checksDue(inGame, known, now) : [];
+      const changed = new Map<string, SteamCheck>();
+      if (due.length > 0) {
+        try {
+          for (const [steamId, check] of await fetchSteamChecks(apiKey, due, now)) {
+            // The score last posted is kept, so a check that finds nothing new posts nothing.
+            const alerted = known.get(steamId)?.alerted;
+            changed.set(steamId, alerted === undefined ? check : { ...check, alerted });
+          }
+        } catch (error) {
+          this.steamRetryAt = now + STEAM_RETRY_MS;
+          console.error(`Steam checks failed, trying again in ${STEAM_RETRY_MS / 60_000} minutes: ${errorText(error)}`);
+        }
+      }
+      const checked = [...changed];
+      const { modLogWebhookUrl, steamAlerts, siteUrl } = this.posting();
+      const alerts =
+        modLogWebhookUrl === undefined || !steamAlerts
+          ? []
+          : inGame.flatMap((steamId): SteamAlert[] => {
+              const check = changed.get(steamId) ?? known.get(steamId) ?? null;
+              if (check === null || !alertDue(check, now)) return [];
+              return [{ steamId, name: names.get(steamId) || steamId, check: { ...check, alerted: assess(check, now).score } }];
+            });
+      // Marked as posted in the same write, before posting: a post that fails is logged, not retried.
+      for (const alert of alerts) changed.set(alert.steamId, alert.check);
+      if (changed.size === 0) return;
+      await this.saveSteam([...changed]);
+      for (const [steamId, check] of checked) {
+        const { risk, score } = assess(check, now);
+        if (risk === 'low') continue;
+        console.info(
+          `Risky Steam account: ${JSON.stringify(names.get(steamId) ?? '')} (${steamId}): ${RISK_LABELS[risk]}, ${score} points: ` +
+            steamFacts(check, now).join(', '),
+        );
+      }
+      if (checked.length > 0) console.info(`Steam checks: ${checked.length} players`);
+      if (modLogWebhookUrl === undefined || alerts.length === 0) return;
+      const messages = buildSteamAlerts(alerts, now, siteUrl);
+      // In order, in the background, so a slow Discord never holds up the check.
+      this.ctx.waitUntil(
+        (async () => {
+          for (const message of messages) {
+            await postWebhook(modLogWebhookUrl, message).catch((error: unknown) => console.error(`Risky Steam account alert failed: ${errorText(error)}`));
+          }
+        })(),
+      );
+    } catch (error) {
+      console.error(`Steam checks failed: ${errorText(error)}`);
+    }
+  }
+
+  // A player's Steam check for /player: the saved one, or one made now when there is none or it is a day old. Staff
+  // asked, so it does not wait out a failure, and it is not posted to the moderation log.
+  async steamLookup(steamId: string): Promise<SteamLookup> {
+    const apiKey = this.steamApiKey();
+    if (apiKey === null) return 'off';
+    const now = Date.now();
+    const saved = (await this.loadSteam([steamId])).get(steamId) ?? null;
+    if (saved !== null && now - saved.at < RECHECK_MS) return saved;
+    try {
+      const check = (await fetchSteamChecks(apiKey, [steamId], now)).get(steamId);
+      if (check === undefined) return saved ?? 'failed';
+      await this.saveSteam([[steamId, check]]);
+      return check;
+    } catch (error) {
+      console.error(`Steam check for /player failed (${steamId}): ${errorText(error)}`);
+      return saved ?? 'failed';
+    }
+  }
+
+  // The staff page's Steam checks: everyone seen in the period or in game now, and the kill feed's kills and headshots
+  // over the period for the risky ones. Null without STEAM_API_KEY.
+  private async steamSources(playerDays: PlayerDay[], online: OnlineSnapshot | null, now: number, days: number): Promise<AdminSteamSources | null> {
+    if (this.steamApiKey() === null) return null;
+    const inGame = new Set(online?.players.map((p) => p.steamId) ?? []);
+    const seen = steamPlayers(playerDays, inGame);
+    const checks = await this.loadSteam(seen);
+    const risky = riskySteamIds(seen, checks, now).slice(0, STEAM_ACCOUNTS_LISTED);
+    const stored = risky.length === 0 ? new Map<string, unknown>() : await this.ctx.storage.get(risky.map(playerWeaponsKey));
+    const oldest = dayOf(now - (days - 1) * DAY_MS);
+    const feed = new Map(risky.map((steamId) => [steamId, feedKillsSince(parsePlayerWeapons(stored.get(playerWeaponsKey(steamId))), oldest)]));
+    return { checks, inGame, feed };
   }
 
   // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their time is up. VIP staff
@@ -1073,7 +1235,7 @@ export class Watcher extends DurableObject<Env> {
     const { config } = this.rcon();
     const http = socketHttp(connect, SUGGEST_TIMEOUT_MS);
     const [stored, recent, logs, serverBans, serverConfig] = await Promise.all([
-      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', 'vip', STAFF_NAMES_KEY]),
+      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', 'vip', 'online', STAFF_NAMES_KEY]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
       fetchBans(config.rconUrl, config.rconPassword, http).catch((error: unknown) => {
@@ -1098,7 +1260,13 @@ export class Watcher extends DurableObject<Env> {
     const grief = griefKeys.map((key) => parseGriefDay(stored.get(key)));
     const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
     const banBook = parseBanBook(stored.get('bans'));
-    const steamIds = adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []);
+    const online = this.onlineNow(now, stored.get('online'));
+    const playerDays = recent.slice(-days).map((d) => d.players);
+    const steam = await this.steamSources(playerDays, online, now, days);
+    const steamIds = [
+      ...adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []),
+      ...(steam === null ? [] : riskySteamIds(steamPlayers(playerDays, steam.inGame), steam.checks, now).slice(0, STEAM_ACCOUNTS_LISTED)),
+    ];
     const names = new Map<string, string>();
     for (const [steamId, log] of modLogs) {
       const logged = log.findLast((e) => e.name !== undefined && e.name !== steamId)?.name;
@@ -1108,6 +1276,7 @@ export class Watcher extends DurableObject<Env> {
     for (const [steamId, grant] of Object.entries(vip.granted)) names.set(steamId, grant.name);
     for (const day of grief) for (const [steamId, t] of Object.entries(day.players)) if (t.name !== '') names.set(steamId, t.name);
     for (const day of recent) for (const [steamId, t] of Object.entries(day.players)) names.set(steamId, t.name);
+    for (const p of online?.players ?? []) names.set(p.steamId, p.name);
     const ids = await this.idsFor(steamIds);
     const since = stored.get('killFeedSince');
     const staffNames = parseStaffNames(stored.get(STAFF_NAMES_KEY));
@@ -1116,7 +1285,7 @@ export class Watcher extends DurableObject<Env> {
       days,
       feedSince: typeof since === 'string' ? since : null,
       grief,
-      playerDays: recent.slice(-days).map((d) => d.players),
+      playerDays,
       modLogs,
       serverBans,
       banBook,
@@ -1125,6 +1294,7 @@ export class Watcher extends DurableObject<Env> {
       staffNames,
       reserved,
       vip,
+      steam,
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);
@@ -1476,6 +1646,7 @@ const commandTools = (
     vipAdd: (grant) => watcher().vipAdd(grant),
     vipRemove: (target) => watcher().vipRemove(target),
     nextMap: (map, playing) => watcher().stageNextMap(map, playing),
+    steam: (steamId) => watcher().steamLookup(steamId),
   };
   return {
     run: runCommand({

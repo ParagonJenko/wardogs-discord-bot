@@ -12,6 +12,7 @@ import {
   buildRoundupMessage,
   buildSeedCall,
   buildSeedersEmbed,
+  buildSteamAlerts,
   buildLiveStatus,
   buildStatusEmbed,
   buildVipMessage,
@@ -788,6 +789,33 @@ describe('buildPlayerEmbed', () => {
     );
   });
 
+  it('shows what Steam says about their account, unless the bot has no Steam key', () => {
+    const steam = {
+      at: NOW - 3_600_000,
+      found: true,
+      vacBans: 1,
+      gameBans: 0,
+      lastBanAt: NOW - 40 * DAY,
+      communityBanned: false,
+      tradeBan: 'none' as const,
+      public: false,
+      setUp: true,
+      createdAt: null,
+    };
+    const checked = `Checked ${t(NOW - 3_600_000, 'R')}`;
+
+    expect(field(buildPlayerEmbed(profile), 'Steam account')).toBeUndefined();
+    expect(field(buildPlayerEmbed({ ...profile, steam: 'off' }), 'Steam account')).toBeUndefined();
+    expect(field(buildPlayerEmbed({ ...profile, steam: 'failed' }), 'Steam account')).toBe("Couldn't reach Steam just now.");
+    expect(field(buildPlayerEmbed({ ...profile, steam }), 'Steam account')).toBe(
+      `🚩 **High risk** · 5 points\n1 VAC ban, 40 days ago · Account age hidden · Private profile\n${checked}`,
+    );
+    expect(field(buildPlayerEmbed({ ...profile, steam: { ...steam, vacBans: 0, lastBanAt: null, public: true, createdAt: NOW - 4000 * DAY } }), 'Steam account')).toBe(
+      `✅ **Nothing risky**\nNo VAC or game bans · Account made 10 years ago · Public profile\n${checked}`,
+    );
+    expect(field(buildPlayerEmbed({ ...profile, steam: { ...steam, found: false } }), 'Steam account')).toBe(`Steam has no account with this ID. ${checked}`);
+  });
+
   it('shows a ban waiting for the player to join, until the server has it', () => {
     const ban = { name: 'Ash', until: null, reason: 'Cheating', serverReason: 'Cheating', by: '42', at: NOW, waiting: true };
     const waiting = buildPlayerEmbed({ ...profile, record: { ...record, ban } });
@@ -985,5 +1013,47 @@ describe('postWebhook', () => {
       });
 
     await expect(postWebhook('https://discord.com/api/webhooks/1/abc', message, stalled, 10)).rejects.toThrow();
+  });
+});
+
+describe('buildSteamAlerts', () => {
+  const NOW = Date.UTC(2026, 9, 3, 20);
+  const DAY = 86_400_000;
+  const check = {
+    at: NOW,
+    found: true,
+    vacBans: 0,
+    gameBans: 0,
+    lastBanAt: null,
+    communityBanned: false,
+    tradeBan: 'none' as const,
+    public: true,
+    setUp: false,
+    createdAt: NOW - 5 * DAY,
+    alerted: 4,
+  };
+  const alert = (i: number) => ({ steamId: `7656119800000${String(i).padStart(4, '0')}`, name: `P_${i}`, check });
+
+  it('posts each player with their risk and what Steam says, linking the staff page, pinging nobody', () => {
+    const [message] = buildSteamAlerts([alert(1)], NOW, 'https://gaminginit.com');
+    const embed = message?.embeds[0];
+
+    expect(embed?.title).toBe('🕵️ Risky Steam account · P\\_1');
+    expect(embed?.url).toBe('https://gaminginit.com/admin');
+    expect(embed?.description).toBe(
+      '`76561198000000001` · [Steam profile](https://steamcommunity.com/profiles/76561198000000001)\n🚩 **High risk** · 4 points · in game now',
+    );
+    expect(embed?.fields).toEqual([
+      { name: 'Steam says', value: `No VAC or game bans\nAccount made 5 days ago\nProfile never set up\nChecked <t:${NOW / 1000}:R>` },
+    ]);
+    expect(message?.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+
+  it('puts up to 10 players in a message', () => {
+    const messages = buildSteamAlerts(Array.from({ length: 12 }, (_, i) => alert(i)), NOW);
+
+    expect(messages.map((m) => m.embeds.length)).toEqual([10, 2]);
+    expect(messages[0]?.embeds[0]?.url).toBeUndefined();
+    expect(buildSteamAlerts([], NOW)).toEqual([]);
   });
 });

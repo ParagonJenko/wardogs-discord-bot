@@ -448,3 +448,10 @@ export const playerWeaponDays = (record: PlayerWeapons, oldest: string): PlayerW
         .map((w) => ({ ...w, longest: w.longest === null ? null : metres(w.longest) }))
         .sort((a, b) => b.kills - a.kills || a.name.localeCompare(b.name));
     });
+
+// A player's kills in the feed from `oldest` on, and how many were headshots, for the staff page.
+export const feedKillsSince = (record: PlayerWeapons, oldest: string): { kills: number; headshots: number } =>
+  Object.entries(record)
+    .filter(([day]) => day >= oldest)
+    .flatMap(([, weapons]) => Object.values(weapons))
+    .reduce((sum, w) => ({ kills: sum.kills + w.kills, headshots: sum.headshots + w.headshots }), { kills: 0, headshots: 0 });
