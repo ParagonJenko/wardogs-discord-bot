@@ -352,26 +352,36 @@ export const namedSteamIds = (stats: SiteStats, leaderboard: Leaderboard): strin
   return [...new Set(rows.flatMap((p) => (p.steamId === undefined ? [] : [p.steamId])))];
 };
 
-// Every reading in the last DAYS_KEPT days (today included) counts once, so an hour's average is its players summed
-// over its readings. Its busy share is its busy readings over the readings checked against `busyThreshold`; days
-// counted under another threshold, or before busy readings were counted, are left out. Averages are rounded to a
-// tenth and shares to a hundredth to keep the JSON short.
+// The middle value, or halfway between the two middle values; null when there are none.
+const median = (values: number[]): number | null => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+// Each hour is the median day's over the last DAYS_KEPT days (today included), so one bad day, like a crash or a quiet
+// evening, cannot drag a busy hour down. A day's average is its players summed over its readings in that hour, and its
+// busy share its busy readings over the readings checked against `busyThreshold`. Days with no readings in the hour
+// are left out, and from the busy shares so are days counted under another threshold, or before busy readings were
+// counted. Averages are rounded to a tenth and shares to a hundredth to keep the JSON short.
 export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number): Hourly => {
   const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
   const kept = hours.filter((h) => h.day >= oldest);
   const sameThreshold = kept.filter((h) => h.busyThreshold === busyThreshold);
-  const total = (days: HourTotals[], pick: (h: HourTotals) => number[], hour: number) =>
-    days.reduce((sum, h) => sum + (pick(h)[hour] ?? 0), 0);
-  const ratio = (part: number, whole: number, places: number) =>
-    whole === 0 ? null : Math.round((part / whole) * places) / places;
+  const typical = (days: HourTotals[], part: (h: HourTotals) => number[], whole: (h: HourTotals) => number[], places: number) =>
+    Array.from({ length: 24 }, (_, hour) => {
+      const daily = days.flatMap((h) => {
+        const count = whole(h)[hour] ?? 0;
+        return count === 0 ? [] : [(part(h)[hour] ?? 0) / count];
+      });
+      const middle = median(daily);
+      return middle === null ? null : Math.round(middle * places) / places;
+    });
   return {
     days: DAYS_KEPT,
-    players: Array.from({ length: 24 }, (_, hour) =>
-      ratio(total(kept, (h) => h.players, hour), total(kept, (h) => h.readings, hour), 10),
-    ),
-    busy: Array.from({ length: 24 }, (_, hour) =>
-      ratio(total(sameThreshold, (h) => h.busy, hour), total(sameThreshold, (h) => h.checked, hour), 100),
-    ),
+    players: typical(kept, (h) => h.players, (h) => h.readings, 10),
+    busy: typical(sameThreshold, (h) => h.busy, (h) => h.checked, 100),
   };
 };
 

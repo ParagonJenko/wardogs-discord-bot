@@ -368,7 +368,7 @@ describe('publicStats and Steam IDs', () => {
 });
 
 describe('hourlyAverages', () => {
-  it(`averages the players in each UTC hour over the last ${DAYS_KEPT} days, with null for an hour with no readings`, () => {
+  it(`averages the players in each UTC hour on the median day of the last ${DAYS_KEPT}, with null for an hour with no readings`, () => {
     const stats = [
       observation(MIDNIGHT + 20 * HOUR, 30),
       observation(MIDNIGHT + 20 * HOUR + 30 * 60_000, 40),
@@ -382,12 +382,13 @@ describe('hourlyAverages', () => {
 
     expect(days).toBe(DAYS_KEPT);
     expect(players).toHaveLength(24);
-    expect(players[20]).toBe(40);
+    // 35 on the first day and 50 on the second: halfway between the two days, not 40 over the three readings.
+    expect(players[20]).toBe(42.5);
     expect(players[3]).toBe(1.7);
     expect(players.filter((p) => p === null)).toHaveLength(22);
   });
 
-  it('gives the share of each hour’s readings that were busy', () => {
+  it('gives the share of each hour’s readings that were busy, on the median day', () => {
     const stats = [
       observation(MIDNIGHT + 20 * HOUR, 98),
       observation(MIDNIGHT + 20 * HOUR + 60_000, 97),
@@ -400,10 +401,38 @@ describe('hourlyAverages', () => {
 
     const { busy } = hourlyAverages(stats.hours, MIDNIGHT + DAY + 21 * HOUR, BUSY);
 
-    expect(busy[20]).toBe(0.67);
+    // All of the first day's readings and none of the second's: halfway, not 2 of the 3 readings.
+    expect(busy[20]).toBe(0.5);
     expect(busy[3]).toBe(0.33);
     expect(busy[4]).toBe(0);
     expect(busy[5]).toBeNull();
+  });
+
+  it('does not let one bad day drag a busy hour down', () => {
+    const busyEvening = (day: number) =>
+      Array.from({ length: 60 }, (_, minute) => observation(MIDNIGHT + day * DAY + 20 * HOUR + minute * 60_000, 98));
+    // Three busy evenings, then one where the server emptied for the hour.
+    const quietEvening = Array.from({ length: 60 }, (_, minute) => observation(MIDNIGHT + 3 * DAY + 20 * HOUR + minute * 60_000, 4));
+    const stats = [...busyEvening(0), ...busyEvening(1), ...busyEvening(2), ...quietEvening].reduce(
+      (acc, obs) => recordObservation(acc, obs, 1, BUSY),
+      emptyStats(),
+    );
+
+    const { players, busy } = hourlyAverages(stats.hours, MIDNIGHT + 3 * DAY + 21 * HOUR, BUSY);
+    expect(players[20]).toBe(98);
+    expect(busy[20]).toBe(1);
+  });
+
+  it('counts a day with few readings in an hour as one day, like the rest', () => {
+    const stats = [
+      ...Array.from({ length: 60 }, (_, minute) => observation(MIDNIGHT + 20 * HOUR + minute * 60_000, 98)),
+      observation(MIDNIGHT + DAY + 20 * HOUR, 10),
+      observation(MIDNIGHT + 2 * DAY + 20 * HOUR, 20),
+    ].reduce((acc, obs) => recordObservation(acc, obs, 1, BUSY), emptyStats());
+
+    const { players, busy } = hourlyAverages(stats.hours, MIDNIGHT + 2 * DAY + 21 * HOUR, BUSY);
+    expect(players[20]).toBe(20);
+    expect(busy[20]).toBe(0);
   });
 
   it('leaves out busy counts made under another threshold', () => {
