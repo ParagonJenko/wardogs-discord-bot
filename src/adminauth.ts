@@ -197,7 +197,7 @@ const isAdministrator = (permissions: string | null | undefined): boolean => {
   }
 };
 
-export type LoginResult = { user: { id: string; name: string } } | { problem: LoginProblem };
+export type LoginResult = { user: { id: string; name: string; username: string } } | { problem: LoginProblem };
 
 // Swaps Discord's code for who the user is, and whether they are staff in the server.
 export const finishLogin = async (
@@ -224,7 +224,7 @@ export const finishLogin = async (
   if (memberResponse.status === 404) return { problem: 'not-member' };
   if (!memberResponse.ok) throw new Error(`Discord did not give their roles: ${memberResponse.status}`);
   const member = MemberSchema.parse(await memberResponse.json());
-  const named = { id: user.id, name: member.nick || user.global_name || user.username };
+  const named = { id: user.id, name: member.nick || user.global_name || user.username, username: user.username };
   if (member.roles.some((role) => config.adminRoleIds.includes(role))) return { user: named };
   // Not a staff role: an Administrator, or the server's owner, is staff too.
   const guildsResponse = await call('/users/@me/guilds', asUser);

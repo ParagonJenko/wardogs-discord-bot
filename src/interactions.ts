@@ -31,6 +31,8 @@ const ADMINISTRATOR = 1n << 3n;
 // to the person who ran them.
 const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow', 'removematch', ...STAFF_COMMANDS];
 
+export const isAdminCommand = (name: CommandName): boolean => ADMIN_COMMANDS.includes(name);
+
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
 const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
 
@@ -262,12 +264,13 @@ const InteractionSchema = z.object({
 });
 
 // A subcommand's name is in `options.subcommand`. `focused` is the option being typed in, for suggestions. `userName` is
-// the name the sender goes by in the server, for the moderation log.
+// the name the sender goes by in the server, for the moderation log, and `userHandle` their Discord username.
 export type CommandRequest = {
   name: CommandName;
   options: Record<string, string>;
   userId: string | null;
   userName?: string;
+  userHandle?: string;
   focused?: string;
 };
 export type CommandReply = { content?: string; embeds?: Embed[] };
@@ -362,6 +365,7 @@ export const handleInteraction = async (
       ]),
       userId: interaction.member?.user?.id ?? null,
       ...(userName ? { userName } : {}),
+      ...(member?.user?.username ? { userHandle: member.user.username } : {}),
       ...(focused === undefined ? {} : { focused }),
     };
   };

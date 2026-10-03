@@ -4,7 +4,7 @@ import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseStagedMap, showBoard, type StagedMap } from './board.ts';
-import { ADMIN_DEFAULT_DAYS, ADMIN_PERIODS, adminSteamIds, buildAdminOverview, type AdminOverview } from './admin.ts';
+import { ADMIN_DEFAULT_DAYS, ADMIN_PERIODS, adminStaffIds, adminSteamIds, buildAdminOverview, staffFor, type AdminOverview } from './admin.ts';
 import {
   adminAuthConfig,
   ADMIN_PAGE,
@@ -27,7 +27,7 @@ import {
   postWebhook,
 } from './discord.ts';
 import { griefDayKey, hasGrief, parseGriefDay, recordGrief, type GriefAlert } from './griefing.ts';
-import { editOriginalReply, handleInteraction } from './interactions.ts';
+import { editOriginalReply, handleInteraction, isAdminCommand } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
@@ -116,6 +116,17 @@ import {
   type RoundupChoice,
 } from './roundup.ts';
 import { socketHttp } from './socket-http.ts';
+import {
+  fetchDiscordUser,
+  LOOKUP_FAILURES_KEY,
+  lookupsDue,
+  noteStaffName,
+  parseLookupFailures,
+  parseStaffNames,
+  STAFF_NAMES_KEY,
+  withFailures,
+  type StaffNames,
+} from './staffnames.ts';
 import {
   banKickReason,
   PROFILE_DAYS,
@@ -224,8 +235,9 @@ const oneAtATime = () => {
 // month whose roundup went out), and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
-// (team kills and suicides that day, for the staff page), and 'serverBans' (the server's ban list at the last check, to
-// notice bans made or lifted outside the bot).
+// (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last check, to
+// notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page) and
+// 'staffLookupsFailed' (when asking Discord about each of those last failed).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -1035,7 +1047,7 @@ export class Watcher extends DurableObject<Env> {
     const griefKeys = Array.from({ length: days }, (_, i) => griefDayKey(now - (days - 1 - i) * DAY_MS));
     const { config } = this.rcon();
     const [stored, recent, logs, serverBans] = await Promise.all([
-      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans']),
+      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', STAFF_NAMES_KEY]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
       fetchBans(config.rconUrl, config.rconPassword, socketHttp(connect, SUGGEST_TIMEOUT_MS)).catch((error: unknown) => {
@@ -1057,7 +1069,8 @@ export class Watcher extends DurableObject<Env> {
     for (const day of recent) for (const [steamId, t] of Object.entries(day.players)) names.set(steamId, t.name);
     const ids = await this.idsFor(steamIds);
     const since = stored.get('killFeedSince');
-    return buildAdminOverview({
+    const staffNames = parseStaffNames(stored.get(STAFF_NAMES_KEY));
+    const overview = buildAdminOverview({
       now,
       days,
       feedSince: typeof since === 'string' ? since : null,
@@ -1068,7 +1081,51 @@ export class Watcher extends DurableObject<Env> {
       banBook,
       nameOf: (steamId) => names.get(steamId),
       idOf: (steamId) => ids.get(steamId),
+      staffNames,
     });
+    const staffIds = adminStaffIds(overview);
+    const found = await this.lookUpStaff(staffIds, staffNames, now);
+    return found === null ? overview : { ...overview, staff: staffFor(staffIds, found, modLogs) };
+  }
+
+  // With DISCORD_BOT_TOKEN, asks Discord who the staff are that the bot has not seen sign in or use a staff command, a
+  // few at a time, and remembers them. Null when there was nobody to ask about, or no token.
+  private async lookUpStaff(ids: string[], known: StaffNames, now: number): Promise<StaffNames | null> {
+    const token = stringVars(this.env)['DISCORD_BOT_TOKEN']?.trim();
+    if (!token) return null;
+    const failures = parseLookupFailures(await this.ctx.storage.get(LOOKUP_FAILURES_KEY));
+    const due = lookupsDue(known, ids, now, failures);
+    if (due.length === 0) return null;
+    const learned: [string, { name: string; username: string }][] = [];
+    const failed: string[] = [];
+    for (const id of due) {
+      try {
+        const user = await fetchDiscordUser(token, id);
+        if (user === null) failed.push(id);
+        else learned.push([id, user]);
+      } catch (error) {
+        // A refused token or a rate limit: the rest wait for a later load.
+        failed.push(id);
+        console.error(`Staff names: ${errorText(error)}`);
+        break;
+      }
+    }
+    // Read again, so a name noted while Discord was being asked is not lost.
+    const latest = parseStaffNames(await this.ctx.storage.get(STAFF_NAMES_KEY));
+    const merged = { ...latest, ...Object.fromEntries(learned.map(([id, user]) => [id, { ...user, at: now }])) };
+    await this.ctx.storage.put({
+      ...(learned.length === 0 ? {} : { [STAFF_NAMES_KEY]: merged }),
+      [LOOKUP_FAILURES_KEY]: withFailures(failures, failed, now),
+    });
+    if (learned.length > 0) console.info(`Staff names: looked up ${learned.length} on Discord`);
+    return learned.length === 0 ? null : merged;
+  }
+
+  // A staff member's name, as seen when they sign in to the staff page or use a staff command. Only written when it
+  // changed, or has not been seen for a while.
+  async noteStaff(id: string, name: string, username: string | null): Promise<void> {
+    const next = noteStaffName(parseStaffNames(await this.ctx.storage.get(STAFF_NAMES_KEY)), id, name, username, Date.now());
+    if (next !== null) await this.ctx.storage.put(STAFF_NAMES_KEY, next);
   }
 
   // Recent matches, newest first, to pick from in /removematch.
@@ -1325,7 +1382,7 @@ const staffLogin = async (request: Request, vars: Record<string, string>): Promi
   return new Response(null, { status: 302, headers: { location, 'set-cookie': cookie, 'cache-control': 'no-store' } });
 };
 
-const staffCallback = async (request: Request, vars: Record<string, string>): Promise<Response> => {
+const staffCallback = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
   const config = adminAuthConfig(vars);
   if ('missing' in config) return notSetUp(config.missing);
   const url = new URL(request.url);
@@ -1351,6 +1408,10 @@ const staffCallback = async (request: Request, vars: Record<string, string>): Pr
       return back(returnTo, `error=${result.problem}`);
     }
     console.info(`Staff signed in: ${JSON.stringify(result.user.name)} (Discord user ${result.user.id})`);
+    const { id, name, username } = result.user;
+    await watcher()
+      .noteStaff(id, name, username)
+      .catch((error: unknown) => console.error(`Noting a staff name failed: ${errorText(error)}`));
     return back(returnTo, `session=${await createSession(config.clientSecret, result.user, Date.now())}`);
   } catch (error) {
     console.error(`Staff sign-in failed: ${errorText(error)}`);
@@ -1441,7 +1502,7 @@ export default {
     const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
     if (request.method === 'POST' && url.pathname.endsWith(FEED_PATH)) return ingestKills(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname === '/auth/login') return staffLogin(request, stringVars(env));
-    if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env));
+    if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env), watcher);
     if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.
     if (request.method === 'GET' && url.pathname === '/api/live/socket') return watcher().fetch(request);
@@ -1469,24 +1530,39 @@ export default {
       vipRemove: (target) => watcher().vipRemove(target),
       nextMap: (map, playing) => watcher().stageNextMap(map, playing),
     };
+    const run = runCommand({
+      config: () => loadConfig(vars),
+      http: socketHttp(connect),
+      lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
+      roundup: (choice) => watcher().roundup(choice),
+      seeders: (days) => watcher().seeders(days),
+      removeMatch: (endedAt) => watcher().removeMatch(endedAt),
+      seedCall: (message) => watcher().seedCall(message),
+      records,
+      now: Date.now,
+      log: console,
+    });
     const result = await handleInteraction(
       await request.text(),
       request.headers.get('x-signature-ed25519'),
       request.headers.get('x-signature-timestamp'),
       {
         publicKey,
-        runCommand: runCommand({
-          config: () => loadConfig(vars),
-          http: socketHttp(connect),
-          lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
-          roundup: (choice) => watcher().roundup(choice),
-          seeders: (days) => watcher().seeders(days),
-          removeMatch: (endedAt) => watcher().removeMatch(endedAt),
-          seedCall: (message) => watcher().seedCall(message),
-          records,
-          now: Date.now,
-          log: console,
-        }),
+        // Each staff command also tells the staff page who that Discord user is.
+        runCommand: async (request) => {
+          const { userId, userName, userHandle } = request;
+          const noted =
+            isAdminCommand(request.name) && userId && userName
+              ? watcher()
+                  .noteStaff(userId, userName, userHandle ?? null)
+                  .catch((error: unknown) => console.error(`Noting a staff name failed: ${errorText(error)}`))
+              : Promise.resolve();
+          try {
+            return await run(request);
+          } finally {
+            await noted;
+          }
+        },
         suggest: suggestOptions({
           recentMatches: () => watcher().recentMatches(),
           config: () => loadConfig(vars),

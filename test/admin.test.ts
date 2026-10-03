@@ -54,6 +54,7 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     banBook: {},
     nameOf: (steamId) => NAMES[steamId],
     idOf: (steamId) => (steamId === ASH ? 'a00000000001' : undefined),
+    staffNames: {},
     ...overrides,
   };
 };
@@ -150,6 +151,33 @@ describe('buildAdminOverview', () => {
     expect(banned({ serverBans: [], banBook: { [ASH]: stale } })).toBe(false);
     expect(banned({ serverBans: [], banBook: { [ASH]: waiting } })).toBe(true);
     expect(banned({ serverBans: null, banBook: { [ASH]: stale } })).toBe(true);
+  });
+
+  it('names the staff in the log and the bans: from the staff directory, else their name in their latest log entry', () => {
+    const modLogs = new Map<string, ModEntry[]>([
+      [ASH, [{ action: 'kick', at: NOW - 60_000, by: '340568148044414976', reason: 'TK' }]],
+      [BO, [{ action: 'warn', at: NOW - 30_000, by: '100000000000000003', byName: 'Old name' }, { action: 'warn', at: NOW, by: '100000000000000003', byName: 'Moth' }]],
+      [DEE, [{ action: 'ban', at: NOW, by: 'server', reason: 'Racism' }, { action: 'kick', at: NOW, by: '100000000000000009' }]],
+    ]);
+    const bot: BanRecord = { name: 'Cy', until: null, reason: 'Cheating', serverReason: 'Cheating', by: '100000000000000002', at: NOW };
+
+    const overview = buildAdminOverview(
+      sources({
+        modLogs,
+        serverBans: [{ steamId: CY, reason: 'Cheating', bannedBy: null }],
+        banBook: { [CY]: bot },
+        staffNames: {
+          '340568148044414976': { name: 'Sarge', username: 'paragon', at: NOW },
+          '100000000000000002': { name: 'Kestrel', username: 'kestrel', at: NOW },
+        },
+      }),
+    );
+
+    expect(overview.staff).toEqual({
+      '340568148044414976': { name: 'Sarge', username: 'paragon' },
+      '100000000000000003': { name: 'Moth', username: null },
+      '100000000000000002': { name: 'Kestrel', username: 'kestrel' },
+    });
   });
 
   it('names everyone it can', () => {

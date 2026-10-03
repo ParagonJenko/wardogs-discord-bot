@@ -124,16 +124,16 @@ describe('finishLogin', () => {
   it('lets in members with a staff role, by the name they go by in the server', async () => {
     const fetchFn = discord({ member: Response.json({ roles: ['111', '555'], nick: 'Sarge' }) });
 
-    await expect(finishLogin(config, 'the-code', CALLBACK, fetchFn)).resolves.toEqual({ user: { id: '42', name: 'Sarge' } });
+    await expect(finishLogin(config, 'the-code', CALLBACK, fetchFn)).resolves.toEqual({ user: { id: '42', name: 'Sarge', username: 'paragon' } });
     expect(fetchFn.mock.calls.map(([url]) => String(url))).not.toContain('https://discord.com/api/v10/users/@me/guilds');
   });
 
   it("lets in the server's Administrators and owner", async () => {
     await expect(
       finishLogin(config, 'the-code', CALLBACK, discord({ guilds: [{ id: '888', permissions: '8' }, { id: '777', owner: false, permissions: String(8 | 16) }] })),
-    ).resolves.toEqual({ user: { id: '42', name: 'Paragon' } });
+    ).resolves.toEqual({ user: { id: '42', name: 'Paragon', username: 'paragon' } });
     await expect(finishLogin(config, 'the-code', CALLBACK, discord({ guilds: [{ id: '777', owner: true, permissions: '0' }] }))).resolves.toEqual({
-      user: { id: '42', name: 'Paragon' },
+      user: { id: '42', name: 'Paragon', username: 'paragon' },
     });
   });
 

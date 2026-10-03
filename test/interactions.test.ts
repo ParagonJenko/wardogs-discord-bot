@@ -140,6 +140,7 @@ describe('handleInteraction', () => {
     }
 
     expect(d.runCommand.mock.calls.map(([request]) => request.userName)).toEqual(['Sarge', 'Paragon', 'paragon']);
+    expect(d.runCommand.mock.calls.map(([request]) => request.userHandle)).toEqual(['paragon', 'paragon', 'paragon']);
   });
 
   it('refuses /broadcast from anyone who is not an Administrator, Manage Server included, even if Discord let it through', async () => {
