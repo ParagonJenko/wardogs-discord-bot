@@ -1658,7 +1658,7 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async vipAdd({ steamId, name, days, by }: Named & { days: number; by: string }): Promise<VipAddResult> {
+  async vipAdd({ steamId, name, days, by }: Named & { days: number | null; by: string }): Promise<VipAddResult> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
@@ -1669,7 +1669,7 @@ export class Watcher extends DurableObject<Env> {
         return { outcome: change.outcome };
       }
       const outcome = change.outcome === 'extended' ? 'extended' : 'added';
-      await this.record(steamId, { action: 'vip-add', at: now, by, name, detail: `${days} day${days === 1 ? '' : 's'}` }, { vip: change.state });
+      await this.record(steamId, { action: 'vip-add', at: now, by, name, detail: days === null ? 'permanent' : `${days} day${days === 1 ? '' : 's'}` }, { vip: change.state });
       return { outcome, ...(change.until === undefined ? {} : { until: change.until }) };
     });
   }

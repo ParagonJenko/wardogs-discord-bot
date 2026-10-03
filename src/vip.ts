@@ -231,9 +231,10 @@ export type VipChange = {
 
 // Gives a player VIP for `days`, as staff asked. It ends like any other: when the time is up, unless they earned it.
 // It also lifts any block from /vip remove, even for a player who already has a reserved slot by hand. Longer VIP for
-// a seeder still counts as theirs from seeding.
+// a seeder still counts as theirs from seeding. `days` null makes it permanent: the bot puts them on the list and
+// forgets any end it had for them, so, like a slot added by hand, it stays until staff remove it.
 export const addVip = async (
-  { steamId, name, days, now, state, rcon }: { steamId: string; name: string; days: number; now: number; state: VipState; rcon: VipRcon },
+  { steamId, name, days, now, state, rcon }: { steamId: string; name: string; days: number | null; now: number; state: VipState; rcon: VipRcon },
 ): Promise<VipChange> => {
   const config = await rcon.fetchConfig();
   const onList = reservedIds(config.text).includes(steamId);
@@ -241,6 +242,10 @@ export const addVip = async (
   const { [steamId]: _unblocked, ...revoked } = state.revoked;
   if (onList && current === undefined) return { state: { ...state, revoked }, outcome: 'already-reserved' };
   if (!onList) await writeReserved(rcon, config, [steamId], []);
+  if (days === null) {
+    const { [steamId]: _forgotten, ...granted } = state.granted;
+    return { state: { ...state, revoked, granted }, outcome: onList ? 'extended' : 'added' };
+  }
   const expiresAt = Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
   const source = onList ? (current?.source ?? 'seeding') : 'staff';
   return {

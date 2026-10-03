@@ -602,7 +602,15 @@ describe('COMMANDS', () => {
     expect(find('changemap')).toMatchObject({ options: setup });
     expect(find('vip')).toMatchObject({
       options: [
-        { name: 'add', type: 1, options: [{ name: 'steam_id', autocomplete: true }, { name: 'days', type: 4, min_value: 1, max_value: 365 }] },
+        {
+          name: 'add',
+          type: 1,
+          options: [
+            { name: 'steam_id', autocomplete: true },
+            { name: 'days', type: 4, required: false, min_value: 1, max_value: 365 },
+            { name: 'permanent', type: 5, required: false },
+          ],
+        },
         { name: 'remove', type: 1, options: [{ name: 'steam_id', autocomplete: true }] },
       ],
     });
@@ -660,7 +668,9 @@ describe('staff commands from the staff page', () => {
 
     expect(checkOptions('vip', { subcommand: 'add', steam_id, days: '7' })).toEqual({ options: { subcommand: 'add', steam_id, days: '7' } });
     expect(checkOptions('vip', { subcommand: 'remove', steam_id })).toEqual({ options: { subcommand: 'remove', steam_id } });
-    expect(checkOptions('vip', { subcommand: 'add', steam_id })).toEqual({ problem: '/vip needs days.' });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, permanent: true })).toEqual({ options: { subcommand: 'add', steam_id, permanent: 'true' } });
+    // Neither days nor permanent: /vip add says what it needs.
+    expect(checkOptions('vip', { subcommand: 'add', steam_id })).toEqual({ options: { subcommand: 'add', steam_id } });
     expect(checkOptions('vip', { subcommand: 'remove', steam_id, days: '7' })).toEqual({ problem: '/vip has no option called days.' });
     expect(checkOptions('vip', { steam_id })).toEqual({ problem: 'Pick add or remove.' });
   });

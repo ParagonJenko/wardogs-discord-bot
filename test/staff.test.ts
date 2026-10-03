@@ -375,10 +375,32 @@ describe('runStaffCommand', () => {
     await expect(run('vip', { subcommand: 'remove', steam_id: BO })).resolves.toEqual({
       content: "🎖️ Took **Bo** off the reserved list. It takes effect after the server's next restart. Automatic VIP will not give it back for 7 days.",
     });
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '0' })).resolves.toEqual({ content: 'Give VIP for 1 to 365 days.' });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '0' })).resolves.toEqual({
+      content: 'Give VIP for 1 to 365 days, or set permanent to True.',
+    });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH })).resolves.toEqual({ content: 'Give VIP for 1 to 365 days, or set permanent to True.' });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '30', permanent: 'true' })).resolves.toEqual({
+      content: 'Pick a number of days or permanent, not both.',
+    });
     expect(records.vipAdd).toHaveBeenCalledTimes(1);
     expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: 30, by: '42' });
     expect(records.vipRemove).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', by: '42' });
+  });
+
+  it('/vip add with permanent gives a reserved slot with no end date', async () => {
+    const { run, records } = setup();
+    records.vipAdd.mockResolvedValueOnce({ outcome: 'added' }).mockResolvedValueOnce({ outcome: 'extended' }).mockResolvedValueOnce({ outcome: 'already-reserved' });
+
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, permanent: 'true' })).resolves.toEqual({
+      content: "🎖️ Gave **Ash** a permanent reserved slot, with no end date. It starts after the server's next restart.",
+    });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, permanent: 'true' })).resolves.toEqual({
+      content: '🎖️ **Ash** keeps their reserved slot, with no end date.',
+    });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, permanent: 'true' })).resolves.toEqual({
+      content: '**Ash** already has a permanent reserved slot, with no end date. Nothing changed.',
+    });
+    expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: null, by: '42' });
   });
 
   it('/player shows the records with what the server says now', async () => {
@@ -401,7 +423,7 @@ describe('runStaffCommand', () => {
       expect.arrayContaining([
         { name: 'Playtime · last 90 days', value: '12 h 10 min', inline: true },
         { name: 'Seeding', value: '2 h 10 min · 4 seed days', inline: true },
-        { name: 'VIP', value: '🎖️ Reserved slot added by hand, no end date' },
+        { name: 'VIP', value: '🎖️ Permanent reserved slot, no end date' },
         { name: 'Ban', value: 'Not banned' },
         { name: 'Staff history', value: `1 kick\n<t:${(NOW - 86_400_000) / 1000}:d> **Kick** by <@42>: Teamkilling` },
       ]),

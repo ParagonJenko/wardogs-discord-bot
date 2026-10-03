@@ -406,6 +406,28 @@ describe('addVip and removeVip', () => {
     expect(bo.state.granted[BO]?.source).toBe('staff');
   });
 
+  it('adds a player permanently, with no end for the bot to act on', async () => {
+    const rcon = server();
+    const state = { ...empty, revoked: { [ASH]: NOW + DAY } };
+
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: null, now: NOW, state, rcon });
+
+    expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: editReserved(settings, [ASH], []) });
+    expect(result).toEqual({ state: empty, outcome: 'added' });
+    // Automatic VIP leaves them on the list, however long it has been.
+    expect(planVip([], [ASH], result.state.granted, NOW + 365 * DAY, { lengthDays: 7 })).toMatchObject({ remove: [] });
+  });
+
+  it('makes VIP the bot gave permanent by forgetting when it ends', async () => {
+    const rcon = server(editReserved(settings, [ASH], []));
+    const state = { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY, source: 'seeding' as const } } };
+
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: null, now: NOW, state, rcon });
+
+    expect(rcon.put).not.toHaveBeenCalled();
+    expect(result).toEqual({ state: empty, outcome: 'extended' });
+  });
+
   it('leaves a player an admin reserved by hand alone, but lifts a block from /vip remove', async () => {
     const rcon = server();
     const blocked = { ...empty, revoked: { [ADMIN]: NOW + DAY } };
