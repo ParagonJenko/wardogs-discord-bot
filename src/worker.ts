@@ -169,6 +169,7 @@ import {
   type RecentMatch,
   type SiteStats,
 } from './stats.ts';
+import { teamBoard } from './teams.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
 import { addVip, parseVipState, removeVip, reservedListing, seederVip, syncVip, vipDue, type ReservedListing, type VipState } from './vip.ts';
 import {
@@ -928,10 +929,11 @@ export class Watcher extends DurableObject<Env> {
   async stats(): Promise<PublicStats> {
     const config = loadConfig(stringVars(this.env));
     const now = Date.now();
-    const [stored, days, weaponDays] = await Promise.all([
+    const [stored, days, weaponDays, records] = await Promise.all([
       this.ctx.storage.get(['stats', 'killFeedSince', 'vip']),
       this.recentDays(now),
       this.recentWeaponDays(now, LEADERBOARD_DAYS),
+      this.matchRecords(now),
     ]);
     const stats = parseStats(stored.get('stats'));
     const since = stored.get('killFeedSince');
@@ -945,7 +947,7 @@ export class Watcher extends DurableObject<Env> {
     const idOf = (steamId: string) => ids.get(steamId);
     const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
-    const extras = { leaderboard: board, vip: config.vip, seederVip: seeders, weapons };
+    const extras = { leaderboard: board, vip: config.vip, seederVip: seeders, weapons, teams: teamBoard(records, LEADERBOARD_DAYS, now) };
     return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, extras, idOf);
   }
 

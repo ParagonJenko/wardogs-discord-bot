@@ -473,6 +473,7 @@ The Node/Docker version does not have the staff page.
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
 | `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |
+| `teams`        | Which team wins most over the last 30 days (UTC), overall and on each map, from the bot's match records. See below |
 
 Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password. Each player on the
 leaderboard and in the current and recent matches has their name, their totals and an `id` for their
@@ -487,6 +488,20 @@ leaderboard and in the current and recent matches has their name, their totals a
 | `kills`    | Every kill in the feed in those days, and `headshots`, how many of them were headshots         |
 | `top`      | Most kills first: each weapon's `name`, `kind` (`weapon`, `vehicle-weapon`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
 | `longest`  | The longest kill of all: `{ weapon, distance, name, id }`, or null                             |
+
+`teams` has:
+
+| Field      | What                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| `days`     | How many UTC days it covers, today included: 30                                                |
+| `matches`  | The matches recorded in those days with at least two teams' scores, and how many were `draws` (level at the top). `averageMs`: their average length |
+| `teams`    | Most wins first: each team's `name`, `colorHex` (its colour in game, when the server sent one), `matches` played and `wins` |
+| `maps`     | Most played first: each map's `matches`, `draws`, `averageMs` and `teams`: each team that played it, `{ name, wins }`, most wins first |
+| `streak`   | The team that won the latest match and how many in a row it has won, `{ name, wins }`, or null after a draw or with no matches |
+| `closest`  | The win by the fewest points over the next team, `{ map, endedAt, durationMs, factionScores }`, or null. `biggest`: the win by the most |
+
+A match goes to the team with the most points. Teams are matched by name whatever its case or spacing, and named and
+coloured as in their latest match. The records start when the bot started keeping them for the player pages.
 
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.

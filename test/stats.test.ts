@@ -295,10 +295,11 @@ describe('publicStats', () => {
     const thresholds = { seeding: 1, live: 20, busy: BUSY };
     const leaderboard = { days: 30, kdMinMatches: 3, kills: [], kd: [], playtime: [], seeding: [] };
     const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
+    const teams = { days: 30, matches: 0, draws: 0, averageMs: 0, teams: [], maps: [], streak: null, closest: null, biggest: null };
 
     const { hours: _hours, ...stats } = emptyStats();
 
-    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip, seederVip: [], weapons: null }, () => undefined)).toEqual({
+    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip, seederVip: [], weapons: null, teams }, () => undefined)).toEqual({
       ...stats,
       generatedAt: MIDNIGHT,
       thresholds,
@@ -307,11 +308,13 @@ describe('publicStats', () => {
       vip,
       seederVip: [],
       weapons: null,
+      teams,
     });
   });
 });
 
 describe('publicStats and Steam IDs', () => {
+  const teams = { days: 30, matches: 0, draws: 0, averageMs: 0, teams: [], maps: [], streak: null, closest: null, biggest: null };
   const ids: Record<string, string> = { '76561198000000001': 'a1a1a1a1a1a1', '76561198000000002': 'b2b2b2b2b2b2' };
   const thresholds = { seeding: 1, live: 20, busy: BUSY };
   const ash = { steamId: '76561198000000001', name: 'Ash', seedingMinutes: 5, liveMinutes: 60, seedDays: 1, matches: 2, kills: 4, deaths: 1 };
@@ -323,7 +326,7 @@ describe('publicStats and Steam IDs', () => {
   );
 
   it('swaps every Steam ID for the player’s public id', () => {
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip: null, weapons: null }, (steamId) => ids[steamId]);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip: null, weapons: null, teams }, (steamId) => ids[steamId]);
 
     expect(served.currentMatch?.top).toEqual([
       { id: 'b2b2b2b2b2b2', name: 'Bo', kills: 9, deaths: 3 },
@@ -340,7 +343,7 @@ describe('publicStats and Steam IDs', () => {
 
   it('names who has VIP from seeding by their public id', () => {
     const seederVip = [{ steamId: '76561198000000001', name: 'Ash', until: MIDNIGHT + 86_400_000 }];
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip, weapons: null }, (steamId) => ids[steamId]);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip, weapons: null, teams }, (steamId) => ids[steamId]);
 
     expect(served.seederVip).toEqual([{ id: 'a1a1a1a1a1a1', name: 'Ash', until: MIDNIGHT + 86_400_000 }]);
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
@@ -351,7 +354,7 @@ describe('publicStats and Steam IDs', () => {
   });
 
   it('leaves out ids it does not know, and still no Steam IDs', () => {
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip: null, weapons: null }, () => undefined);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip: null, weapons: null, teams }, () => undefined);
 
     expect(served.leaderboard.kills[0]).not.toHaveProperty('id');
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
