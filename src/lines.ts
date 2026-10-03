@@ -5,7 +5,8 @@
 // Placeholders: {team} is the faction's name, {score} its points and {site} the website (SITE_URL, such as
 // gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players".
 
-// Every few minutes while the server seeds. The bot puts what seeding earns after the line.
+// Every few minutes while the server seeds. The bot puts what seeding earns after the line. The ones that say why to
+// play here mention the leaderboards and player pages, which need the website (SITE_URL) and the bot on Cloudflare.
 export const SEEDING = [
   "We're seeding! {needed} and we go live.",
   'Seeding now: {needed} to go live. Stick around and bring a friend.',
@@ -14,6 +15,15 @@ export const SEEDING = [
   'Seeding in progress: {needed} to go live. Get your squad on.',
   "Seeding now: {needed} to go live. Green's got room, for once.",
   '{needed} to go live. Pick any team. Yes, even blue.',
+  'Active admins keep it fair here. {needed} to go live.',
+  'Cheaters and trolls get dealt with here. {needed} to go live.',
+  'Real admins who actually show up. {needed} and we go live.',
+  'Kills, K/D, play time and seeding all have a leaderboard here. {needed} to go live.',
+  'The leaderboard covers the last 30 days, so anyone can top it. {needed} to go live.',
+  'Every match you play is tracked: kills, deaths, wins. {needed} to go live.',
+  '{needed} to go live. Your K/D, wins and play time are all on your player page.',
+  'We track your stats, match by match. {needed} and we go live.',
+  'Active admins, leaderboards and full stats. {needed} to go live.',
 ];
 
 // 10 minutes after the match goes live. These are the whole message, so they point at the rules and the site.
