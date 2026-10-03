@@ -50,6 +50,14 @@ export const parseVipState = (raw: unknown): VipState => {
 
 export const vipDue = (state: VipState, now: number): boolean => now - state.checkedAt >= VIP_CHECK_MS;
 
+// Whether the reserved list needs bringing in line with who is staff now: someone linked their Steam account without a
+// staff spot yet (such as staff who linked before the bot kept staff spots), or has one but is no longer linked. Then
+// the next check does it, not the next 10-minute mark.
+export const staffSpotsDue = (state: VipState, staff: Iterable<string>): boolean => {
+  const linked = new Set(staff);
+  return [...linked].some((id) => state.staffSpots[id] === undefined) || Object.keys(state.staffSpots).some((id) => !linked.has(id));
+};
+
 export type SeederVip = { steamId: string; name: string; until: number };
 
 // Who has VIP from seeding now, for the website: the latest to earn it first. By when they earned it, not when it

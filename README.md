@@ -533,7 +533,8 @@ account to their Discord sign-in, and the bot then counts their time on the serv
 - **Staff spots.** Each linked staff member gets a reserved slot on the server's reserved list for as long as they are
   linked, in place of one an admin adds by hand. A slot they already had (added by hand, or VIP from the bot) is taken
   over as it is, so nothing changes in `ServerSettings.ini` for them, and VIP the bot gave them stops running out. The
-  bot puts it on (or takes it off) at the check after they link (or unlink), within a minute, and the server uses it
+  bot puts it on (or takes it off) at the check after they link (or unlink), within a minute, and so for staff who
+  linked before the bot kept staff spots, at the first check after it is deployed. The server uses it
   after its next restart. It is never announced in Discord. `/vip remove` leaves a staff spot alone and says to unlink
   their Steam account instead; an admin who takes one off by hand sees it put back. Each change is logged
   (`Staff spots added: …`, `Staff spots taken over from the reserved list: …`, `Staff spots ended: …`).
