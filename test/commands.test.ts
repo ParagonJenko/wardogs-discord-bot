@@ -17,6 +17,8 @@ const records: StaffRecords = {
   vipRemove: vi.fn(),
   nextMap: vi.fn(async () => undefined),
   steam: vi.fn(async () => 'off' as const),
+  rotations: vi.fn(),
+  editRotations: vi.fn(),
 };
 
 const config: Config = {
@@ -39,6 +41,7 @@ const config: Config = {
   matchMessages: null,
   seedingMessages: null,
   roundups: null,
+  rotationHour: 5,
 };
 
 // A fake RCON server keyed by path; records what was sent.

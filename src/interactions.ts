@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
+import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
 import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
 
@@ -34,7 +35,7 @@ const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow
 export const isAdminCommand = (name: CommandName): boolean => ADMIN_COMMANDS.includes(name);
 
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
-const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
+const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'];
 
 // What /roundup can show, as Discord lists it.
 const ROUNDUP_PERIODS: { name: string; value: RoundupChoice }[] = [
@@ -67,6 +68,26 @@ const matchSetup = [
   { type: BOOLEAN, name: 'hardcore', description: 'Hardcore (default: as in the rotation)', required: false },
   { type: STRING, name: 'lighting', description: 'Time of day and weather (default: as in the rotation)', required: false, autocomplete: true },
   { type: STRING, name: 'zones', description: 'Control zone layout (default: as in the rotation)', required: false, autocomplete: true },
+];
+
+// A saved map rotation, picked from the list; where it may be new, the name typed starts one.
+const rotation = (description: string, required = true) => ({
+  type: STRING,
+  name: 'rotation',
+  description,
+  required,
+  autocomplete: true,
+  max_length: ROTATION_NAME_MAX,
+});
+
+// A map for a saved rotation. Anything left out is the map's own.
+const rotationMap = [
+  { type: STRING, name: 'map', description: 'Pick the map from the list', required: true, autocomplete: true },
+  { type: STRING, name: 'mode', description: "Game mode (default: the map's first)", required: false, autocomplete: true },
+  { type: BOOLEAN, name: 'infantry_only', description: 'Infantry only (default: off)', required: false },
+  { type: BOOLEAN, name: 'hardcore', description: 'Hardcore (default: off)', required: false },
+  { type: STRING, name: 'lighting', description: "Time of day and weather (default: the map's own)", required: false, autocomplete: true },
+  { type: STRING, name: 'zones', description: "Control zone layout (default: the map's own)", required: false, autocomplete: true },
 ];
 
 export const COMMANDS = [
@@ -220,6 +241,65 @@ export const COMMANDS = [
         name: 'remove',
         description: 'Take a player off the reserved list; automatic VIP skips them for 7 days',
         options: [steamId('Pick from the reserved list, or type a Steam ID')],
+      },
+    ],
+  },
+  {
+    name: 'rotations',
+    description: 'Saved map rotations, and which one the server plays each day (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      {
+        type: SUBCOMMAND,
+        name: 'show',
+        description: 'The saved rotations and the week, or the maps in one rotation',
+        options: [rotation('Pick a rotation to see its maps (default: all of them, and the week)', false)],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'use',
+        description: 'Put a rotation on the server now, until the next day starts; it plays from the next map',
+        options: [rotation('Pick the rotation')],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'schedule',
+        description: 'Pick the rotation for a day of the week; it goes on the server each week as that day starts',
+        options: [
+          { type: STRING, name: 'day', description: 'Which day', required: true, choices: DAY_CHOICES.map(({ name, value }) => ({ name, value })) },
+          rotation('The rotation for that day (leave out to keep whatever the server has)', false),
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'add',
+        description: 'Add a map to a rotation; a new name starts a new rotation',
+        options: [
+          rotation('The rotation to add to, or a new name such as "Rotation 1"'),
+          ...rotationMap,
+          { type: INTEGER, name: 'position', description: 'Where in the list, 1 for first (default: at the end)', required: false, min_value: 1, max_value: MAX_ROTATION_MAPS },
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'remove',
+        description: 'Take a map out of a rotation',
+        options: [
+          rotation('Pick the rotation'),
+          { type: STRING, name: 'map', description: 'Pick the map to take out', required: true, autocomplete: true },
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'save',
+        description: "Save the server's rotation as it is now under a name (replaces a rotation with that name)",
+        options: [rotation('A name for it, such as "Rotation 1"')],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'delete',
+        description: 'Delete a saved rotation (the server keeps the maps it has)',
+        options: [rotation('Pick the rotation')],
       },
     ],
   },

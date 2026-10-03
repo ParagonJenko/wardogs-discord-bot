@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
 import type { HttpClient } from '../src/rcon.ts';
+import { editRotations, parseRotationBook, rotationDay, type RotationBook, type RotationEdit, type RotationEditResult } from '../src/rotations.ts';
 import type { SteamLookup } from '../src/steam.ts';
 import {
   findPlayer,
@@ -33,6 +34,7 @@ const config: Config = {
   matchMessages: null,
   seedingMessages: null,
   roundups: null,
+  rotationHour: 5,
 };
 
 const NOW = Date.UTC(2026, 8, 30, 12);
@@ -90,6 +92,8 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   vipRemove: vi.fn(async () => ({ outcome: 'removed' as const })),
   nextMap: vi.fn(async () => undefined),
   steam: vi.fn(async (): Promise<SteamLookup> => 'off'),
+  rotations: vi.fn(async () => parseRotationBook(undefined)),
+  editRotations: vi.fn(async () => ({ problem: 'Not in this test.' })),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -515,5 +519,219 @@ describe('suggestStaff', () => {
       { name: '🟦 Ozeti', value: 'Europe' },
     ]);
     await expect(suggest({ name: 'setnextmap', options: { map: 'oze' }, focused: 'map' })).resolves.toEqual([{ name: '🟦 Ozeti', value: 'Europe' }]);
+  });
+});
+
+describe('/rotations', () => {
+  // Wednesday 30 September, the 2026-09-30 rotation day with ROTATION_HOUR 5.
+  const catalog: Record<string, [number, unknown]> = {
+    'GET /v1/catalog/maps': [
+      200,
+      { maps: [{ id: 'Kavkazi', displayName: 'Kavkazi' }, { id: 'Europe', displayName: 'Europe' }, { id: 'NorthAmerica', displayName: 'NorthAmerica' }] },
+    ],
+    'GET /v1/catalog/experiences': [
+      200,
+      { experiences: [{ id: 'Europe_KOTH_01', displayName: 'King of the Hill' }, { id: 'Kavkazi_KOTH_01', displayName: 'King of the Hill' }] },
+    ],
+    'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }, { id: 'DayEndClear', displayName: 'Dusk' }] }],
+    'GET /v1/catalog/maps/Europe/experiences': [200, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'] }],
+    'GET /v1/catalog/maps/Europe/alternators': [200, { alternators: [] }],
+    'GET /v1/catalog/maps/Kavkazi/experiences': [200, { experiences: ['Kavkazi_KOTH_01', 'KOTH_Hardcore'] }],
+    'GET /v1/catalog/maps/Kavkazi/alternators': [200, { alternators: [{ tag: 'ZoneAlternator.Bakurani.Default.Circle', displayName: 'Circle' }] }],
+  };
+
+  // The saved rotations as the Durable Object keeps them, with a server that takes every rotation put on it, unless
+  // `refuse` says why not.
+  const withBook = (start: RotationBook = parseRotationBook(undefined), overrides: Record<string, [number, unknown]> = {}, refuse?: string) => {
+    const ctx = setup({ ...catalog, ...overrides });
+    let book = start;
+    ctx.records.rotations.mockImplementation(async () => book);
+    ctx.records.editRotations.mockImplementation(async (edit: RotationEdit, by: string): Promise<RotationEditResult> => {
+      const result = editRotations(book, edit, { today: rotationDay(NOW, 5), now: NOW, by });
+      if ('problem' in result) return result;
+      const applied = result.book.applied;
+      const chose = applied !== book.applied && applied?.pending === true;
+      book = chose && refuse === undefined ? { ...result.book, applied: { ...applied, pending: false } } : result.book;
+      if (!chose) return { ...result, book };
+      return { ...result, book, server: refuse === undefined ? { outcome: 'updated' } : { outcome: 'failed', reason: refuse } };
+    });
+    const rotations = (options: Record<string, string>) => ctx.run('rotations', options);
+    return { ...ctx, rotations, book: () => book };
+  };
+
+  const two: RotationBook = {
+    rotations: [
+      { name: 'Rotation 1', entries: [{ map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01'], lighting: 'DayClear' }, { map: 'Europe' }] },
+      { name: 'Weekend', entries: [{ map: 'NorthAmerica' }] },
+    ],
+    week: ['Rotation 1', 'Rotation 1', 'Rotation 1', 'Rotation 1', 'Rotation 1', 'Weekend', 'Weekend'],
+    applied: { name: 'Rotation 1', day: '2026-09-30', at: 0, by: 'schedule', pending: false },
+  };
+
+  it('builds a rotation a map at a time, each map as the game plays it unless staff say otherwise', async () => {
+    const { rotations, book, sent } = withBook();
+
+    await expect(rotations({ subcommand: 'add', rotation: 'Rotation 1', map: 'Europe', infantry_only: 'true' })).resolves.toEqual({
+      content: '➕ Added 🟦 **Ozeti** · King of the Hill · Infantry only to **Rotation 1**, number 1 of 1.',
+    });
+    await expect(
+      rotations({ subcommand: 'add', rotation: 'rotation 1', map: 'Bakurani', lighting: 'dusk', zones: 'Circle', position: '1' }),
+    ).resolves.toEqual({ content: '➕ Added 🟧 **Bakurani** · King of the Hill · Dusk · Circle zones to **Rotation 1**, number 1 of 2.' });
+    await expect(rotations({ subcommand: 'add', rotation: 'Rotation 1', map: 'Nowhere' })).resolves.toEqual({ content: 'Pick a map from the list.' });
+
+    expect(book().rotations).toEqual([
+      {
+        name: 'Rotation 1',
+        entries: [
+          { map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01'], lighting: 'DayEndClear', zoneAlternator: 'ZoneAlternator.Bakurani.Default.Circle' },
+          { map: 'Europe', experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'] },
+        ],
+      },
+    ]);
+    // Nothing on the server changes while a rotation nobody picked is built.
+    expect(sent.filter((line) => !line.startsWith('GET'))).toEqual([]);
+  });
+
+  it("saves the server's rotation as it is", async () => {
+    const { rotations, book } = withBook(parseRotationBook(undefined), {
+      'GET /v1/rotation': [
+        200,
+        { enabled: true, mode: 'ordered', entries: [{ map: 'Kavkazi', status: 'now', experiences: ['Kavkazi_KOTH_01'], lighting: '' }, { map: 'Europe' }] },
+      ],
+    });
+
+    await expect(rotations({ subcommand: 'save', rotation: 'Rotation 1' })).resolves.toEqual({
+      content: "💾 Saved the server's rotation as **Rotation 1** (2 maps).",
+    });
+    expect(book().rotations).toEqual([{ name: 'Rotation 1', entries: [{ map: 'Kavkazi', experiences: ['Kavkazi_KOTH_01'] }, { map: 'Europe' }] }]);
+    await expect(rotations({ subcommand: 'save', rotation: 'ROTATION 1' })).resolves.toEqual({
+      content: "💾 Saved the server's rotation as **Rotation 1** (2 maps), in place of the one saved before.",
+    });
+  });
+
+  it('plans the week, and puts a rotation planned for today on straight away', async () => {
+    const { rotations, book } = withBook({ ...two, week: [null, null, null, null, null, null, null], applied: null });
+
+    await expect(rotations({ subcommand: 'schedule', day: 'weekend', rotation: 'Weekend' })).resolves.toEqual({
+      content: '📅 Saturday and Sunday: **Weekend**.',
+    });
+    await expect(rotations({ subcommand: 'schedule', day: 'wednesday', rotation: 'rotation 1' })).resolves.toEqual({
+      content: "📅 Wednesdays: **Rotation 1**. It's Wednesday, so it goes on today. The server has **Rotation 1** now, and plays it from the next map.",
+    });
+    await expect(rotations({ subcommand: 'schedule', day: 'every-day' })).resolves.toEqual({
+      content: '📅 Every day: no rotation, so the server keeps whatever it has.',
+    });
+    expect(book().week).toEqual([null, null, null, null, null, null, null]);
+  });
+
+  it('swaps the rotation for today, until the next day starts', async () => {
+    const { rotations, book } = withBook(two);
+
+    await expect(rotations({ subcommand: 'use', rotation: 'weekend' })).resolves.toEqual({
+      content:
+        "🗺️ Swapped to **Weekend** for today. The server has **Weekend** now, and plays it from the next map. Tomorrow's rotation, **Rotation 1**, goes on <t:" +
+        `${Date.UTC(2026, 9, 1, 5) / 1000}:f>.`,
+    });
+    expect(book().applied).toEqual({ name: 'Weekend', day: '2026-09-30', at: NOW, by: '42', pending: false });
+  });
+
+  it('says so when the server could not take the rotation yet', async () => {
+    const { rotations, book } = withBook(two, {}, 'the server settings are read-only over RCON');
+
+    await expect(rotations({ subcommand: 'use', rotation: 'Weekend' })).resolves.toMatchObject({
+      content: expect.stringContaining("⚠️ Couldn't put it on the server yet (the server settings are read-only over RCON). The bot tries again every minute."),
+    });
+    expect(book().applied?.pending).toBe(true);
+  });
+
+  it("takes a map out by its number or name, and puts today's rotation on again", async () => {
+    const { rotations, book } = withBook(two);
+
+    await expect(rotations({ subcommand: 'remove', rotation: 'Rotation 1', map: 'Ozeti' })).resolves.toEqual({
+      content: '➖ Took 🟦 **Ozeti** out of **Rotation 1** (1 map left). The server has **Rotation 1** now, and plays it from the next map.',
+    });
+    await expect(rotations({ subcommand: 'remove', rotation: 'Weekend', map: '1' })).resolves.toEqual({
+      content: '➖ Took 🟪 **Zestafona** out of **Weekend** (0 maps left). It has no maps left, so it is not put on the server; the server keeps the maps it has.',
+    });
+    await expect(rotations({ subcommand: 'remove', rotation: 'Rotation 1', map: '5' })).resolves.toEqual({
+      content: "Pick a map from **Rotation 1**'s list.",
+    });
+    expect(book().rotations.map((r) => r.entries.length)).toEqual([1, 0]);
+  });
+
+  it('deletes a rotation, and says which days now keep what the server has', async () => {
+    const { rotations, book } = withBook(two);
+
+    await expect(rotations({ subcommand: 'delete', rotation: 'weekend' })).resolves.toEqual({
+      content: '🗑️ Deleted **Weekend**. The server keeps the maps it has. Saturday and Sunday now keep whatever the server has.',
+    });
+    await expect(rotations({ subcommand: 'delete', rotation: 'Weekend' })).resolves.toEqual({
+      content: 'There\'s no rotation called "Weekend". Pick one from the list.',
+    });
+    expect(book().rotations.map((r) => r.name)).toEqual(['Rotation 1']);
+  });
+
+  it('shows the rotations and the week, or one rotation map by map', async () => {
+    const { rotations } = withBook(two);
+
+    const all = await rotations({ subcommand: 'show' });
+    expect(all.embeds?.[0]).toMatchObject({
+      title: '🗺️ Map rotations',
+      description: 'On the server today: **Rotation 1**, from the schedule.',
+      fields: [
+        {
+          name: '📅 This week',
+          value: [
+            '▫️ Monday: **Rotation 1**',
+            '▫️ Tuesday: **Rotation 1**',
+            '▶️ Wednesday: **Rotation 1**',
+            '▫️ Thursday: **Rotation 1**',
+            '▫️ Friday: **Rotation 1**',
+            '▫️ Saturday: **Weekend**',
+            '▫️ Sunday: **Weekend**',
+          ].join('\n'),
+        },
+        { name: 'Rotation 1 · 2 maps', value: 'Bakurani → Ozeti' },
+        { name: 'Weekend · 1 map', value: 'Zestafona' },
+      ],
+      footer: { text: "Each day's rotation goes on at 05:00 UTC and plays from the next map." },
+    });
+
+    const one = await rotations({ subcommand: 'show', rotation: 'rotation 1' });
+    expect(one.embeds?.[0]).toMatchObject({
+      title: '🗺️ Rotation 1',
+      description: '1. 🟧 **Bakurani** · King of the Hill · Day, clear\n2. 🟦 **Ozeti**',
+      footer: { text: 'Planned for Monday, Tuesday, Wednesday, Thursday and Friday · On the server today' },
+    });
+  });
+
+  it('explains how to start when there are no rotations', async () => {
+    const { rotations } = withBook();
+
+    const reply = await rotations({ subcommand: 'show' });
+    expect(reply.embeds?.[0]?.description).toMatch(/No saved rotations yet/);
+  });
+
+  it('offers the saved rotations, a new name where one starts a rotation, and the maps to take out', async () => {
+    const { suggest } = withBook(two);
+
+    await expect(suggest({ name: 'rotations', options: { subcommand: 'use', rotation: '' }, focused: 'rotation' })).resolves.toEqual([
+      { name: 'Rotation 1 · 2 maps', value: 'Rotation 1' },
+      { name: 'Weekend · 1 map', value: 'Weekend' },
+    ]);
+    await expect(suggest({ name: 'rotations', options: { subcommand: 'add', rotation: 'Night ' }, focused: 'rotation' })).resolves.toEqual([
+      { name: 'New rotation: Night', value: 'Night' },
+    ]);
+    await expect(suggest({ name: 'rotations', options: { subcommand: 'use', rotation: 'Night' }, focused: 'rotation' })).resolves.toEqual([]);
+    await expect(
+      suggest({ name: 'rotations', options: { subcommand: 'remove', rotation: 'Rotation 1', map: '' }, focused: 'map' }),
+    ).resolves.toEqual([
+      { name: '1. 🟧 Bakurani · King of the Hill · Day, clear', value: '1' },
+      { name: '2. 🟦 Ozeti', value: '2' },
+    ]);
+    // Adding a map offers every map, as /setnextmap does.
+    await expect(suggest({ name: 'rotations', options: { subcommand: 'add', map: 'zest' }, focused: 'map' })).resolves.toEqual([
+      { name: '🟪 Zestafona', value: 'NorthAmerica' },
+    ]);
   });
 });

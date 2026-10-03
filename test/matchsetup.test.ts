@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isModifier, modesFor, planSetup, type SetupCatalog } from '../src/matchsetup.ts';
+import { isModifier, modesFor, planSetup, setupLabels, type SetupCatalog } from '../src/matchsetup.ts';
 
 const catalog: SetupCatalog = {
   rotation: {
@@ -106,5 +106,18 @@ describe('modesFor', () => {
       { id: 'Kavkazi_KOTH_01', name: 'King of the Hill' },
       { id: 'Kavkazi_KOTH_02', name: 'King of the Hill (small)' },
     ]);
+  });
+});
+
+describe('setupLabels', () => {
+  it('names a setup from the catalogue, and a zone layout it does not know by the end of its tag', () => {
+    const setup = { experiences: ['Kavkazi_KOTH_01', 'KOTH_Hardcore'], lighting: 'DayClear', zoneAlternator: 'ZoneAlternator.Bakurani.Default.Circle' };
+    expect(setupLabels(setup, { experiences: [{ id: 'Kavkazi_KOTH_01', name: 'King of the Hill' }], lightings: null, zones: null })).toEqual([
+      'King of the Hill',
+      'Hardcore',
+      'DayClear',
+      'Circle zones',
+    ]);
+    expect(setupLabels({}, { experiences: null, lightings: null, zones: null })).toEqual([]);
   });
 });

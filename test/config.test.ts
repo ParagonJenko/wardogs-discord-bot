@@ -29,7 +29,13 @@ describe('loadConfig', () => {
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
       roundups: { hour: 17, webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123' },
+      rotationHour: 5,
     });
+  });
+
+  it('starts each day\'s map rotation at ROTATION_HOUR (UTC)', () => {
+    expect(loadConfig({ ...required, ROTATION_HOUR: '0' }).rotationHour).toBe(0);
+    expect(() => loadConfig({ ...required, ROTATION_HOUR: '24' })).toThrow(/ROTATION_HOUR/);
   });
 
   it('posts roundups to their own channel when one is set, at the hour given, or not at all', () => {

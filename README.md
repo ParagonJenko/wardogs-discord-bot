@@ -22,6 +22,9 @@ It also posts:
   move with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
   in game with a [risky Steam account](#risky-steam-accounts).
 
+It also keeps **[map rotations](#map-rotations)** (Cloudflare only): staff save rotations by name, such as "Rotation 1"
+and "Weekend", pick which one plays on each day of the week, and swap between them with one command.
+
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
 pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
 other faction gets a dot in its in-game colour), each map with its own colour (🟧 Bakurani, 🟦 Ozeti, 🟪 Zestafona,
@@ -195,6 +198,7 @@ The Node/Docker version does not post roundups.
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
 | `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days                      |
 | `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days |
+| `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
 
@@ -329,6 +333,55 @@ confirmed, check in game before trying again: it may have gone through.
 
 There is no chat log command: the game's RCON API has no way to read chat.
 
+## Map rotations
+
+Staff save map rotations by name, such as "Rotation 1" and "Weekend", and pick which one the server plays on each day of
+the week. The bot puts a rotation on the server by writing its maps into `ServerSettings.ini` (`PUT /v1/config`, checked
+first with `POST /v1/config/validate`), as live builds have no other way to change the rotation. The server rebuilds its
+rotation straight away and plays it from the next map change, so the match on now is never cut short. Only the
+`RotationEntries` lines are written: whether the rotation is on, and in order or random, stay as they are.
+
+| Command                 | What                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------- |
+| `/rotations show`       | The saved rotations, the week and which one is on today; or, with `rotation`, its maps in order |
+| `/rotations use`        | Swaps the server to a rotation now, for the rest of the day                              |
+| `/rotations schedule`   | Picks the rotation for a day: one weekday, weekdays, the weekend or every day. Leave `rotation` out to clear it |
+| `/rotations add`        | Adds a map to a rotation, with the same options as `/setnextmap`, and `position` (default: the end). A new name starts a new rotation |
+| `/rotations remove`     | Takes a map out of a rotation, picked from its list                                      |
+| `/rotations save`       | Saves the rotation the server has now under a name, or in place of a saved one          |
+| `/rotations delete`     | Deletes a saved rotation. The days it was planned for keep whatever the server has      |
+
+Setting up two rotations and a week, for example:
+
+```
+/rotations save rotation:Rotation 1              (the rotation the server has now)
+/rotations add rotation:Weekend map:Ozeti infantry_only:True
+/rotations add rotation:Weekend map:Zestafona hardcore:True
+/rotations schedule day:Weekdays (Monday to Friday) rotation:Rotation 1
+/rotations schedule day:Weekend (Saturday and Sunday) rotation:Weekend
+```
+
+- **Each day starts at `ROTATION_HOUR`** (UTC, default `5`: 6am in the UK in summer, 5am in winter), so a late night
+  still plays the evening's rotation. At the first check after that, the bot puts the day's rotation on the server. A day
+  with no rotation keeps whatever the server has.
+- **`/rotations use`** lasts until the next day starts; then the schedule takes over again. Planning today in
+  `/rotations schedule` puts that rotation on straight away too.
+- **Changing today's rotation** (adding, taking out or saving over its maps) puts it on the server again, unless it has
+  no maps left: the bot never leaves the server without a rotation.
+- In `add`, anything left out is the map's own: its first game mode, infantry only and hardcore off, and the map's own
+  lighting and zones. A map can be in a rotation more than once, such as Bakurani by day and at dusk.
+- If the server can't take the rotation (it is not answering, or the settings file is read-only), the reply says why,
+  and the bot tries again at every check until the server has it.
+- Changes made by hand on the server stay until the bot next puts a rotation on: the start of a day with one planned,
+  or a staff command. `/rotation` (for everyone) shows what the server is playing either way.
+
+| Variable        | What                                                    | Default |
+| --------------- | ------------------------------------------------------- | ------- |
+| `ROTATION_HOUR` | The hour (UTC, 0 to 23) each day's rotation starts      | `"5"`   |
+
+Up to 10 rotations, of up to 100 maps each. The tools are on the [staff page](#staff-page) too. The Node/Docker version
+does not have map rotations.
+
 ## Moderation log
 
 A staff-only Discord channel where the bot posts, as they happen:
@@ -389,8 +442,8 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
 - **The reserved slots**: everyone on the reserved list in `ServerSettings.ini`, with VIP from the bot and when it ends,
   or added by hand, and how many slots `MaxReservedSlots` holds back.
 - **Admin tools**: every staff slash command, run from the page: warn, kick, move team, ban, unban, look up a player,
-  give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders, and
-  remove a wrongly recorded match. See below.
+  give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders,
+  [map rotations](#map-rotations), and remove a wrongly recorded match. See below.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
 Discord's **Administrator** permission, or with a role in `DISCORD_ADMIN_ROLE_IDS`, or the server's owner.
@@ -928,8 +981,8 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). On its own
 the bot only reads the server, sends the [in-game messages](#in-game-messages) (`POST /v1/broadcast`), changes the
-reserved list in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`) and lifts timed bans
-when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
+reserved list in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`), puts each day's planned
+[map rotation](#map-rotations) there in the same way, and lifts timed bans when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
 [staff command](#staff-commands). Still:
 
 - Keep the password in a Wrangler secret or `.env`, never in `wrangler.jsonc` or the repo.

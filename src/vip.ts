@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { VipRule } from './config.ts';
+import { appendSection, refusal, sectionLines, sectionRange } from './ini.ts';
 import { totals, type PlayerDay } from './players.ts';
 import type { ConfigResult, ServerConfig } from './rcon.ts';
 
@@ -63,7 +64,6 @@ const STEAM_ID = /^\d{17}$/;
 
 type ListLine = { op: 'add' | 'remove' | 'clear'; id: string };
 
-const isHeader = (line: string): boolean => /^\s*\[.*\]\s*$/.test(line);
 const listLine = (line: string): ListLine | null => {
   const match = LIST_LINE.exec(line);
   if (match === null) return null;
@@ -84,22 +84,7 @@ const applyLines = (lines: string[]): string[] =>
     return ids.includes(parsed.id) ? ids : [...ids, parsed.id];
   }, []);
 
-const sectionRange = (lines: string[]): { start: number; end: number } => {
-  const starts = lines.flatMap((line, i) => (line.trim().toLowerCase() === SECTION.toLowerCase() ? [i] : []));
-  if (starts.length > 1) throw new Error(`ServerSettings.ini has ${SECTION} more than once`);
-  const start = starts[0] ?? -1;
-  if (start === -1) return { start, end: -1 };
-  const next = lines.findIndex((line, i) => i > start && isHeader(line));
-  return { start, end: next === -1 ? lines.length : next };
-};
-
-const sectionLines = (text: string): string[] => {
-  const lines = text.split(/\r?\n/);
-  const { start, end } = sectionRange(lines);
-  return start === -1 ? [] : lines.slice(start + 1, end);
-};
-
-export const reservedIds = (text: string): string[] => applyLines(sectionLines(text));
+export const reservedIds = (text: string): string[] => applyLines(sectionLines(text, SECTION));
 
 // The reserved list for the staff page to show: everyone on it, and how many slots are held back for them
 // (MaxReservedSlots, null when the file does not say).
@@ -108,7 +93,7 @@ export type ReservedListing = { ids: string[]; maxSlots: number | null };
 const MAX_SLOTS = /^\s*MaxReservedSlots\s*=\s*"?(\d+)"?\s*$/i;
 
 export const reservedListing = (text: string): ReservedListing => {
-  const lines = sectionLines(text);
+  const lines = sectionLines(text, SECTION);
   const slots = lines.flatMap((line) => MAX_SLOTS.exec(line)?.[1] ?? []).at(-1);
   return { ids: applyLines(lines), maxSlots: slots === undefined ? null : Number(slots) };
 };
@@ -119,12 +104,9 @@ export const editReserved = (text: string, add: string[], remove: string[]): str
   if (![...add, ...remove].every((id) => STEAM_ID.test(id))) throw new Error('refusing to write something that is not a Steam ID');
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const lines = text.split(/\r?\n/);
-  const { start, end } = sectionRange(lines);
+  const { start, end } = sectionRange(lines, SECTION);
   const added = add.map((id) => `+DefaultReservedPlayerIds=${id}`);
-  if (start === -1) {
-    const body = lines.at(-1) === '' ? lines.slice(0, -1) : lines;
-    return [...body, ...(body.length > 0 ? [''] : []), SECTION, ...added, ''].join(eol);
-  }
+  if (start === -1) return appendSection(text, SECTION, added);
   const drop = new Set(remove);
   const section = lines.slice(start + 1, end).filter((line) => !drop.has(addsId(line) ?? ''));
   // New entries go after the list's last line, or straight under the section header.
@@ -192,13 +174,7 @@ type VipDeps = {
   log: { info: (message: string) => void };
 };
 
-const refused = (result: ConfigResult): string | null => {
-  if (!result.ok) return `the server refused the change: ${result.errors.join('; ') || 'no reason given'}`;
-  if (result.ignored.some((item) => /DefaultReservedPlayerIds/i.test(item))) {
-    return 'the server ignores DefaultReservedPlayerIds edits (it may be set by a launch argument)';
-  }
-  return null;
-};
+const refused = (result: ConfigResult): string | null => refusal(result, 'DefaultReservedPlayerIds');
 
 const names = (players: Named[]): string => players.map((p) => `${p.name} (${p.steamId})`).join(', ');
 
