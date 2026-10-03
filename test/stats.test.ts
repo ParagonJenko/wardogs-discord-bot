@@ -281,6 +281,22 @@ describe('crashes', () => {
     expect(stats.crashes).toEqual([{ from: EIGHT + 60_000, until: EIGHT + 5 * 60_000, back: BUSY }]);
   });
 
+  it('keeps the first fall’s deadline when the server falls again without filling back up', () => {
+    const fall = EIGHT + 60_000;
+    const again = fall + 2 * HOUR;
+    const stats = record([
+      observation(EIGHT, 98),
+      ...readings(fall, Array(120).fill(0)),
+      ...readings(again, [30, 5]),
+      ...readings(again + 2 * 60_000, Array(4 * 60).fill(0)),
+    ]);
+
+    expect(stats.crashes).toEqual([{ from: fall, until: fall + CRASH_MS, back: BUSY }]);
+    // Counted again from 23:01, not 3 hours after the second fall.
+    const { players } = hourlyAverages(stats.hours, again + 5 * HOUR, BUSY);
+    expect(players.slice(20)).toEqual([98, null, null, 0]);
+  });
+
   it('ends a crash at the players it had, when that was under the busy threshold', () => {
     const stats = record(readings(EIGHT, [60, 0, 30, 60]));
 

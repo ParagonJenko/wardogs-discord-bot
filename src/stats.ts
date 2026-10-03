@@ -289,9 +289,10 @@ const trackCrashes = (
   const fell =
     previous !== undefined && at - previous[0] <= CRASH_MS && previous[1] >= thresholds.live && players < previous[1] / 4;
   if (fell) {
-    // Falling again while recovering keeps the crash going, and it still ends once the players are back.
+    // Falling again while recovering is the same crash: it still ends once the players are back, or CRASH_MS after the
+    // first fall, so falls that keep coming cannot leave a quiet server out for longer.
     const back = Math.max(Math.min(previous[1], thresholds.busy), open?.back ?? 0);
-    return [...earlier, { from: open?.from ?? at, until: at + CRASH_MS, back }];
+    return [...earlier, open === null ? { from: at, until: at + CRASH_MS, back } : { ...open, back }];
   }
   if (open !== null && players >= open.back) return [...earlier, { ...open, until: at }];
   return kept;
