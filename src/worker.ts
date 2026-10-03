@@ -425,7 +425,9 @@ export class Watcher extends DurableObject<Env> {
     );
   }
 
-  // Possible griefing, to the moderation log channel, when GRIEF_ALERTS is on.
+  // Possible griefing, to the moderation log channel, when GRIEF_ALERTS is on, with the player's Steam account when it is
+  // risky. Steam is not asked: the saved check is used, as the bot checks everyone in game. In the background, so a slow
+  // read or Discord never holds up the kill feed.
   private postGriefAlerts(alerts: GriefAlert[]): void {
     const { modLogWebhookUrl, griefAlerts, siteUrl } = this.posting();
     for (const alert of alerts) {
@@ -433,13 +435,20 @@ export class Watcher extends DurableObject<Env> {
         `Possible griefing: ${JSON.stringify(alert.name)} (${alert.steamId}) has ${alert.teamKills} team kills and ` +
           `${alert.vehicleSuicides} vehicle suicides today`,
       );
-      if (modLogWebhookUrl === undefined || !griefAlerts) continue;
-      this.ctx.waitUntil(
-        postWebhook(modLogWebhookUrl, buildGriefAlert(alert, weaponName, siteUrl)).catch((error: unknown) =>
-          console.error(`Griefing alert failed (${alert.steamId}): ${errorText(error)}`),
-        ),
-      );
     }
+    if (modLogWebhookUrl === undefined || !griefAlerts) return;
+    this.ctx.waitUntil(
+      (async () => {
+        const steam = await this.savedSteam(alerts.map((a) => a.steamId));
+        await Promise.all(
+          alerts.map((alert) =>
+            postWebhook(modLogWebhookUrl, buildGriefAlert(alert, weaponName, siteUrl, steam.get(alert.steamId) ?? null)).catch((error: unknown) =>
+              console.error(`Griefing alert failed (${alert.steamId}): ${errorText(error)}`),
+            ),
+          ),
+        );
+      })(),
+    );
   }
 
   private stateStore(): StateStore {
@@ -1008,6 +1017,18 @@ export class Watcher extends DurableObject<Env> {
     return this.steamChecks;
   }
 
+  // The saved Steam checks for these players, for a post: none without STEAM_API_KEY, or when storage cannot be read, so
+  // the post still goes out.
+  private async savedSteam(steamIds: string[]): Promise<Map<string, SteamCheck | null>> {
+    if (this.steamApiKey() === null) return new Map();
+    try {
+      return await this.loadSteam(steamIds);
+    } catch (error) {
+      console.error(`Reading Steam checks failed: ${errorText(error)}`);
+      return new Map();
+    }
+  }
+
   // Keeps the highest score posted so far, so a check saved from an earlier reading never makes an alert go out again,
   // and never saves a check over a newer one.
   private async saveSteam(checks: [string, SteamCheck][]): Promise<void> {
@@ -1024,8 +1045,9 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Asks Steam about the players in game it has not checked, or not for a day, up to 100 at a check, and posts those with
-  // a high-risk account to the moderation log channel: once, and again only if it gets riskier. After Steam fails or
-  // refuses, it waits STEAM_RETRY_MS before asking again. A failure never stops the rest of the check.
+  // an account at the alert mark (RISK.alert) to the moderation log channel: once, and again only if it gets riskier.
+  // High-risk accounts below it are only logged, listed on the staff page and shown on griefing posts. After Steam fails
+  // or refuses, it waits STEAM_RETRY_MS before asking again. A failure never stops the rest of the check.
   private async checkSteam(snapshot: Snapshot | null): Promise<void> {
     const apiKey = this.steamApiKey();
     if (apiKey === null || snapshot === null || snapshot.players.length === 0) return;

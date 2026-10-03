@@ -77,8 +77,8 @@ const EnvSchema = z
     ROTATION_HOUR: z.coerce.number().int().min(0).max(23).default(5),
     // Posts to the moderation log when a player passes a griefing flag (team kills, vehicle suicides): "on" or "off".
     GRIEF_ALERTS: z.enum(['on', 'off']).default('on'),
-    // Posts to the moderation log when a player with a high-risk Steam account is in game (needs STEAM_API_KEY): "on" or
-    // "off".
+    // Posts to the moderation log when a player with one of the riskiest Steam accounts is in game (needs STEAM_API_KEY):
+    // "on" or "off".
     STEAM_ALERTS: z.enum(['on', 'off']).default('on'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
@@ -106,7 +106,7 @@ export type Config = {
   modLogWebhookUrl: string | undefined;
   // Whether possible griefing is posted to the moderation log.
   griefAlerts: boolean;
-  // Whether high-risk Steam accounts are posted to the moderation log.
+  // Whether the riskiest Steam accounts are posted to the moderation log.
   steamAlerts: boolean;
   roleId: string | undefined;
   inviteCode: string | undefined;

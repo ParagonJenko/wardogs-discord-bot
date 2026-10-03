@@ -20,6 +20,7 @@ import {
   type DiscordMessage,
 } from '../src/discord.ts';
 import type { Roundup } from '../src/roundup.ts';
+import type { SteamCheck } from '../src/steam.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
@@ -977,6 +978,35 @@ describe('buildGriefAlert', () => {
     expect(value.split('\n').length).toBeLessThan(5);
     expect(value.endsWith(`Map_${'x'.repeat(196)}`)).toBe(true);
     expect(value).toContain(t(NOW + 5000, 'R'));
+  });
+
+  it("shows the player's Steam account when it is risky, and nothing about it when it is not", () => {
+    const DAY = 86_400_000;
+    const incident = { at: NOW, kind: 'vehicle-suicide' as const, map: '', steamId: ASH, name: 'Ash', faction: null, cause: null, distance: null, tags: [] };
+    const alert = { steamId: ASH, name: 'Ash', teamKills: 0, vehicleSuicides: 2, sameTeammate: null, incidents: [incident] };
+    const check: SteamCheck = {
+      at: NOW - DAY,
+      found: true,
+      vacBans: 1,
+      gameBans: 0,
+      lastBanAt: NOW - 10 * DAY,
+      communityBanned: false,
+      tradeBan: 'none',
+      public: true,
+      setUp: true,
+      createdAt: NOW - 9 * 365 * DAY,
+    };
+    const fields = (steam: SteamCheck | null) => buildGriefAlert(alert, () => 'w', undefined, steam).embeds[0]?.fields;
+
+    expect(fields(check)).toEqual([
+      { name: 'Latest', value: `${t(NOW, 'R')} Killed themselves in a vehicle` },
+      {
+        name: 'Steam account',
+        value: `🚩 **High risk** · 4 points\n1 VAC ban, 10 days ago · Account made 9 years ago · Public profile\nChecked ${t(NOW - DAY, 'R')}`,
+      },
+    ]);
+    expect(fields({ ...check, vacBans: 0, lastBanAt: null })?.map((f) => f.name)).toEqual(['Latest']);
+    expect(fields(null)?.map((f) => f.name)).toEqual(['Latest']);
   });
 });
 
