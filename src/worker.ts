@@ -1165,7 +1165,7 @@ export class Watcher extends DurableObject<Env> {
     const inGame = new Set(online?.players.map((p) => p.steamId) ?? []);
     const seen = steamPlayers(playerDays, inGame);
     const checks = await this.loadSteam(seen);
-    const risky = riskySteamIds(seen, checks, now).slice(0, STEAM_ACCOUNTS_LISTED);
+    const risky = riskySteamIds(seen, checks, now, inGame).slice(0, STEAM_ACCOUNTS_LISTED);
     const stored = risky.length === 0 ? new Map<string, unknown>() : await this.ctx.storage.get(risky.map(playerWeaponsKey));
     const oldest = dayOf(now - (days - 1) * DAY_MS);
     const feed = new Map(risky.map((steamId) => [steamId, feedKillsSince(parsePlayerWeapons(stored.get(playerWeaponsKey(steamId))), oldest)]));
@@ -1533,7 +1533,7 @@ export class Watcher extends DurableObject<Env> {
       ...adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []),
       ...staffSteamIds(staffProfiles),
       ...(online?.players.map((p) => p.steamId) ?? []),
-      ...(steam === null ? [] : riskySteamIds(steamPlayers(playerDays, steam.inGame), steam.checks, now).slice(0, STEAM_ACCOUNTS_LISTED)),
+      ...(steam === null ? [] : riskySteamIds(steamPlayers(playerDays, steam.inGame), steam.checks, now, steam.inGame).slice(0, STEAM_ACCOUNTS_LISTED)),
     ];
     const names = new Map<string, string>();
     for (const [steamId, log] of modLogs) {
