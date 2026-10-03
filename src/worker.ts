@@ -170,7 +170,7 @@ import {
   type SiteStats,
 } from './stats.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
-import { addVip, parseVipState, removeVip, reservedListing, syncVip, vipDue, type ReservedListing, type VipState } from './vip.ts';
+import { addVip, parseVipState, removeVip, reservedListing, seederVip, syncVip, vipDue, type ReservedListing, type VipState } from './vip.ts';
 import {
   FEED_PATH,
   feedAuthorized,
@@ -929,18 +929,24 @@ export class Watcher extends DurableObject<Env> {
     const config = loadConfig(stringVars(this.env));
     const now = Date.now();
     const [stored, days, weaponDays] = await Promise.all([
-      this.ctx.storage.get(['stats', 'killFeedSince']),
+      this.ctx.storage.get(['stats', 'killFeedSince', 'vip']),
       this.recentDays(now),
       this.recentWeaponDays(now, LEADERBOARD_DAYS),
     ]);
     const stats = parseStats(stored.get('stats'));
     const since = stored.get('killFeedSince');
     const board = leaderboard(days.slice(-LEADERBOARD_DAYS).map((d) => d.players), LEADERBOARD_DAYS, LEADERBOARD_SIZE);
-    const ids = await this.idsFor([...namedSteamIds(stats, board), ...weaponHolders(weaponDays)]);
+    const seeders = config.vip === null ? null : seederVip(parseVipState(stored.get('vip')), now);
+    const ids = await this.idsFor([
+      ...namedSteamIds(stats, board),
+      ...weaponHolders(weaponDays),
+      ...(seeders ?? []).map((p) => p.steamId),
+    ]);
     const idOf = (steamId: string) => ids.get(steamId);
     const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
-    return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, { leaderboard: board, vip: config.vip, weapons }, idOf);
+    const extras = { leaderboard: board, vip: config.vip, seederVip: seeders, weapons };
+    return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, extras, idOf);
   }
 
   // The key for players' public ids, made the first time it is needed. Changing it would change every id, and break

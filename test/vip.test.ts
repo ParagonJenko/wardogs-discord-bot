@@ -11,6 +11,7 @@ import {
   removeVip,
   reservedIds,
   reservedListing,
+  seederVip,
   syncVip,
   vipDue,
   type VipGrant,
@@ -22,6 +23,8 @@ const rule: VipRule = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays:
 
 const ASH = '76561198000000001';
 const BO = '76561198000000002';
+const CY = '76561198000000003';
+const DEE = '76561198000000004';
 const ADMIN = '76561198000000009';
 
 const ini = (lines: string[]): string => `${lines.join('\n')}\n`;
@@ -142,7 +145,7 @@ describe('qualified', () => {
 });
 
 describe('planVip', () => {
-  const grant = (at: number, name = 'Ash'): VipGrant => ({ name, grantedAt: at, expiresAt: at + 7 * DAY });
+  const grant = (at: number, name = 'Ash'): VipGrant => ({ name, grantedAt: at, expiresAt: at + 7 * DAY, source: 'seeding' });
 
   it('gives a week of VIP to players who earned it, leaving an admin’s VIPs alone', () => {
     const plan = planVip([{ steamId: ASH, name: 'Ash' }, { steamId: ADMIN, name: 'Admin' }], [ADMIN], {}, NOW, rule);
@@ -199,6 +202,42 @@ describe('vipDue and parseVipState', () => {
     expect(vipDue(state, NOW)).toBe(true);
     expect(vipDue({ ...state, checkedAt: NOW - 9 * 60_000 }, NOW)).toBe(false);
   });
+
+  it('reads how each player got VIP, and grants saved before it was kept', () => {
+    const saved = {
+      granted: {
+        [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'staff' },
+        [BO]: { name: 'Bo', grantedAt: NOW, expiresAt: NOW + 7 * DAY },
+      },
+      checkedAt: NOW,
+    };
+
+    expect(parseVipState(saved).granted).toEqual(saved.granted);
+  });
+});
+
+describe('seederVip', () => {
+  it('lists who has VIP from seeding now, the latest to earn it first, leaving out VIP from staff', () => {
+    const state = {
+      ...parseVipState(undefined),
+      granted: {
+        // Earned before Bo, then extended by staff past Bo's.
+        [ASH]: { name: 'Ash', grantedAt: NOW - 3 * DAY, expiresAt: NOW + 30 * DAY, source: 'seeding' as const },
+        [BO]: { name: 'Bo', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY, source: 'seeding' as const },
+        [ADMIN]: { name: 'Admin', grantedAt: NOW, expiresAt: NOW + 30 * DAY, source: 'staff' as const },
+        // Saved before the bot kept how a player got VIP: counts as seeding.
+        [CY]: { name: 'Cy', grantedAt: NOW - 5 * DAY, expiresAt: NOW + 2 * DAY },
+        // Over, but not yet taken off the list.
+        [DEE]: { name: 'Dee', grantedAt: NOW - 8 * DAY, expiresAt: NOW - 1, source: 'seeding' as const },
+      },
+    };
+
+    expect(seederVip(state, NOW)).toEqual([
+      { steamId: BO, name: 'Bo', until: NOW + 6 * DAY },
+      { steamId: ASH, name: 'Ash', until: NOW + 30 * DAY },
+      { steamId: CY, name: 'Cy', until: NOW + 2 * DAY },
+    ]);
+  });
 });
 
 describe('syncVip', () => {
@@ -219,7 +258,7 @@ describe('syncVip', () => {
     const result = await syncVip({ rule, days: earned, state: parseVipState(undefined), now: NOW, rcon, log });
 
     expect(result).toEqual({
-      state: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY } }, checkedAt: NOW, revoked: {} },
+      state: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'seeding' } }, checkedAt: NOW, revoked: {} },
       added: [{ steamId: ASH, name: 'Ash' }],
       renewed: [],
     });
@@ -263,7 +302,7 @@ describe('syncVip', () => {
 
     expect(rcon.put).not.toHaveBeenCalled();
     expect(result.renewed).toEqual([{ steamId: ASH, name: 'Ash' }]);
-    expect(result.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY });
+    expect(result.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'seeding' });
   });
 
   it('forgets blocks that have run out', async () => {
@@ -330,7 +369,7 @@ describe('addVip and removeVip', () => {
 
     expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: editReserved(settings, [ASH], []) });
     expect(result).toEqual({
-      state: { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 30 * DAY } } },
+      state: { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 30 * DAY, source: 'staff' } } },
       outcome: 'added',
       until: NOW + 30 * DAY,
     });
@@ -345,8 +384,26 @@ describe('addVip and removeVip', () => {
 
     expect(rcon.put).not.toHaveBeenCalled();
     expect(longer).toMatchObject({ outcome: 'extended', until: NOW + 30 * DAY });
-    expect(longer.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 30 * DAY });
+    // Saved before the bot kept how a player got VIP, so it counts as seeding, and still does.
+    expect(longer.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 30 * DAY, source: 'seeding' });
     expect(shorter).toMatchObject({ outcome: 'extended', until: NOW + 6 * DAY });
+  });
+
+  it('keeps how a player got VIP when staff extend it', async () => {
+    const rcon = server(editReserved(settings, [ASH, BO], []));
+    const state = {
+      ...empty,
+      granted: {
+        [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY, source: 'seeding' as const },
+        [BO]: { name: 'Bo', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY, source: 'staff' as const },
+      },
+    };
+
+    const ash = await addVip({ steamId: ASH, name: 'Ash', days: 30, now: NOW, state, rcon });
+    const bo = await addVip({ steamId: BO, name: 'Bo', days: 30, now: NOW, state, rcon });
+
+    expect(ash.state.granted[ASH]?.source).toBe('seeding');
+    expect(bo.state.granted[BO]?.source).toBe('staff');
   });
 
   it('leaves a player an admin reserved by hand alone, but lifts a block from /vip remove', async () => {

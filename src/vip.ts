@@ -8,7 +8,9 @@ import type { ConfigResult, ServerConfig } from './rcon.ts';
 // their week is up, unless they have earned another. It only ever removes players it added itself, so reserved slots
 // an admin gave out by hand are left alone. The server reads the list when it restarts.
 
-export type VipGrant = { name: string; grantedAt: number; expiresAt: number };
+// `source`: how they got it, by seeding or from staff with /vip add. Grants saved before the bot kept track have none,
+// and count as seeding, as nearly all of them were; a staff grant among them is gone once its time is up.
+export type VipGrant = { name: string; grantedAt: number; expiresAt: number; source?: 'seeding' | 'staff' };
 
 // The players the bot put on the reserved list, by Steam ID.
 // `revoked`: players staff took VIP from, by Steam ID, and until when automatic VIP must not give it back.
@@ -19,7 +21,10 @@ export const VIP_CHECK_MS = 10 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 const VipStateSchema = z.object({
-  granted: z.record(z.string(), z.object({ name: z.string(), grantedAt: z.number(), expiresAt: z.number() })),
+  granted: z.record(
+    z.string(),
+    z.object({ name: z.string(), grantedAt: z.number(), expiresAt: z.number(), source: z.enum(['seeding', 'staff']).optional() }),
+  ),
   checkedAt: z.number(),
   // Missing from state saved before staff could remove VIP.
   revoked: z.record(z.string(), z.number()).default({}),
@@ -32,6 +37,16 @@ export const parseVipState = (raw: unknown): VipState => {
 };
 
 export const vipDue = (state: VipState, now: number): boolean => now - state.checkedAt >= VIP_CHECK_MS;
+
+export type SeederVip = { steamId: string; name: string; until: number };
+
+// Who has VIP from seeding now, for the website: the latest to earn it first. By when they earned it, not when it
+// ends, since staff can extend a seeder's VIP.
+export const seederVip = (state: VipState, now: number): SeederVip[] =>
+  Object.entries(state.granted)
+    .filter(([, g]) => g.source !== 'staff' && g.expiresAt > now)
+    .sort(([, a], [, b]) => b.grantedAt - a.grantedAt)
+    .map(([steamId, g]) => ({ steamId, name: g.name, until: g.expiresAt }));
 
 // Who has earned VIP: enough seed days in the days given (the rule's window, ending today).
 export const qualified = (days: PlayerDay[], rule: VipRule): { steamId: string; name: string }[] =>
@@ -137,7 +152,7 @@ export const planVip = (
   const earners = new Map(
     earned.filter((p) => STEAM_ID.test(p.steamId) && !blocked(p.steamId)).map((p) => [p.steamId, p.name]),
   );
-  const grant = (name: string): VipGrant => ({ name, grantedAt: now, expiresAt: now + rule.lengthDays * DAY_MS });
+  const grant = (name: string): VipGrant => ({ name, grantedAt: now, expiresAt: now + rule.lengthDays * DAY_MS, source: 'seeding' });
 
   // Someone an admin took off the list is forgotten; if they have earned VIP, they are added again below.
   const current = Object.entries(granted).filter(([id]) => onList.has(id));
@@ -239,7 +254,8 @@ export type VipChange = {
 };
 
 // Gives a player VIP for `days`, as staff asked. It ends like any other: when the time is up, unless they earned it.
-// It also lifts any block from /vip remove, even for a player who already has a reserved slot by hand.
+// It also lifts any block from /vip remove, even for a player who already has a reserved slot by hand. Longer VIP for
+// a seeder still counts as theirs from seeding.
 export const addVip = async (
   { steamId, name, days, now, state, rcon }: { steamId: string; name: string; days: number; now: number; state: VipState; rcon: VipRcon },
 ): Promise<VipChange> => {
@@ -250,8 +266,9 @@ export const addVip = async (
   if (onList && current === undefined) return { state: { ...state, revoked }, outcome: 'already-reserved' };
   if (!onList) await writeReserved(rcon, config, [steamId], []);
   const expiresAt = Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
+  const source = onList ? (current?.source ?? 'seeding') : 'staff';
   return {
-    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: current?.grantedAt ?? now, expiresAt } } },
+    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: current?.grantedAt ?? now, expiresAt, source } } },
     outcome: onList ? 'extended' : 'added',
     until: expiresAt,
   };

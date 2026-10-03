@@ -471,11 +471,12 @@ The Node/Docker version does not have the staff page.
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
 | `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
+| `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |
 
 Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password. Each player on the
 leaderboard and in the current and recent matches has their name, their totals and an `id` for their
-[player page](#player-pages). Matches recorded before ids were added have names only.
+[player page](#player-pages). Each player in `seederVip` has their `name`, `id` and `until`. Matches recorded before ids were added have names only.
 
 `weapons` has:
 
@@ -708,6 +709,9 @@ How it changes the server:
 - `MaxReservedSlots` in the same section sets how many slots are held back for reserved players. The bot does not
   change it.
 - Each change is logged (`VIP added: …`, `VIP ended: …`), and `/seeders` shows who has VIP from the bot and until when.
+- The website lists who has VIP from seeding (`seederVip` in [`/api/stats`](#website-stats)). The bot keeps whether
+  each player got VIP by seeding or from staff. VIP it gave before it kept that counts as seeding; VIP from staff
+  stays from staff when it is extended, and a seeder's stays from seeding.
 - Staff can give or take away VIP by hand with [`/vip add` and `/vip remove`](#staff-commands).
 
 Turning it off (`VIP_SEED_DAYS` `"0"`) stops players earning it. VIP the bot already gave, by seeding or through
