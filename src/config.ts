@@ -40,6 +40,8 @@ const EnvSchema = z
     DISCORD_WEBHOOK_URL: webhookUrl,
     // A webhook in a channel of its own, for the live server status the bot keeps up to date there.
     DISCORD_STATUS_WEBHOOK_URL: webhookUrl.optional(),
+    // Where the weekly and monthly roundups go, when not to the alerts channel.
+    DISCORD_ROUNDUP_WEBHOOK_URL: webhookUrl.optional(),
     DISCORD_ROLE_ID: numericId.optional(),
     DISCORD_INVITE: invite.optional(),
     // The community website; Discord posts link to it.
@@ -65,6 +67,10 @@ const EnvSchema = z
     // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
     // after someone joins. 0 turns both off.
     SEEDING_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(5),
+    // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
+    ROUNDUPS: z.enum(['on', 'off']).default('on'),
+    // The hour (UTC) on Mondays, and on the 1st of the month, when the roundups go out.
+    ROUNDUP_HOUR: z.coerce.number().int().min(0).max(23).default(17),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -103,7 +109,11 @@ export type Config = {
   matchMessages: MessageRule | null;
   // Null when SEEDING_MESSAGE_MINUTES is 0.
   seedingMessages: SeedingMessageRule | null;
+  // When the roundups go out (an hour, UTC) and where. Null when ROUNDUPS is off.
+  roundups: RoundupRule | null;
 };
+
+export type RoundupRule = { hour: number; webhookUrl: string };
 
 export const loadConfig = (env: Record<string, string | undefined>): Config => {
   // A copied .env.example leaves optional keys blank; treat those as unset so defaults apply.
@@ -147,5 +157,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       e.SEEDING_MESSAGE_MINUTES > 0
         ? { everyMs: e.SEEDING_MESSAGE_MINUTES * 60_000, siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null }
         : null,
+    roundups:
+      e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,
   };
 };

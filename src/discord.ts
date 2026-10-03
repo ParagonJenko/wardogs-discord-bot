@@ -3,6 +3,7 @@ import type { VipRule } from './config.ts';
 import { isBotBan, type BanRecord, type ModAction } from './moderation.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
+import type { MatchHighlight, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
 import type { RecentMatch } from './stats.ts';
 import { topPlayers, type MatchState, type MatchSummary } from './tracking.ts';
 
@@ -549,6 +550,132 @@ export const buildVipMessage = (
     ],
     allowed_mentions: NO_PINGS,
   };
+};
+
+const ROUNDUP_COLOR = 0xf1c40f;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Discord caps an embed at 6000 characters all told, and a field's value at 1024.
+const MAX_EMBED = 6000;
+const MAX_FIELD = 1024;
+
+// "28 Sep", or "Sat 27 Sep" with the weekday, for a UTC day.
+const dayLabel = (at: number, weekday = false): string => {
+  const d = new Date(at);
+  return `${weekday ? `${WEEKDAYS[d.getUTCDay()]} ` : ''}${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+};
+
+// "Weekly roundup · 28 Sep – 4 Oct", "Monthly roundup · September 2026", or "This week so far · 28 Sep – 3 Oct".
+const roundupTitle = (r: Roundup): string => {
+  const start = new Date(r.start);
+  const when =
+    r.kind === 'month'
+      ? `${MONTH_NAMES[start.getUTCMonth()]} ${start.getUTCFullYear()}`
+      : [...new Set([dayLabel(r.start), dayLabel(r.end - 1)])].join(' – ');
+  const name = r.partial ? `This ${r.kind} so far` : r.kind === 'month' ? 'Monthly roundup' : 'Weekly roundup';
+  return `🏆 ${name} · ${when}`;
+};
+
+const matchCount = (count: number): string => `${count} ${count === 1 ? 'match' : 'matches'}`;
+
+const percent = (part: number, whole: number): string => `${Math.round((part / Math.max(whole, 1)) * 100)}%`;
+
+// 🐻 **Valkyra** 100 – 23 Lonestar · 🟦 Ozeti
+const matchLine = (m: MatchHighlight): string => {
+  const [first, second] = byScore(m.factionScores);
+  if (!first || !second) return mapTitle(m.map);
+  const winner = `${factionBadge(first.name, first.colorHex)}**${escapeMarkdown(first.name)}**`;
+  return `${winner} ${first.score} – ${second.score} ${escapeMarkdown(second.name)} · ${mapTitle(m.map)}`;
+};
+
+const teamLine = (t: TeamStanding, best: boolean): string => {
+  const name = escapeMarkdown(t.name);
+  const record = [`${t.wins} W`, `${t.losses} L`, ...(t.draws > 0 ? [`${t.draws} D`] : []), percent(t.wins, t.matches)];
+  return `${factionBadge(t.name, t.colorHex)}${best ? `**${name}**` : name} · ${record.join(' · ')}`;
+};
+
+const embedLength = (embed: Embed): number =>
+  embed.title.length +
+  (embed.description?.length ?? 0) +
+  (embed.footer?.text.length ?? 0) +
+  (embed.fields ?? []).reduce((sum, f) => sum + f.name.length + f.value.length, 0);
+
+const buildRoundupEmbed = (r: Roundup, siteUrl: string | undefined, links: boolean): Embed => {
+  const pages = links && siteUrl ? siteUrl.replace(/\/$/, '') : null;
+  const who = (p: RoundupPlayer): string => {
+    const name = playerName(p.name);
+    return `**${pages && p.id ? `[${name}](${pages}/player?id=${p.id})` : name}**`;
+  };
+  const board = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string): string =>
+    rows.length === 0 ? '–' : ranked(rows.map((p) => `${who(p)} · ${value(p)}`));
+
+  // Whole hours, once there is at least one.
+  const played = r.playedMs >= 60 * 60_000 ? `${Math.round(r.playedMs / (60 * 60_000))} h` : minutes(r.playedMs);
+  const summary =
+    r.matches > 0
+      ? `**${matchCount(r.matches)}** · **${played}** played · ` +
+        `**${plural(r.players, 'player')}**${r.peakPlayers === null ? '' : ` · peak **${r.peakPlayers}**`}`
+      : `**${plural(r.players, 'player')}** · no matches went live`;
+  const team = r.bestTeam
+    ? `🏆 Team of the ${r.kind}: ${factionBadge(r.bestTeam.name, r.bestTeam.colorHex)}**${escapeMarkdown(r.bestTeam.name)}** · ` +
+      `won ${r.bestTeam.wins} of ${matchCount(r.bestTeam.matches)} (${percent(r.bestTeam.wins, r.bestTeam.matches)})`
+    : null;
+
+  const playtime = (p: { minutes: number }): string => hoursAndMinutes(p.minutes);
+  const combat: EmbedField[] =
+    r.matches > 0
+      ? [
+          { name: '🔫 Most kills', value: board(r.kills, (p) => String(p.kills)), inline: true },
+          { name: `🎯 Best K/D (${r.kdMinMatches}+ matches)`, value: board(r.kd, (p) => p.kd.toFixed(2)), inline: true },
+          { name: '💥 Most kills in a match', value: board(r.bestMatch, (p) => `${p.kills} · ${mapTitle(p.map)}`), inline: true },
+          { name: '🏅 Most wins', value: board(r.wins, (p) => `${p.wins} of ${p.played}`), inline: true },
+          { name: '⭐ Most MVPs', value: board(r.mvps, (p) => String(p.mvps)), inline: true },
+          { name: '⏱️ Most time played', value: board(r.playtime, playtime), inline: true },
+        ]
+      : r.playtime.length > 0
+        ? [{ name: '⏱️ Most time played', value: board(r.playtime, playtime) }]
+        : [];
+  const highlights = [
+    ...(r.biggestWin ? [`💪 Biggest win: ${matchLine(r.biggestWin)}`] : []),
+    ...(r.closestMatch ? [`😬 Closest finish: ${matchLine(r.closestMatch)}`] : []),
+    ...(r.topMap ? [`🗺️ Most played: ${mapTitle(r.topMap.map)} · ${matchCount(r.topMap.matches)}`] : []),
+    ...(r.busiestDay
+      ? [`📅 Busiest day: ${dayLabel(Date.parse(`${r.busiestDay.day}T00:00:00Z`), true)} · ${plural(r.busiestDay.players, 'player')}`]
+      : []),
+  ];
+  const linked = site(siteUrl);
+  const rules = [
+    r.kind === 'week' ? 'Weeks run Monday to Sunday, UTC.' : 'Days are UTC.',
+    `MVP: top of a match's scoreboard. Team of the ${r.kind}: best win rate, ${r.teamMinMatches}+ matches.`,
+  ];
+  return {
+    title: roundupTitle(r),
+    description: [summary, team].filter((line) => line !== null).join('\n'),
+    color: (r.bestTeam && colourOf(r.bestTeam.colorHex)) ?? ROUNDUP_COLOR,
+    fields: [
+      ...(r.teams.length > 0 ? [{ name: '⚔️ Teams', value: r.teams.map((t) => teamLine(t, t.name === r.bestTeam?.name)).join('\n') }] : []),
+      ...combat,
+      ...(r.seeding.length > 0
+        ? [
+            {
+              name: '🌱 Top seeders · thanks for getting us live!',
+              value: board(r.seeding, (p) => `${plural(p.seedDays, 'seed day')} · ${hoursAndMinutes(p.minutes)}`),
+            },
+          ]
+        : []),
+      ...(highlights.length > 0 ? [{ name: '✨ Highlights', value: highlights.join('\n') }] : []),
+    ],
+    ...(linked.url ? { url: linked.url } : {}),
+    footer: { text: [...rules, linked.footer?.text].filter(Boolean).join('\n') },
+  };
+};
+
+// The best players and team of a week or month. Names link to their player pages on the website, unless the links
+// would make it too long for Discord.
+export const buildRoundupMessage = (roundup: Roundup, siteUrl?: string): DiscordMessage => {
+  const linked = buildRoundupEmbed(roundup, siteUrl, true);
+  const fits = embedLength(linked) <= MAX_EMBED && (linked.fields ?? []).every((f) => f.value.length <= MAX_FIELD);
+  return { embeds: [fits ? linked : buildRoundupEmbed(roundup, siteUrl, false)], allowed_mentions: NO_PINGS };
 };
 
 export type SeederRow = { steamId: string; name: string; seedingMinutes: number; seedDays: number; vipUntil: number | null };

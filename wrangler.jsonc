@@ -11,8 +11,9 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
   "observability": { "enabled": true },
-  // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So is
-  // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status.
+  // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So are
+  // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status, and DISCORD_ROUNDUP_WEBHOOK_URL, the
+  // optional channel for the weekly and monthly roundups.
   "vars": {
     // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop.
     "DISCORD_ROLE_ID": "1554801355015594025",
@@ -42,6 +43,11 @@
     // Automatic VIP: seed on this many days in a week to get a reserved slot for a week. "0" turns it off.
     "VIP_SEED_DAYS": "3",
     // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.
-    "VIP_SEED_MINUTES": "10"
+    "VIP_SEED_MINUTES": "10",
+    // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
+    "ROUNDUPS": "on",
+    // The hour (UTC, 0 to 23) on Mondays, and on the 1st of the month, when the roundups go out. 17 is 6pm in the UK in
+    // summer, 5pm in winter.
+    "ROUNDUP_HOUR": "17"
   }
 }

@@ -23,6 +23,7 @@ const config: Config = {
   vip: null,
   matchMessages: null,
   seedingMessages: null,
+  roundups: null,
 };
 
 const player = (steamId: string, kills = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths: 0 });
