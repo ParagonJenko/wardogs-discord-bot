@@ -1227,15 +1227,16 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  // The staff page: possible griefers and their incidents over the last `days` UTC days, what staff did in them, and the
-  // bans on the server now. The ban list is read from the server; without it the rest still shows.
+  // The staff page: who is in game now, possible griefers and their incidents over the last `days` UTC days, risky Steam
+  // accounts, what staff did in them, and the bans on the server now. The ban list is read from the server; without it
+  // the rest still shows.
   async adminOverview(days: number): Promise<AdminOverview> {
     const now = Date.now();
     const griefKeys = Array.from({ length: days }, (_, i) => griefDayKey(now - (days - 1 - i) * DAY_MS));
     const { config } = this.rcon();
     const http = socketHttp(connect, SUGGEST_TIMEOUT_MS);
     const [stored, recent, logs, serverBans, serverConfig] = await Promise.all([
-      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', 'vip', 'online', STAFF_NAMES_KEY]),
+      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', 'vip', 'online', 'state', 'stats', STAFF_NAMES_KEY]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
       fetchBans(config.rconUrl, config.rconPassword, http).catch((error: unknown) => {
@@ -1265,6 +1266,7 @@ export class Watcher extends DurableObject<Env> {
     const steam = await this.steamSources(playerDays, online, now, days);
     const steamIds = [
       ...adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []),
+      ...(online?.players.map((p) => p.steamId) ?? []),
       ...(steam === null ? [] : riskySteamIds(steamPlayers(playerDays, steam.inGame), steam.checks, now).slice(0, STEAM_ACCOUNTS_LISTED)),
     ];
     const names = new Map<string, string>();
@@ -1295,6 +1297,10 @@ export class Watcher extends DurableObject<Env> {
       reserved,
       vip,
       steam,
+      server: parseStats(stored.get('stats')).server,
+      online,
+      match: parseState(stored.get('state'))?.match?.players ?? {},
+      history: recent,
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);

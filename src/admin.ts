@@ -1,16 +1,18 @@
 import { mapName } from './discord.ts';
-import { FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
+import { dayFlags, FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
 import { isBotBan, type BanBook, type ModAction, type ModEntry } from './moderation.ts';
 import { totals, type PlayerDay } from './players.ts';
+import type { DayRecords, OnlineSnapshot } from './profiles.ts';
 import type { Ban } from './rcon.ts';
 import { DISCORD_ID, type StaffNames } from './staffnames.ts';
-import type { IdOf } from './stats.ts';
-import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, type SteamCheck, type SteamFlag, type TradeBan } from './steam.ts';
+import type { IdOf, ServerSnapshot } from './stats.ts';
+import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, type Risk, type SteamCheck, type SteamFlag, type TradeBan } from './steam.ts';
 import type { ReservedListing, VipState } from './vip.ts';
 import { weaponKind, weaponName, type WeaponKind } from './weapons.ts';
 
-// What the staff page shows: possible griefers from the kill feed, the incidents behind it, what staff did, and the bans
-// on the server with their reasons. Only for signed-in staff (see adminauth.ts), so it has Steam IDs.
+// What the staff page shows: who is in game now, possible griefers from the kill feed, the incidents behind it, risky
+// Steam accounts, what staff did, and the bans on the server with their reasons. Only for signed-in staff (see
+// adminauth.ts), so it has Steam IDs.
 
 // The periods the page offers, in UTC days, today included.
 export const ADMIN_PERIODS = [1, 7, 30] as const;
@@ -127,12 +129,40 @@ export type AdminSteamSources = {
   feed: Map<string, { kills: number; headshots: number }>;
 };
 
+// Someone in game now, for the staff page's server list, with what the bot knows that is worth watching.
+export type AdminOnlinePlayer = AdminPlayer & {
+  faction: string | null;
+  // This match so far: the bot's own count, which a rejoin does not reset, or else the scoreboard's.
+  kills: number | null;
+  deaths: number | null;
+  // Seeding and live minutes on the server today (UTC).
+  minutesToday: number;
+  // The first UTC day of the last 90 they were on the server: today for someone new.
+  firstSeen: string | null;
+  // Their Steam account, once the bot has checked it. Null before that, and without STEAM_API_KEY.
+  steam: { risk: Risk; score: number; flags: SteamFlag[] } | null;
+  // Today's possible griefing: the flags their day earned so far, their team kills and their vehicle suicides.
+  griefFlags: Flag[];
+  teamKillsToday: number;
+  vehicleSuicidesToday: number;
+  banned: boolean;
+  // On the reserved list, from the bot or by hand. Null when ServerSettings.ini could not be read.
+  reserved: boolean | null;
+};
+
+// Who is in game, as the bot's last check saw them (`at`), on `map`.
+export type AdminOnline = { at: number; map: string; players: AdminOnlinePlayer[] };
+
 // A staff member, by Discord user ID: the name they go by and their Discord username, when the bot knows them.
 export type AdminStaff = Record<string, { name: string; username: string | null }>;
 
 export type AdminOverview = {
   generatedAt: number;
   days: number;
+  // The server as the bot last saw it, or null if it never has. `seenAt` says how long ago.
+  server: ServerSnapshot | null;
+  // Null when the server has not answered for 3 minutes.
+  online: AdminOnline | null;
   // The UTC day the bot first had the kill feed, or null if it never has: then there is no griefing data.
   feedSince: string | null;
   flags: typeof FLAGS;
@@ -174,6 +204,12 @@ export type AdminSources = {
   vip: VipState;
   // Null without STEAM_API_KEY.
   steam: AdminSteamSources | null;
+  server: ServerSnapshot | null;
+  // Who was in game at the last check, or null when the server has stopped answering; the bot's own count of the match
+  // so far, by Steam ID; and every UTC day of the last 90, oldest first, today last, for time today and who is new.
+  online: OnlineSnapshot | null;
+  match: Record<string, { kills: number; deaths: number; faction?: string }>;
+  history: DayRecords[];
 };
 
 // The staff page lists at most this many risky accounts.
@@ -197,6 +233,51 @@ export const riskySteamIds = (steamIds: string[], checks: Map<string, SteamCheck
     .map((r) => r.steamId);
 
 const startOfDay = (at: number): number => Date.parse(`${new Date(at).toISOString().slice(0, 10)}T00:00:00Z`);
+
+// Who is in game, for the server list: by team, then name.
+const onlinePlayers = (
+  s: AdminSources,
+  ref: (steamId: string, fallback?: string) => AdminPlayer,
+  banned: Set<string>,
+): AdminOnline | null => {
+  if (s.online === null) return null;
+  const today = s.history.at(-1)?.players ?? {};
+  const grief = s.grief.at(-1)?.players ?? {};
+  const inGame = new Set(s.online.players.map((p) => p.steamId));
+  const firstSeen = new Map<string, string>();
+  for (const { day, players } of s.history) {
+    for (const steamId of Object.keys(players)) if (inGame.has(steamId) && !firstSeen.has(steamId)) firstSeen.set(steamId, day);
+  }
+  const reserved = s.reserved === null ? null : new Set(s.reserved.ids);
+  const seen = new Set<string>();
+  const players = s.online.players
+    .filter((p) => !seen.has(p.steamId) && seen.add(p.steamId))
+    .map((p): AdminOnlinePlayer => {
+      const tracked = s.match[p.steamId];
+      const t = today[p.steamId];
+      const g = grief[p.steamId];
+      const check = s.steam?.checks.get(p.steamId) ?? null;
+      const said = check === null ? null : assess(check, s.now);
+      return {
+        ...ref(p.steamId, p.name),
+        name: p.name || ref(p.steamId).name,
+        faction: p.faction ?? tracked?.faction ?? null,
+        kills: tracked?.kills ?? p.kills,
+        deaths: tracked?.deaths ?? p.deaths,
+        minutesToday: (t?.seedingMinutes ?? 0) + (t?.liveMinutes ?? 0),
+        firstSeen: firstSeen.get(p.steamId) ?? null,
+        steam: said === null ? null : { risk: said.risk, score: said.score, flags: said.flags },
+        griefFlags: g === undefined ? [] : dayFlags(g),
+        teamKillsToday: g?.teamKills ?? 0,
+        vehicleSuicidesToday: g?.vehicleSuicides ?? 0,
+        banned: banned.has(p.steamId),
+        reserved: reserved === null ? null : reserved.has(p.steamId),
+      };
+    })
+    // Players with no team yet go last.
+    .sort((a, b) => Number(a.faction === null) - Number(b.faction === null) || (a.faction ?? '').localeCompare(b.faction ?? '') || a.name.localeCompare(b.name));
+  return { at: s.online.at, map: mapName(s.online.map), players };
+};
 
 // Every Steam ID the page will name, so their public ids can be worked out first.
 export const adminSteamIds = (
@@ -389,6 +470,8 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
   return {
     generatedAt: s.now,
     days: s.days,
+    server: s.server,
+    online: onlinePlayers(s, ref, banned),
     feedSince: s.feedSince,
     flags: FLAGS,
     staff: staffFor(adminStaffIds({ moderation, bans }), s.staffNames, s.modLogs),

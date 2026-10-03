@@ -3,6 +3,7 @@ import { adminSteamIds, buildAdminOverview, riskySteamIds, steamPlayers, type Ad
 import { emptyGriefDay, FLAGS, recordGrief } from '../src/griefing.ts';
 import type { BanRecord, ModEntry } from '../src/moderation.ts';
 import type { PlayerTotals } from '../src/players.ts';
+import type { DayRecords } from '../src/profiles.ts';
 import type { SteamCheck } from '../src/steam.ts';
 import type { FeedEvent } from '../src/weapons.ts';
 
@@ -59,6 +60,10 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     reserved: null,
     vip: { granted: {}, checkedAt: 0, revoked: {} },
     steam: null,
+    server: null,
+    online: null,
+    match: {},
+    history: [],
     ...overrides,
   };
 };
@@ -285,5 +290,81 @@ describe('risky Steam accounts on the staff page', () => {
   it('finds the players to look up, and the risky ones among them', () => {
     expect(steamPlayers(playerDays, [DEE, ASH])).toEqual([ASH, BO, CY, DEE]);
     expect(riskySteamIds([CY, BO, DEE, ASH, '76561198000000009'], checks, NOW)).toEqual([DEE, ASH, BO]);
+  });
+});
+
+describe('the server list on the staff page', () => {
+  const check: SteamCheck = {
+    at: NOW,
+    found: true,
+    vacBans: 1,
+    gameBans: 0,
+    lastBanAt: NOW - 30 * DAY,
+    communityBanned: false,
+    tradeBan: 'none',
+    public: true,
+    setUp: true,
+    createdAt: NOW - 3000 * DAY,
+  };
+  // Ash (Valkyra) has played before and team killed today; Dee (Kharr) is new today, on the reserved list, and banned
+  // while still in game. Bo shows twice in the snapshot.
+  const online = {
+    at: NOW - 30_000,
+    map: 'Europe',
+    players: [
+      { steamId: DEE, name: 'Dee', kills: 2, deaths: 0, faction: 'Kharr' },
+      { steamId: ASH, name: 'Ash', kills: 1, deaths: 1, faction: 'Valkyra' },
+      { steamId: BO, name: 'Bo', kills: null, deaths: null },
+      { steamId: BO, name: 'Bo', kills: null, deaths: null },
+    ],
+  };
+  const history: DayRecords[] = [
+    { day: '2026-09-01', players: { [ASH]: totals() } },
+    { day: '2026-10-03', players: { [ASH]: totals({ seedingMinutes: 10, liveMinutes: 50 }), [DEE]: totals({ name: 'Dee', seedingMinutes: 0, liveMinutes: 15 }) } },
+  ];
+  const overview = (overrides: Partial<AdminSources> = {}) =>
+    buildAdminOverview(
+      sources({
+        online,
+        history,
+        match: { [ASH]: { kills: 9, deaths: 3, faction: 'Valkyra' } },
+        // Ash's team kills put on today.
+        grief: [emptyGriefDay(), ...sources().grief.slice(0, 1)],
+        reserved: { ids: [DEE], maxSlots: 2 },
+        serverBans: [{ steamId: DEE, reason: 'Cheating', bannedBy: null }],
+        steam: { checks: new Map([[ASH, check]]), inGame: new Set([ASH, DEE, BO]), feed: new Map() },
+        ...overrides,
+      }),
+    );
+
+  it('lists everyone in game once, by team, with what is worth watching', () => {
+    const list = overview().online;
+
+    expect(list?.at).toBe(NOW - 30_000);
+    expect(list?.map).toBe('Ozeti');
+    expect(list?.players.map((p) => p.name)).toEqual(['Dee', 'Ash', 'Bo']);
+    expect(list?.players[1]).toEqual({
+      steamId: ASH,
+      name: 'Ash',
+      id: 'a00000000001',
+      faction: 'Valkyra',
+      kills: 9,
+      deaths: 3,
+      minutesToday: 60,
+      firstSeen: '2026-09-01',
+      steam: { risk: 'high', score: 4, flags: ['vacBan', 'recentBan'] },
+      griefFlags: ['teamKills', 'sameTeammate'],
+      teamKillsToday: 3,
+      vehicleSuicidesToday: 0,
+      banned: false,
+      reserved: false,
+    });
+    expect(list?.players[0]).toMatchObject({ kills: 2, firstSeen: '2026-10-03', steam: null, griefFlags: [], banned: true, reserved: true });
+    expect(list?.players[2]).toMatchObject({ faction: null, kills: null, minutesToday: 0, firstSeen: null });
+  });
+
+  it('says nothing about the reserved list it could not read, and has no list while the server is not answering', () => {
+    expect(overview({ reserved: null }).online?.players[0]?.reserved).toBeNull();
+    expect(overview({ online: null }).online).toBeNull();
   });
 });

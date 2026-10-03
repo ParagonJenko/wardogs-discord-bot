@@ -370,6 +370,10 @@ The Node/Docker version does not have the moderation log.
 
 The website has a page for staff (gaminginit's `/admin`). Staff sign in with Discord, and the page shows:
 
+- **Who is in game now**, from the bot's last check (every minute): each player's team, kills and deaths this match,
+  time on the server today, whether they are new (first seen today, in 90 days), their
+  [Steam account](#risky-steam-accounts)'s risk, today's griefing flags, VIP and bans. Nothing while the server has not
+  answered for 3 minutes.
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
   the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
   or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
