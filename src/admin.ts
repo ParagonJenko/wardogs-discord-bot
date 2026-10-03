@@ -5,6 +5,7 @@ import { totals, type PlayerDay } from './players.ts';
 import type { DayRecords, OnlineSnapshot } from './profiles.ts';
 import type { Ban } from './rcon.ts';
 import { DISCORD_ID, type StaffNames } from './staffnames.ts';
+import type { StaffProfiles } from './staffprofiles.ts';
 import type { IdOf, ServerSnapshot } from './stats.ts';
 import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, type Risk, type SteamCheck, type SteamFlag, type TradeBan } from './steam.ts';
 import type { ReservedListing, VipState } from './vip.ts';
@@ -156,6 +157,10 @@ export type AdminOnline = { at: number; map: string; players: AdminOnlinePlayer[
 // A staff member, by Discord user ID: the name they go by and their Discord username, when the bot knows them.
 export type AdminStaff = Record<string, { name: string; username: string | null }>;
 
+// A staff member who linked their Steam account (see staffprofiles.ts), by Discord user ID: the name they go by, when
+// they linked it, and their account in game. `seen`: whether the bot has seen that account in game in the last 90 days.
+export type AdminStaffProfile = { userId: string; name: string; linkedAt: number; player: AdminPlayer; seen: boolean };
+
 export type AdminOverview = {
   generatedAt: number;
   days: number;
@@ -180,6 +185,8 @@ export type AdminOverview = {
   reserved: AdminReserved | null;
   // Null without STEAM_API_KEY.
   steam: AdminSteam | null;
+  // Every staff member who linked their Steam account, by name.
+  staffProfiles: AdminStaffProfile[];
 };
 
 export type AdminSources = {
@@ -199,6 +206,7 @@ export type AdminSources = {
   idOf: IdOf;
   // Staff the bot has seen or looked up, by Discord user ID.
   staffNames: StaffNames;
+  staffProfiles: StaffProfiles;
   // The reserved list in ServerSettings.ini, or null when it could not be read, and the VIP the bot gave.
   reserved: ReservedListing | null;
   vip: VipState;
@@ -502,5 +510,14 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     moderation,
     bans,
     steam,
+    staffProfiles: Object.entries(s.staffProfiles)
+      .map(([userId, p]) => ({
+        userId,
+        name: s.staffNames[userId]?.name ?? p.name,
+        linkedAt: p.at,
+        player: ref(p.steamId),
+        seen: s.history.some((d) => d.players[p.steamId] !== undefined),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 };

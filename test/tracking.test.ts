@@ -33,6 +33,15 @@ describe('seeding tally', () => {
     ]);
   });
 
+  it('leaves staff off the top seeders', () => {
+    const tally = [[player('a'), player('b')], [player('a'), player('b'), player('c')]].reduce(tallySeeding, {});
+
+    expect(topSeeders(tally, 3, new Set(['a']))).toEqual([
+      { name: 'Pb', checks: 2 },
+      { name: 'Pc', checks: 1 },
+    ]);
+  });
+
   it('keeps the latest name a player used', () => {
     const tally = tallySeeding(tallySeeding({}, [player('a')]), [{ ...player('a'), name: 'Renamed' }]);
 

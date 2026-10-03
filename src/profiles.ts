@@ -98,7 +98,8 @@ export type PlayerProfile = {
   online: OnlineNow | null;
   // A reserved slot from the bot, earned by seeding or given by staff, and until when.
   vip: { until: number } | null;
-  // How close they are to earning seeder VIP: seed days in the bot's window. Null when automatic VIP is off.
+  // How close they are to earning seeder VIP: seed days in the bot's window. Null when automatic VIP is off, and for
+  // staff, who cannot earn it.
   seeding: { rule: VipRule; seedDays: number } | null;
   // Their kills by weapon each day, from the game's kill feed. Null when the bot has never had the feed.
   weapons: PlayerWeaponsPage | null;

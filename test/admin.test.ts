@@ -57,6 +57,7 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     nameOf: (steamId) => NAMES[steamId],
     idOf: (steamId) => (steamId === ASH ? 'a00000000001' : undefined),
     staffNames: {},
+    staffProfiles: {},
     reserved: null,
     vip: { granted: {}, checkedAt: 0, revoked: {} },
     steam: null,
@@ -206,6 +207,26 @@ describe('buildAdminOverview', () => {
     });
     expect(buildAdminOverview(sources()).reserved).toBeNull();
     expect(adminSteamIds([], new Map(), null, {}, [DEE])).toEqual([DEE]);
+  });
+
+  it('lists the staff who linked their Steam account, by name, and whether the bot has seen it in game', () => {
+    const SARGE = '340568148044414976';
+    const KESTREL = '100000000000000002';
+    const overview = buildAdminOverview(
+      sources({
+        staffNames: { [SARGE]: { name: 'Sarge now', username: 'paragon', at: NOW } },
+        staffProfiles: {
+          [SARGE]: { steamId: ASH, name: 'Sarge', at: NOW - DAY },
+          [KESTREL]: { steamId: DEE, name: 'Kestrel', at: NOW },
+        },
+        history: [{ day: '2026-10-03', players: { [ASH]: totals() } }],
+      }),
+    );
+
+    expect(overview.staffProfiles).toEqual([
+      { userId: KESTREL, name: 'Kestrel', linkedAt: NOW, player: { steamId: DEE, name: 'Dee' }, seen: false },
+      { userId: SARGE, name: 'Sarge now', linkedAt: NOW - DAY, player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, seen: true },
+    ]);
   });
 
   it('names everyone it can', () => {

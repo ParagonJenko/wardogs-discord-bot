@@ -9,8 +9,14 @@ export const tallySeeding = (tally: SeedingTally, players: Player[]): SeedingTal
     tally,
   );
 
-export const topSeeders = (tally: SeedingTally, count: number): { name: string; checks: number }[] =>
-  Object.values(tally)
+// Staff (`staff`, by Steam ID) are never top seeders.
+export const topSeeders = (
+  tally: SeedingTally,
+  count: number,
+  staff: ReadonlySet<string> = new Set(),
+): { name: string; checks: number }[] =>
+  Object.entries(tally)
+    .flatMap(([steamId, s]) => (staff.has(steamId) ? [] : [s]))
     .sort((a, b) => b.checks - a.checks)
     .slice(0, count);
 

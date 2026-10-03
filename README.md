@@ -10,7 +10,8 @@ Watches a WARDOGS server through its RCON API and posts to a Discord channel whe
 
 It also posts:
 
-- **Top seeders** on the live alert: the 3 players who were online longest while the server seeded.
+- **Top seeders** on the live alert: the 3 players who were online longest while the server seeded. Never
+  [staff](#staff-steam-accounts).
 - **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D.
@@ -148,7 +149,7 @@ every month a roundup of the month before. Each one celebrates:
 | 🏅 Most wins            | Matches won on the winning side, out of the matches they played                         |
 | ⭐ Most MVPs            | Times top of a match's scoreboard (most kills, then fewest deaths; players level share it) |
 | ⏱️ Most time played     | Seeding and live time                                                                  |
-| 🌱 Top seeders          | Seed days, then seeding time                                                           |
+| 🌱 Top seeders          | Seed days, then seeding time. Not [staff](#staff-steam-accounts)                       |
 | ✨ Highlights           | The biggest win, the closest finish, the map played most and the busiest day           |
 
 - Names link to each player's page on the website when `SITE_URL` is set. Posts never ping anyone.
@@ -185,7 +186,7 @@ The Node/Docker version does not post roundups.
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/roundup`      | Everyone             | The [roundup](#roundups) of last week (default), last month, or this week or month so far |
 | `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
-| `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP |
+| `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP. Not [staff](#staff-steam-accounts) |
 | `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |
 | `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
 | `/warn`         | Staff only           | Sends a player in game a private message: "Staff warning: …"       |
@@ -465,6 +466,7 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
   give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders,
   [map rotations](#map-rotations), and remove a wrongly recorded match. See below.
 - **[Rotations](#rotations-tab)**: the week, what is on the server, and a drag and drop editor for the saved rotations.
+- **[Staff Steam accounts](#staff-steam-accounts)**: who has linked theirs, so the bot never counts them as seeders.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
 Discord's **Administrator** permission, or with a role in `DISCORD_ADMIN_ROLE_IDS`, or the server's owner.
@@ -515,6 +517,27 @@ Admin tools: the page runs the staff commands through the bot, as the signed-in 
   the [moderation log](#moderation-log) and the Worker logs, with the staff member's Discord user ID and name. Each is
   also logged as `Staff page: /<command> by "<name>" (Discord user <ID>)`.
 - The page asks before anything that changes the game or the records, such as a kick, a ban or a map change.
+
+### Staff Steam accounts
+
+Seeder VIP and the top seeders are for the players who seed, not for staff. So each staff member links their Steam
+account to their Discord sign-in, and the bot then counts their time on the server as playing, never seeding:
+
+- The first time they sign in without one, the page asks for their Steam64 ID (17 digits, starting `7656119`), with how
+  to find it. They can paste their Steam profile's link instead, when it has the ID in it
+  (`steamcommunity.com/profiles/<ID>`). They can skip it, change it or unlink it later from the page.
+- A linked account never earns [automatic VIP](#automatic-vip), and is left off the live alert's top seeders,
+  `/seeders`, the roundups' top seeders, the website's seeding board and its list of who has VIP from seeding. Its
+  seeding time counts as time played, so time played stays the same. Its player page shows no seed days and no
+  progress towards seeder VIP. Everything else (kills, K/D, matches, time played) shows as for anyone.
+- VIP a staff member earned before linking runs out on time and is not renewed. VIP staff give with `/vip add` is not
+  changed.
+- A Steam account can only be linked to one staff member. Any staff member can unlink anyone's, for someone who is no
+  longer staff: their time then counts as seeding again, including before they were unlinked, as the bot keeps the
+  records as they were.
+- The page sends `POST /api/admin/profile` (`{"action": "link", "steamId": "…"}`, or `{"action": "unlink"}` with
+  an optional `userId`), and the overview lists everyone linked (`staffProfiles`). Each change is logged
+  (`Staff page: "<name>" (Discord user <ID>) linked Steam account <ID>`).
 
 Staff names: the bot's records name staff by their Discord user ID, so the page puts names to them:
 
@@ -614,7 +637,7 @@ The Node/Docker version does not check Steam accounts.
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
 | `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
-| `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`). `null` when automatic VIP is off |
+| `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`), nor [staff](#staff-steam-accounts). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |
 | `teams`        | Which team wins most over the last 30 days (UTC), overall and on each map, from the bot's match records. See below |
 
@@ -846,6 +869,8 @@ Players who seed get a reserved slot, so they skip the queue when the server is 
 
 - **Seed on 3 days in a week** (`VIP_SEED_DAYS` successful seeds in the last 7 UTC days, including today), and the
   bot adds you to the server's reserved list for **a week**.
+- Staff who linked their Steam account on the [staff page](#staff-steam-accounts) never earn it: it is for the players
+  who seed.
 - When the week is up, you come off the list, unless you earned it again during that week. Then it runs for
   another week.
 - The bot checks every 10 minutes. The game server only reads the reserved list when it restarts, so VIP starts

@@ -60,6 +60,8 @@ type PollerDeps = {
   broadcast?: (message: string) => Promise<void>;
   // Picks which line an in-game message uses.
   random?: () => number;
+  // Staff's Steam IDs: they are never named as top seeders (see staffprofiles.ts). Only asked when the server goes live.
+  staff?: () => Promise<ReadonlySet<string>>;
 };
 
 // Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
@@ -175,7 +177,18 @@ export const JOIN_CHECK_MS = 5_000;
 const canSeedMessage = (seeding: boolean, players: number, live: number): boolean => seeding && players > 0 && players < live;
 
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
-export const createPoller = ({ config, fetchSnapshot, send, now, log, store, stats, broadcast, random = Math.random }: PollerDeps) => {
+export const createPoller = ({
+  config,
+  fetchSnapshot,
+  send,
+  now,
+  log,
+  store,
+  stats,
+  broadcast,
+  random = Math.random,
+  staff,
+}: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
     if (stats === undefined) return;
@@ -222,14 +235,16 @@ export const createPoller = ({ config, fetchSnapshot, send, now, log, store, sta
     // low-pop alert that starts a re-seed cannot be posted, the phase stays live (so the alert is retried) while the
     // re-seed is already being counted.
     const wentLive = after === 'live' && (before !== 'live' || Object.keys(state.seeding).length > 0);
-    const seeders = wentLive
-      ? topSeeders(state.seeding, TOP_SEEDERS).map((s) => ({ name: s.name, minutes: minutes(s.checks) }))
-      : [];
     const credits = wentLive
       ? Object.entries(state.seeding).map(([steamId, s]) => ({ steamId, name: s.name, minutes: minutes(s.checks) }))
       : [];
 
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
+    // Not caught, like the seed below: nothing has been saved yet, so the next check tries again.
+    const staffIds = wentLive && staff !== undefined ? await staff() : new Set<string>();
+    const seeders = wentLive
+      ? topSeeders(state.seeding, TOP_SEEDERS, staffIds).map((s) => ({ name: s.name, minutes: minutes(s.checks) }))
+      : [];
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
     if (credits.length > 0) await stats?.seeded(credits, time);
     if (finished !== null) await stats?.matchEnded(finished, time);
