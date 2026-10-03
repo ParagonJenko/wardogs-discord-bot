@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ConfigResult, ServerConfig } from '../src/rcon.ts';
 import {
+  DEFAULT_ROTATION,
   editRotations,
   parseEntry,
   parseRotationBook,
@@ -8,6 +9,8 @@ import {
   putRotation,
   rotationDay,
   rotationName,
+  hasDefault,
+  seedDefault,
   serverEntries,
   setRotationEntries,
   type RotationBook,
@@ -100,7 +103,10 @@ describe('editRotations', () => {
   it("saves the server's rotation under a name, in place of one with that name", () => {
     const saved = edited(book(), { kind: 'save', name: 'WEEKEND', entries: [BAKURANI, ZESTAFONA] });
     expect(saved.rotations).toEqual([book().rotations[0], { name: 'Weekend', entries: [BAKURANI, ZESTAFONA] }]);
-    expect(editRotations(book(), { kind: 'save', name: 'New', entries: [] }, at)).toEqual({ problem: expect.stringMatching(/no maps/) });
+    expect(editRotations(book(), { kind: 'save', name: 'New', entries: [] }, at)).toEqual({ problem: 'A rotation needs at least one map.' });
+    expect(editRotations(book(), { kind: 'save', name: 'New', entries: [{ map: 'Kavkazi', lighting: 'Day"Clear' }] }, at)).toEqual({
+      problem: expect.stringMatching(/aren't ones the server knows/),
+    });
   });
 
   it('plans a rotation for a day, or several, and puts it on now when one of them is today', () => {
@@ -146,6 +152,95 @@ describe('editRotations', () => {
     const deleted = edited(planned, { kind: 'delete', name: 'weekend' });
     expect(deleted.rotations.map((r) => r.name)).toEqual(['Rotation 1']);
     expect(deleted.week).toEqual([null, null, null, null, null, null, 'Rotation 1']);
+  });
+});
+
+describe('the Default rotation', () => {
+  const withDefault = (changes: Partial<RotationBook> = {}): RotationBook => {
+    const start = book(changes);
+    return { ...start, rotations: [{ name: DEFAULT_ROTATION, entries: [OZETI] }, ...start.rotations] };
+  };
+
+  it("starts as the server's rotation, once, first in the list", () => {
+    const seeded = seedDefault(book(), [BAKURANI, ZESTAFONA]);
+    expect(seeded.rotations[0]).toEqual({ name: 'Default', entries: [BAKURANI, ZESTAFONA] });
+    expect(seedDefault(seeded, [OZETI])).toBe(seeded);
+    const nothing = book();
+    expect(seedDefault(nothing, [])).toBe(nothing);
+  });
+
+  it('takes over a rotation staff already called "Default": an empty one gets the server\'s maps, one with maps keeps them', () => {
+    const legacy = (entries: RotationEntry[]): RotationBook => ({ ...book(), rotations: [...book().rotations, { name: 'default', entries }] });
+    const filled = seedDefault(legacy([]), [ZESTAFONA]);
+    expect(filled.rotations.at(-1)).toEqual({ name: 'Default', entries: [ZESTAFONA] });
+    expect(hasDefault(filled)).toBe(true);
+    const kept = seedDefault(legacy([BAKURANI]), []);
+    expect(kept.rotations.at(-1)).toEqual({ name: 'Default', entries: [BAKURANI] });
+    // Empty, and nothing from the server: still not set up.
+    expect(hasDefault(seedDefault(legacy([]), []))).toBe(false);
+  });
+
+  it("doesn't count against the most rotations staff can save", () => {
+    const ten: RotationBook = { ...empty, rotations: Array.from({ length: 10 }, (_, i) => ({ name: `R${i}`, entries: [BAKURANI] })) };
+    const seeded = seedDefault(ten, [OZETI]);
+    expect(seeded.rotations).toHaveLength(11);
+    expect(editRotations(seeded, { kind: 'add', name: 'R10', entry: BAKURANI }, at)).toEqual({ problem: expect.stringMatching(/already 10/) });
+    expect(editRotations(seeded, { kind: 'add', name: 'Default', entry: BAKURANI }, at)).not.toHaveProperty('problem');
+    // A full book without Default can still have one.
+    expect(editRotations(ten, { kind: 'save', name: 'default', entries: [OZETI] }, at)).not.toHaveProperty('problem');
+  });
+
+  it('plays on every day without a rotation of its own, or whose rotation has no maps', () => {
+    const start = withDefault({ week: [null, null, null, null, null, 'Weekend', 'Gone'] });
+    expect(planToday(start, SATURDAY, NOW).applied).toMatchObject({ name: 'Weekend' });
+    expect(planToday(start, rotationDay(Date.UTC(2026, 9, 4, 12), 5), NOW).applied).toMatchObject({ name: 'Default', by: 'schedule' });
+    expect(planToday(start, rotationDay(Date.UTC(2026, 9, 5, 12), 5), NOW).applied).toMatchObject({ name: 'Default' });
+  });
+
+  it('is what a day goes back to, at once when it is today', () => {
+    const start = withDefault({ week: [null, null, null, null, null, 'Weekend', 'Weekend'] });
+    const cleared = edited(start, { kind: 'schedule', days: [5, 6], name: null });
+    expect(cleared.week).toEqual([null, null, null, null, null, null, null]);
+    expect(cleared.applied).toMatchObject({ name: 'Default', day: '2026-10-03', pending: true });
+    // Picking Default is the same as picking nothing.
+    expect(edited(start, { kind: 'schedule', days: [5], name: 'default' }).week[5]).toBeNull();
+  });
+
+  it("can't be deleted, renamed or emptied, and no other rotation takes its name", () => {
+    const start = withDefault();
+    expect(editRotations(start, { kind: 'delete', name: 'default' }, at)).toEqual({ problem: expect.stringMatching(/can't be deleted/) });
+    expect(editRotations(start, { kind: 'rename', name: 'Default', to: 'Old' }, at)).toEqual({ problem: expect.stringMatching(/keeps its name/) });
+    expect(editRotations(start, { kind: 'rename', name: 'Weekend', to: 'DEFAULT' }, at)).toEqual({ problem: expect.stringMatching(/is taken/) });
+    expect(editRotations(start, { kind: 'remove', name: 'Default', position: 1 }, at)).toEqual({ problem: expect.stringMatching(/at least one map/) });
+  });
+
+  it("puts Default on when today's rotation is deleted", () => {
+    const start = withDefault({ week: [null, null, null, null, null, 'Weekend', null], applied: { name: 'Weekend', day: '2026-10-03', at: 0, by: 'schedule', pending: false } });
+    const deleted = edited(start, { kind: 'delete', name: 'Weekend' });
+    expect(deleted.week[5]).toBeNull();
+    expect(deleted.applied).toMatchObject({ name: 'Default', pending: true, by: '42' });
+  });
+});
+
+describe('renaming', () => {
+  it('renames a rotation everywhere it is used, and saves its maps as it renames it', () => {
+    const start = book({ week: ['Rotation 1', null, null, null, null, 'Rotation 1', null], applied: { name: 'Rotation 1', day: '2026-10-03', at: 0, by: 'schedule', pending: false } });
+    const renamed = edited(start, { kind: 'rename', name: 'rotation 1', to: 'Weekday mix' });
+    expect(renamed.rotations[0]?.name).toBe('Weekday mix');
+    expect(renamed.week).toEqual(['Weekday mix', null, null, null, null, 'Weekday mix', null]);
+    expect(renamed.applied).toMatchObject({ name: 'Weekday mix', pending: false });
+
+    const saved = edited(start, { kind: 'save', from: 'Rotation 1', name: 'Weekday mix', entries: [ZESTAFONA] });
+    expect(saved.rotations[0]).toEqual({ name: 'Weekday mix', entries: [ZESTAFONA] });
+    // Today's rotation changed its maps, so it goes on again.
+    expect(saved.applied).toMatchObject({ name: 'Weekday mix', pending: true });
+    expect(editRotations(start, { kind: 'rename', name: 'Rotation 1', to: 'weekend' }, at)).toEqual({ problem: expect.stringMatching(/already a rotation called \*\*Weekend/) });
+    expect(edited(start, { kind: 'save', from: 'Rotation 1', name: 'ROTATION 1', entries: [ZESTAFONA] }).rotations[0]?.name).toBe('ROTATION 1');
+  });
+
+  it('notes who chose the rotation by the name they go by', () => {
+    const result = editRotations(book(), { kind: 'use', name: 'Weekend' }, { ...at, byName: 'Sarge' });
+    expect('book' in result && result.book.applied).toMatchObject({ by: '42', byName: 'Sarge' });
   });
 });
 

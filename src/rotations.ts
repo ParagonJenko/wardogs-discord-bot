@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import { appendSection, refusal, sectionLines, sectionRange } from './ini.ts';
-import type { ConfigResult, MatchSetup, ServerConfig } from './rcon.ts';
+import type { ConfigResult, MatchSetup, Rotation, ServerConfig } from './rcon.ts';
 
 // Map rotations staff save by name, such as "Rotation 1" and "Weekend", and which one the server plays on each day of
-// the week. The bot puts a rotation on the server by writing its maps into ServerSettings.ini, as live builds have no
-// other way to change the rotation; the server rebuilds its rotation at once and plays it from the next map change.
-// Only the RotationEntries lines are written: whether the rotation is on, and in order or random, stay as they are.
+// the week. "Default" starts as the rotation the server had, and plays on every day without one of its own. The bot
+// puts a rotation on the server by writing its maps into ServerSettings.ini, as live builds have no other way to change
+// the rotation; the server rebuilds its rotation at once and plays it from the next map change. Only the
+// RotationEntries lines are written: whether the rotation is on, and in order or random, stay as they are.
 
 export type RotationEntry = { map: string } & MatchSetup;
 export type SavedRotation = { name: string; entries: RotationEntry[] };
@@ -14,11 +15,16 @@ export type SavedRotation = { name: string; entries: RotationEntry[] };
 export const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
 // The rotation the bot put on the server, or is putting on: its name, the rotation day it is for, when and who chose it
-// ("schedule", or a Discord user ID). `pending` until the server has it; the checks keep trying until then.
-export type AppliedRotation = { name: string; day: string; at: number; by: string; pending: boolean };
+// ("schedule", or a Discord user ID, with the name they go by). `pending` until the server has it; the checks keep
+// trying until then.
+export type AppliedRotation = { name: string; day: string; at: number; by: string; byName?: string; pending: boolean };
 
-// `week`: each day's rotation by name, Monday first; null leaves the server's rotation as it is that day.
+// `week`: each day's rotation by name, Monday first; null plays Default (or, without one, leaves the server's rotation as
+// it is that day).
 export type RotationBook = { rotations: SavedRotation[]; week: (string | null)[]; applied: AppliedRotation | null };
+
+// The rotation for every day without one of its own. It cannot be renamed or deleted.
+export const DEFAULT_ROTATION = 'Default';
 
 // The days /rotations schedule offers: one day, or several at once.
 export const DAY_CHOICES: { name: string; value: string; days: number[] }[] = [
@@ -28,6 +34,7 @@ export const DAY_CHOICES: { name: string; value: string; days: number[] }[] = [
   { name: 'Every day', value: 'every-day', days: [0, 1, 2, 3, 4, 5, 6] },
 ];
 
+// Rotations staff can save besides Default, which never counts against it.
 export const MAX_ROTATIONS = 10;
 // The server takes far more, but this many is already a long day of matches.
 export const MAX_ROTATION_MAPS = 100;
@@ -45,7 +52,9 @@ const EntrySchema = z.object({
 const BookSchema = z.object({
   rotations: z.array(z.object({ name: z.string(), entries: z.array(EntrySchema) })),
   week: z.array(z.string().nullable()).length(WEEKDAYS.length),
-  applied: z.object({ name: z.string(), day: z.string(), at: z.number(), by: z.string(), pending: z.boolean() }).nullable(),
+  applied: z
+    .object({ name: z.string(), day: z.string(), at: z.number(), by: z.string(), byName: z.string().optional(), pending: z.boolean() })
+    .nullable(),
 });
 
 // Reads what the store saved. Nothing saved yet means no rotations and nothing planned.
@@ -78,15 +87,49 @@ export const rotationName = (typed: string): { name: string } | { problem: strin
 
 const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
+export const isDefault = (name: string): boolean => same(name.trim(), DEFAULT_ROTATION);
+
 // A saved rotation by name, ignoring case.
 export const findRotation = (book: RotationBook, name: string): SavedRotation | null =>
   book.rotations.find((r) => same(r.name, name.trim().replace(/\s+/g, ' '))) ?? null;
 
-// The rotation planned for this day, if it is saved and has maps.
+// The rotation planned for this day: its own if it is saved and has maps, or else Default.
 export const plannedRotation = (book: RotationBook, today: RotationDay): SavedRotation | null => {
-  const name = book.week[today.weekday];
-  const rotation = name ? findRotation(book, name) : null;
-  return rotation !== null && rotation.entries.length > 0 ? rotation : null;
+  const own = book.week[today.weekday];
+  return (
+    [own, DEFAULT_ROTATION]
+      .flatMap((name) => (name ? [findRotation(book, name)] : []))
+      .find((rotation): rotation is SavedRotation => rotation !== null && rotation.entries.length > 0) ?? null
+  );
+};
+
+// The maps of the rotation the server reports, without which is playing now.
+export const rotationEntries = (rotation: Rotation): RotationEntry[] =>
+  rotation.entries.map(({ map, experiences, lighting, zoneAlternator }) => ({
+    map,
+    ...(experiences && experiences.length > 0 ? { experiences } : {}),
+    ...(lighting ? { lighting } : {}),
+    ...(zoneAlternator ? { zoneAlternator } : {}),
+  }));
+
+// Makes Default the server's rotation (`entries`), first in the list, the first time. A rotation staff already called
+// "Default" (any capitals, from before Default was kept for this) stays where it is, named Default, and keeps its maps if
+// it has any; one with none takes the server's. With no maps from the server either, there is no Default yet.
+export const seedDefault = (book: RotationBook, entries: RotationEntry[]): RotationBook => {
+  const existing = findRotation(book, DEFAULT_ROTATION);
+  if (existing !== null && existing.name === DEFAULT_ROTATION && existing.entries.length > 0) return book;
+  const filled = existing !== null && existing.entries.length > 0 ? existing.entries : entries;
+  if (filled.length === 0) {
+    return existing === null || existing.name === DEFAULT_ROTATION ? book : { ...book, rotations: book.rotations.map((r) => (r === existing ? { ...r, name: DEFAULT_ROTATION } : r)) };
+  }
+  if (existing === null) return { ...book, rotations: [{ name: DEFAULT_ROTATION, entries: filled }, ...book.rotations] };
+  return { ...book, rotations: book.rotations.map((r) => (r === existing ? { name: DEFAULT_ROTATION, entries: filled } : r)) };
+};
+
+// Whether Default is there with maps, so the server's rotation is not needed to make it.
+export const hasDefault = (book: RotationBook): boolean => {
+  const existing = findRotation(book, DEFAULT_ROTATION);
+  return existing !== null && existing.name === DEFAULT_ROTATION && existing.entries.length > 0;
 };
 
 // The rotation on the server for this day, as the bot put it there (or is putting it there).
@@ -102,11 +145,13 @@ export const planToday = (book: RotationBook, today: RotationDay, now: number): 
   return { ...book, applied: { name: planned.name, day: today.day, at: now, by: 'schedule', pending: true } };
 };
 
-// What staff can change. Positions count from 1. `days` are weekdays, 0 for Monday.
+// What staff can change. Positions count from 1. `days` are weekdays, 0 for Monday; a null name (or Default) gives them
+// back to Default. `save` with `from` renames that rotation as it saves it.
 export type RotationEdit =
   | { kind: 'add'; name: string; entry: RotationEntry; position?: number }
   | { kind: 'remove'; name: string; position: number }
-  | { kind: 'save'; name: string; entries: RotationEntry[] }
+  | { kind: 'save'; name: string; entries: RotationEntry[]; from?: string }
+  | { kind: 'rename'; name: string; to: string }
   | { kind: 'delete'; name: string }
   | { kind: 'use'; name: string }
   | { kind: 'schedule'; days: number[]; name: string | null };
@@ -129,14 +174,32 @@ const withRotation = (book: RotationBook, rotation: SavedRotation): RotationBook
     : [...book.rotations, rotation],
 });
 
-// Changes the book as staff asked, `by` a Discord user ID. Whatever should now be on the server is left `pending` in
-// `applied`, for the caller to put there: the rotation staff picked for today, or today's rotation after its maps changed.
+// Only ids go into ServerSettings.ini.
+const ID = /^[A-Za-z0-9_.-]+$/;
+
+const isIds = (entry: RotationEntry): boolean =>
+  /^[A-Za-z0-9_]+$/.test(entry.map) &&
+  [...(entry.experiences ?? []), entry.lighting ?? 'x', entry.zoneAlternator ?? 'x'].every((id) => ID.test(id));
+
+// Changes the book as staff asked, `by` a Discord user ID (with `byName`, the name they go by). Whatever should now be on
+// the server is left `pending` in `applied`, for the caller to put there: the rotation staff picked for today, or today's
+// rotation after its maps changed.
 export const editRotations = (
   book: RotationBook,
   edit: RotationEdit,
-  { today, now, by }: { today: RotationDay; now: number; by: string },
+  context: { today: RotationDay; now: number; by: string; byName?: string },
 ): EditedBook | { problem: string } => {
-  const choose = (next: RotationBook, name: string): RotationBook => ({ ...next, applied: { name, day: today.day, at: now, by, pending: true } });
+  const { today, now, by, byName } = context;
+  const choose = (next: RotationBook, name: string): RotationBook => ({
+    ...next,
+    applied: { name, day: today.day, at: now, by, ...(byName === undefined ? {} : { byName }), pending: true },
+  });
+  // Today's plan goes on now, when a change makes it something else.
+  const replan = (next: RotationBook): RotationBook => {
+    const planned = plannedRotation(next, today);
+    const current = rotationToday(next, today);
+    return planned !== null && (current === null || !same(current.name, planned.name)) ? choose(next, planned.name) : next;
+  };
   // Today's rotation goes on the server again when its maps change, unless it has none left.
   const changed = (next: RotationBook, rotation: SavedRotation): EditedBook => {
     const current = rotationToday(next, today);
@@ -150,25 +213,38 @@ export const editRotations = (
     }
     const rotation = edit.name === null ? null : findRotation(book, edit.name);
     if (edit.name !== null && rotation === null) return notSaved(edit.name);
-    if (rotation !== null && rotation.entries.length === 0) {
-      return { problem: `**${rotation.name}** has no maps yet. Add some with /rotations add first.` };
-    }
-    const week = book.week.map((name, day) => (edit.days.includes(day) ? (rotation?.name ?? null) : name));
-    const next = { ...book, week };
-    // Setting today's rotation puts it on now; clearing today leaves the server as it is.
-    return { book: rotation !== null && edit.days.includes(today.weekday) ? choose(next, rotation.name) : next, rotation };
+    if (rotation !== null && rotation.entries.length === 0) return { problem: `**${rotation.name}** has no maps yet. Add some first.` };
+    // Default is what a day has without a rotation of its own.
+    const own = rotation !== null && !isDefault(rotation.name) ? rotation.name : null;
+    const next = { ...book, week: book.week.map((name, day) => (edit.days.includes(day) ? own : name)) };
+    // Setting today puts it on now: what staff chose, or Default.
+    if (!edit.days.includes(today.weekday)) return { book: next, rotation };
+    const planned = plannedRotation(next, today);
+    return { book: planned === null ? next : choose(next, planned.name), rotation };
+  }
+
+  const tidy = (name: string): string => name.trim().replace(/\s+/g, ' ');
+  // A new name, even one that only changes its capitals.
+  if (edit.kind === 'save' && edit.from !== undefined && tidy(edit.from) !== tidy(edit.name)) {
+    const renamed = editRotations(book, { kind: 'rename', name: edit.from, to: edit.name }, context);
+    if ('problem' in renamed) return renamed;
+    return editRotations(renamed.book, { kind: 'save', name: edit.name, entries: edit.entries }, context);
   }
 
   if (edit.kind === 'add' || edit.kind === 'save') {
     const named = rotationName(edit.name);
     if ('problem' in named) return named;
     const existing = findRotation(book, named.name);
-    if (existing === null && book.rotations.length >= MAX_ROTATIONS) {
-      return { problem: `There are already ${MAX_ROTATIONS} rotations. Delete one with /rotations delete first.` };
+    const own = book.rotations.filter((r) => !isDefault(r.name)).length;
+    if (existing === null && !isDefault(named.name) && own >= MAX_ROTATIONS) {
+      return { problem: `There are already ${MAX_ROTATIONS} rotations. Delete one first.` };
     }
-    const name = existing?.name ?? named.name;
+    const name = existing?.name ?? (isDefault(named.name) ? DEFAULT_ROTATION : named.name);
+    if (![...(edit.kind === 'save' ? edit.entries : [edit.entry])].every(isIds)) {
+      return { problem: "A map's settings aren't ones the server knows. Pick them from the lists." };
+    }
     if (edit.kind === 'save') {
-      if (edit.entries.length === 0) return { problem: "The server's rotation has no maps, so there's nothing to save." };
+      if (edit.entries.length === 0) return { problem: 'A rotation needs at least one map.' };
       if (edit.entries.length > MAX_ROTATION_MAPS) return { problem: `A rotation can have at most ${MAX_ROTATION_MAPS} maps.` };
       const rotation = { name, entries: edit.entries };
       return changed(withRotation(book, rotation), rotation);
@@ -186,19 +262,46 @@ export const editRotations = (
   if (edit.kind === 'remove') {
     const at = Math.trunc(edit.position) - 1;
     if (!(at >= 0 && at < existing.entries.length)) return { problem: `Pick a map from **${existing.name}**'s list.` };
+    if (isDefault(existing.name) && existing.entries.length === 1) {
+      return { problem: `**${DEFAULT_ROTATION}** needs at least one map, as it plays on every day without a rotation of its own.` };
+    }
     const rotation = { name: existing.name, entries: existing.entries.filter((_, i) => i !== at) };
     return changed(withRotation(book, rotation), rotation);
   }
 
+  if (edit.kind === 'rename') {
+    if (isDefault(existing.name)) return { problem: `**${DEFAULT_ROTATION}** keeps its name, as it plays on every day without a rotation of its own.` };
+    const named = rotationName(edit.to);
+    if ('problem' in named) return named;
+    if (isDefault(named.name)) return { problem: `**${DEFAULT_ROTATION}** is taken: it is the rotation for days without one of their own.` };
+    const taken = findRotation(book, named.name);
+    if (taken !== null && taken !== existing) return { problem: `There's already a rotation called **${taken.name}**.` };
+    const rotation = { ...existing, name: named.name };
+    const renamed = (name: string | null): string | null => (name !== null && same(name, existing.name) ? named.name : name);
+    return {
+      book: {
+        rotations: book.rotations.map((r) => (r === existing ? rotation : r)),
+        week: book.week.map(renamed),
+        applied: book.applied === null ? null : { ...book.applied, name: renamed(book.applied.name) ?? book.applied.name },
+      },
+      rotation,
+    };
+  }
+
   if (edit.kind === 'delete') {
-    // The server keeps its maps, and so do the days it was planned for.
+    if (isDefault(existing.name)) {
+      return { problem: `**${DEFAULT_ROTATION}** can't be deleted: it plays on every day without a rotation of its own. Change its maps instead.` };
+    }
+    // The days it was planned for go back to Default, and so does today, if it was on.
     const rotations = book.rotations.filter((r) => r !== existing);
     const week = book.week.map((name) => (name !== null && same(name, existing.name) ? null : name));
-    return { book: { ...book, rotations, week }, rotation: null };
+    const next = { ...book, rotations, week };
+    const current = rotationToday(book, today);
+    return { book: current !== null && same(current.name, existing.name) ? replan(next) : next, rotation: null };
   }
 
   // use
-  if (existing.entries.length === 0) return { problem: `**${existing.name}** has no maps yet. Add some with /rotations add first.` };
+  if (existing.entries.length === 0) return { problem: `**${existing.name}** has no maps yet. Add some first.` };
   return { book: choose(book, existing.name), rotation: existing };
 };
 
@@ -210,7 +313,6 @@ const SECTION = '[/Script/WDGame.WDServerMapRotationSettings]';
 // one out, and `!` empties the list so far.
 const ENTRY_LINE = /^\s*([+.!-]?)RotationEntries\s*=\s*(.*?)\s*$/i;
 const FIELD = /(\w+)\s*=\s*(?:"([^"]*)"|([^,)]*))/g;
-const ID = /^[A-Za-z0-9_.-]+$/;
 
 export const parseEntry = (value: string): RotationEntry | null => {
   const inner = value.trim().replace(/^\(/, '').replace(/\)$/, '');
