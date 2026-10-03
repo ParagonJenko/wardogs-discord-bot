@@ -66,7 +66,7 @@ export const mapEmoji = (idOrName: string): string => {
 export const mapTitle = (idOrName: string): string => `${mapEmoji(idOrName)}${mapName(idOrName)}`;
 
 // Player names are free text; escape Discord markdown so a name cannot restyle or break the message.
-const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>#[\]()-]/g, '\\$&');
+export const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>#[\]()-]/g, '\\$&');
 
 // Discord caps an embed field at 1024 characters; five escaped 40-character names stay well inside it.
 const MAX_PLAYER_NAME = 40;

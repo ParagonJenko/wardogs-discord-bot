@@ -69,6 +69,30 @@ const parseResponse = (raw: Uint8Array): HttpResponse => {
   return { status: Number(status), body: decoder.decode(body) };
 };
 
+// The largest answer the bot reads. ServerSettings.ini is the biggest the game sends; anything far larger is not a
+// game server, and reading it all could run the Worker out of memory.
+export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+const readAll = async (readable: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> => {
+  const reader = readable.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) throw new Error(`RCON answer was larger than ${maxBytes} bytes`);
+      parts.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const out = new Uint8Array(total);
+  parts.reduce((position, part) => (out.set(part, position), position + part.length), 0);
+  return out;
+};
+
 const withTimeout = <T>(work: Promise<T>, timeoutMs: number): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`RCON request timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -76,7 +100,7 @@ const withTimeout = <T>(work: Promise<T>, timeoutMs: number): Promise<T> =>
   });
 
 export const socketHttp =
-  (connect: Connect, timeoutMs = 8_000): HttpClient =>
+  (connect: Connect, timeoutMs = 8_000, maxBytes = MAX_RESPONSE_BYTES): HttpClient =>
   async (url, headers, body, method) => {
     const secure = url.protocol === 'https:';
     const socket = connect(
@@ -101,7 +125,7 @@ export const socketHttp =
       if (payload) await writer.write(payload);
       writer.releaseLock();
       // "Connection: close" makes the server close the socket after the response, so read to the end.
-      return parseResponse(new Uint8Array(await new Response(socket.readable).arrayBuffer()));
+      return parseResponse(await readAll(socket.readable, maxBytes));
     };
 
     try {

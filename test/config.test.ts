@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig, loadSettings, parseSecrets, SECRET_NAMES, SETTING_NAMES, settingsProblems } from '../src/config.ts';
 
 const required = {
   RCON_URL: 'http://203.0.113.10:7776',
@@ -15,6 +15,7 @@ describe('loadConfig', () => {
       webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123',
       statusWebhookUrl: undefined,
       roleId: undefined,
+      adminRoleIds: [],
       inviteCode: undefined,
       siteUrl: undefined,
       pollIntervalMs: 60_000,
@@ -155,5 +156,48 @@ describe('loadConfig', () => {
 
   it('rejects a seeding threshold at or above the live threshold', () => {
     expect(() => loadConfig({ ...required, SEEDING_THRESHOLD: '20' })).toThrow(/SEEDING_THRESHOLD/);
+  });
+
+  it('reads the staff roles, dropping blanks and spaces', () => {
+    expect(loadConfig({ ...required, DISCORD_ADMIN_ROLE_IDS: ' 555, 666 ,' }).adminRoleIds).toEqual(['555', '666']);
+    expect(() => loadConfig({ ...required, DISCORD_ADMIN_ROLE_IDS: '555,staff' })).toThrow(/DISCORD_ADMIN_ROLE_IDS/);
+  });
+
+  it('rejects an RCON password with a line break, which would end the request header', () => {
+    expect(() => loadConfig({ ...required, RCON_PASSWORD: 'secret\r\nX-Other: 1' })).toThrow(/RCON_PASSWORD/);
+  });
+});
+
+describe('settings and secrets', () => {
+  it('keeps every secret out of the settings a community can see and change', () => {
+    expect(SECRET_NAMES).toEqual(['RCON_URL', 'RCON_PASSWORD', 'DISCORD_WEBHOOK_URL', 'DISCORD_STATUS_WEBHOOK_URL', 'DISCORD_ROUNDUP_WEBHOOK_URL']);
+    expect(SETTING_NAMES.filter((name) => (SECRET_NAMES as string[]).includes(name))).toEqual([]);
+    // Node only: on Cloudflare the check runs every minute.
+    expect(SETTING_NAMES).not.toContain('POLL_INTERVAL_SECONDS');
+    // At most 25, the most Discord lists as choices.
+    expect(SETTING_NAMES.length).toBeLessThanOrEqual(25);
+  });
+
+  it('loads the settings without any secrets, for the public pages', () => {
+    const settings = loadSettings({ LIVE_THRESHOLD: '40', VIP_SEED_DAYS: '3' });
+
+    expect(settings.rules.live).toBe(40);
+    expect(settings.vip).toEqual({ seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 });
+    expect(settings).not.toHaveProperty('rconPassword');
+  });
+
+  it('says what is wrong with settings, threshold rules included', () => {
+    expect(settingsProblems({ LIVE_THRESHOLD: '40' })).toEqual([]);
+    expect(settingsProblems({ SEEDING_THRESHOLD: '20' })).toEqual(['SEEDING_THRESHOLD: must be below LIVE_THRESHOLD']);
+    expect(settingsProblems({ ROUNDUP_HOUR: '24' })[0]).toMatch(/^ROUNDUP_HOUR: /);
+  });
+
+  it('checks secrets on their own, tidying the RCON address', () => {
+    expect(parseSecrets({ ...required, RCON_URL: '203.0.113.10:7776' })).toEqual({
+      values: { ...required, RCON_URL: 'http://203.0.113.10:7776' },
+    });
+    expect(parseSecrets({ ...required, DISCORD_WEBHOOK_URL: 'https://example.com/hook' })).toEqual({
+      problems: ['DISCORD_WEBHOOK_URL: must be a Discord webhook URL'],
+    });
   });
 });

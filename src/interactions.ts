@@ -2,9 +2,12 @@ import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
 import type { RoundupChoice } from './roundup.ts';
+import { SETTING_CHOICES, SETUP_MODAL_ID, setupModal, setupValues } from './setup.ts';
 import { STAFF_COMMANDS, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
 
-// Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
+// Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL"). One Discord
+// application serves every community: each command goes to the community whose Discord server it came from, and a
+// server no community has gets nothing.
 
 const COMMAND_NAMES = [
   'serverstatus',
@@ -17,6 +20,8 @@ const COMMAND_NAMES = [
   'seednow',
   'removematch',
   ...STAFF_COMMANDS,
+  'setup',
+  'settings',
 ] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -34,6 +39,10 @@ const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
 const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'];
 
+// Connecting the bot and changing its settings: Administrators only, not staff roles, as these hold the RCON password
+// and say who is staff.
+const OWNER_COMMANDS: readonly CommandName[] = ['setup', 'settings'];
+
 // What /roundup can show, as Discord lists it.
 const ROUNDUP_PERIODS: { name: string; value: RoundupChoice }[] = [
   { name: 'Last week', value: 'week' },
@@ -47,6 +56,8 @@ export const SEEDERS_MAX_DAYS = 90;
 
 // Hidden from everyone but Administrators until a server gives other roles access, and only usable in a server.
 const STAFF_ONLY = { type: 1, default_member_permissions: String(ADMINISTRATOR), contexts: [0] };
+// Every command is for a community's Discord server: installed to a server, and used in one.
+const IN_SERVERS = { integration_types: [0], contexts: [0] };
 
 const STRING = 3;
 const INTEGER = 4;
@@ -67,7 +78,7 @@ const matchSetup = [
   { type: STRING, name: 'zones', description: 'Control zone layout (default: as in the rotation)', required: false, autocomplete: true },
 ];
 
-export const COMMANDS = [
+const COMMAND_LIST = [
   { name: 'serverstatus', description: 'Show the WARDOGS server status', type: 1 },
   { name: 'players', description: 'Who is on the server, with kills and deaths', type: 1 },
   { name: 'lastmatch', description: 'Summary of the last finished match', type: 1 },
@@ -221,15 +232,47 @@ export const COMMANDS = [
       },
     ],
   },
+  {
+    name: 'setup',
+    description: 'Connect the bot to your game server and Discord channels (Administrators only)',
+    ...STAFF_ONLY,
+  },
+  {
+    name: 'settings',
+    description: 'See or change how the bot behaves in this server (Administrators only)',
+    ...STAFF_ONLY,
+    options: [
+      { type: SUBCOMMAND, name: 'show', description: 'Every setting, and which secrets are set' },
+      {
+        type: SUBCOMMAND,
+        name: 'set',
+        description: 'Change a setting',
+        options: [
+          { type: STRING, name: 'name', description: 'Which setting', required: true, choices: SETTING_CHOICES },
+          { type: STRING, name: 'value', description: 'Its new value', required: true, max_length: 200 },
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'reset',
+        description: 'Put a setting back to its default',
+        options: [{ type: STRING, name: 'name', description: 'Which setting', required: true, choices: SETTING_CHOICES }],
+      },
+    ],
+  },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
+
+export const COMMANDS = COMMAND_LIST.map((command) => ({ ...command, ...IN_SERVERS }));
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
 const AUTOCOMPLETE = 4;
+const MODAL_SUBMIT = 5;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
 const AUTOCOMPLETE_RESULT = 8;
+const MODAL = 9;
 const EPHEMERAL = 64;
 
 const OptionSchema = z.object({
@@ -245,9 +288,12 @@ const InteractionSchema = z.object({
   token: z.string().optional(),
   data: z
     .object({
-      name: z.string(),
+      name: z.string().optional(),
       // A subcommand, such as /vip add, arrives as an option holding its own options.
       options: z.array(OptionSchema.extend({ options: z.array(OptionSchema).optional() })).optional(),
+      // A submitted form: which one, and what was typed in it.
+      custom_id: z.string().optional(),
+      components: z.array(z.unknown()).optional(),
     })
     .optional(),
   member: z
@@ -268,20 +314,30 @@ export type Choice = { name: string; value: string };
 
 type Reply = CommandReply & { allowed_mentions: { parse: never[] } };
 
-type InteractionDeps = {
-  publicKey: string;
+// One community's commands, for the Discord server it belongs to.
+export type TenantHandlers = {
   runCommand: (request: CommandRequest) => Promise<CommandReply>;
   // What to offer for an option with autocomplete; the request holds what has been typed so far.
   suggest: (request: CommandRequest) => Promise<Choice[]>;
+  // Roles whose members may use admin commands without being Administrators, such as Staff. Only asked for when
+  // someone who is not an Administrator uses one.
+  adminRoleIds: () => Promise<string[]>;
+  // Saves what was typed in the /setup form, after testing it, and says how that went.
+  submitSetup: (values: Record<string, string>, userId: string | null) => Promise<CommandReply>;
+};
+
+type InteractionDeps = {
+  publicKey: string;
+  // The community a Discord server belongs to, or null. Commands are registered globally, so this is what keeps an
+  // admin in one server from ever reaching another community's game server or records.
+  tenantFor: (guildId: string) => Promise<TenantHandlers | null>;
   editReply: (applicationId: string, token: string, reply: Reply) => Promise<void>;
   log: { error: (message: string) => void };
   now: () => number;
-  // The only Discord server allowed to use admin commands. Commands are registered globally, so without this an
-  // admin in any server that adds the app could control this game server.
-  adminGuildId: string | undefined;
-  // Roles in that server whose members may use admin commands without being Administrators, such as Staff.
-  adminRoleIds: string[];
 };
+
+const NOT_CONNECTED = "This Discord server isn't connected to the bot. Ask whoever runs the bot to add it.";
+const NOT_IN_SERVER = "Use the bot's commands in your community's Discord server.";
 
 export type InteractionResult = { status: number; body: unknown; followUp?: () => Promise<void> };
 
@@ -314,8 +370,19 @@ const isAdministrator = (permissions: string | undefined): boolean => {
 
 type Member = { permissions?: string | undefined; roles?: string[] | undefined } | undefined;
 
-const isAdmin = (member: Member, adminRoleIds: string[]): boolean =>
-  isAdministrator(member?.permissions) || (member?.roles ?? []).some((role) => adminRoleIds.includes(role));
+// Administrators, or members with one of the community's staff roles. The roles are only looked up when needed.
+const isStaff = async (member: Member, tenant: TenantHandlers, log: InteractionDeps['log']): Promise<boolean> => {
+  if (isAdministrator(member?.permissions)) return true;
+  const roles = member?.roles ?? [];
+  if (roles.length === 0) return false;
+  try {
+    const staffRoles = await tenant.adminRoleIds();
+    return roles.some((role) => staffRoles.includes(role));
+  } catch (error) {
+    log.error(`Staff roles could not be read: ${errorText(error)}`);
+    return false;
+  }
+};
 
 const privateMessage = (content: string) => ({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
 
@@ -339,6 +406,17 @@ export const handleInteraction = async (
   if (interaction.type === PING) return { status: 200, body: { type: PONG } };
 
   const name = interaction.data?.name;
+  const guildId = interaction.guild_id;
+  let tenant: TenantHandlers | null = null;
+  try {
+    tenant = guildId === undefined ? null : await deps.tenantFor(guildId);
+  } catch (error) {
+    deps.log.error(`Looking up the community for Discord server ${guildId ?? ''} failed: ${errorText(error)}`);
+    const unavailable = "The bot can't reach its list of communities right now. Try again in a minute.";
+    return interaction.type === AUTOCOMPLETE
+      ? { status: 200, body: { type: AUTOCOMPLETE_RESULT, data: { choices: [] } } }
+      : { status: 200, body: privateMessage(unavailable) };
+  }
   const toRequest = (command: CommandName): CommandRequest => {
     const top = interaction.data?.options ?? [];
     const subcommand = top.find((o) => o.type === SUBCOMMAND);
@@ -358,31 +436,59 @@ export const handleInteraction = async (
   // Suggestions while someone types. Nobody who could not run the command gets any.
   if (interaction.type === AUTOCOMPLETE) {
     const allowed =
+      tenant !== null &&
       isCommandName(name) &&
-      (!ADMIN_COMMANDS.includes(name) ||
-        (deps.adminGuildId !== undefined &&
-          interaction.guild_id === deps.adminGuildId &&
-          isAdmin(interaction.member, deps.adminRoleIds)));
-    const choices = allowed
-      ? await deps.suggest(toRequest(name)).catch((error: unknown) => {
-          deps.log.error(`/${name} suggestions failed: ${errorText(error)}`);
-          return [];
-        })
-      : [];
+      !OWNER_COMMANDS.includes(name) &&
+      (!ADMIN_COMMANDS.includes(name) || (await isStaff(interaction.member, tenant, deps.log)));
+    const choices =
+      allowed && tenant !== null
+        ? await tenant.suggest(toRequest(name)).catch((error: unknown) => {
+            deps.log.error(`/${name} suggestions failed: ${errorText(error)}`);
+            return [];
+          })
+        : [];
     return { status: 200, body: { type: AUTOCOMPLETE_RESULT, data: { choices } } };
+  }
+
+  // The /setup form, sent back. Its fields are secrets, so the reply only says how it went, and only to the sender.
+  if (interaction.type === MODAL_SUBMIT) {
+    if (interaction.data?.custom_id !== SETUP_MODAL_ID || !interaction.token) {
+      return { status: 200, body: privateMessage('Unknown form.') };
+    }
+    if (tenant === null) return { status: 200, body: privateMessage(guildId === undefined ? NOT_IN_SERVER : NOT_CONNECTED) };
+    if (!isAdministrator(interaction.member?.permissions)) {
+      return { status: 200, body: privateMessage('Only Administrators can connect the bot.') };
+    }
+    const token = interaction.token;
+    const values = setupValues(interaction.data.components);
+    const userId = interaction.member?.user?.id ?? null;
+    const followUp = async (): Promise<void> => {
+      const reply: Reply = await tenant.submitSetup(values, userId).then(
+        (result) => ({ ...result, allowed_mentions: { parse: [] } }),
+        (error: unknown) => {
+          deps.log.error(`/setup failed: ${errorText(error)}`);
+          return { content: `Couldn't save that (${errorText(error)}). Try again in a minute.`, allowed_mentions: { parse: [] } };
+        },
+      );
+      await deps.editReply(interaction.application_id, token, reply);
+    };
+    return { status: 200, body: { type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } }, followUp };
   }
 
   if (interaction.type !== APPLICATION_COMMAND || !isCommandName(name) || !interaction.token) {
     return { status: 200, body: privateMessage('Unknown command.') };
   }
+  if (tenant === null) return { status: 200, body: privateMessage(guildId === undefined ? NOT_IN_SERVER : NOT_CONNECTED) };
 
-  const admin = ADMIN_COMMANDS.includes(name);
-  if (admin && (!deps.adminGuildId || interaction.guild_id !== deps.adminGuildId)) {
-    return { status: 200, body: privateMessage('This command can only be used in the Discord server that runs this bot.') };
+  const owner = OWNER_COMMANDS.includes(name);
+  if (owner && !isAdministrator(interaction.member?.permissions)) {
+    return { status: 200, body: privateMessage('Only Administrators can use this.') };
   }
+  if (name === 'setup') return { status: 200, body: { type: MODAL, data: setupModal() } };
   // Discord shows admin commands only to Administrators and roles given access in Server Settings, and server owners
   // can change that, so check again.
-  if (admin && !isAdmin(interaction.member, deps.adminRoleIds)) {
+  const admin = owner || ADMIN_COMMANDS.includes(name);
+  if (admin && !owner && !(await isStaff(interaction.member, tenant, deps.log))) {
     return { status: 200, body: privateMessage('Only Administrators and staff can use this.') };
   }
 
@@ -390,7 +496,7 @@ export const handleInteraction = async (
   const request = toRequest(name);
   // Discord allows 3 seconds for the first response and RCON can be slower, so defer and edit later.
   const followUp = async (): Promise<void> => {
-    const reply: Reply = await deps.runCommand(request).then(
+    const reply: Reply = await tenant.runCommand(request).then(
       (result) => ({ ...result, allowed_mentions: { parse: [] } }),
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
