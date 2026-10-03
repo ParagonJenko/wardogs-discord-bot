@@ -633,6 +633,14 @@ describe('staff commands from the staff page', () => {
     expect(checkOptions('setnextmap', { map: 'Europe', hardcore: 'yes' })).toEqual({ problem: 'hardcore must be true or false.' });
   });
 
+  it('refuses a text option sent as a number, as a Steam ID would be rounded to someone else', () => {
+    expect(checkOptions('ban', { player: 76561198000000001, duration: '7d', reason: 'TK' })).toEqual({ problem: 'player must be sent as text.' });
+    expect(checkOptions('vip', { subcommand: 'remove', steam_id: 76561198000000001 })).toEqual({ problem: 'steam_id must be sent as text.' });
+    expect(checkOptions('seeders', { days: true })).toEqual({ problem: 'days must be a whole number.' });
+    expect(checkOptions('setnextmap', { map: 'Europe', hardcore: 1 })).toEqual({ problem: 'hardcore must be true or false.' });
+    expect(checkOptions('vip', { subcommand: 1, steam_id: '76561198000000001' })).toEqual({ problem: 'Pick add or remove.' });
+  });
+
   it('takes a subcommand for /vip, and checks its options', () => {
     const steam_id = '76561198000000001';
 

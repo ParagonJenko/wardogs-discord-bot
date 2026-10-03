@@ -362,7 +362,8 @@ const optionsOf = (name: CommandName): OptionDefinition[] =>
 // A staff page request checked the way Discord checks a slash command before sending it: only the command's options,
 // the required ones given, text within its length, whole numbers within their range, true or false, and choices from
 // their list. A command with subcommands, such as /vip, takes `subcommand` too. Values come back as Discord would send
-// them, as text.
+// them, as text. Text options must come as text: a Steam ID sent as a JSON number is rounded on the way in
+// (76561198000000001 becomes 76561198000000000), which would still look like a Steam ID, for someone else.
 export const checkOptions = (
   name: CommandName,
   given: Record<string, string | number | boolean>,
@@ -371,7 +372,7 @@ export const checkOptions = (
   const options: Record<string, string> = {};
   const subcommands = definitions.filter((o) => o.type === SUBCOMMAND);
   if (subcommands.length > 0) {
-    const chosen = subcommands.find((o) => o.name === given['subcommand']);
+    const chosen = typeof given['subcommand'] === 'string' ? subcommands.find((o) => o.name === given['subcommand']) : undefined;
     if (chosen === undefined) return { problem: `Pick ${subcommands.map((o) => o.name).join(' or ')}.` };
     options['subcommand'] = chosen.name;
     definitions = chosen.options ?? [];
@@ -383,6 +384,9 @@ export const checkOptions = (
   }
   for (const o of definitions) {
     const raw = given[o.name];
+    if (raw !== undefined && o.type === STRING && typeof raw !== 'string') return { problem: `${o.name} must be sent as text.` };
+    if (raw !== undefined && o.type === INTEGER && typeof raw === 'boolean') return { problem: `${o.name} must be a whole number.` };
+    if (raw !== undefined && o.type === BOOLEAN && typeof raw === 'number') return { problem: `${o.name} must be true or false.` };
     const value = raw === undefined ? '' : String(raw);
     if (value.trim() === '') {
       if (o.required) return { problem: `/${name} needs ${o.name}.` };
