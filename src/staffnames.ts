@@ -36,9 +36,30 @@ export const noteStaffName = (names: StaffNames, id: string, name: string, usern
   return { ...names, [id]: { name, username, at } };
 };
 
-// The IDs to ask Discord about: never seen, or seen too long ago.
-export const lookupsDue = (names: StaffNames, ids: Iterable<string>, now: number): string[] =>
-  [...new Set(ids)].filter((id) => DISCORD_ID.test(id) && (names[id] === undefined || now - names[id].at >= STAFF_NAME_MS)).slice(0, LOOKUPS_PER_LOAD);
+// When asking Discord about each user ID last failed ('staffLookupsFailed'), kept in storage so a restart does not ask
+// again sooner than LOOKUP_RETRY_MS.
+export const LOOKUP_FAILURES_KEY = 'staffLookupsFailed';
+export const LOOKUP_RETRY_MS = 60 * 60_000;
+export type LookupFailures = Record<string, number>;
+
+export const parseLookupFailures = (raw: unknown): LookupFailures => {
+  const parsed = z.record(z.string(), z.number()).safeParse(raw);
+  return parsed.success ? parsed.data : {};
+};
+
+// The failures still waiting out LOOKUP_RETRY_MS, with `ids` failing now.
+export const withFailures = (failed: LookupFailures, ids: string[], now: number): LookupFailures => ({
+  ...Object.fromEntries(Object.entries(failed).filter(([, at]) => now - at < LOOKUP_RETRY_MS)),
+  ...Object.fromEntries(ids.map((id) => [id, now])),
+});
+
+// The IDs to ask Discord about: never seen, or seen too long ago, and not failed lately. The limit is taken after the
+// failures are left out, so a few that keep failing never hold up the rest.
+export const lookupsDue = (names: StaffNames, ids: Iterable<string>, now: number, failed: LookupFailures = {}): string[] =>
+  [...new Set(ids)]
+    .filter((id) => DISCORD_ID.test(id) && (names[id] === undefined || now - names[id].at >= STAFF_NAME_MS))
+    .filter((id) => failed[id] === undefined || now - failed[id] >= LOOKUP_RETRY_MS)
+    .slice(0, LOOKUPS_PER_LOAD);
 
 const UserSchema = z.object({ id: z.string(), username: z.string(), global_name: z.string().nullish() });
 

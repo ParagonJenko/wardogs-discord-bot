@@ -116,7 +116,17 @@ import {
   type RoundupChoice,
 } from './roundup.ts';
 import { socketHttp } from './socket-http.ts';
-import { fetchDiscordUser, lookupsDue, noteStaffName, parseStaffNames, STAFF_NAMES_KEY, type StaffNames } from './staffnames.ts';
+import {
+  fetchDiscordUser,
+  LOOKUP_FAILURES_KEY,
+  lookupsDue,
+  noteStaffName,
+  parseLookupFailures,
+  parseStaffNames,
+  STAFF_NAMES_KEY,
+  withFailures,
+  type StaffNames,
+} from './staffnames.ts';
 import {
   banKickReason,
   PROFILE_DAYS,
@@ -226,7 +236,8 @@ const oneAtATime = () => {
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last check, to
-// notice bans made or lifted outside the bot) and 'staffNames' (staff's names on Discord, by user ID, for the staff page).
+// notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page) and
+// 'staffLookupsFailed' (when asking Discord about each of those last failed).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -256,8 +267,6 @@ export class Watcher extends DurableObject<Env> {
   private killsSeen = new Set<string>();
   // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
   private weaponDayCache = new Map<string, WeaponDay>();
-  // Discord user IDs whose lookup failed lately, and when, so the staff page does not ask Discord again on every load.
-  private staffLookupFailed = new Map<string, number>();
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -1084,28 +1093,32 @@ export class Watcher extends DurableObject<Env> {
   private async lookUpStaff(ids: string[], known: StaffNames, now: number): Promise<StaffNames | null> {
     const token = stringVars(this.env)['DISCORD_BOT_TOKEN']?.trim();
     if (!token) return null;
-    const due = lookupsDue(known, ids, now).filter((id) => now - (this.staffLookupFailed.get(id) ?? 0) >= 60 * 60_000);
+    const failures = parseLookupFailures(await this.ctx.storage.get(LOOKUP_FAILURES_KEY));
+    const due = lookupsDue(known, ids, now, failures);
     if (due.length === 0) return null;
     const learned: [string, { name: string; username: string }][] = [];
+    const failed: string[] = [];
     for (const id of due) {
       try {
         const user = await fetchDiscordUser(token, id);
-        if (user === null) this.staffLookupFailed.set(id, now);
+        if (user === null) failed.push(id);
         else learned.push([id, user]);
       } catch (error) {
         // A refused token or a rate limit: the rest wait for a later load.
-        this.staffLookupFailed.set(id, now);
+        failed.push(id);
         console.error(`Staff names: ${errorText(error)}`);
         break;
       }
     }
-    if (learned.length === 0) return null;
     // Read again, so a name noted while Discord was being asked is not lost.
     const latest = parseStaffNames(await this.ctx.storage.get(STAFF_NAMES_KEY));
     const merged = { ...latest, ...Object.fromEntries(learned.map(([id, user]) => [id, { ...user, at: now }])) };
-    await this.ctx.storage.put(STAFF_NAMES_KEY, merged);
-    console.info(`Staff names: looked up ${learned.length} on Discord`);
-    return merged;
+    await this.ctx.storage.put({
+      ...(learned.length === 0 ? {} : { [STAFF_NAMES_KEY]: merged }),
+      [LOOKUP_FAILURES_KEY]: withFailures(failures, failed, now),
+    });
+    if (learned.length > 0) console.info(`Staff names: looked up ${learned.length} on Discord`);
+    return learned.length === 0 ? null : merged;
   }
 
   // A staff member's name, as seen when they sign in to the staff page or use a staff command. Only written when it

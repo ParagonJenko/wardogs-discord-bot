@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchDiscordUser, LOOKUPS_PER_LOAD, lookupsDue, noteStaffName, parseStaffNames, STAFF_NAME_MS } from '../src/staffnames.ts';
+import {
+  fetchDiscordUser,
+  LOOKUP_RETRY_MS,
+  LOOKUPS_PER_LOAD,
+  lookupsDue,
+  noteStaffName,
+  parseLookupFailures,
+  parseStaffNames,
+  STAFF_NAME_MS,
+  withFailures,
+} from '../src/staffnames.ts';
 
 const NOW = Date.UTC(2026, 9, 3, 12);
 const SARGE = '340568148044414976';
@@ -51,5 +61,23 @@ describe('fetchDiscordUser', () => {
     await expect(fetchDiscordUser('t', SARGE, async () => new Response('Unknown User', { status: 404 }))).resolves.toBeNull();
     await expect(fetchDiscordUser('t', SARGE, async () => new Response('401: Unauthorized', { status: 401 }))).rejects.toThrow('401');
     await expect(fetchDiscordUser('t', 'server', vi.fn())).resolves.toBeNull();
+  });
+});
+
+describe('lookup failures', () => {
+  it('leaves out IDs that failed in the last hour before taking the limit, so they never hold up the rest', () => {
+    const ids = Array.from({ length: LOOKUPS_PER_LOAD + 3 }, (_, i) => `2000000000000000${String(i).padStart(2, '0')}`);
+    const failed = Object.fromEntries(ids.slice(0, LOOKUPS_PER_LOAD).map((id) => [id, NOW - 60_000]));
+
+    expect(lookupsDue({}, ids, NOW, failed)).toEqual(ids.slice(LOOKUPS_PER_LOAD));
+    expect(lookupsDue({}, ids, NOW + LOOKUP_RETRY_MS, failed)).toEqual(ids.slice(0, LOOKUPS_PER_LOAD));
+  });
+
+  it('keeps failures for an hour, across restarts, and adds new ones', () => {
+    const failed = { [SARGE]: NOW - LOOKUP_RETRY_MS, [KESTREL]: NOW - 60_000 };
+
+    expect(withFailures(failed, ['300000000000000001'], NOW)).toEqual({ [KESTREL]: NOW - 60_000, '300000000000000001': NOW });
+    expect(parseLookupFailures(withFailures({}, [SARGE], NOW))).toEqual({ [SARGE]: NOW });
+    expect(parseLookupFailures('nonsense')).toEqual({});
   });
 });
