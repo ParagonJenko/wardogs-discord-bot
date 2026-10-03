@@ -43,7 +43,7 @@
     // Optional: role IDs (comma-separated) that may use the admin commands as well as Administrators. Staff.
     "DISCORD_ADMIN_ROLE_IDS": "1552990722976649296",
     // For the staff page's Discord sign-in: the application's ID (Developer Portal → General Information). Not a secret.
-    "DISCORD_APPLICATION_ID": "",
+    "DISCORD_APPLICATION_ID": "1554816090452795484",
     // Posts to the moderation log when a player passes a griefing flag (3 team kills, 2 vehicle suicides): "on" or "off".
     "GRIEF_ALERTS": "on",
     // Automatic VIP: seed on this many days in a week to get a reserved slot for a week. "0" turns it off.
