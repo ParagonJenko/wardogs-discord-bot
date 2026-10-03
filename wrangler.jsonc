@@ -55,6 +55,9 @@
     "VIP_SEED_DAYS": "3",
     // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.
     "VIP_SEED_MINUTES": "10",
+    // The hour (UTC, 0 to 23) each day's map rotation starts (see /rotations). 5 is 6am in the UK in summer, 5am in winter,
+    // so a late night keeps the evening's rotation.
+    "ROTATION_HOUR": "5",
     // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
     "ROUNDUPS": "on",
     // The hour (UTC, 0 to 23) on Mondays, and on the 1st of the month, when the roundups go out. 17 is 6pm in the UK in

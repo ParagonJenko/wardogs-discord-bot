@@ -73,6 +73,8 @@ const EnvSchema = z
     ROUNDUPS: z.enum(['on', 'off']).default('on'),
     // The hour (UTC) on Mondays, and on the 1st of the month, when the roundups go out.
     ROUNDUP_HOUR: z.coerce.number().int().min(0).max(23).default(17),
+    // The hour (UTC) each day's map rotation starts, so a late night still plays the evening's rotation.
+    ROTATION_HOUR: z.coerce.number().int().min(0).max(23).default(5),
     // Posts to the moderation log when a player passes a griefing flag (team kills, vehicle suicides): "on" or "off".
     GRIEF_ALERTS: z.enum(['on', 'off']).default('on'),
     // Posts to the moderation log when a player with a high-risk Steam account is in game (needs STEAM_API_KEY): "on" or
@@ -124,6 +126,8 @@ export type Config = {
   seedingMessages: SeedingMessageRule | null;
   // When the roundups go out (an hour, UTC) and where. Null when ROUNDUPS is off.
   roundups: RoundupRule | null;
+  // The hour (UTC) each day's map rotation starts.
+  rotationHour: number;
 };
 
 export type RoundupRule = { hour: number; webhookUrl: string };
@@ -175,5 +179,6 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
         : null,
     roundups:
       e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,
+    rotationHour: e.ROTATION_HOUR,
   };
 };

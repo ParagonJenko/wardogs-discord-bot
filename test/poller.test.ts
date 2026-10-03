@@ -27,6 +27,7 @@ const config: Config = {
   matchMessages: null,
   seedingMessages: null,
   roundups: null,
+  rotationHour: 5,
 };
 
 const player = (steamId: string, kills = 0): Player => ({ steamId, name: `P${steamId}`, kills, deaths: 0 });

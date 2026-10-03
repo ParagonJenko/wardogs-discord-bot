@@ -182,6 +182,19 @@ import {
   type VipRemoveResult,
 } from './staff.ts';
 import {
+  editRotations as editRotationBook,
+  findRotation,
+  parseRotationBook,
+  planToday,
+  putRotation,
+  rotationDay,
+  rotationToday,
+  type RotationBook,
+  type RotationEdit,
+  type RotationEditResult,
+  type RotationServer,
+} from './rotations.ts';
+import {
   dayOf,
   discordDue,
   namedSteamIds,
@@ -283,8 +296,9 @@ const oneAtATime = () => {
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last check, to
 // notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page),
-// 'staffLookupsFailed' (when asking Discord about each of those last failed) and 'steam:<Steam ID>' (what Steam said about
-// that player's account, for risky accounts).
+// 'staffLookupsFailed' (when asking Discord about each of those last failed), 'steam:<Steam ID>' (what Steam said about
+// that player's account, for risky accounts) and 'rotations' (the saved map rotations, the week's plan and the rotation
+// put on the server today).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -292,8 +306,9 @@ export class Watcher extends DurableObject<Env> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
 
-  // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
-  // never overwrites another, or the VIP state, with what it read before the other finished.
+  // Bans, the reserved list and the map rotation all live in the server's settings file. Changes to them run one at a
+  // time, so one never overwrites another, or the VIP state or the saved rotations, with what it read before the other
+  // finished.
   private serial = oneAtATime();
   // The alerts and /seednow run one at a time, so a check never sends the seeding alert while a seeding call is going out.
   private alerting = oneAtATime();
@@ -327,7 +342,8 @@ export class Watcher extends DurableObject<Env> {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
   }
 
-  private vipRcon({ config, http }: { config: Config; http: HttpClient }) {
+  // ServerSettings.ini, which holds the reserved list and the map rotation.
+  private settingsFile({ config, http }: { config: Config; http: HttpClient }) {
     return {
       fetchConfig: () => fetchConfig(config.rconUrl, config.rconPassword, http),
       validate: (text: string) => validateConfig(config.rconUrl, config.rconPassword, text, http),
@@ -556,6 +572,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
+    await this.serial(() => this.updateRotation(config, seen.snapshot));
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
 
     const { inviteCode } = config;
@@ -649,6 +666,70 @@ export class Watcher extends DurableObject<Env> {
     } catch (error) {
       console.error(`Live status update failed: ${errorText(error)}`);
     }
+  }
+
+  // As each day starts, puts that day's planned rotation on the server, and tries again each check until the server has
+  // it. Waits while the server is not answering. A failure is logged; it never stops what comes after it.
+  private async updateRotation(config: Config, snapshot: Snapshot | null): Promise<void> {
+    if (snapshot === null) return;
+    const now = Date.now();
+    const today = rotationDay(now, config.rotationHour);
+    try {
+      const saved = parseRotationBook(await this.ctx.storage.get('rotations'));
+      const book = planToday(saved, today, now);
+      if (book !== saved) await this.ctx.storage.put('rotations', book);
+      if (rotationToday(book, today)?.pending) await this.sendRotation(book, config);
+    } catch (error) {
+      console.error(`Map rotation update failed: ${errorText(error)}`);
+    }
+  }
+
+  // Puts the rotation `applied` names on the server, and notes when the server has it. One that is no longer saved, or
+  // has no maps, is dropped: the server keeps the maps it has.
+  private async sendRotation(book: RotationBook, config: Config): Promise<{ book: RotationBook; server: RotationServer | null }> {
+    const { applied } = book;
+    if (applied === null) return { book, server: null };
+    const rotation = findRotation(book, applied.name);
+    const done = { ...book, applied: { ...applied, pending: false } };
+    if (rotation === null || rotation.entries.length === 0) {
+      await this.ctx.storage.put('rotations', done);
+      return { book: done, server: null };
+    }
+    const who = applied.by === 'schedule' ? 'the schedule' : `Discord user ${applied.by}`;
+    try {
+      const changed = await putRotation(this.settingsFile({ config, http: socketHttp(connect) }), rotation.entries);
+      await this.ctx.storage.put('rotations', done);
+      console.info(
+        changed
+          ? `Map rotation: put ${JSON.stringify(rotation.name)} (${rotation.entries.length} maps) on the server for ${applied.day}, chosen by ${who}`
+          : `Map rotation: the server already has ${JSON.stringify(rotation.name)}`,
+      );
+      return { book: done, server: { outcome: changed ? 'updated' : 'unchanged' } };
+    } catch (error) {
+      console.error(`Map rotation: couldn't put ${JSON.stringify(rotation.name)} on the server, trying again next check: ${errorText(error)}`);
+      return { book, server: { outcome: 'failed', reason: errorText(error) } };
+    }
+  }
+
+  // The saved rotations, for /rotations.
+  async rotationBook(): Promise<RotationBook> {
+    return parseRotationBook(await this.ctx.storage.get('rotations'));
+  }
+
+  // Changes the saved rotations as staff asked, and when that changes what should be on the server today, puts it there.
+  async editRotations(edit: RotationEdit, by: string): Promise<RotationEditResult> {
+    return this.serial(async () => {
+      const config = loadConfig(stringVars(this.env));
+      const now = Date.now();
+      const saved = parseRotationBook(await this.ctx.storage.get('rotations'));
+      const edited = editRotationBook(saved, edit, { today: rotationDay(now, config.rotationHour), now, by });
+      if ('problem' in edited) return edited;
+      await this.ctx.storage.put('rotations', edited.book);
+      // Only when this edit chose it, so a reply never reports on a rotation staff did not touch.
+      if (edited.book.applied === saved.applied || !edited.book.applied?.pending) return edited;
+      const { book, server } = await this.sendRotation(edited.book, config);
+      return { ...edited, book, ...(server === null ? {} : { server }) };
+    });
   }
 
   // Lifts timed bans whose time is up, if the ban on the server is still the bot's. One that fails is tried again at
@@ -955,7 +1036,7 @@ export class Watcher extends DurableObject<Env> {
         days: keys.map((key) => parsePlayerDay(stored.get(key))),
         state,
         now,
-        rcon: this.vipRcon({ config, http: socketHttp(connect) }),
+        rcon: this.settingsFile({ config, http: socketHttp(connect) }),
         log: console,
       });
       await storage.put('vip', next.state);
@@ -1479,7 +1560,7 @@ export class Watcher extends DurableObject<Env> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
-      const change = await addVip({ steamId, name, days, now, state, rcon: this.vipRcon(this.rcon()) });
+      const change = await addVip({ steamId, name, days, now, state, rcon: this.settingsFile(this.rcon()) });
       if (change.outcome === 'already-reserved') {
         // Nothing given, but any block from /vip remove is lifted.
         await this.record(steamId, null, { vip: change.state });
@@ -1495,7 +1576,7 @@ export class Watcher extends DurableObject<Env> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
-      const change = await removeVip({ steamId, now, state, rcon: this.vipRcon(this.rcon()) });
+      const change = await removeVip({ steamId, now, state, rcon: this.settingsFile(this.rcon()) });
       const outcome = change.outcome === 'removed' ? 'removed' : 'not-reserved';
       await this.record(steamId, { action: 'vip-remove', at: now, by, name }, { vip: change.state });
       return { outcome };
@@ -1661,6 +1742,8 @@ const commandTools = (
     vipRemove: (target) => watcher().vipRemove(target),
     nextMap: (map, playing) => watcher().stageNextMap(map, playing),
     steam: (steamId) => watcher().steamLookup(steamId),
+    rotations: () => watcher().rotationBook(),
+    editRotations: (edit, by) => watcher().editRotations(edit, by),
   };
   return {
     run: runCommand({

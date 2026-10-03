@@ -5,6 +5,7 @@ import type { GriefAlert, Incident } from './griefing.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
+import { WEEKDAYS as ROTATION_DAYS } from './rotations.ts';
 import type { RecentMatch } from './stats.ts';
 import { assess, RISK_LABELS, steamFacts, type Risk, type SteamAlert, type SteamCheck, type SteamLookup } from './steam.ts';
 import { topPlayers, type MatchState, type MatchSummary } from './tracking.ts';
@@ -512,6 +513,72 @@ export const buildRotationEmbed = (rotation: Rotation): Embed => {
   return { title, description: lines.join('\n'), color, ...(note ? { footer: { text: note } } : {}) };
 };
 
+// "Saturday and Sunday", "Monday, Tuesday and Friday".
+export const andList = (items: string[]): string =>
+  items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : (items[0] ?? '');
+
+// /rotations show: the saved rotations with their maps' names in order, the week's plan (Monday first, `weekday` 0 is
+// Monday), and the rotation on the server today: who picked it ("schedule" or a Discord user ID), and whether the server
+// has it yet. `hour` is when each day's rotation goes on (UTC).
+export type RotationsView = {
+  rotations: { name: string; maps: string[] }[];
+  week: (string | null)[];
+  weekday: number;
+  today: { name: string; by: string; pending: boolean } | null;
+  hour: number;
+};
+
+// A rotation's first few maps, so a field stays short.
+const ROTATION_MAPS_NAMED = 8;
+// Lines of one rotation's maps; at about 80 characters each, this stays inside Discord's 4096.
+const ROTATION_LINES_SHOWN = 40;
+
+const twoDigits = (n: number): string => String(n).padStart(2, '0');
+
+export const buildRotationsEmbed = ({ rotations, week, weekday, today, hour }: RotationsView): Embed => {
+  const title = '🗺️ Map rotations';
+  const footer = { text: `Each day's rotation goes on at ${twoDigits(hour)}:00 UTC and plays from the next map.` };
+  if (rotations.length === 0) {
+    return {
+      title,
+      description: "No saved rotations yet. Save the server's rotation with **/rotations save**, or build one with **/rotations add**.",
+      color: INFO_COLOR,
+      footer,
+    };
+  }
+  const chosen =
+    today === null
+      ? 'No rotation picked for today, so the server keeps the one it has.'
+      : `On the server today: **${today.name}**, ${today.by === 'schedule' ? 'from the schedule' : `picked by <@${today.by}>`}.` +
+        (today.pending ? " ⏳ The server doesn't have it yet; the bot tries again every minute." : '');
+  const named = (maps: string[]): string => {
+    const more = maps.length - ROTATION_MAPS_NAMED;
+    return [...maps.slice(0, ROTATION_MAPS_NAMED), ...(more > 0 ? [`${more} more`] : [])].join(' → ');
+  };
+  return {
+    title,
+    description: chosen,
+    color: INFO_COLOR,
+    fields: [
+      { name: '📅 This week', value: ROTATION_DAYS.map((day, i) => `${i === weekday ? '▶️' : '▫️'} ${day}: ${week[i] ? `**${week[i]}**` : '–'}`).join('\n') },
+      ...rotations.map((r) => ({ name: `${r.name} · ${plural(r.maps.length, 'map')}`, value: r.maps.length === 0 ? 'No maps yet.' : named(r.maps) })),
+    ],
+    footer,
+  };
+};
+
+// /rotations show with a rotation picked: its maps in order, one line each, and the days it is planned for.
+export const buildSavedRotationEmbed = ({ name, lines, days, onToday }: { name: string; lines: string[]; days: string[]; onToday: boolean }): Embed => {
+  const shown = lines.slice(0, ROTATION_LINES_SHOWN).map((line, i) => `${i + 1}. ${line}`);
+  const more = lines.length - shown.length;
+  return {
+    title: `🗺️ ${name}`,
+    description: lines.length === 0 ? 'No maps yet. Add some with **/rotations add**.' : [...shown, ...(more > 0 ? [`…and ${more} more`] : [])].join('\n'),
+    color: INFO_COLOR,
+    footer: { text: [days.length > 0 ? `Planned for ${andList(days)}` : 'Not planned for any day', ...(onToday ? ['On the server today'] : [])].join(' · ') },
+  };
+};
+
 // Discord caps an embed description at 4096 characters; this many names stays well inside it.
 const MAX_NAMES_ANNOUNCED = 20;
 
@@ -519,7 +586,7 @@ const nameList = (names: string[]): string => {
   const shown = names.slice(0, MAX_NAMES_ANNOUNCED).map(playerName);
   const more = names.length - shown.length;
   const all = more > 0 ? [...shown, `${more} more`] : shown;
-  return all.length > 1 ? `${all.slice(0, -1).join(', ')} and ${all.at(-1)}` : (all[0] ?? '');
+  return andList(all);
 };
 
 // Posted when seeders get a reserved slot, or keep one for another week, so everyone sees what seeding earns.

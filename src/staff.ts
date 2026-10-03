@@ -1,7 +1,17 @@
 import type { Config } from './config.ts';
-import { buildPlayerEmbed, factionBadge, factionKey, mapEmoji, mapName, playerName } from './discord.ts';
+import {
+  andList,
+  buildPlayerEmbed,
+  buildRotationsEmbed,
+  buildSavedRotationEmbed,
+  factionBadge,
+  factionKey,
+  mapEmoji,
+  mapName,
+  playerName,
+} from './discord.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
-import { modesFor, planSetup } from './matchsetup.ts';
+import { modesFor, planSetup, setupLabels, type SetupCatalog } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
 import type { PlayerTotals } from './players.ts';
 import {
@@ -23,6 +33,19 @@ import {
   type HttpClient,
   type Player,
 } from './rcon.ts';
+import {
+  DAY_CHOICES,
+  findRotation,
+  rotationDay,
+  rotationToday,
+  WEEKDAYS,
+  type RotationBook,
+  type RotationEdit,
+  type RotationEditResult,
+  type RotationEntry,
+  type RotationServer,
+  type SavedRotation,
+} from './rotations.ts';
 import type { SteamLookup } from './steam.ts';
 import { reservedIds, type VipGrant } from './vip.ts';
 
@@ -71,6 +94,10 @@ export type StaffRecords = {
   nextMap: (map: string, playing: string | null) => Promise<void>;
   // What Steam says about their account: the bot's check, made now when it has none or it is a day old.
   steam: (steamId: string) => Promise<SteamLookup>;
+  // The saved map rotations, the week's plan, and the rotation on the server today (see rotations.ts).
+  rotations: () => Promise<RotationBook>;
+  // Changes them as staff asked (`by`, a Discord user ID), and puts a rotation on the server when the change calls for it.
+  editRotations: (edit: RotationEdit, by: string) => Promise<RotationEditResult>;
 };
 
 export type StaffDeps = {
@@ -81,7 +108,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -176,6 +203,32 @@ const isReserved = (settings: string, steamId: string): boolean | null => {
   }
 };
 
+// A rotation's map in a line: "🟧 Bakurani · King of the Hill · Infantry only · Day, clear". `bold` names the map in bold,
+// for Discord; a choice in a list shows no markdown.
+const entryName = (entry: RotationEntry, catalog: Pick<SetupCatalog, 'experiences' | 'lightings' | 'zones'>, bold = false): string =>
+  [`${mapEmoji(entry.map)}${bold ? `**${mapName(entry.map)}**` : mapName(entry.map)}`, ...setupLabels(entry, catalog)].join(' · ');
+
+// The saved rotations to pick from. Where a new name starts a rotation, what has been typed is offered first as one.
+const rotationChoices = (book: RotationBook, typed: string, subcommand: string | undefined): Choice[] => {
+  const lower = typed.trim().toLowerCase();
+  const saved = book.rotations
+    .filter((r) => r.name.toLowerCase().includes(lower))
+    .map((r) => ({ name: fit(`${r.name} · ${r.entries.length} map${r.entries.length === 1 ? '' : 's'}`), value: r.name }));
+  const fresh = typed.trim() !== '' && (subcommand === 'add' || subcommand === 'save') && findRotation(book, typed) === null;
+  return [...(fresh ? [{ name: fit(`New rotation: ${typed.trim()}`), value: typed.trim() }] : []), ...saved];
+};
+
+// What the server did with a rotation, for a reply.
+const serverNote = (server: RotationServer | undefined, name: string): string => {
+  if (server === undefined) return '';
+  if ('reason' in server) return ` ⚠️ Couldn't put it on the server yet (${server.reason}). The bot tries again every minute.`;
+  return server.outcome === 'updated' ? ` The server has **${name}** now, and plays it from the next map.` : ' The server already had these maps.';
+};
+
+// The days a rotation is planned for, by name.
+const daysOf = (book: RotationBook, name: string): string[] =>
+  WEEKDAYS.filter((_, i) => book.week[i]?.toLowerCase() === name.toLowerCase());
+
 // Choices offered while staff type in an option with autocomplete.
 export const suggestStaff =
   ({ config, http, records }: Pick<StaffDeps, 'config' | 'http' | 'records'>) =>
@@ -188,6 +241,19 @@ export const suggestStaff =
       return matching(merge(live, known), typed).map((p) => playerChoice(live.find((l) => l.steamId === p.steamId) ?? p));
     };
     const choices = await (async (): Promise<Choice[]> => {
+      if (name === 'rotations' && focused === 'rotation') return rotationChoices(await records.rotations(), typed, options['subcommand']);
+      if (name === 'rotations' && options['subcommand'] === 'remove' && focused === 'map') {
+        const rotation = findRotation(await records.rotations(), options['rotation'] ?? '');
+        if (rotation === null) return [];
+        const [experiences, lightings] = await Promise.all([
+          optional(fetchExperiences(rconUrl, rconPassword, http)),
+          optional(fetchLightings(rconUrl, rconPassword, http)),
+        ]);
+        const lower = typed.trim().toLowerCase();
+        return rotation.entries
+          .map((entry, i) => ({ name: fit(`${i + 1}. ${entryName(entry, { experiences, lightings, zones: null })}`), value: String(i + 1) }))
+          .filter((c) => c.name.toLowerCase().includes(lower));
+      }
       if (focused === 'player' && ['warn', 'kick', 'switchteam'].includes(name)) return players(false);
       if (focused === 'player' && ['player', 'ban'].includes(name)) return players(true);
       if (name === 'vip' && options['subcommand'] === 'add') return players(true);
@@ -389,6 +455,8 @@ export const runStaffCommand =
       return { content: `🗺️ Ended the match. The server moves to ${described} after the end screen.` };
     }
 
+    if (name === 'rotations') return runRotations({ config, http, records, now, log }, options, by);
+
     if (name === 'vip') {
       const { found } = await anyTarget('steam_id');
       if ('problem' in found) return { content: found.problem };
@@ -441,3 +509,174 @@ export const runStaffCommand =
       ],
     };
   };
+
+// /rotations: saved map rotations, the week's plan, and swapping the server's rotation (see rotations.ts).
+const runRotations = async (
+  { config, http, records, now, log }: StaffDeps,
+  options: Record<string, string>,
+  by: string,
+): Promise<CommandReply> => {
+  const { rconUrl, rconPassword, rotationHour } = config();
+  const staff = `Discord user ${by}`;
+  const sub = options['subcommand'] ?? 'show';
+  const typed = (options['rotation'] ?? '').trim();
+  const edit = async (change: RotationEdit): Promise<RotationEditResult> => {
+    log.info(`/rotations ${sub} by ${staff}: ${JSON.stringify(change)}`);
+    return records.editRotations(change, by);
+  };
+  // Names for modes and lighting, and for the zones of each map, when the server gives them.
+  const catalogFor = async (entries: RotationEntry[]): Promise<Pick<SetupCatalog, 'experiences' | 'lightings' | 'zones'>> => {
+    const maps = [...new Set(entries.flatMap((e) => (e.zoneAlternator ? [e.map] : [])))];
+    const [experiences, lightings, zones] = await Promise.all([
+      optional(fetchExperiences(rconUrl, rconPassword, http)),
+      optional(fetchLightings(rconUrl, rconPassword, http)),
+      Promise.all(maps.map((map) => optional(fetchZones(rconUrl, rconPassword, map, http)))),
+    ]);
+    return { experiences, lightings, zones: zones.flatMap((z) => z ?? []) };
+  };
+
+  if (sub === 'show') {
+    const book = await records.rotations();
+    const today = rotationDay(now(), rotationHour);
+    const current = rotationToday(book, today);
+    if (typed) {
+      const rotation = findRotation(book, typed);
+      if (rotation === null) return { content: `There's no rotation called "${typed}". Pick one from the list.` };
+      const catalog = await catalogFor(rotation.entries);
+      return {
+        embeds: [
+          buildSavedRotationEmbed({
+            name: rotation.name,
+            lines: rotation.entries.map((entry) => entryName(entry, catalog, true)),
+            days: daysOf(book, rotation.name),
+            onToday: current !== null && current.name.toLowerCase() === rotation.name.toLowerCase(),
+          }),
+        ],
+      };
+    }
+    return {
+      embeds: [
+        buildRotationsEmbed({
+          rotations: book.rotations.map((r) => ({ name: r.name, maps: r.entries.map((e) => mapName(e.map)) })),
+          week: book.week,
+          weekday: today.weekday,
+          today: current,
+          hour: rotationHour,
+        }),
+      ],
+    };
+  }
+
+  if (sub === 'add') {
+    const [maps, experiences, lightings] = await Promise.all([
+      fetchMaps(rconUrl, rconPassword, http),
+      optional(fetchExperiences(rconUrl, rconPassword, http)),
+      optional(fetchLightings(rconUrl, rconPassword, http)),
+    ]);
+    const map = findMap(options['map'], maps);
+    if (map === null) return { content: 'Pick a map from the list.' };
+    const [mapExperiences, zones] = await Promise.all([
+      optional(fetchMapExperiences(rconUrl, rconPassword, map.id, http)),
+      optional(fetchZones(rconUrl, rconPassword, map.id, http)),
+    ]);
+    // Not from the server's rotation: what staff leave out is the map's own.
+    const planned = planSetup(map.id, options, { rotation: null, mapExperiences, experiences, lightings, zones });
+    if ('problem' in planned) return { content: planned.problem };
+    const position = options['position'] === undefined ? undefined : Number(options['position']);
+    const entry: RotationEntry = { map: map.id, ...planned.setup };
+    const result = await edit({ kind: 'add', name: typed, entry, ...(position === undefined ? {} : { position }) });
+    if ('problem' in result) return { content: result.problem };
+    const rotation = result.rotation as SavedRotation;
+    const at = position === undefined ? rotation.entries.length : Math.min(Math.max(1, position), rotation.entries.length);
+    const described = [`${mapEmoji(map.id)}**${mapLabel(map)}**`, ...planned.labels].join(' · ');
+    return {
+      content:
+        `➕ Added ${described} to **${rotation.name}**, number ${at} of ${rotation.entries.length}.` +
+        serverNote(result.server, rotation.name),
+    };
+  }
+
+  if (sub === 'remove') {
+    const book = await records.rotations();
+    const rotation = findRotation(book, typed);
+    if (rotation === null) return { content: `There's no rotation called "${typed}". Pick one from the list.` };
+    const picked = (options['map'] ?? '').trim();
+    // A number from the list, or a map's name when it is in the rotation once.
+    const byName = rotation.entries.flatMap((e, i) => ([e.map, mapName(e.map)].some((n) => n.toLowerCase() === picked.toLowerCase()) ? [i + 1] : []));
+    const position = /^\d+$/.test(picked) ? Number(picked) : byName.length === 1 ? (byName[0] ?? 0) : 0;
+    if (position === 0 && byName.length > 1) return { content: `**${rotation.name}** has ${mapName(picked)} more than once. Pick the one to take out from the list.` };
+    const removed = rotation.entries[position - 1];
+    const result = await edit({ kind: 'remove', name: rotation.name, position });
+    if ('problem' in result) return { content: result.problem };
+    const left = result.rotation?.entries.length ?? 0;
+    const catalog = removed === undefined ? null : await catalogFor([removed]);
+    const what = removed === undefined || catalog === null ? 'the map' : entryName(removed, catalog, true);
+    const empty = left === 0 ? ' It has no maps left, so it is not put on the server; the server keeps the maps it has.' : '';
+    return {
+      content: `➖ Took ${what} out of **${rotation.name}** (${left} map${left === 1 ? '' : 's'} left).${empty}` + serverNote(result.server, rotation.name),
+    };
+  }
+
+  if (sub === 'save') {
+    const current = await fetchRotation(rconUrl, rconPassword, http);
+    const entries = current.entries.map(({ map, experiences, lighting, zoneAlternator }): RotationEntry => ({
+      map,
+      ...(experiences && experiences.length > 0 ? { experiences } : {}),
+      ...(lighting ? { lighting } : {}),
+      ...(zoneAlternator ? { zoneAlternator } : {}),
+    }));
+    const replaced = findRotation(await records.rotations(), typed) !== null;
+    const result = await edit({ kind: 'save', name: typed, entries });
+    if ('problem' in result) return { content: result.problem };
+    const name = result.rotation?.name ?? typed;
+    return {
+      content:
+        `💾 Saved the server's rotation as **${name}** (${entries.length} map${entries.length === 1 ? '' : 's'})` +
+        `${replaced ? ', in place of the one saved before' : ''}.` +
+        serverNote(result.server, name),
+    };
+  }
+
+  if (sub === 'delete') {
+    const before = await records.rotations();
+    const rotation = findRotation(before, typed);
+    const result = await edit({ kind: 'delete', name: typed });
+    if ('problem' in result) return { content: result.problem };
+    const days = rotation === null ? [] : daysOf(before, rotation.name);
+    const cleared = days.length > 0 ? ` ${andList(days)} now keep whatever the server has.` : '';
+    return { content: `🗑️ Deleted **${rotation?.name ?? typed}**. The server keeps the maps it has.${cleared}` };
+  }
+
+  if (sub === 'use') {
+    const result = await edit({ kind: 'use', name: typed });
+    if ('problem' in result) return { content: result.problem };
+    const name = result.rotation?.name ?? typed;
+    const today = rotationDay(now(), rotationHour);
+    const tomorrow = result.book.week[(today.weekday + 1) % WEEKDAYS.length];
+    const next = Math.floor(Date.UTC(...dayParts(today.day, 1), rotationHour) / 1000);
+    return {
+      content:
+        `🗺️ Swapped to **${name}** for today.` +
+        serverNote(result.server, name) +
+        (tomorrow ? ` Tomorrow's rotation, **${tomorrow}**, goes on <t:${next}:f>.` : ''),
+    };
+  }
+
+  // schedule
+  const choice = DAY_CHOICES.find((c) => c.value === options['day']);
+  if (choice === undefined) return { content: 'Pick the day from the list.' };
+  const result = await edit({ kind: 'schedule', days: choice.days, name: typed || null });
+  if ('problem' in result) return { content: result.problem };
+  const days = choice.days.map((d) => WEEKDAYS[d] ?? '');
+  const today = rotationDay(now(), rotationHour);
+  const when = choice.days.length === 1 ? `${days[0]}s` : choice.value === 'every-day' ? 'Every day' : andList(days);
+  if (result.rotation === null) return { content: `📅 ${when}: no rotation, so the server keeps whatever it has.` };
+  const goesOn = choice.days.includes(today.weekday) ? ` It's ${WEEKDAYS[today.weekday]}, so it goes on today.` : '';
+  return { content: `📅 ${when}: **${result.rotation.name}**.${goesOn}` + serverNote(result.server, result.rotation.name) };
+};
+
+// A day as UTC year, month (from 0) and day, `ahead` days on.
+const dayParts = (day: string, ahead: number): [number, number, number] => {
+  const date = new Date(Date.parse(`${day}T00:00:00Z`) + ahead * 24 * 60 * 60_000);
+  return [date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()];
+};

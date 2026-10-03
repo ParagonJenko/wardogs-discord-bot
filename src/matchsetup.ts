@@ -25,6 +25,8 @@ export type SetupCatalog = {
 export type PlannedSetup = { setup: MatchSetup; labels: string[] };
 
 const nameOf = (id: string, items: CatalogItem[] | null): string => items?.find((i) => i.id === id)?.name ?? id;
+// A layout the catalogue does not name goes by the end of its tag: ZoneAlternator.Bakurani.Default.Circle is "Circle".
+const zoneName = (id: string, zones: CatalogItem[] | null): string => zones?.find((z) => z.id === id)?.name ?? id.split('.').at(-1) ?? id;
 
 // The id for what staff typed or picked: an id, or a name, ignoring case. A list that could not be read (null) lets
 // it through as typed; a list the server gave, even an empty one, is the only thing allowed.
@@ -32,6 +34,19 @@ const pick = (typed: string, items: CatalogItem[] | null): string | null => {
   const lower = typed.trim().toLowerCase();
   if (items === null) return typed.trim();
   return items.find((i) => i.id.toLowerCase() === lower || i.name.toLowerCase() === lower)?.id ?? null;
+};
+
+// What a setup is called, as names where the catalogue has them: "King of the Hill", "Infantry only", "Day, clear",
+// "Circle zones".
+export const setupLabels = (setup: MatchSetup, catalog: Pick<SetupCatalog, 'experiences' | 'lightings' | 'zones'>): string[] => {
+  const experiences = setup.experiences ?? [];
+  const mode = experiences.find((id) => !isModifier(id));
+  return [
+    ...(mode ? [nameOf(mode, catalog.experiences)] : []),
+    ...MODIFIERS.filter((m) => experiences.some((id) => m.pattern.test(id))).map((m) => m.name),
+    ...(setup.lighting ? [nameOf(setup.lighting, catalog.lightings)] : []),
+    ...(setup.zoneAlternator ? [`${zoneName(setup.zoneAlternator, catalog.zones)} zones`] : []),
+  ];
 };
 
 // The game modes a map can be played with, named.
@@ -69,17 +84,10 @@ export const planSetup = (
   if (zoneAlternator === null) return { problem: `No zone layout "${typedZones}" on this map. Pick one from the list.` };
 
   const experiences = [...(mode ? [mode] : []), ...modifiers];
-  return {
-    setup: {
-      ...(experiences.length > 0 ? { experiences } : {}),
-      ...(lighting ? { lighting } : {}),
-      ...(zoneAlternator ? { zoneAlternator } : {}),
-    },
-    labels: [
-      ...(mode ? [nameOf(mode, catalog.experiences)] : []),
-      ...MODIFIERS.filter((m) => modifiers.some((id) => m.pattern.test(id))).map((m) => m.name),
-      ...(lighting ? [nameOf(lighting, catalog.lightings)] : []),
-      ...(zoneAlternator ? [`${nameOf(zoneAlternator, catalog.zones)} zones`] : []),
-    ],
+  const setup: MatchSetup = {
+    ...(experiences.length > 0 ? { experiences } : {}),
+    ...(lighting ? { lighting } : {}),
+    ...(zoneAlternator ? { zoneAlternator } : {}),
   };
+  return { setup, labels: setupLabels(setup, catalog) };
 };
