@@ -80,7 +80,7 @@ const rcon = (overrides: Record<string, [number, unknown]> = {}) => {
   return { http, sent };
 };
 
-const emptyRecord: PlayerRecord = { name: null, totals: null, vip: null, vipBlockedUntil: null, log: [], ban: null };
+const emptyRecord: PlayerRecord = { name: null, totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null };
 
 const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<typeof vi.fn> } => ({
   player: vi.fn(async () => emptyRecord),
@@ -385,6 +385,15 @@ describe('runStaffCommand', () => {
     expect(records.vipAdd).toHaveBeenCalledTimes(1);
     expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: 30, by: '42' });
     expect(records.vipRemove).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', by: '42' });
+  });
+
+  it('/vip remove leaves a staff spot, which only unlinking takes away', async () => {
+    const { run, records } = setup();
+    records.vipRemove.mockResolvedValueOnce({ outcome: 'staff-spot' as const } as never);
+
+    await expect(run('vip', { subcommand: 'remove', steam_id: BO })).resolves.toEqual({
+      content: '**Bo** is staff, with a staff spot that stays while their Steam account is linked. To take it away, unlink their Steam account on the staff page.',
+    });
   });
 
   it('/vip add with permanent gives a reserved slot with no end date', async () => {

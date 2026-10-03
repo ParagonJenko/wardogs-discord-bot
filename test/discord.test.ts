@@ -756,7 +756,7 @@ describe('buildPlayerEmbed', () => {
   const NOW = Date.UTC(2026, 8, 30, 12);
   const DAY = 86_400_000;
   const ID = '76561198000000001';
-  const record = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, log: [], ban: null };
+  const record = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null };
   const profile = { steamId: ID, name: 'Ash_*', record, online: null, reserved: false, serverBan: null, days: 90, now: NOW };
   const field = (embed: ReturnType<typeof buildPlayerEmbed>, name: string) => embed.fields?.find((f) => f.name === name)?.value;
   const t = (at: number, style: string) => `<t:${at / 1000}:${style}>`;
@@ -838,6 +838,12 @@ describe('buildPlayerEmbed', () => {
       `🎖️ Reserved slot until ${t(NOW + 7 * DAY, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`,
     );
     expect(field(buildPlayerEmbed({ ...profile, reserved: null }), 'VIP')).toBe("Couldn't read the reserved list");
+    expect(field(buildPlayerEmbed({ ...profile, reserved: true, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
+      '🎖️ Staff spot: a reserved slot while they are staff',
+    );
+    expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
+      '🎖️ Staff spot: on the reserved list from the next check',
+    );
     expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, vip } }), 'VIP')).toBe('None');
     expect(field(buildPlayerEmbed({ ...profile, record: { ...record, vipBlockedUntil: NOW + DAY } }), 'VIP')).toBe(
       `None\nStaff removed VIP: automatic VIP is off for them until ${t(NOW + DAY, 'f')}`,

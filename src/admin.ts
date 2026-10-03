@@ -77,9 +77,10 @@ export type AdminBan = {
 };
 
 // Everyone on the server's reserved list. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
-// when it ends; without it, the slot is permanent (added by hand, or with /vip add permanent).
+// when it ends; `staff` a staff spot the bot keeps while their Steam account is linked, and since when. With neither,
+// the slot is permanent (added by hand, or with /vip add permanent).
 export type AdminReserved = {
-  players: { player: AdminPlayer; bot: { since: number; until: number } | null }[];
+  players: { player: AdminPlayer; bot: { since: number; until: number } | null; staff: { since: number } | null }[];
   maxSlots: number | null;
 };
 
@@ -490,9 +491,11 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
             players: s.reserved.ids
               .map((steamId) => {
                 const grant = s.vip.granted[steamId];
+                const spot = s.vip.staffSpots[steamId];
                 return {
-                  player: ref(steamId, grant?.name),
+                  player: ref(steamId, grant?.name ?? spot?.name),
                   bot: grant === undefined ? null : { since: grant.grantedAt, until: grant.expiresAt },
+                  staff: spot === undefined ? null : { since: spot.since },
                 };
               })
               .sort((a, b) => a.player.name.localeCompare(b.player.name)),

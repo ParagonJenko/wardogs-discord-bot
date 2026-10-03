@@ -69,6 +69,8 @@ export type PlayerRecord = {
   vip: VipGrant | null;
   // Until when automatic VIP must not give them VIP, after staff took it away.
   vipBlockedUntil: number | null;
+  // Whether they are staff who linked their Steam account, so the bot keeps a staff spot for them.
+  staffSpot: boolean;
   log: ModEntry[];
   ban: BanRecord | null;
 };
@@ -79,7 +81,8 @@ export type BanRequest = Named & { length: string; reason: string; by: string; b
 // bans them when it next sees them.
 export type BanResult = { outcome: 'banned' | 'already-banned'; until: number | null; byBot: boolean; waiting?: boolean };
 export type VipAddResult = { outcome: 'added' | 'extended' | 'already-reserved'; until?: number };
-export type VipRemoveResult = { outcome: 'removed' | 'not-reserved' };
+// `staff-spot`: a staff member's own reserved slot, which only unlinking their Steam account takes away.
+export type VipRemoveResult = { outcome: 'removed' | 'not-reserved' | 'staff-spot' };
 
 // The records, and the actions that change the server's settings file (bans and the reserved list), which the
 // Durable Object runs one at a time so they never overwrite each other or the automatic VIP update.
@@ -472,6 +475,11 @@ export const runStaffCommand =
       if (options['subcommand'] === 'remove') {
         log.info(`/vip remove by ${staff}: ${logged(player)}`);
         const { outcome } = await records.vipRemove({ ...player, by });
+        if (outcome === 'staff-spot') {
+          return {
+            content: `${who(player)} is staff, with a staff spot that stays while their Steam account is linked. To take it away, unlink their Steam account on the staff page.`,
+          };
+        }
         const blocked = 'Automatic VIP will not give it back for 7 days.';
         return outcome === 'removed'
           ? { content: `🎖️ Took ${who(player)} off the reserved list. It takes effect after the server's next restart. ${blocked}` }

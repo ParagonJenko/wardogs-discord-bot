@@ -181,6 +181,7 @@ import {
   parseStaffProfiles,
   readProfileAction,
   STAFF_PROFILES_KEY,
+  staffBySteam,
   staffSteamIds,
   unlinkSteam,
   type ProfileAction,
@@ -315,6 +316,10 @@ const oneAtATime = () => {
     return run;
   };
 };
+
+// The VIP state, due at the next check: after a staff member links or unlinks their Steam account, their staff spot
+// is put on or taken off the reserved list within a minute, not at the next 10-minute mark.
+const syncSoon = (raw: unknown): VipState => ({ ...parseVipState(raw), checkedAt: 0 });
 
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 // Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
@@ -1160,25 +1165,29 @@ export class Watcher extends DurableObject<Env> {
     return { checks, inGame, feed };
   }
 
-  // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their time is up. VIP staff
-  // gave ends on time even when automatic VIP is off.
+  // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their time is up, and keeps a
+  // staff spot on the reserved list for each staff member who linked their Steam account. VIP staff gave ends on time
+  // even when automatic VIP is off.
   private async updateVip(config: Config): Promise<void> {
     const rule = config.vip;
     const storage = this.ctx.storage;
     const now = Date.now();
-    const state = parseVipState(await storage.get('vip'));
-    if (rule === null && Object.keys(state.granted).length === 0) return;
-    if (!vipDue(state, now)) return;
     const keys = rule === null ? [] : recentDayKeys(now, rule.windowDays);
-    const stored = await storage.get([...keys, STAFF_PROFILES_KEY]);
-    // Staff never earn it. One who earned it before linking their Steam account keeps it until it runs out.
-    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const stored = await storage.get(['vip', STAFF_PROFILES_KEY]);
+    const state = parseVipState(stored.get('vip'));
+    const staff = staffBySteam(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const idle = Object.keys(state.granted).length === 0 && staff.size === 0 && Object.keys(state.staffSpots).length === 0;
+    if (rule === null && idle) return;
+    if (!vipDue(state, now)) return;
+    const days = await storage.get(keys);
+    const staffIds = new Set(staff.keys());
     try {
       const next = await syncVip({
         rule,
-        days: keys.map((key) => withoutStaffSeeding(parsePlayerDay(stored.get(key)), staff)),
+        days: keys.map((key) => withoutStaffSeeding(parsePlayerDay(days.get(key)), staffIds)),
         state,
         now,
+        staff,
         rcon: this.settingsFile({ config, http: socketHttp(connect) }),
         log: console,
       });
@@ -1605,13 +1614,13 @@ export class Watcher extends DurableObject<Env> {
         const target = action.userId ?? user.id;
         const was = profiles[target];
         if (was === undefined) return { steamId: null };
-        await storage.put(STAFF_PROFILES_KEY, unlinkSteam(profiles, target));
+        await storage.put({ [STAFF_PROFILES_KEY]: unlinkSteam(profiles, target), vip: syncSoon(await storage.get('vip')) });
         console.info(`Staff page: ${JSON.stringify(user.name)} unlinked Steam account ${was.steamId} from Discord user ${target}`);
         return { steamId: null };
       }
       const linked = linkSteam(profiles, user, action.steamId, Date.now());
       if ('problem' in linked) return linked;
-      await storage.put(STAFF_PROFILES_KEY, linked.profiles);
+      await storage.put({ [STAFF_PROFILES_KEY]: linked.profiles, vip: syncSoon(await storage.get('vip')) });
       console.info(`Staff page: ${JSON.stringify(user.name)} (Discord user ${user.id}) linked Steam account ${linked.steamId}`);
       return { steamId: linked.steamId };
     });
@@ -1672,6 +1681,7 @@ export class Watcher extends DurableObject<Env> {
       totals: found === undefined ? null : withoutId(found),
       vip: vip.granted[steamId] ?? null,
       vipBlockedUntil: vip.revoked[steamId] ?? null,
+      staffSpot: staff.has(steamId),
       log,
       ban,
     };
@@ -1768,6 +1778,8 @@ export class Watcher extends DurableObject<Env> {
 
   async vipRemove({ steamId, name, by }: Named & { by: string }): Promise<VipRemoveResult> {
     return this.serial(async () => {
+      // A staff spot follows the staff member's linked Steam account: the next check would only put it back.
+      if (await this.staffSteam().then((staff) => staff.has(steamId))) return { outcome: 'staff-spot' };
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
       const change = await removeVip({ steamId, now, state, rcon: this.settingsFile(this.rcon()) });

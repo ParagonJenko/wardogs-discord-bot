@@ -13,9 +13,18 @@ import type { ConfigResult, ServerConfig } from './rcon.ts';
 // and count as seeding, as nearly all of them were; a staff grant among them is gone once its time is up.
 export type VipGrant = { name: string; grantedAt: number; expiresAt: number; source?: 'seeding' | 'staff' };
 
+// A staff member's reserved slot (see staffprofiles.ts): theirs while their Steam account is linked, since `since`.
+export type StaffSpot = { name: string; since: number };
+
 // The players the bot put on the reserved list, by Steam ID.
 // `revoked`: players staff took VIP from, by Steam ID, and until when automatic VIP must not give it back.
-export type VipState = { granted: Record<string, VipGrant>; checkedAt: number; revoked: Record<string, number> };
+// `staffSpots`: the staff the bot keeps on the list, by Steam ID, including ones an admin had put there by hand.
+export type VipState = {
+  granted: Record<string, VipGrant>;
+  checkedAt: number;
+  revoked: Record<string, number>;
+  staffSpots: Record<string, StaffSpot>;
+};
 
 export const VIP_CHECK_MS = 10 * 60_000;
 
@@ -29,12 +38,14 @@ const VipStateSchema = z.object({
   checkedAt: z.number(),
   // Missing from state saved before staff could remove VIP.
   revoked: z.record(z.string(), z.number()).default({}),
+  // Missing from state saved before staff spots.
+  staffSpots: z.record(z.string(), z.object({ name: z.string(), since: z.number() })).default({}),
 });
 
 // Reads what a store saved. Nothing saved yet means nobody has been given VIP.
 export const parseVipState = (raw: unknown): VipState => {
   const parsed = VipStateSchema.safeParse(raw);
-  return parsed.success ? parsed.data : { granted: {}, checkedAt: 0, revoked: {} };
+  return parsed.success ? parsed.data : { granted: {}, checkedAt: 0, revoked: {}, staffSpots: {} };
 };
 
 export const vipDue = (state: VipState, now: number): boolean => now - state.checkedAt >= VIP_CHECK_MS;
@@ -160,6 +171,28 @@ export const planVip = (
   };
 };
 
+// Staff spots: every staff member who linked their Steam account has a reserved slot while they are staff, instead of
+// one an admin puts in by hand. One already on the list (by hand, or VIP from the bot) is taken over as it is; one
+// whose Steam account is unlinked (they left staff) comes off the list. `staff` is who is linked now, with their name.
+export type StaffSpotPlan = { add: Named[]; adopted: Named[]; remove: string[]; staffSpots: Record<string, StaffSpot> };
+
+export const planStaffSpots = (
+  staff: ReadonlyMap<string, string>,
+  reserved: string[],
+  spots: Record<string, StaffSpot>,
+  now: number,
+): StaffSpotPlan => {
+  const onList = new Set(reserved);
+  const linked = [...staff].filter(([id]) => STEAM_ID.test(id)).map(([steamId, name]) => ({ steamId, name }));
+  return {
+    add: linked.filter((p) => !onList.has(p.steamId)),
+    adopted: linked.filter((p) => onList.has(p.steamId) && spots[p.steamId] === undefined),
+    // One an admin already took off the list is just forgotten.
+    remove: Object.keys(spots).filter((id) => !staff.has(id) && onList.has(id)),
+    staffSpots: Object.fromEntries(linked.map((p) => [p.steamId, { name: p.name, since: spots[p.steamId]?.since ?? now }])),
+  };
+};
+
 type VipDeps = {
   // Null when automatic VIP is off: nobody earns it, but VIP staff gave still ends on time.
   rule: VipRule | null;
@@ -167,6 +200,8 @@ type VipDeps = {
   days: PlayerDay[];
   state: VipState;
   now: number;
+  // Staff who linked their Steam account, by Steam ID, with their name: they have staff spots, never seeder VIP.
+  staff?: ReadonlyMap<string, string>;
   rcon: {
     fetchConfig: () => Promise<ServerConfig>;
     validate: (text: string) => Promise<ConfigResult>;
@@ -195,27 +230,45 @@ const unexpired = (revoked: Record<string, number>, now: number): Record<string,
 // The new state to save, and who got VIP or kept it for another week, to announce.
 export type VipSync = { state: VipState; added: Named[]; renewed: Named[] };
 
-// Brings the reserved list in line with who has earned VIP. Throws if the server cannot be read or refuses the
-// change; nothing is recorded then, so the next check tries again.
-export const syncVip = async ({ rule, days, state, now, rcon, log }: VipDeps): Promise<VipSync> => {
+// Brings the reserved list in line with who has earned VIP, and who is staff. Throws if the server cannot be read or
+// refuses the change; nothing is recorded then, so the next check tries again.
+export const syncVip = async ({ rule, days, state, now, staff = new Map(), rcon, log }: VipDeps): Promise<VipSync> => {
   const config = await rcon.fetchConfig();
-  const earned = rule === null ? [] : qualified(days, rule);
-  const plan = planVip(earned, reservedIds(config.text), state.granted, now, rule ?? { lengthDays: 0 }, state.revoked);
+  const reserved = reservedIds(config.text);
+  const spots = planStaffSpots(staff, reserved, state.staffSpots, now);
+  // VIP the bot gave a staff member becomes their staff spot, which does not run out, and staff never earn it. Someone
+  // whose staff spot ends (they left staff) can still have earned it, and is then added back as a seeder.
+  const notStaff = <T>(entries: [string, T][]): [string, T][] => entries.filter(([id]) => !staff.has(id));
+  const earned = (rule === null ? [] : qualified(days, rule)).filter((p) => !staff.has(p.steamId));
+  const plan = planVip(
+    earned,
+    reserved.filter((id) => !spots.remove.includes(id)),
+    Object.fromEntries(notStaff(Object.entries(state.granted))),
+    now,
+    rule ?? { lengthDays: 0 },
+    state.revoked,
+  );
   const done = (): VipSync => ({
-    state: { granted: plan.granted, checkedAt: now, revoked: unexpired(state.revoked, now) },
+    state: { granted: plan.granted, checkedAt: now, revoked: unexpired(state.revoked, now), staffSpots: spots.staffSpots },
     added: plan.add,
     renewed: plan.renewed,
   });
   if (plan.renewed.length > 0) log.info(`VIP renewed for another week: ${names(plan.renewed)}.`);
-  if (plan.add.length === 0 && plan.remove.length === 0) return done();
+  if (spots.adopted.length > 0) log.info(`Staff spots taken over from the reserved list: ${names(spots.adopted)}.`);
+  const add = [...plan.add, ...spots.add].map((p) => p.steamId);
+  const remove = [...plan.remove, ...spots.remove];
+  if (add.length === 0 && remove.length === 0) return done();
 
-  await writeReserved(rcon, config, plan.add.map((p) => p.steamId), plan.remove);
+  await writeReserved(rcon, config, add, remove);
 
   const removed = plan.remove.map((steamId) => ({ steamId, name: state.granted[steamId]?.name ?? 'unknown' }));
+  const spotsEnded = spots.remove.map((steamId) => ({ steamId, name: state.staffSpots[steamId]?.name ?? 'unknown' }));
   log.info(
     [
       ...(plan.add.length > 0 ? [`VIP added: ${names(plan.add)}.`] : []),
       ...(removed.length > 0 ? [`VIP ended: ${names(removed)}.`] : []),
+      ...(spots.add.length > 0 ? [`Staff spots added: ${names(spots.add)}.`] : []),
+      ...(spotsEnded.length > 0 ? [`Staff spots ended: ${names(spotsEnded)}.`] : []),
       'The server uses the new reserved list after its next restart.',
     ].join(' '),
   );
