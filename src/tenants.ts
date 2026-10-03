@@ -126,7 +126,8 @@ export const applyTenantInput = (
     ...(legacy ? { legacy: true as const } : {}),
     limits: { ...DEFAULT_LIMITS, ...current?.limits, ...change.limits },
     createdAt: current?.createdAt ?? now,
-    updatedAt: now,
+    // Always later than the last change, even within the same millisecond: the newest record wins (see Watcher.adopt).
+    updatedAt: Math.max(now, (current?.updatedAt ?? 0) + 1),
   };
   return { record };
 };

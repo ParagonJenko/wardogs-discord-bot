@@ -196,6 +196,7 @@ const tenantLog = (id: string): Log => ({
 const SUGGESTIONS_PER_COMMAND = 5;
 const SLOW_DOWN = 'The bot is getting a lot of commands from this server right now. Try again in a minute.';
 const PAUSED = 'The bot is paused for this server. Ask whoever runs the bot.';
+const NOT_THIS_SERVER = "This Discord server isn't connected to the bot. Ask whoever runs the bot to add it.";
 
 // A community's settings, and its secrets once decrypted, as stored in its Durable Object.
 type Stored = { settings: Record<string, string>; secrets: Partial<Record<SecretName, string>> };
@@ -228,6 +229,10 @@ const oneAtATime = () => {
 // month whose roundup went out).
 export class Watcher extends DurableObject<Env> {
   private tenant: TenantRecord | null = null;
+  // What callers are waiting on now, so deleting the community can let it finish first.
+  private inFlight = new Set<Promise<unknown>>();
+  // Set while the community is deleted, and after, until it is added again.
+  private purging = false;
   private log: Log = console;
   private stored: Promise<Stored> | null = null;
   // Limits on what the community's website and Discord server can ask of it each minute.
@@ -276,9 +281,25 @@ export class Watcher extends DurableObject<Env> {
       await storage.put('tenant', current);
       if (purgedAt !== undefined) await storage.delete('purgedAt');
     }
+    // Added again after it was deleted: a fresh start.
+    if (typeof purgedAt === 'number') this.purging = false;
     this.tenant = current;
     this.log = tenantLog(current.id);
     return current;
+  }
+
+  // Every call from outside goes through here. Deleting the community waits for these to finish, and refuses new
+  // ones, so nothing they write can outlive the deletion.
+  private async run<T>(given: TenantRecord, work: (record: TenantRecord) => Promise<T>): Promise<T> {
+    const record = await this.adopt(given);
+    if (this.purging) throw new Error(`"${record.id}" is being deleted`);
+    const running = work(record);
+    this.inFlight.add(running);
+    try {
+      return await running;
+    } finally {
+      this.inFlight.delete(running);
+    }
   }
 
   private get id(): string {
@@ -394,7 +415,11 @@ export class Watcher extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const stored = this.tenant ?? parseTenantRecord(await this.ctx.storage.get('tenant'));
     if (stored === null) return;
-    const record = await this.adopt(stored);
+    // A failure is logged rather than thrown, so the runtime does not retry the alarm.
+    await this.run(stored, (record) => this.joinCheck(record)).catch((error: unknown) => this.log.error(`Join check failed: ${errorText(error)}`));
+  }
+
+  private async joinCheck(record: TenantRecord): Promise<void> {
     if (record.status !== 'active' || !record.limits.joinChecks) return;
     let rcon: { config: Config; http: HttpClient };
     try {
@@ -501,7 +526,10 @@ export class Watcher extends DurableObject<Env> {
   // The cron calls this every minute for each active community. Nothing happens until the community has set up its
   // game server, and a game server that stops answering is checked less often (see afterCheck).
   async check(given: TenantRecord): Promise<void> {
-    const record = await this.adopt(given);
+    return this.run(given, (record) => this.checkNow(record));
+  }
+
+  private async checkNow(record: TenantRecord): Promise<void> {
     if (record.status !== 'active' || !(await this.hasSecrets())) return;
     const storage = this.ctx.storage;
     const health = parseHealth(await storage.get('health'));
@@ -528,7 +556,10 @@ export class Watcher extends DurableObject<Env> {
     });
     await this.alerting(poll);
     await this.recordHealth(health, seen.snapshot !== null);
-    await this.startJoinChecks(config, record);
+    // Join checks only run while the server answers: one that has stopped answering would otherwise be read every 5
+    // seconds, whatever the backoff above.
+    if (seen.snapshot === null) await storage.deleteAlarm();
+    else await this.startJoinChecks(config, record);
     await this.updateBoard(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
@@ -1065,7 +1096,10 @@ export class Watcher extends DurableObject<Env> {
     what: 'stats' | 'players' | 'player',
     id = '',
   ): Promise<{ status: 200; value: unknown } | { status: 404 | 429 }> {
-    const record = await this.adopt(given);
+    return this.run(given, (record) => this.read(record, what, id));
+  }
+
+  private async read(record: TenantRecord, what: 'stats' | 'players' | 'player', id: string): Promise<{ status: 200; value: unknown } | { status: 404 | 429 }> {
     if (record.status !== 'active' || !record.limits.publicApi) return { status: 404 };
     if (!this.reads.take(record.limits.publicReadsPerMinute, Date.now())) return { status: 429 };
     if (what === 'stats') return { status: 200, value: await this.stats() };
@@ -1075,8 +1109,13 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // A slash command from the community's Discord server. It runs here, so the RCON password never leaves this object.
-  async command(given: TenantRecord, request: CommandRequest): Promise<CommandReply> {
-    const record = await this.adopt(given);
+  // `guildId` is the Discord server it came from: a Worker's list of communities can be a minute old, so a server the
+  // community has just moved from is refused here, by its newest record.
+  async command(given: TenantRecord, guildId: string, request: CommandRequest): Promise<CommandReply> {
+    return this.run(given, (record) => (record.guildId === guildId ? this.commandNow(record, request) : Promise.resolve({ content: NOT_THIS_SERVER })));
+  }
+
+  private async commandNow(record: TenantRecord, request: CommandRequest): Promise<CommandReply> {
     if (record.status !== 'active') return { content: PAUSED };
     if (!this.commands.take(record.limits.commandsPerMinute, Date.now())) return { content: SLOW_DOWN };
     if (request.name === 'settings') return this.settingsCommand(record, request);
@@ -1100,8 +1139,11 @@ export class Watcher extends DurableObject<Env> {
     })(request);
   }
 
-  async suggest(given: TenantRecord, request: CommandRequest): Promise<Choice[]> {
-    const record = await this.adopt(given);
+  async suggest(given: TenantRecord, guildId: string, request: CommandRequest): Promise<Choice[]> {
+    return this.run(given, (record) => (record.guildId === guildId ? this.suggestNow(record, request) : Promise.resolve([])));
+  }
+
+  private async suggestNow(record: TenantRecord, request: CommandRequest): Promise<Choice[]> {
     if (record.status !== 'active') return [];
     if (!this.suggestions.take(record.limits.commandsPerMinute * SUGGESTIONS_PER_COMMAND, Date.now())) return [];
     const config = await this.config();
@@ -1113,9 +1155,8 @@ export class Watcher extends DurableObject<Env> {
     })(request);
   }
 
-  async adminRoleIds(record: TenantRecord): Promise<string[]> {
-    await this.adopt(record);
-    return (await this.settings()).adminRoleIds;
+  async adminRoleIds(given: TenantRecord, guildId: string): Promise<string[]> {
+    return this.run(given, async (record) => (record.guildId === guildId ? (await this.settings()).adminRoleIds : []));
   }
 
   private async settingsCommand(record: TenantRecord, { options, userId }: CommandRequest): Promise<CommandReply> {
@@ -1141,23 +1182,27 @@ export class Watcher extends DurableObject<Env> {
     changes: Record<string, string | null>,
     by: string,
   ): Promise<{ ok: true; settings: Record<string, string> } | { ok: false; problem: string }> {
-    await this.adopt(given);
-    return this.configuring(async () => {
-      const result = changeSettings((await this.load()).settings, changes);
-      if ('problem' in result) return { ok: false as const, problem: result.problem };
-      await this.ctx.storage.put('settings', result.settings);
-      this.stored = null;
-      const said = Object.entries(changes).map(([name, value]) => `${name}=${value === null ? 'default' : JSON.stringify(value)}`);
-      this.log.info(`Settings changed by ${by}: ${said.join(', ')}`);
-      return { ok: true as const, settings: result.settings };
-    });
+    return this.run(given, () =>
+      this.configuring(async () => {
+        const result = changeSettings((await this.load()).settings, changes);
+        if ('problem' in result) return { ok: false as const, problem: result.problem };
+        await this.ctx.storage.put('settings', result.settings);
+        this.stored = null;
+        const said = Object.entries(changes).map(([name, value]) => `${name}=${value === null ? 'default' : JSON.stringify(value)}`);
+        this.log.info(`Settings changed by ${by}: ${said.join(', ')}`);
+        return { ok: true as const, settings: result.settings };
+      }),
+    );
   }
 
   // From the /setup form or the operator's API. A new RCON address or password is only saved once the game server
   // answers to it, and a new webhook once Discord says it is in the community's own server. Only the names of what
   // changed are logged.
   async saveSecrets(given: TenantRecord, change: Record<string, string>, by: string): Promise<SaveSecretsResult> {
-    const record = await this.adopt(given);
+    return this.run(given, (record) => this.saveSecretsNow(record, change, by));
+  }
+
+  private async saveSecretsNow(record: TenantRecord, change: Record<string, string>, by: string): Promise<SaveSecretsResult> {
     return this.configuring(async (): Promise<SaveSecretsResult> => {
       const merged = mergeSecrets((await this.load()).secrets, change);
       if ('problems' in merged) return { ok: false, problems: merged.problems };
@@ -1184,41 +1229,48 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async submitSetup(given: TenantRecord, values: Record<string, string>, userId: string | null): Promise<CommandReply> {
-    const record = await this.adopt(given);
-    if (record.status !== 'active') return { content: PAUSED };
-    // Each one may open a connection to the address given, so it counts as a command.
-    if (!this.commands.take(record.limits.commandsPerMinute, Date.now())) return { content: SLOW_DOWN };
-    return { content: setupReply(await this.saveSecrets(record, values, `Discord user ${userId ?? 'unknown'}`)) };
+  async submitSetup(given: TenantRecord, guildId: string, values: Record<string, string>, userId: string | null): Promise<CommandReply> {
+    return this.run(given, async (record) => {
+      if (record.guildId !== guildId) return { content: NOT_THIS_SERVER };
+      if (record.status !== 'active') return { content: PAUSED };
+      // Each one may open a connection to the address given, so it counts as a command.
+      if (!this.commands.take(record.limits.commandsPerMinute, Date.now())) return { content: SLOW_DOWN };
+      return { content: setupReply(await this.saveSecretsNow(record, values, `Discord user ${userId ?? 'unknown'}`)) };
+    });
   }
 
   // For the operator: settings, which secrets are set (never what they are), and whether the game server answers.
-  async view(record: TenantRecord): Promise<TenantView> {
-    await this.adopt(record);
-    const [{ settings, secrets }, stored] = await Promise.all([this.load(), this.ctx.storage.get(['health', 'stats'])]);
-    const server = parseStats(stored.get('stats')).server;
-    return {
-      settings,
-      secretsSet: SECRET_NAMES.filter((name) => secrets[name] !== undefined),
-      health: parseHealth(stored.get('health')),
-      server: server === null ? null : { name: server.name, seenAt: server.seenAt },
-    };
+  async view(given: TenantRecord): Promise<TenantView> {
+    return this.run(given, async () => {
+      const [{ settings, secrets }, stored] = await Promise.all([this.load(), this.ctx.storage.get(['health', 'stats'])]);
+      const server = parseStats(stored.get('stats')).server;
+      return {
+        settings,
+        secretsSet: SECRET_NAMES.filter((name) => secrets[name] !== undefined),
+        health: parseHealth(stored.get('health')),
+        server: server === null ? null : { name: server.name, seenAt: server.seenAt },
+      };
+    });
   }
 
-  async testConnection(record: TenantRecord): ReturnType<TenantAdmin['test']> {
-    await this.adopt(record);
-    try {
-      const { config, http } = await this.rcon();
-      const status = await fetchStatus(config.rconUrl, config.rconPassword, http);
-      return { ok: true, server: { name: status.name, players: status.players, maxPlayers: status.maxPlayers } };
-    } catch (error) {
-      return { ok: false, problem: errorText(error) };
-    }
+  async testConnection(given: TenantRecord): ReturnType<TenantAdmin['test']> {
+    return this.run(given, async () => {
+      try {
+        const { config, http } = await this.rcon();
+        const status = await fetchStatus(config.rconUrl, config.rconPassword, http);
+        return { ok: true as const, server: { name: status.name, players: status.players, maxPlayers: status.maxPlayers } };
+      } catch (error) {
+        return { ok: false as const, problem: errorText(error) };
+      }
+    });
   }
 
-  // Deletes everything the bot holds for the community. The object then refuses it, unless it is added again.
-  async purge(record: TenantRecord): Promise<void> {
-    await this.adopt(record);
+  // Deletes everything the bot holds for the community. New calls are refused at once, and calls still running finish
+  // first, so nothing they write survives. The object then refuses the community, unless it is added again.
+  async purge(given: TenantRecord): Promise<void> {
+    await this.adopt(given);
+    this.purging = true;
+    while (this.inFlight.size > 0) await Promise.allSettled([...this.inFlight]);
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     await this.ctx.storage.put('purgedAt', Date.now());
@@ -1362,11 +1414,12 @@ const tenantHandlers =
     const record = (await tenantIndex(env)).byGuild.get(guildId);
     if (record === undefined || record.status !== 'active') return null;
     const watcher = () => watcherOf(env, record);
+    // The Discord server goes too: the community's own record decides whether it is still theirs.
     return {
-      runCommand: (request) => watcher().command(record, request),
-      suggest: (request) => watcher().suggest(record, request),
-      adminRoleIds: () => watcher().adminRoleIds(record),
-      submitSetup: (values, userId) => watcher().submitSetup(record, values, userId),
+      runCommand: (request) => watcher().command(record, guildId, request),
+      suggest: (request) => watcher().suggest(record, guildId, request),
+      adminRoleIds: () => watcher().adminRoleIds(record, guildId),
+      submitSetup: (values, userId) => watcher().submitSetup(record, guildId, values, userId),
     };
   };
 

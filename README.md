@@ -189,7 +189,7 @@ The bot keeps any one community from running up costs for everyone:
 | `joinChecks`                 | Whether its server is read every 5 seconds while seeding (default on): the most Durable Object alarms a community uses, about 720 an hour of seeding |
 | `publicApi`                  | Whether it has website stats at all (default on)                                    |
 | `status`                     | `suspended` stops everything for it at once                                         |
-| Unreachable game servers     | Checked every minute for the first 15 failures, then every 5 minutes, then every 15 after an hour. A community whose server has gone costs almost nothing |
+| Unreachable game servers     | Checked every minute for the first 15 failed checks, then every 5 minutes for the next 45 (about 4 hours), then every 15 minutes. While it does not answer, the 5-second join checks stop too. A community whose server has gone costs almost nothing |
 | RCON answers                 | Time out after 8 seconds, and are refused past 4 MB                                 |
 
 Set limits with `npm run tenant -- update <id> '{"limits":{…}}'`. Also, on the Cloudflare account: turn on billing

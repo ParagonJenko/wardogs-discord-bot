@@ -42,6 +42,13 @@ describe('applyTenantInput', () => {
     });
   });
 
+  it('always moves updatedAt forward, even for two changes in the same millisecond', () => {
+    const first = applyTenantInput([tenant('alpha', GUILD_A, { updatedAt: NOW })], 'alpha', { status: 'suspended' }, NOW, 25);
+    expect(first).toMatchObject({ record: { updatedAt: NOW + 1 } });
+    const record = 'record' in first ? first.record : tenant('alpha', GUILD_A);
+    expect(applyTenantInput([record], 'alpha', { status: 'active' }, NOW, 25)).toMatchObject({ record: { updatedAt: NOW + 2 } });
+  });
+
   it('refuses a bad id, a Discord server another community has, and a new community without one', () => {
     expect(applyTenantInput([], 'Alpha!', { guildId: GUILD_A }, NOW, 25)).toMatchObject({ error: expect.stringMatching(/lowercase/) });
     expect(applyTenantInput([], 'ab', { guildId: GUILD_A }, NOW, 25)).toMatchObject({ error: expect.any(String) });
