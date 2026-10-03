@@ -279,9 +279,9 @@ works when it matches exactly one player.
 - **`/kick`** needs a reason; the player sees it. They can rejoin.
 - Warnings, kicks and the kick that comes with a ban tell the player where the rules are: "… | Rules: our Discord at
   gaminginit.com" (`SITE_URL`), or "… | Rules are in our Discord" without it.
-- **`/switchteam`** lists the other teams in the match, with how many players and points each has. With two teams,
-  leave `team` out to move them to the other one. Like the game's own console, the bot then kills the player so they
-  respawn on the new side.
+- **`/switchteam`** only offers the game's three teams: Lonestar, Manticore and Valkyra. A team that is not in the
+  match is refused. With two teams, leave `team` out to move them to the other one. Like the game's own console, the
+  bot then kills the player so they respawn on the new side.
 - **`/ban`** needs a length and a reason. The server's own bans are permanent (they go into `ServerSettings.ini`), so
   for a timed ban the bot writes when it ends into the reason, remembers it, and lifts the ban itself at the first
   check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly

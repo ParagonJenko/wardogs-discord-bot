@@ -1,5 +1,5 @@
 import type { Config } from './config.ts';
-import { buildPlayerEmbed, factionBadge, mapEmoji, mapName, playerName } from './discord.ts';
+import { buildPlayerEmbed, factionBadge, factionKey, mapEmoji, mapName, playerName } from './discord.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
 import { modesFor, planSetup } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
@@ -84,6 +84,9 @@ export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
 
 export const VIP_MAX_DAYS = 365;
+// The game's three teams. /switchteam only moves players to one of them: "🤠 Lonestar".
+export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
+export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionBadge(team)}${team}`, value: team }));
 // The game shows a private message on one line; "Staff warning: " takes the rest of its 200 characters.
 // The game shows a private message on one line of up to 200 characters; the prefix and the rules note take the rest.
 export const WARNING_MAX_LENGTH = 140;
@@ -193,21 +196,6 @@ export const suggestStaff =
         const [bans, known] = await Promise.all([fetchBans(rconUrl, rconPassword, http), records.knownPlayers()]);
         return matching(namedIds(bans.map((b) => b.steamId), known), typed).map(playerChoice);
       }
-      if (name === 'switchteam' && focused === 'team') {
-        const [status, live] = await Promise.all([fetchStatus(rconUrl, rconPassword, http), online().catch(() => [])]);
-        // The player being moved is already on their own team, so it is left out.
-        const current = live.find((p) => p.steamId === options['player'])?.faction;
-        const lower = typed.trim().toLowerCase();
-        return status.factionScores
-          .filter((f) => f.name !== current && f.name.toLowerCase().includes(lower))
-          .map((f) => {
-            const count = live.filter((p) => p.faction === f.name).length;
-            return {
-              name: fit(`${factionBadge(f.name, f.colorHex)}${f.name} · ${count} player${count === 1 ? '' : 's'} · ${f.score} points`),
-              value: f.name,
-            };
-          });
-      }
       const lower = typed.trim().toLowerCase();
       const named = (items: { id: string; name: string }[]): Choice[] =>
         items
@@ -293,17 +281,21 @@ export const runStaffCommand =
       const { player } = target;
       const current = target.online.faction;
       const teams = status.factionScores.map((f) => f.name);
-      const others = teams.filter((team) => team !== current);
+      const same = (a: string, b: string | null | undefined): boolean => b != null && factionKey(a) === factionKey(b);
+      const others = teams.filter((team) => !same(team, current));
       const asked = text('team');
-      const team = asked
-        ? (teams.find((t) => t.toLowerCase() === asked.toLowerCase()) ?? (teams.length === 0 ? asked : null))
+      const known = TEAMS.find((t) => same(t, asked));
+      if (asked && known === undefined) return { content: `Pick ${TEAMS.slice(0, -1).join(', ')} or ${TEAMS.at(-1)}.` };
+      // The server's own name for the team, or the one picked when the server does not say which teams are playing.
+      const team = known
+        ? (teams.find((t) => same(t, known)) ?? (teams.length === 0 ? known : null))
         : current && others.length === 1
           ? (others[0] ?? null)
           : null;
       if (team === null) {
-        return { content: asked ? `No team called "${asked}". Teams now: ${teams.join(', ')}.` : `Pick a team: ${teams.join(', ') || 'none found'}.` };
+        return { content: known ? `${known} is not in this match. Teams now: ${teams.join(', ')}.` : `Pick a team: ${teams.join(', ') || 'none found'}.` };
       }
-      if (team === current) return { content: `${who(player)} is already on ${team}.` };
+      if (same(team, current)) return { content: `${who(player)} is already on ${team}.` };
       log.info(`/switchteam by ${staff}: ${logged(player)} from ${current ?? 'unknown'} to ${team}`);
       await switchFaction(rconUrl, rconPassword, player.steamId, team, http);
       await records.log(player.steamId, {

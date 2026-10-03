@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
 import type { RoundupChoice } from './roundup.ts';
-import { STAFF_COMMANDS, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
+import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
@@ -163,7 +163,7 @@ export const COMMANDS = [
         name: 'team',
         description: 'The team to move them to (with two teams, leave it out for the other one)',
         required: false,
-        autocomplete: true,
+        choices: TEAM_CHOICES,
       },
     ],
   },

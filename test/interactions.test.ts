@@ -374,26 +374,26 @@ describe('handleInteraction', () => {
           options: [{ name: 'remove', type: 1, options: [{ name: 'steam_id', type: 3, value: 'ash', focused: true }] }],
         },
       };
-      const team = {
+      const kick = {
         ...typing(String(ADMINISTRATOR)),
         data: {
-          name: 'switchteam',
+          name: 'kick',
           options: [
-            { name: 'player', type: 3, value: '76561198000000001' },
-            { name: 'team', type: 3, value: 'kh', focused: true },
+            { name: 'player', type: 3, value: 'ash', focused: true },
+            { name: 'reason', type: 3, value: 'TK' },
           ],
         },
       };
       const d = deps();
 
-      for (const payload of [vip, team]) {
+      for (const payload of [vip, kick]) {
         const { body, signature, timestamp } = await signed(payload);
         await handleInteraction(body, signature, timestamp, d);
       }
 
       expect(d.suggest.mock.calls).toEqual([
         [{ name: 'vip', options: { subcommand: 'remove', steam_id: 'ash' }, userId: '42', focused: 'steam_id' }],
-        [{ name: 'switchteam', options: { player: '76561198000000001', team: 'kh' }, userId: '42', focused: 'team' }],
+        [{ name: 'kick', options: { player: 'ash', reason: 'TK' }, userId: '42', focused: 'player' }],
       ]);
     });
 
@@ -558,7 +558,18 @@ describe('COMMANDS', () => {
       ],
     });
     expect(find('switchteam')).toMatchObject({
-      options: [{ name: 'player', autocomplete: true }, { name: 'team', required: false, autocomplete: true }],
+      options: [
+        { name: 'player', autocomplete: true },
+        {
+          name: 'team',
+          required: false,
+          choices: [
+            { name: '🤠 Lonestar', value: 'Lonestar' },
+            { name: '🦂 Manticore', value: 'Manticore' },
+            { name: '🐻 Valkyra', value: 'Valkyra' },
+          ],
+        },
+      ],
     });
     expect(find('ban')).toMatchObject({
       options: [
@@ -622,6 +633,8 @@ describe('staff commands from the staff page', () => {
     expect(checkOptions('ban', { player, duration: '7d', reason: 'x'.repeat(201) })).toEqual({ problem: 'reason can be at most 200 characters.' });
     expect(checkOptions('ban', { player, duration: '7d', reason: 'TK', evil: 'x' })).toEqual({ problem: '/ban has no option called evil.' });
     expect(checkOptions('kick', { player, reason: 'TK', subcommand: 'add' })).toEqual({ problem: '/kick has no option called subcommand.' });
+    expect(checkOptions('switchteam', { player, team: 'Manticore' })).toEqual({ options: { player, team: 'Manticore' } });
+    expect(checkOptions('switchteam', { player, team: 'Kharr' })).toEqual({ problem: 'Pick team from the list.' });
   });
 
   it('checks whole numbers, true or false, and leaves out optional options left empty', () => {
