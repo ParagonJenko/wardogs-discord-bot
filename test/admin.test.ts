@@ -55,6 +55,8 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     nameOf: (steamId) => NAMES[steamId],
     idOf: (steamId) => (steamId === ASH ? 'a00000000001' : undefined),
     staffNames: {},
+    reserved: null,
+    vip: { granted: {}, checkedAt: 0, revoked: {} },
     ...overrides,
   };
 };
@@ -178,6 +180,26 @@ describe('buildAdminOverview', () => {
       '100000000000000003': { name: 'Moth', username: null },
       '100000000000000002': { name: 'Kestrel', username: 'kestrel' },
     });
+  });
+
+  it('lists the reserved players, with the VIP the bot gave and when it ends, and the lines that stop automatic VIP', () => {
+    const overview = buildAdminOverview(
+      sources({
+        reserved: { ids: [DEE, ASH], removals: ['-DefaultReservedPlayerIds=76561198000000003'], maxSlots: 2 },
+        vip: { granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY } }, checkedAt: 0, revoked: {} },
+      }),
+    );
+
+    expect(overview.reserved).toEqual({
+      players: [
+        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY } },
+        { player: { steamId: DEE, name: 'Dee' }, bot: null },
+      ],
+      removals: ['-DefaultReservedPlayerIds=76561198000000003'],
+      maxSlots: 2,
+    });
+    expect(buildAdminOverview(sources()).reserved).toBeNull();
+    expect(adminSteamIds([], new Map(), null, {}, [DEE])).toEqual([DEE]);
   });
 
   it('names everyone it can', () => {

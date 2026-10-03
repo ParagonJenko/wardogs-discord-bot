@@ -374,6 +374,12 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
   it, and bans made or lifted outside the bot.
 - **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
   player to join.
+- **The reserved slots**: everyone on the reserved list in `ServerSettings.ini`, with VIP from the bot and when it ends,
+  or added by hand, how many slots `MaxReservedSlots` holds back, and any `-`/`!DefaultReservedPlayerIds` lines that
+  stop [automatic VIP](#automatic-vip) until someone edits them out.
+- **Admin tools**: every staff slash command, run from the page: warn, kick, move team, ban, unban, look up a player,
+  give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders, and
+  remove a wrongly recorded match. See below.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
 Discord's **Administrator** permission, or with a role in `DISCORD_ADMIN_ROLE_IDS`, or the server's owner.
@@ -410,8 +416,20 @@ How it works:
 - Anyone else goes back to the page with why: not in the server, or not staff. Each sign-in is logged
   (`Staff signed in: …`, `Staff sign-in refused: …`).
 - The page reads `GET /api/admin/overview?days=1|7|30` with the session as a bearer token. Only `SITE_URL` may read it
-  from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord.
+  from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord. Each load also
+  reads the server's ban list and `ServerSettings.ini` (two RCON requests).
 - Sign-ins only go back to pages on `SITE_URL`, so a session is never handed to another site.
+
+Admin tools: the page runs the staff commands through the bot, as the signed-in staff member:
+
+- `GET /api/admin/commands` gives the page the staff commands as Discord has them, and it builds its forms from them, so
+  they always match. `POST /api/admin/suggest` fills the pick-lists (players, teams, maps, modes, bans, the reserved
+  list, recent matches) from the same suggestions Discord shows, and `POST /api/admin/command` runs one.
+- A command is checked the way Discord checks one (its options only, required ones given, lengths, ranges and choices),
+  then run by the same code as the slash command, so it does exactly the same: the same replies, the staff history,
+  the [moderation log](#moderation-log) and the Worker logs, with the staff member's Discord user ID and name. Each is
+  also logged as `Staff page: /<command> by "<name>" (Discord user <ID>)`.
+- The page asks before anything that changes the game or the records, such as a kick, a ban or a map change.
 
 Staff names: the bot's records name staff by their Discord user ID, so the page puts names to them:
 

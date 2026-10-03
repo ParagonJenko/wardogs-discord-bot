@@ -1,5 +1,14 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { COMMANDS, editOriginalReply, handleInteraction, type CommandRequest } from '../src/interactions.ts';
+import {
+  ADMIN_COMMAND_DEFINITIONS,
+  checkOptions,
+  COMMANDS,
+  editOriginalReply,
+  failureText,
+  handleInteraction,
+  isOptionOf,
+  type CommandRequest,
+} from '../src/interactions.ts';
 
 const encoder = new TextEncoder();
 const hex = (bytes: ArrayBuffer): string => Buffer.from(bytes).toString('hex');
@@ -589,5 +598,62 @@ describe('COMMANDS', () => {
     type Described = { description: string; options?: Described[] };
     const all = (list: Described[]): Described[] => list.flatMap((o) => [o, ...all(o.options ?? [])]);
     expect(all(COMMANDS as Described[]).every((o) => o.description.length <= 100)).toBe(true);
+  });
+});
+
+describe('staff commands from the staff page', () => {
+  it('offers only the staff commands', () => {
+    const names = ADMIN_COMMAND_DEFINITIONS.map((c) => c.name);
+
+    expect(names).toContain('ban');
+    expect(names).toContain('vip');
+    expect(names).toContain('broadcast');
+    expect(names).not.toContain('serverstatus');
+    expect(names).not.toContain('roundup');
+  });
+
+  it('checks options as Discord would: required, length, choices', () => {
+    const player = '76561198000000001';
+
+    expect(checkOptions('ban', { player, duration: '7d', reason: 'TK' })).toEqual({ options: { player, duration: '7d', reason: 'TK' } });
+    expect(checkOptions('ban', { player, duration: '7d' })).toEqual({ problem: '/ban needs reason.' });
+    expect(checkOptions('ban', { player, duration: '7d', reason: '  ' })).toEqual({ problem: '/ban needs reason.' });
+    expect(checkOptions('ban', { player, duration: '2y', reason: 'TK' })).toEqual({ problem: 'Pick duration from the list.' });
+    expect(checkOptions('ban', { player, duration: '7d', reason: 'x'.repeat(201) })).toEqual({ problem: 'reason can be at most 200 characters.' });
+    expect(checkOptions('ban', { player, duration: '7d', reason: 'TK', evil: 'x' })).toEqual({ problem: '/ban has no option called evil.' });
+    expect(checkOptions('kick', { player, reason: 'TK', subcommand: 'add' })).toEqual({ problem: '/kick has no option called subcommand.' });
+  });
+
+  it('checks whole numbers, true or false, and leaves out optional options left empty', () => {
+    expect(checkOptions('seeders', { days: 30 })).toEqual({ options: { days: '30' } });
+    expect(checkOptions('seeders', {})).toEqual({ options: {} });
+    expect(checkOptions('seeders', { days: '91' })).toEqual({ problem: 'days must be a whole number from 1 to 90.' });
+    expect(checkOptions('seeders', { days: '2.5' })).toEqual({ problem: 'days must be a whole number from 1 to 90.' });
+    expect(checkOptions('setnextmap', { map: 'Europe', hardcore: true, mode: '' })).toEqual({ options: { map: 'Europe', hardcore: 'true' } });
+    expect(checkOptions('setnextmap', { map: 'Europe', hardcore: 'yes' })).toEqual({ problem: 'hardcore must be true or false.' });
+  });
+
+  it('takes a subcommand for /vip, and checks its options', () => {
+    const steam_id = '76561198000000001';
+
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, days: '7' })).toEqual({ options: { subcommand: 'add', steam_id, days: '7' } });
+    expect(checkOptions('vip', { subcommand: 'remove', steam_id })).toEqual({ options: { subcommand: 'remove', steam_id } });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id })).toEqual({ problem: '/vip needs days.' });
+    expect(checkOptions('vip', { subcommand: 'remove', steam_id, days: '7' })).toEqual({ problem: '/vip has no option called days.' });
+    expect(checkOptions('vip', { steam_id })).toEqual({ problem: 'Pick add or remove.' });
+  });
+
+  it('knows which options suggestions can be asked for', () => {
+    expect(isOptionOf('ban', 'player')).toBe(true);
+    expect(isOptionOf('ban', 'nope')).toBe(false);
+    expect(isOptionOf('vip', 'steam_id', 'remove')).toBe(true);
+    expect(isOptionOf('vip', 'steam_id')).toBe(false);
+  });
+
+  it('says what failed without inviting a blind retry of an action', () => {
+    expect(failureText('kick', new Error('timed out'))).toBe("Couldn't confirm /kick worked (timed out). Check before trying again.");
+    expect(failureText('broadcast', new Error('x'))).toBe("Couldn't confirm the broadcast was delivered. Check in game before sending it again.");
+    expect(failureText('seeders', new Error('x'))).toBe("Couldn't get that right now (x). Try again in a minute.");
+    expect(failureText('players', new Error('x'))).toBe("Couldn't get that right now. Try again in a minute.");
   });
 });

@@ -20,7 +20,7 @@ const COMMAND_NAMES = [
 ] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
-const isCommandName = (name: string | undefined): name is CommandName =>
+export const isCommandName = (name: string | undefined): name is CommandName =>
   COMMAND_NAMES.some((command) => command === name);
 
 // Discord permission bit for "Administrator".
@@ -330,6 +330,87 @@ const isAdmin = (member: Member, adminRoleIds: string[]): boolean =>
 
 const privateMessage = (content: string) => ({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
 
+// What a command that failed says. A broadcast or staff action that timed out may still have reached the game, so it
+// does not invite a blind retry. Staff replies are private, so they say why; public ones don't show internals.
+export const failureText = (name: CommandName, error: unknown): string =>
+  name === 'broadcast'
+    ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
+    : ACTIONS.includes(name)
+      ? `Couldn't confirm /${name} worked (${errorText(error)}). Check before trying again.`
+      : ADMIN_COMMANDS.includes(name)
+        ? `Couldn't get that right now (${errorText(error)}). Try again in a minute.`
+        : "Couldn't get that right now. Try again in a minute.";
+
+// The staff commands as Discord gets them, for the staff page, which builds its forms from them.
+export const ADMIN_COMMAND_DEFINITIONS = COMMANDS.filter((command) => isAdminCommand(command.name));
+
+type OptionDefinition = {
+  type: number;
+  name: string;
+  description?: string;
+  required?: boolean;
+  max_length?: number;
+  min_value?: number;
+  max_value?: number;
+  choices?: { name: string; value: string }[];
+  options?: OptionDefinition[];
+};
+
+const optionsOf = (name: CommandName): OptionDefinition[] =>
+  ((COMMANDS.find((command) => command.name === name) as { options?: OptionDefinition[] } | undefined)?.options ?? []);
+
+// A staff page request checked the way Discord checks a slash command before sending it: only the command's options,
+// the required ones given, text within its length, whole numbers within their range, true or false, and choices from
+// their list. A command with subcommands, such as /vip, takes `subcommand` too. Values come back as Discord would send
+// them, as text.
+export const checkOptions = (
+  name: CommandName,
+  given: Record<string, string | number | boolean>,
+): { options: Record<string, string> } | { problem: string } => {
+  let definitions = optionsOf(name);
+  const options: Record<string, string> = {};
+  const subcommands = definitions.filter((o) => o.type === SUBCOMMAND);
+  if (subcommands.length > 0) {
+    const chosen = subcommands.find((o) => o.name === given['subcommand']);
+    if (chosen === undefined) return { problem: `Pick ${subcommands.map((o) => o.name).join(' or ')}.` };
+    options['subcommand'] = chosen.name;
+    definitions = chosen.options ?? [];
+  }
+  const known = new Set(definitions.map((o) => o.name));
+  const unknown = Object.keys(given).find((key) => key !== 'subcommand' && !known.has(key));
+  if (unknown !== undefined || (subcommands.length === 0 && 'subcommand' in given)) {
+    return { problem: `/${name} has no option called ${unknown ?? 'subcommand'}.` };
+  }
+  for (const o of definitions) {
+    const raw = given[o.name];
+    const value = raw === undefined ? '' : String(raw);
+    if (value.trim() === '') {
+      if (o.required) return { problem: `/${name} needs ${o.name}.` };
+      continue;
+    }
+    if (o.type === STRING && o.max_length !== undefined && value.length > o.max_length) {
+      return { problem: `${o.name} can be at most ${o.max_length} characters.` };
+    }
+    if (o.type === INTEGER) {
+      const n = Number(value);
+      if (!Number.isInteger(n) || (o.min_value !== undefined && n < o.min_value) || (o.max_value !== undefined && n > o.max_value)) {
+        return { problem: `${o.name} must be a whole number from ${o.min_value ?? '…'} to ${o.max_value ?? '…'}.` };
+      }
+    }
+    if (o.type === BOOLEAN && value !== 'true' && value !== 'false') return { problem: `${o.name} must be true or false.` };
+    if (o.choices !== undefined && !o.choices.some((c) => c.value === value)) return { problem: `Pick ${o.name} from the list.` };
+    options[o.name] = value;
+  }
+  return { options };
+};
+
+// The option being typed in, for suggestions: one of the command's (or its subcommand's) options.
+export const isOptionOf = (name: CommandName, option: string, subcommand?: string): boolean => {
+  const top = optionsOf(name);
+  const list = top.some((o) => o.type === SUBCOMMAND) ? (top.find((o) => o.name === subcommand)?.options ?? []) : top;
+  return list.some((o) => o.name === option);
+};
+
 export const handleInteraction = async (
   body: string,
   signature: string | null,
@@ -409,17 +490,7 @@ export const handleInteraction = async (
       (result) => ({ ...result, allowed_mentions: { parse: [] } }),
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
-        // A broadcast or staff action that timed out may still have reached the game, so don't invite a blind retry.
-        // Staff replies are private, so they say why; public ones don't show internals.
-        const content =
-          name === 'broadcast'
-            ? "Couldn't confirm the broadcast was delivered. Check in game before sending it again."
-            : ACTIONS.includes(name)
-              ? `Couldn't confirm /${name} worked (${errorText(error)}). Check before trying again.`
-              : admin
-                ? `Couldn't get that right now (${errorText(error)}). Try again in a minute.`
-                : "Couldn't get that right now. Try again in a minute.";
-        return { content, allowed_mentions: { parse: [] } };
+        return { content: failureText(name, error), allowed_mentions: { parse: [] } };
       },
     );
     await deps.editReply(interaction.application_id, token, reply);

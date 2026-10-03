@@ -5,6 +5,7 @@ import { totals, type PlayerDay } from './players.ts';
 import type { Ban } from './rcon.ts';
 import { DISCORD_ID, type StaffNames } from './staffnames.ts';
 import type { IdOf } from './stats.ts';
+import type { ReservedListing, VipState } from './vip.ts';
 import { weaponKind, weaponName, type WeaponKind } from './weapons.ts';
 
 // What the staff page shows: possible griefers from the kill feed, the incidents behind it, what staff did, and the bans
@@ -71,6 +72,15 @@ export type AdminBan = {
   bot: { by: string; at: number; until: number | null; reason: string } | null;
 };
 
+// Everyone on the server's reserved list. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
+// when it ends; without it, the slot was added by hand. `removals` are lines in ServerSettings.ini that remove players
+// from the list, which stop automatic VIP until someone edits them out.
+export type AdminReserved = {
+  players: { player: AdminPlayer; bot: { since: number; until: number } | null }[];
+  removals: string[];
+  maxSlots: number | null;
+};
+
 // A staff member, by Discord user ID: the name they go by and their Discord username, when the bot knows them.
 export type AdminStaff = Record<string, { name: string; username: string | null }>;
 
@@ -90,6 +100,8 @@ export type AdminOverview = {
   bans: AdminBan[] | null;
   // Everyone in `moderation` and `bans` by Discord user ID that the bot has a name for.
   staff: AdminStaff;
+  // Null when ServerSettings.ini could not be read.
+  reserved: AdminReserved | null;
 };
 
 export type AdminSources = {
@@ -109,17 +121,27 @@ export type AdminSources = {
   idOf: IdOf;
   // Staff the bot has seen or looked up, by Discord user ID.
   staffNames: StaffNames;
+  // The reserved list in ServerSettings.ini, or null when it could not be read, and the VIP the bot gave.
+  reserved: ReservedListing | null;
+  vip: VipState;
 };
 
 const startOfDay = (at: number): number => Date.parse(`${new Date(at).toISOString().slice(0, 10)}T00:00:00Z`);
 
 // Every Steam ID the page will name, so their public ids can be worked out first.
-export const adminSteamIds = (grief: GriefDay[], modLogs: Map<string, ModEntry[]>, serverBans: Ban[] | null, banBook: BanBook): string[] => [
+export const adminSteamIds = (
+  grief: GriefDay[],
+  modLogs: Map<string, ModEntry[]>,
+  serverBans: Ban[] | null,
+  banBook: BanBook,
+  reserved: string[] = [],
+): string[] => [
   ...new Set([
     ...grief.flatMap((d) => Object.keys(d.players)),
     ...modLogs.keys(),
     ...(serverBans ?? []).map((b) => b.steamId),
     ...Object.keys(banBook),
+    ...reserved,
   ]),
 ];
 
@@ -255,6 +277,22 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     feedSince: s.feedSince,
     flags: FLAGS,
     staff: staffFor(adminStaffIds({ moderation, bans }), s.staffNames, s.modLogs),
+    reserved:
+      s.reserved === null
+        ? null
+        : {
+            players: s.reserved.ids
+              .map((steamId) => {
+                const grant = s.vip.granted[steamId];
+                return {
+                  player: ref(steamId, grant?.name),
+                  bot: grant === undefined ? null : { since: grant.grantedAt, until: grant.expiresAt },
+                };
+              })
+              .sort((a, b) => a.player.name.localeCompare(b.player.name)),
+            removals: s.reserved.removals,
+            maxSlots: s.reserved.maxSlots,
+          },
     totals: {
       teamKills: sum('teamKills'),
       vehicleTeamKills: sum('vehicleTeamKills'),
