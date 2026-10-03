@@ -75,6 +75,9 @@ const EnvSchema = z
     ROUNDUP_HOUR: z.coerce.number().int().min(0).max(23).default(17),
     // Posts to the moderation log when a player passes a griefing flag (team kills, vehicle suicides): "on" or "off".
     GRIEF_ALERTS: z.enum(['on', 'off']).default('on'),
+    // Posts to the moderation log when a player with a high-risk Steam account is in game (needs STEAM_API_KEY): "on" or
+    // "off".
+    STEAM_ALERTS: z.enum(['on', 'off']).default('on'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -101,6 +104,8 @@ export type Config = {
   modLogWebhookUrl: string | undefined;
   // Whether possible griefing is posted to the moderation log.
   griefAlerts: boolean;
+  // Whether high-risk Steam accounts are posted to the moderation log.
+  steamAlerts: boolean;
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
@@ -141,6 +146,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     statusWebhookUrl: e.DISCORD_STATUS_WEBHOOK_URL,
     modLogWebhookUrl: e.DISCORD_MODLOG_WEBHOOK_URL,
     griefAlerts: e.GRIEF_ALERTS === 'on',
+    steamAlerts: e.STEAM_ALERTS === 'on',
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,

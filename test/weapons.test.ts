@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  feedKillsSince,
   feedAuthorized,
   MAX_FEED_EVENTS,
   parseFeed,
@@ -307,5 +308,18 @@ describe('playerWeaponDays', () => {
       { day: '2026-10-03', name: 'M113 APC', kind: 'vehicle', kills: 3, headshots: 0, longest: 3 },
       { day: '2026-10-03', name: 'M4', kind: 'weapon', kills: 1, headshots: 0, longest: null },
     ]);
+  });
+});
+
+describe('feedKillsSince', () => {
+  it('adds up a player\'s kills and headshots from a day on', () => {
+    const record = {
+      '2026-09-01': { 'Id.Item.AK74M': { kills: 9, headshots: 9, longest: 50 } },
+      '2026-10-01': { 'Id.Item.AK74M': { kills: 4, headshots: 1, longest: 20 }, 'Id.Item.M4A1': { kills: 2, headshots: 2, longest: null } },
+      '2026-10-03': { 'Id.Item.AK74M': { kills: 3, headshots: 0, longest: 12 } },
+    };
+
+    expect(feedKillsSince(record, '2026-10-01')).toEqual({ kills: 9, headshots: 3 });
+    expect(feedKillsSince({}, '2026-10-01')).toEqual({ kills: 0, headshots: 0 });
   });
 });

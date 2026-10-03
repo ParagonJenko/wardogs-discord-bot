@@ -23,6 +23,7 @@ import {
   type HttpClient,
   type Player,
 } from './rcon.ts';
+import type { SteamLookup } from './steam.ts';
 import { reservedIds, type VipGrant } from './vip.ts';
 
 // Staff commands that act on players, maps and VIP. Players are picked from a list while typing, so the value
@@ -68,6 +69,8 @@ export type StaffRecords = {
   // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
   // the server was on when staff set it, or null when that could not be read.
   nextMap: (map: string, playing: string | null) => Promise<void>;
+  // What Steam says about their account: the bot's check, made now when it has none or it is a day old.
+  steam: (steamId: string) => Promise<SteamLookup>;
 };
 
 export type StaffDeps = {
@@ -415,10 +418,11 @@ export const runStaffCommand =
     const { found, live } = await anyTarget('player');
     if ('problem' in found) return { content: found.problem };
     const { player } = found;
-    const [record, serverConfig, bans] = await Promise.all([
+    const [record, serverConfig, bans, steam] = await Promise.all([
       records.player(player.steamId),
       optional(fetchConfig(rconUrl, rconPassword, http)),
       optional(fetchBans(rconUrl, rconPassword, http)),
+      records.steam(player.steamId).catch((): SteamLookup => 'failed'),
     ]);
     const inGame = live.find((p) => p.steamId === player.steamId) ?? null;
     return {
@@ -430,6 +434,7 @@ export const runStaffCommand =
           online: inGame,
           reserved: serverConfig === null ? null : isReserved(serverConfig.text, player.steamId),
           serverBan: bans === null ? undefined : (bans.find((b) => b.steamId === player.steamId) ?? null),
+          steam,
           days: PROFILE_DAYS,
           now: now(),
         }),

@@ -16,6 +16,7 @@ const records: StaffRecords = {
   vipAdd: vi.fn(),
   vipRemove: vi.fn(),
   nextMap: vi.fn(async () => undefined),
+  steam: vi.fn(async () => 'off' as const),
 };
 
 const config: Config = {
@@ -25,6 +26,7 @@ const config: Config = {
   statusWebhookUrl: undefined,
   modLogWebhookUrl: undefined,
   griefAlerts: true,
+  steamAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,

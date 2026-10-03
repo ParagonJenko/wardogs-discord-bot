@@ -14,6 +14,7 @@ const config: Config = {
   statusWebhookUrl: undefined,
   modLogWebhookUrl: undefined,
   griefAlerts: true,
+  steamAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,

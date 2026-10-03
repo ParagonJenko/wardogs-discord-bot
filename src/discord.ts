@@ -6,6 +6,7 @@ import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
 import type { RecentMatch } from './stats.ts';
+import { assess, RISK_LABELS, steamFacts, type Risk, type SteamAlert, type SteamCheck, type SteamLookup } from './steam.ts';
 import { topPlayers, type MatchState, type MatchSummary } from './tracking.ts';
 
 export type EmbedField = { name: string; value: string; inline?: boolean };
@@ -754,6 +755,8 @@ export type PlayerProfile = {
   reserved: boolean | null;
   // undefined when the server could not be read; null when it has no ban for them.
   serverBan: Ban | null | undefined;
+  // What Steam says about their account. Left out without STEAM_API_KEY.
+  steam?: SteamLookup;
   days: number;
   now: number;
 };
@@ -842,9 +845,23 @@ const historyText = (record: PlayerRecord): string => {
   return [...(counts.length > 0 ? [counts.join(' · ')] : []), ...entries].join('\n');
 };
 
-// For staff: who a player is, their time on the server, VIP, bans and what staff did through the bot.
+const RISK_EMOJI: Record<Risk, string> = { high: '🚩', medium: '⚠️', low: '✅' };
+
+// "🚩 **High risk** · 5 points".
+const riskLine = (check: SteamCheck, now: number): string => {
+  const { risk, score } = assess(check, now);
+  return `${RISK_EMOJI[risk]} **${RISK_LABELS[risk]}**${risk === 'low' ? '' : ` · ${plural(score, 'point')}`}`;
+};
+
+const steamText = (lookup: SteamCheck | 'failed', now: number): string => {
+  if (lookup === 'failed') return "Couldn't reach Steam just now.";
+  if (!lookup.found) return `Steam has no account with this ID. Checked ${when(lookup.at, 'R')}`;
+  return [riskLine(lookup, now), steamFacts(lookup, now).join(' · '), `Checked ${when(lookup.at, 'R')}`].join('\n');
+};
+
+// For staff: who a player is, their time on the server, their Steam account, VIP, bans and what staff did through the bot.
 export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
-  const { steamId, name, record, online, days } = profile;
+  const { steamId, name, record, online, days, steam } = profile;
   const t = record.totals;
   const period = `last ${days} days`;
   const here = online
@@ -863,6 +880,7 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
             { name: 'Seeding', value: `${hoursAndMinutes(t.seedingMinutes)} · ${plural(t.seedDays, 'seed day')}`, inline: true },
             { name: 'Matches', value: `${t.matches} · ${plural(t.kills, 'kill')} · ${kd(t.kills, t.deaths)} K/D`, inline: true },
           ]),
+      ...(steam === undefined || steam === 'off' ? [] : [{ name: 'Steam account', value: steamText(steam, profile.now) }]),
       { name: 'VIP', value: vipText(profile) },
       { name: 'Ban', value: banText(profile) },
       { name: 'Staff history', value: historyText(record) },
@@ -950,4 +968,26 @@ export const buildGriefAlert = (alert: GriefAlert, weapon: (cause: string) => st
     ],
     allowed_mentions: NO_PINGS,
   };
+};
+
+// Discord takes up to 10 embeds in one message.
+const EMBEDS_PER_MESSAGE = 10;
+
+// Players in game with a high-risk Steam account, one embed each, in as few messages as Discord allows.
+export const buildSteamAlerts = (alerts: SteamAlert[], now: number, siteUrl?: string): DiscordMessage[] => {
+  const embeds = alerts.map(
+    ({ steamId, name, check }): Embed => ({
+      title: `🕵️ Risky Steam account · ${playerName(name)}`,
+      ...staffPage(siteUrl),
+      description: [steamLine(steamId), `${riskLine(check, now)} · in game now`].join('\n'),
+      color: COLORS.lowPop,
+      fields: [{ name: 'Steam says', value: [...steamFacts(check, now), `Checked ${when(check.at, 'R')}`].join('\n') }],
+      footer: { text: 'From Steam. A reason to look, not proof: check before acting.' },
+      timestamp: new Date(now).toISOString(),
+    }),
+  );
+  return Array.from({ length: Math.ceil(embeds.length / EMBEDS_PER_MESSAGE) }, (_, i) => ({
+    embeds: embeds.slice(i * EMBEDS_PER_MESSAGE, (i + 1) * EMBEDS_PER_MESSAGE),
+    allowed_mentions: NO_PINGS,
+  }));
 };

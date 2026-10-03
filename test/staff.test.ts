@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
 import type { HttpClient } from '../src/rcon.ts';
+import type { SteamLookup } from '../src/steam.ts';
 import {
   findPlayer,
   runStaffCommand,
@@ -19,6 +20,7 @@ const config: Config = {
   statusWebhookUrl: undefined,
   modLogWebhookUrl: undefined,
   griefAlerts: true,
+  steamAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
@@ -87,6 +89,7 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   vipAdd: vi.fn(async () => ({ outcome: 'added' as const, until: NOW + 30 * 86_400_000 })),
   vipRemove: vi.fn(async () => ({ outcome: 'removed' as const })),
   nextMap: vi.fn(async () => undefined),
+  steam: vi.fn(async (): Promise<SteamLookup> => 'off'),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -399,6 +402,30 @@ describe('runStaffCommand', () => {
         { name: 'Staff history', value: `1 kick\n<t:${(NOW - 86_400_000) / 1000}:d> **Kick** by <@42>: Teamkilling` },
       ]),
     );
+  });
+
+  it('/player shows what Steam says about their account, and still answers without it', async () => {
+    const { run, records } = setup();
+    const steam = {
+      at: NOW,
+      found: true,
+      vacBans: 0,
+      gameBans: 2,
+      lastBanAt: NOW - 400 * 86_400_000,
+      communityBanned: false,
+      tradeBan: 'none' as const,
+      public: true,
+      setUp: true,
+      createdAt: NOW - 2000 * 86_400_000,
+    };
+    records.steam.mockResolvedValueOnce(steam).mockRejectedValueOnce(new Error('down'));
+    const steamField = async () => (await run('player', { player: BO })).embeds?.[0]?.fields?.find((f) => f.name === 'Steam account')?.value;
+
+    expect(await steamField()).toContain('⚠️ **Worth a look** · 3 points\n2 game bans, the last 13 months ago');
+    expect(records.steam).toHaveBeenCalledWith(BO);
+    expect(await steamField()).toBe("Couldn't reach Steam just now.");
+    // Without STEAM_API_KEY there is nothing to say.
+    expect(await steamField()).toBeUndefined();
   });
 
   it('/player still answers when the reserved list cannot be read safely', async () => {

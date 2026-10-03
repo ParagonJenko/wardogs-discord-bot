@@ -16,6 +16,7 @@ describe('loadConfig', () => {
       statusWebhookUrl: undefined,
       modLogWebhookUrl: undefined,
       griefAlerts: true,
+      steamAlerts: true,
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
@@ -39,6 +40,11 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, DISCORD_ROUNDUP_WEBHOOK_URL: 'https://example.com/hook' })).toThrow(
       /DISCORD_ROUNDUP_WEBHOOK_URL/,
     );
+  });
+
+  it('posts high-risk Steam accounts to the moderation log unless STEAM_ALERTS is off', () => {
+    expect(loadConfig({ ...required, STEAM_ALERTS: 'off' }).steamAlerts).toBe(false);
+    expect(() => loadConfig({ ...required, STEAM_ALERTS: 'no' })).toThrow(/STEAM_ALERTS/);
   });
 
   it('reads the webhook for the live status, which must be a Discord webhook too', () => {
