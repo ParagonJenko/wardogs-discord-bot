@@ -14,8 +14,8 @@
   // Non-secret settings. RCON_URL, RCON_PASSWORD and DISCORD_WEBHOOK_URL are secrets: see the README. So are
   // DISCORD_STATUS_WEBHOOK_URL, the optional channel for the live server status, DISCORD_ROUNDUP_WEBHOOK_URL, the
   // optional channel for the weekly and monthly roundups, KILL_FEED_TOKEN, which turns on the weapon stats,
-  // DISCORD_MODLOG_WEBHOOK_URL, the optional staff channel for the moderation log, and DISCORD_CLIENT_SECRET, for the
-  // staff page's Discord sign-in.
+  // DISCORD_MODLOG_WEBHOOK_URL, the optional staff channel for the moderation log, DISCORD_CLIENT_SECRET, for the staff
+  // page's Discord sign-in, and DISCORD_BOT_TOKEN, optional, so the staff page can name staff it has not seen.
   "vars": {
     // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop.
     "DISCORD_ROLE_ID": "1554801355015594025",

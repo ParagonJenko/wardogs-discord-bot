@@ -3,6 +3,7 @@ import { FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
 import { isBotBan, type BanBook, type ModAction, type ModEntry } from './moderation.ts';
 import { totals, type PlayerDay } from './players.ts';
 import type { Ban } from './rcon.ts';
+import { DISCORD_ID, type StaffNames } from './staffnames.ts';
 import type { IdOf } from './stats.ts';
 import { weaponKind, weaponName, type WeaponKind } from './weapons.ts';
 
@@ -70,6 +71,9 @@ export type AdminBan = {
   bot: { by: string; at: number; until: number | null; reason: string } | null;
 };
 
+// A staff member, by Discord user ID: the name they go by and their Discord username, when the bot knows them.
+export type AdminStaff = Record<string, { name: string; username: string | null }>;
+
 export type AdminOverview = {
   generatedAt: number;
   days: number;
@@ -84,6 +88,8 @@ export type AdminOverview = {
   moderation: AdminModEntry[];
   // Null when the server's ban list could not be read.
   bans: AdminBan[] | null;
+  // Everyone in `moderation` and `bans` by Discord user ID that the bot has a name for.
+  staff: AdminStaff;
 };
 
 export type AdminSources = {
@@ -101,6 +107,8 @@ export type AdminSources = {
   // The best name the bot has for a Steam ID, if any.
   nameOf: (steamId: string) => string | undefined;
   idOf: IdOf;
+  // Staff the bot has seen or looked up, by Discord user ID.
+  staffNames: StaffNames;
 };
 
 const startOfDay = (at: number): number => Date.parse(`${new Date(at).toISOString().slice(0, 10)}T00:00:00Z`);
@@ -114,6 +122,31 @@ export const adminSteamIds = (grief: GriefDay[], modLogs: Map<string, ModEntry[]
     ...Object.keys(banBook),
   ]),
 ];
+
+// The Discord user IDs the page names: who did each thing in the log, and who made each of the bot's bans.
+export const adminStaffIds = (overview: Pick<AdminOverview, 'moderation' | 'bans'>): string[] => [
+  ...new Set([...overview.moderation.map((e) => e.by), ...(overview.bans ?? []).flatMap((b) => (b.bot === null ? [] : [b.bot.by]))]),
+].filter((id) => DISCORD_ID.test(id));
+
+// Names for those IDs: from the staff directory, or else the name the staff member had in their latest log entry.
+export const staffFor = (ids: string[], staffNames: StaffNames, modLogs: Map<string, ModEntry[]>): AdminStaff => {
+  const logged = new Map<string, { name: string; at: number }>();
+  for (const log of modLogs.values()) {
+    for (const e of log) {
+      if (e.byName === undefined) continue;
+      const seen = logged.get(e.by);
+      if (seen === undefined || e.at > seen.at) logged.set(e.by, { name: e.byName, at: e.at });
+    }
+  }
+  return Object.fromEntries(
+    ids.flatMap((id) => {
+      const known = staffNames[id];
+      if (known !== undefined) return [[id, { name: known.name, username: known.username }]];
+      const name = logged.get(id)?.name;
+      return name === undefined ? [] : [[id, { name, username: null }]];
+    }),
+  );
+};
 
 export const buildAdminOverview = (s: AdminSources): AdminOverview => {
   const ref = (steamId: string, fallback?: string): AdminPlayer => {
@@ -221,6 +254,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     days: s.days,
     feedSince: s.feedSince,
     flags: FLAGS,
+    staff: staffFor(adminStaffIds({ moderation, bans }), s.staffNames, s.modLogs),
     totals: {
       teamKills: sum('teamKills'),
       vehicleTeamKills: sum('vehicleTeamKills'),

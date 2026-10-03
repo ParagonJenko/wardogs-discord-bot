@@ -389,7 +389,11 @@ To set it up, with the [slash commands](#slash-commands) app:
      ```
 2. In the `vars` block of `wrangler.jsonc`, set `DISCORD_APPLICATION_ID` to the app's **Application ID** (General
    Information; the same one as in `.env`). `DISCORD_GUILD_ID` and `SITE_URL` must be set too.
-3. `npm run deploy`.
+3. Optionally, so the page names every staff member (see below), store the bot token from `.env` as a secret:
+   ```bash
+   npx wrangler secret put DISCORD_BOT_TOKEN
+   ```
+4. `npm run deploy`.
 
 How it works:
 
@@ -405,6 +409,15 @@ How it works:
 - The page reads `GET /api/admin/overview?days=1|7|30` with the session as a bearer token. Only `SITE_URL` may read it
   from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord.
 - Sign-ins only go back to pages on `SITE_URL`, so a session is never handed to another site.
+
+Staff names: the bot's records name staff by their Discord user ID, so the page puts names to them:
+
+- The bot learns each staff member's name, the one they go by in the server, and their Discord username, when they sign
+  in to the page or use a staff command. Each warning, kick, ban and team move also keeps the name of who made it.
+- With `DISCORD_BOT_TOKEN`, it asks Discord (`GET /users/{id}`) about anyone it has not seen that way, such as staff who
+  made bans before names were kept: up to 10 each time the page loads, and again after 30 days. A name from Discord is
+  their display name, not their server nickname.
+- Anyone it still has no name for shows as "Discord user" and their ID.
 
 What the griefing figures can and cannot tell:
 
