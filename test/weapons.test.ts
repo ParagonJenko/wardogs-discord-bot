@@ -43,39 +43,66 @@ const event = (overrides: Record<string, unknown> = {}) => ({
 
 const kill = (overrides: Partial<FeedKill> = {}): FeedKill => ({
   eventId: 'e1',
+  time: 100,
+  matchId: 'm1',
+  map: 'Kavkazi',
+  victimSteamId: CY,
+  victimName: 'Cy',
   killerSteamId: ASH,
   killerName: 'Ash',
   cause: 'Id.Item.AK74M',
   distance: 50,
   headshot: false,
+  tags: [],
   ...overrides,
 });
 
 describe('parseFeed', () => {
-  it('reads each kill: who, with what, how far in metres, and whether it was a headshot', () => {
-    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({
-      kills: [{ eventId: 'e1', killerSteamId: ASH, killerName: 'Ash', cause: 'Id.Item.AK74M', distance: 7.05, headshot: true }],
-      skipped: 0,
-    });
+  it('reads each death: who, by whom, with what, how far in metres, whether it was a headshot, and the match clock', () => {
+    const kill = {
+      eventId: 'e1',
+      time: 3317.77,
+      matchId: 'm1',
+      map: 'Kavkazi',
+      victimSteamId: BO,
+      victimName: 'Bo',
+      killerSteamId: ASH,
+      killerName: 'Ash',
+      cause: 'Id.Item.AK74M',
+      distance: 7.05,
+      headshot: true,
+      tags: [],
+    };
+
+    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({ events: [kill], kills: [kill], skipped: 0 });
   });
 
-  it('skips suicides, falls, deaths with nobody to blame, other events and anything malformed', () => {
+  it('keeps suicides, falls and deaths with nobody to blame as deaths, not kills', () => {
     const batch = parseFeed({
       events: [
         event({ eventId: 'suicide', killerSteamId: BO }),
         event({ eventId: 'tagged', contextTags: ['Meta.PlayerKillFlag.Player.Suicide'] }),
-        event({ eventId: 'fall', cause: undefined, contextTags: ['Meta.Progression.Context.Player.KillContext.Falling'] }),
+        event({ eventId: 'fall', cause: undefined, killerSteamId: undefined, contextTags: ['Meta.Progression.Context.Player.KillContext.Falling'] }),
         event({ eventId: 'world', killerSteamId: undefined, killerName: undefined }),
-        event({ eventId: 'other', type: 'spawned' }),
-        event({ eventId: 'odd', distance: 'far' }),
-        'nonsense',
-        event({ eventId: 'kept', contextTags: undefined }),
+        event({ eventId: 'kept', contextTags: ['Meta.Progression.Context.Player.KillContext.RoadKill'] }),
       ],
     });
 
+    expect(batch?.events.map((e) => e.eventId)).toEqual(['suicide', 'tagged', 'fall', 'world', 'kept']);
     expect(batch?.kills.map((k) => k.eventId)).toEqual(['kept']);
-    expect(batch?.kills[0]?.headshot).toBe(false);
-    expect(batch?.skipped).toBe(7);
+    expect(batch?.events[1]?.tags).toEqual(['Suicide']);
+    expect(batch?.events[2]).toMatchObject({ killerSteamId: null, cause: null, tags: ['Falling'] });
+    expect(batch?.kills[0]).toMatchObject({ headshot: false, tags: ['RoadKill'] });
+    expect(batch?.skipped).toBe(0);
+  });
+
+  it('skips other events and anything malformed', () => {
+    const batch = parseFeed({
+      events: [event({ eventId: 'other', type: 'spawned' }), event({ eventId: 'odd', distance: 'far' }), 'nonsense', event({ eventId: 'kept' })],
+    });
+
+    expect(batch?.events.map((e) => e.eventId)).toEqual(['kept']);
+    expect(batch?.skipped).toBe(3);
   });
 
   it('keeps a kill without a distance, as when a vehicle blows up', () => {

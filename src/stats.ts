@@ -322,6 +322,12 @@ const named = <T extends { steamId?: string }>(rows: T[], idOf: IdOf): Public<T>
     return id === undefined ? row : { ...row, id };
   });
 
+// The match on now, as the website sees it.
+export const publicCurrentMatch = (
+  match: CurrentMatch | null,
+  idOf: IdOf,
+): (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null => (match === null ? null : { ...match, top: named(match.top, idOf) });
+
 // Everyone the public stats name, so their public ids can be worked out before publicStats needs them.
 export const namedSteamIds = (stats: SiteStats, leaderboard: Leaderboard): string[] => {
   const rows = [
@@ -369,7 +375,7 @@ export const publicStats = (
   thresholds,
   ...stats,
   matches: matches.map((m) => ({ ...m, top: named(m.top, idOf) })),
-  currentMatch: currentMatch === null ? null : { ...currentMatch, top: named(currentMatch.top, idOf) },
+  currentMatch: publicCurrentMatch(currentMatch, idOf),
   hourly: hourlyAverages(hours, now, thresholds.busy),
   leaderboard: {
     days: leaderboard.days,

@@ -15,56 +15,89 @@ export const MAX_FEED_BYTES = 65_536;
 export const MAX_FEED_EVENTS = 100;
 export const MIN_FEED_TOKEN = 16;
 
-// One player killing another. Suicides, falls and deaths with no player to blame are not kills.
-export type FeedKill = {
+// One death in the feed: a player killed by another, or by something else (a suicide, a fall, the world).
+export type FeedEvent = {
   eventId: string;
-  killerSteamId: string;
+  // The match clock, in seconds. It starts again with each match.
+  time: number;
+  // The game's id for the match. It only changes when the server restarts, not with each match.
+  matchId: string;
+  // As RCON names it, such as Kavkazi.
+  map: string;
+  victimSteamId: string;
+  victimName: string;
+  // Null when no other player made it.
+  killerSteamId: string | null;
   killerName: string;
-  cause: string;
+  // What killed them, such as Id.Item.AK74M. Null for a fall.
+  cause: string | null;
   // Metres, when the game sent a distance. It sends none for a vehicle blowing up.
   distance: number | null;
   headshot: boolean;
+  // The other things the game says about it, in short: RoadKill, Penetration, Ricochet, WeaponMelee, VehicleExplosion,
+  // Falling, Suicide.
+  tags: string[];
 };
 
-export type FeedBatch = { kills: FeedKill[]; skipped: number };
+// One player killing another, with something. Suicides, falls and deaths with no player to blame are not kills.
+export type FeedKill = FeedEvent & { killerSteamId: string; cause: string };
+
+export const isKill = (e: FeedEvent): e is FeedKill =>
+  e.killerSteamId !== null && e.killerSteamId !== e.victimSteamId && e.cause !== null && !e.tags.includes('Suicide');
+
+// Every death in a batch, in the order the game sent them, the kills among them, and how many of its events were
+// something else.
+export type FeedBatch = { events: FeedEvent[]; kills: FeedKill[]; skipped: number };
 
 const STEAM_ID = /^\d{17}$/;
-const TAG = 'Meta.Progression.Context.Player.KillContext.';
-const SUICIDE = 'Meta.PlayerKillFlag.Player.Suicide';
+const TAG_PREFIXES = ['Meta.Progression.Context.Player.KillContext.', 'Meta.PlayerKillFlag.Player.'];
+// The tags kept: the rest (Local.Kill and Local.Death, on every event) say nothing.
+const TAGS = ['Headshot', 'RoadKill', 'Penetration', 'Ricochet', 'WeaponMelee', 'VehicleExplosion', 'Falling', 'Suicide'];
 
 const EventSchema = z.object({
   eventId: z.string().min(1).max(200),
   type: z.literal('killed'),
-  killerSteamId: z.string().regex(STEAM_ID),
-  killerName: z.string().optional(),
+  eventTime: z.number().nullish(),
+  matchId: z.string().max(200).nullish(),
+  mapName: z.string().max(200).nullish(),
+  killerSteamId: z.string().regex(STEAM_ID).nullish(),
+  killerName: z.string().nullish(),
   victimSteamId: z.string().regex(STEAM_ID),
-  cause: z.string().min(1).max(200),
+  victimName: z.string().nullish(),
+  cause: z.string().min(1).max(200).nullish(),
   distance: z.number().nonnegative().nullish(),
-  contextTags: z.array(z.string()).optional(),
+  contextTags: z.array(z.string()).nullish(),
 });
 
-// A batch's kills, and how many of its events were something else. Null when the body is not a batch at all.
+const shortTag = (tag: string): string => TAG_PREFIXES.reduce((t, prefix) => (t.startsWith(prefix) ? t.slice(prefix.length) : t), tag);
+
+// A batch's deaths. Null when the body is not a batch at all.
 export const parseFeed = (body: unknown): FeedBatch | null => {
-  const events = z.object({ events: z.array(z.unknown()).max(MAX_FEED_EVENTS) }).safeParse(body);
-  if (!events.success) return null;
-  const kills: FeedKill[] = [];
-  for (const raw of events.data.events) {
+  const batch = z.object({ events: z.array(z.unknown()).max(MAX_FEED_EVENTS) }).safeParse(body);
+  if (!batch.success) return null;
+  const events: FeedEvent[] = [];
+  for (const raw of batch.data.events) {
     const parsed = EventSchema.safeParse(raw);
     if (!parsed.success) continue;
     const e = parsed.data;
-    const tags = e.contextTags ?? [];
-    if (e.killerSteamId === e.victimSteamId || tags.some((t) => t === SUICIDE || t === `${TAG}Suicide`)) continue;
-    kills.push({
+    const tags = [...new Set((e.contextTags ?? []).map(shortTag))].filter((t) => TAGS.includes(t));
+    events.push({
       eventId: e.eventId,
-      killerSteamId: e.killerSteamId,
+      time: e.eventTime ?? 0,
+      matchId: e.matchId ?? '',
+      map: e.mapName ?? '',
+      victimSteamId: e.victimSteamId,
+      victimName: (e.victimName ?? '').slice(0, 100),
+      killerSteamId: e.killerSteamId ?? null,
       killerName: (e.killerName ?? '').slice(0, 100),
-      cause: e.cause,
+      cause: e.cause ?? null,
       // Unreal units are centimetres.
       distance: e.distance == null ? null : Math.round(e.distance) / 100,
-      headshot: tags.includes(`${TAG}Headshot`),
+      headshot: tags.includes('Headshot'),
+      tags: tags.filter((t) => t !== 'Headshot'),
     });
   }
-  return { kills, skipped: events.data.events.length - kills.length };
+  return { events, kills: events.filter(isKill), skipped: batch.data.events.length - events.length };
 };
 
 const sha256 = async (text: string): Promise<Uint8Array> =>

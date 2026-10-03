@@ -105,6 +105,7 @@ import {
   discordDue,
   namedSteamIds,
   parseStats,
+  publicCurrentMatch,
   publicStats,
   recordDiscord,
   recordMatch,
@@ -120,6 +121,7 @@ import { addVip, parseVipState, removeVip, syncVip, vipDue, type VipState } from
 import {
   FEED_PATH,
   feedAuthorized,
+  isKill,
   MAX_FEED_BYTES,
   MIN_FEED_TOKEN,
   parseFeed,
@@ -132,9 +134,10 @@ import {
   weaponBoard,
   weaponDayKey,
   weaponHolders,
-  type FeedKill,
+  type FeedEvent,
   type WeaponDay,
 } from './weapons.ts';
+import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveSnapshot } from './live.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -157,6 +160,8 @@ const LEADERBOARD_SIZE = 10;
 const WEAPONS_LISTED = 10;
 // Kill feed events already counted, remembered so a batch the game sends again is not counted twice.
 const KILLS_REMEMBERED = 5_000;
+// Live pages open at once, at most. Each is one WebSocket to the Durable Object.
+const LIVE_VIEWERS = 500;
 const DAY_MS = 24 * 60 * 60_000;
 // How far back staff can pick players who are not online.
 const KNOWN_PLAYER_DAYS = 30;
@@ -189,9 +194,15 @@ const oneAtATime = () => {
 // was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow), 'winsSettled'
 // (set once the matches saved before settleWin have been put right), 'roundups' (the first day of the last week and
 // month whose roundup went out), and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
-// 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days) and 'killFeedSince' (the
-// UTC date of the first kill the feed sent).
+// 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
+// UTC date of the first kill the feed sent) and 'live' (the match going on now, for the live page).
 export class Watcher extends DurableObject<Env> {
+  // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+  }
+
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
   private serial = oneAtATime();
@@ -403,6 +414,8 @@ export class Watcher extends DurableObject<Env> {
       }
     }
     await this.roundingUp(() => this.postRoundups(config));
+    // Live pages get the new score, players and map.
+    await this.broadcastLive();
   }
 
   // The roundup of the week or month just ended, once, from ROUNDUP_HOUR (UTC) on the first day of the next one. A post
@@ -603,31 +616,38 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // A batch from the game's kill feed: the day's weapon totals and each killer's, in one write. Only storage is awaited,
-  // so no other batch is counted part-way through. Returns how many kills were new.
-  async recordKills(kills: FeedKill[]): Promise<number> {
-    const fresh = kills.filter((k, i) => !this.killsSeen.has(k.eventId) && kills.findIndex((o) => o.eventId === k.eventId) === i);
+  // A batch from the game's kill feed: the day's weapon totals, each killer's, and the live match, in one write. Only
+  // storage is awaited, so no other batch is counted part-way through. Returns how many deaths were new.
+  async recordFeed(events: FeedEvent[]): Promise<number> {
+    const fresh = events.filter((e, i) => !this.killsSeen.has(e.eventId) && events.findIndex((o) => o.eventId === e.eventId) === i);
     if (fresh.length === 0) return 0;
     const now = Date.now();
     const day = dayOf(now);
     const dayKey = weaponDayKey(now);
-    const killers = [...new Set(fresh.map((k) => k.killerSteamId))];
-    const stored = await this.ctx.storage.get([dayKey, 'killFeedSince', ...killers.map(playerWeaponsKey)]);
+    const kills = fresh.filter(isKill);
+    const killers = [...new Set(kills.map((k) => k.killerSteamId))];
+    const stored = await this.ctx.storage.get([dayKey, 'killFeedSince', 'live', 'online', 'state', ...killers.map(playerWeaponsKey)]);
     const oldest = dayOf(now - (PROFILE_DAYS - 1) * DAY_MS);
     const first = typeof stored.get('killFeedSince') !== 'string';
+    // The feed does not say who is on which side: the bot's last check does.
+    const online = parseOnline(stored.get('online'));
+    const tracked = parseState(stored.get('state'))?.match?.players ?? {};
+    const factionOf = (steamId: string): string | null =>
+      online?.players.find((p) => p.steamId === steamId)?.faction ?? tracked[steamId]?.faction ?? null;
     const write = this.ctx.storage.put({
-      [dayKey]: recordWeaponDay(parseWeaponDay(stored.get(dayKey)), fresh),
+      live: recordLive(parseLiveMatch(stored.get('live')), fresh, now, factionOf),
       ...(first ? { killFeedSince: day } : {}),
+      ...(kills.length === 0 ? {} : { [dayKey]: recordWeaponDay(parseWeaponDay(stored.get(dayKey)), kills) }),
       ...Object.fromEntries(
         killers.map((steamId) => {
           const key = playerWeaponsKey(steamId);
-          const theirs = fresh.filter((k) => k.killerSteamId === steamId);
+          const theirs = kills.filter((k) => k.killerSteamId === steamId);
           return [key, recordPlayerWeapons(parsePlayerWeapons(stored.get(key)), theirs, day, oldest)];
         }),
       ),
     });
     // Remembered as the write goes out, so a copy of this batch arriving now is not counted again.
-    for (const k of fresh) this.killsSeen.add(k.eventId);
+    for (const e of fresh) this.killsSeen.add(e.eventId);
     for (const id of this.killsSeen) {
       if (this.killsSeen.size <= KILLS_REMEMBERED) break;
       this.killsSeen.delete(id);
@@ -635,11 +655,76 @@ export class Watcher extends DurableObject<Env> {
     try {
       await write;
     } catch (error) {
-      for (const k of fresh) this.killsSeen.delete(k.eventId);
+      for (const e of fresh) this.killsSeen.delete(e.eventId);
       throw error;
     }
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
+    await this.broadcastLive();
     return fresh.length;
+  }
+
+  // The live page: the server and its match from the last check, and the kill feed's match while it is the one on now.
+  async live(): Promise<LiveSnapshot> {
+    const now = Date.now();
+    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince']);
+    const stats = parseStats(stored.get('stats'));
+    const server = stats.server !== null && now - stats.server.seenAt < OFFLINE_AFTER_MS ? stats.server : null;
+    const onServer = server === null ? null : stats.currentMatch;
+    const saved = parseLiveMatch(stored.get('live'));
+    const match = saved !== null && isCurrent(saved, onServer, now) ? saved : null;
+    const ids = await this.idsFor([
+      ...liveSteamIds(match),
+      ...(onServer?.top.flatMap((p) => (p.steamId === undefined ? [] : [p.steamId])) ?? []),
+    ]);
+    const idOf = (steamId: string) => ids.get(steamId);
+    return {
+      generatedAt: now,
+      feed: typeof stored.get('killFeedSince') === 'string',
+      server: stats.server,
+      currentMatch: publicCurrentMatch(onServer, idOf),
+      match: match === null ? null : liveStats(match, idOf),
+    };
+  }
+
+  // Sends every open live page what it shows now. A page that has gone is skipped; the runtime closes it.
+  private async broadcastLive(): Promise<void> {
+    const sockets = this.ctx.getWebSockets();
+    if (sockets.length === 0) return;
+    try {
+      const message = JSON.stringify(await this.live());
+      for (const socket of sockets) {
+        try {
+          socket.send(message);
+        } catch {
+          // Closing already.
+        }
+      }
+    } catch (error) {
+      console.error(`Live page update failed: ${errorText(error)}`);
+    }
+  }
+
+  // A live page's WebSocket. It gets what the page shows straight away, then again after every kill feed batch and
+  // every check. The object can sleep between them; the sockets stay open.
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected a WebSocket', { status: 426 });
+    if (this.ctx.getWebSockets().length >= LIVE_VIEWERS) return new Response('Too many live pages open', { status: 503 });
+    const snapshot = JSON.stringify(await this.live());
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server);
+    server.send(snapshot);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Pages only send pings, which the auto-response answers.
+  async webSocketMessage(): Promise<void> {}
+
+  async webSocketClose(socket: WebSocket, code: number, reason: string): Promise<void> {
+    try {
+      socket.close(code, reason);
+    } catch {
+      // Already closed.
+    }
   }
 
   // The weapons of the last `count` UTC days, oldest first, today last.
@@ -961,8 +1046,10 @@ export class Watcher extends DurableObject<Env> {
 
 // The stats only change once a minute. Each Worker instance keeps its last answers for a short while so a busy page
 // does not wake the Durable Object on every request. Requests that arrive while a refresh is in flight wait for that
-// one instead of starting their own.
+// one instead of starting their own. The live page's answer changes with every kill, so it is kept for less; the page
+// mostly gets it over its WebSocket instead.
 const CACHE_MS = 30_000;
+const LIVE_CACHE_MS = 5_000;
 // One answer per player page; past this many, the oldest are dropped.
 const CACHE_ENTRIES = 200;
 const cache = new Map<string, { body: Promise<string | null>; at: number }>();
@@ -971,10 +1058,10 @@ const cache = new Map<string, { body: Promise<string | null>; at: number }>();
 const PUBLIC_HEADERS = { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' };
 
 // `load` answers null when there is no such thing, which is a 404.
-const serveJson = async (key: string, load: () => Promise<unknown>, ctx: ExecutionContext): Promise<Response> => {
+const serveJson = async (key: string, load: () => Promise<unknown>, ctx: ExecutionContext, keepMs = CACHE_MS): Promise<Response> => {
   const now = Date.now();
   let entry = cache.get(key);
-  if (entry === undefined || now - entry.at >= CACHE_MS) {
+  if (entry === undefined || now - entry.at >= keepMs) {
     const fresh = { body: load().then((value) => (value === null ? null : JSON.stringify(value))), at: now };
     entry = fresh;
     // Re-added, so the oldest answers are always first.
@@ -993,13 +1080,18 @@ const serveJson = async (key: string, load: () => Promise<unknown>, ctx: Executi
     );
   }
   const body = await entry.body;
-  if (body === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });
-  return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...PUBLIC_HEADERS } });
+  const headers = { ...PUBLIC_HEADERS, 'cache-control': `public, max-age=${Math.round(keepMs / 1000)}` };
+  if (body === null) return Response.json({ error: 'Not found' }, { status: 404, headers });
+  return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...headers } });
 };
 
-// The website's JSON: the server's stats, everyone to find a player page for, and one player's page.
-const publicRoute = (url: URL, watcher: () => DurableObjectStub<Watcher>): { key: string; load: () => Promise<unknown> } | null => {
+// The website's JSON: the server's stats, the live match, everyone to find a player page for, and one player's page.
+const publicRoute = (
+  url: URL,
+  watcher: () => DurableObjectStub<Watcher>,
+): { key: string; load: () => Promise<unknown>; keepMs?: number } | null => {
   if (url.pathname === '/api/stats') return { key: 'stats', load: () => watcher().stats() };
+  if (url.pathname === '/api/live') return { key: 'live', load: () => watcher().live(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
@@ -1038,7 +1130,7 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
   }
   if (batch === null) return Response.json({ error: 'Not a kill feed batch' }, { status: 400 });
   try {
-    const accepted = batch.kills.length === 0 ? 0 : await watcher().recordKills(batch.kills);
+    const accepted = batch.events.length === 0 ? 0 : await watcher().recordFeed(batch.events);
     return Response.json({ ok: true, accepted, skipped: batch.skipped });
   } catch (error) {
     console.error(`Kill feed batch failed: ${errorText(error)}`);
@@ -1058,11 +1150,13 @@ export default {
     const url = new URL(request.url);
     const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
     if (request.method === 'POST' && url.pathname.endsWith(FEED_PATH)) return ingestKills(request, stringVars(env), watcher);
+    // The live page's WebSocket goes straight to the Durable Object, which keeps it.
+    if (request.method === 'GET' && url.pathname === '/api/live/socket') return watcher().fetch(request);
     if (request.method === 'GET' && url.pathname.startsWith('/api/')) {
       const route = publicRoute(url, watcher);
       if (route === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });
       try {
-        return await serveJson(route.key, route.load, ctx);
+        return await serveJson(route.key, route.load, ctx, route.keepMs);
       } catch (error) {
         console.error(`${url.pathname} failed: ${error instanceof Error ? error.message : String(error)}`);
         return Response.json({ error: 'Stats are unavailable' }, { status: 503, headers: { 'access-control-allow-origin': '*' } });

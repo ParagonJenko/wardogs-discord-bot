@@ -33,7 +33,8 @@ population, daily peaks, the busiest hours, the current and recent matches, Disc
 leaderboard (see [Website stats](#website-stats)). It serves a page of stats for every player, too (see
 [Player pages](#player-pages)). It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
-kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's. And it gives
+kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
+[live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. And it gives
 [automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
@@ -456,6 +457,51 @@ match` means `Token` in the file is not the secret.
 
 The Node/Docker version does not take the kill feed: the game needs a public URL to send it to.
 
+## Live match
+
+With the [kill feed](#weapon-stats) on, the bot follows the match on now for the website's live page: every death as it
+happens, each player's kills, deaths and streaks, and the match's highlights. It serves it two ways, both public and
+without Steam IDs:
+
+| Endpoint                      | What                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| `GET /api/live`               | What the live page shows now (below). Each Worker instance reuses it for 5 seconds   |
+| `GET /api/live/socket`        | A WebSocket: the same, straight away, and again after every kill feed batch and every check. Send `ping` to keep it open through quiet spells; the answer is `pong` |
+
+It has:
+
+| Field          | What                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| `feed`         | Whether the bot has ever had the kill feed                                                  |
+| `server`       | As in [`/api/stats`](#website-stats): name, players, map, phase, score, `seenAt`            |
+| `currentMatch` | As in `/api/stats`: the match on the server, with the top 5 by kills from its scoreboard. Null when the server is empty or not answering |
+| `match`        | The kill feed's match, or null before it has a death. See below                             |
+
+`match` has the map, when its first and latest deaths came in (`startedAt`, `lastKillAt`), the kills, headshots, team
+kills and other deaths (`otherDeaths`: suicides and falls), and:
+
+| Field        | What                                                                                          |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| `feed`       | The last 40 deaths, newest first: `killer` (null for a fall or suicide) and `victim` (`name`, `id`, `faction`), `weapon`, `kind`, `distance`, `headshot`, `teamKill`, `tags` (`RoadKill`, `Penetration`, `Ricochet`, `WeaponMelee`, `VehicleExplosion`, `Falling`, `Suicide`), and the killer's `streak` and `chain` after it |
+| `players`    | The top 10 by kills, then fewest deaths: kills, deaths, headshots, team kills, `streak` (kills since they last died), `bestStreak` and the `weapon` they have the most kills with |
+| `weapons`    | The top 5 weapons this match                                                                   |
+| `highlights` | `firstBlood`, `longest` kill, `bestStreak` (3 or more), `onFire` (up to 3 players on 5 or more kills without dying now), `bestMultiKill` (2 or more kills each within 8 seconds), `mostHeadshots`, and a `rivalry` (one player killing another 3 or more times) |
+
+- **Sides.** The feed does not say who is on which side, so the bot takes it from its last check of the server. Two
+  players on the same side make a team kill, which counts as neither a kill nor towards a streak.
+- **Streaks.** Any death ends one: a fall or a suicide too.
+- **A new match.** The feed does not say when a match ends. A new one starts when the match clock starts again (the game
+  restarts it with each match), the map changes, the game restarts, or nobody dies for 20 minutes. The page shows the
+  feed's match only while it is the one on the server: on the same map, and not over before the bot's checks saw the
+  server's match start. With nobody on, it stays up for 10 minutes after its last death.
+- **Cost.** A page opening its WebSocket is one Worker request, and so is reconnecting. The updates it is sent are not
+  requests, and pings are answered without waking the Durable Object, so a page left open all evening costs one
+  request. While a page cannot connect, it loads `/api/live` every 15 seconds instead. At most 500 pages can be
+  connected at once.
+- **`/removematch`** does not change it.
+
+The Node/Docker version does not have the live match.
+
 ## Player records
 
 On Cloudflare, the bot also keeps records for leaderboards and seeder rewards (such as VIP). They are keyed by
@@ -469,6 +515,7 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Bans the bot made            | Name, reason, who made it, when a timed ban ends, and whether it waits for them to join |
 | Each UTC day's weapons       | From the [kill feed](#weapon-stats): each weapon's kills, headshots, distances and longest kill, with the Steam ID and name of who made it |
 | Each player's weapons        | From the kill feed: their kills, headshots and longest kill with each weapon, on each of their last 90 UTC days |
+| The live match               | From the kill feed: the match on now, for the [live page](#live-match). Its last 40 deaths, and each player's totals and streaks |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
