@@ -62,6 +62,34 @@ const sectionRange = (lines: string[]): { start: number; end: number } => {
   return { start, end };
 };
 
+// The reserved list for the staff page to show, read whatever the file holds: everyone on it, the lines that remove
+// players from it (which stop automatic VIP until someone edits them out), and how many slots are held back for them
+// (MaxReservedSlots, null when the file does not say).
+export type ReservedListing = { ids: string[]; removals: string[]; maxSlots: number | null };
+
+const MAX_SLOTS = /^\s*MaxReservedSlots\s*=\s*"?(\d+)"?\s*$/i;
+
+export const reservedListing = (text: string): ReservedListing => {
+  const lines = text.split(/\r?\n/);
+  const ids: string[] = [];
+  const removals: string[] = [];
+  let maxSlots: number | null = null;
+  let inSection = false;
+  for (const line of lines) {
+    if (isHeader(line)) {
+      inSection = line.trim().toLowerCase() === SECTION.toLowerCase();
+      continue;
+    }
+    if (!inSection) continue;
+    if (OTHER_EDIT.test(line)) removals.push(line.trim());
+    const id = entryId(line);
+    if (id !== null && !ids.includes(id)) ids.push(id);
+    const slots = MAX_SLOTS.exec(line)?.[1];
+    if (slots !== undefined) maxSlots = Number(slots);
+  }
+  return { ids, removals, maxSlots };
+};
+
 export const reservedIds = (text: string): string[] => {
   const lines = text.split(/\r?\n/);
   const { start, end } = sectionRange(lines);

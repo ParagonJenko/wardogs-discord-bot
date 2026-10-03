@@ -1,4 +1,5 @@
 import { connect } from 'cloudflare:sockets';
+import { z } from 'zod';
 import { DurableObject } from 'cloudflare:workers';
 import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
@@ -29,7 +30,19 @@ import {
   postWebhook,
 } from './discord.ts';
 import { griefDayKey, hasGrief, parseGriefDay, recordGrief, type GriefAlert } from './griefing.ts';
-import { editOriginalReply, handleInteraction, isAdminCommand } from './interactions.ts';
+import {
+  ADMIN_COMMAND_DEFINITIONS,
+  checkOptions,
+  editOriginalReply,
+  failureText,
+  handleInteraction,
+  isAdminCommand,
+  isCommandName,
+  isOptionOf,
+  type CommandReply,
+  type CommandRequest,
+  type Choice,
+} from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
@@ -157,7 +170,7 @@ import {
   type SiteStats,
 } from './stats.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
-import { addVip, parseVipState, removeVip, syncVip, vipDue, type VipState } from './vip.ts';
+import { addVip, parseVipState, removeVip, reservedListing, syncVip, vipDue, type VipState } from './vip.ts';
 import {
   FEED_PATH,
   feedAuthorized,
@@ -1048,25 +1061,33 @@ export class Watcher extends DurableObject<Env> {
     const now = Date.now();
     const griefKeys = Array.from({ length: days }, (_, i) => griefDayKey(now - (days - 1 - i) * DAY_MS));
     const { config } = this.rcon();
-    const [stored, recent, logs, serverBans] = await Promise.all([
-      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', STAFF_NAMES_KEY]),
+    const http = socketHttp(connect, SUGGEST_TIMEOUT_MS);
+    const [stored, recent, logs, serverBans, serverConfig] = await Promise.all([
+      this.ctx.storage.get([...griefKeys, 'killFeedSince', 'bans', 'vip', STAFF_NAMES_KEY]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
-      fetchBans(config.rconUrl, config.rconPassword, socketHttp(connect, SUGGEST_TIMEOUT_MS)).catch((error: unknown) => {
+      fetchBans(config.rconUrl, config.rconPassword, http).catch((error: unknown) => {
         console.error(`Staff page: the ban list could not be read: ${errorText(error)}`);
         return null;
       }),
+      fetchConfig(config.rconUrl, config.rconPassword, http).catch((error: unknown) => {
+        console.error(`Staff page: ServerSettings.ini could not be read: ${errorText(error)}`);
+        return null;
+      }),
     ]);
+    const reserved = serverConfig === null ? null : reservedListing(serverConfig.text);
+    const vip = parseVipState(stored.get('vip'));
     const grief = griefKeys.map((key) => parseGriefDay(stored.get(key)));
     const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
     const banBook = parseBanBook(stored.get('bans'));
-    const steamIds = adminSteamIds(grief, modLogs, serverBans, banBook);
+    const steamIds = adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []);
     const names = new Map<string, string>();
     for (const [steamId, log] of modLogs) {
       const logged = log.findLast((e) => e.name !== undefined && e.name !== steamId)?.name;
       if (logged !== undefined) names.set(steamId, logged);
     }
     for (const [steamId, ban] of Object.entries(banBook)) names.set(steamId, ban.name);
+    for (const [steamId, grant] of Object.entries(vip.granted)) names.set(steamId, grant.name);
     for (const day of grief) for (const [steamId, t] of Object.entries(day.players)) if (t.name !== '') names.set(steamId, t.name);
     for (const day of recent) for (const [steamId, t] of Object.entries(day.players)) names.set(steamId, t.name);
     const ids = await this.idsFor(steamIds);
@@ -1084,6 +1105,8 @@ export class Watcher extends DurableObject<Env> {
       nameOf: (steamId) => names.get(steamId),
       idOf: (steamId) => ids.get(steamId),
       staffNames,
+      reserved,
+      vip,
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);
@@ -1421,6 +1444,63 @@ const staffCallback = async (request: Request, vars: Record<string, string>, wat
   }
 };
 
+// The slash commands, run and suggested for in the same way from Discord and from the staff page.
+const commandTools = (
+  vars: Record<string, string>,
+  watcher: () => DurableObjectStub<Watcher>,
+): { run: (request: CommandRequest) => Promise<CommandReply>; suggest: (request: CommandRequest) => Promise<Choice[]> } => {
+  const records: StaffRecords = {
+    player: (steamId) => watcher().playerRecord(steamId),
+    knownPlayers: () => watcher().knownPlayers(),
+    log: (steamId, entry) => watcher().logAction(steamId, entry),
+    ban: (ban) => watcher().ban(ban),
+    unban: (target, by, byName) => watcher().unban(target, by, byName),
+    vipAdd: (grant) => watcher().vipAdd(grant),
+    vipRemove: (target) => watcher().vipRemove(target),
+    nextMap: (map, playing) => watcher().stageNextMap(map, playing),
+  };
+  return {
+    run: runCommand({
+      config: () => loadConfig(vars),
+      http: socketHttp(connect),
+      lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
+      roundup: (choice) => watcher().roundup(choice),
+      seeders: (days) => watcher().seeders(days),
+      removeMatch: (endedAt) => watcher().removeMatch(endedAt),
+      seedCall: (message) => watcher().seedCall(message),
+      records,
+      now: Date.now,
+      log: console,
+    }),
+    suggest: suggestOptions({
+      recentMatches: () => watcher().recentMatches(),
+      config: () => loadConfig(vars),
+      http: socketHttp(connect, SUGGEST_TIMEOUT_MS),
+      records,
+    }),
+  };
+};
+
+// A staff page request to run a staff command, or for suggestions while staff fill one in. Far smaller than this.
+const STAFF_BODY_BYTES = 8_192;
+const StaffBodySchema = z.object({
+  name: z.string().max(40),
+  options: z.record(z.string().max(40), z.union([z.string().max(1_000), z.number(), z.boolean()])).default({}),
+  focused: z.string().max(40).optional(),
+});
+
+const readStaffBody = async (request: Request): Promise<z.infer<typeof StaffBodySchema> | null> => {
+  if (Number(request.headers.get('content-length') ?? 0) > STAFF_BODY_BYTES) return null;
+  const body = await request.arrayBuffer();
+  if (body.byteLength > STAFF_BODY_BYTES) return null;
+  try {
+    const parsed = StaffBodySchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+};
+
 // The staff page's data, for a signed-in session only. Only the website may read it from a browser, and nothing keeps a
 // copy.
 const staffApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
@@ -1428,8 +1508,8 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   // The website may read even a refusal, so the page can say why. Without SITE_URL no site may.
   const headers = {
     'access-control-allow-origin': siteOriginOf(vars) ?? 'null',
-    'access-control-allow-headers': 'authorization',
-    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-allow-headers': 'authorization, content-type',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
     'access-control-max-age': '600',
     'cache-control': 'no-store',
     vary: 'origin',
@@ -1438,11 +1518,40 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   if ('missing' in config) console.error(notSetUpText(config.missing));
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
   if ('missing' in config) return Response.json({ error: notSetUpText(config.missing) }, { status: 503, headers });
-  if (request.method !== 'GET') return Response.json({ error: 'Not found' }, { status: 404, headers });
   const session = await readSession(config.clientSecret, request.headers.get('authorization'), Date.now());
   if (session === null) return Response.json({ error: 'Sign in again' }, { status: 401, headers });
   const url = new URL(request.url);
-  if (url.pathname !== '/api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
+  const route = `${request.method} ${url.pathname}`;
+  if (route === 'GET /api/admin/commands') return Response.json({ commands: ADMIN_COMMAND_DEFINITIONS }, { headers });
+  if (route === 'POST /api/admin/command' || route === 'POST /api/admin/suggest') {
+    const body = await readStaffBody(request);
+    if (body === null) return Response.json({ error: 'Not a staff page request' }, { status: 400, headers });
+    const { name } = body;
+    if (!isCommandName(name) || !isAdminCommand(name)) return Response.json({ error: `/${name} is not a staff command` }, { status: 400, headers });
+    const tools = commandTools(vars, watcher);
+    if (route === 'POST /api/admin/suggest') {
+      const options = Object.fromEntries(Object.entries(body.options).map(([key, value]) => [key, String(value)]));
+      const focused = body.focused ?? '';
+      if (!isOptionOf(name, focused, options['subcommand'])) return Response.json({ choices: [] }, { headers });
+      const choices = await tools.suggest({ name, options, userId: session.userId, focused }).catch((error: unknown) => {
+        console.error(`/${name} suggestions for the staff page failed: ${errorText(error)}`);
+        return [];
+      });
+      return Response.json({ choices }, { headers });
+    }
+    // Checked as Discord checks a slash command, then run by the same code, as the signed-in staff member.
+    const checked = checkOptions(name, body.options);
+    if ('problem' in checked) return Response.json({ error: checked.problem }, { status: 400, headers });
+    console.info(`Staff page: /${name} by ${JSON.stringify(session.name)} (Discord user ${session.userId})`);
+    try {
+      const reply = await tools.run({ name, options: checked.options, userId: session.userId, userName: session.name });
+      return Response.json(reply, { headers });
+    } catch (error) {
+      console.error(`/${name} from the staff page failed: ${errorText(error)}`);
+      return Response.json({ error: failureText(name, error) }, { status: 502, headers });
+    }
+  }
+  if (route !== 'GET /api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
   const asked = Number(url.searchParams.get('days'));
   const days = ADMIN_PERIODS.find((d) => d === asked) ?? ADMIN_DEFAULT_DAYS;
   try {
@@ -1525,28 +1634,7 @@ export default {
     const vars = stringVars(env);
     const publicKey = vars['DISCORD_PUBLIC_KEY'];
     if (!publicKey) return new Response('DISCORD_PUBLIC_KEY is not set', { status: 500 });
-    const records: StaffRecords = {
-      player: (steamId) => watcher().playerRecord(steamId),
-      knownPlayers: () => watcher().knownPlayers(),
-      log: (steamId, entry) => watcher().logAction(steamId, entry),
-      ban: (ban) => watcher().ban(ban),
-      unban: (target, by, byName) => watcher().unban(target, by, byName),
-      vipAdd: (grant) => watcher().vipAdd(grant),
-      vipRemove: (target) => watcher().vipRemove(target),
-      nextMap: (map, playing) => watcher().stageNextMap(map, playing),
-    };
-    const run = runCommand({
-      config: () => loadConfig(vars),
-      http: socketHttp(connect),
-      lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
-      roundup: (choice) => watcher().roundup(choice),
-      seeders: (days) => watcher().seeders(days),
-      removeMatch: (endedAt) => watcher().removeMatch(endedAt),
-      seedCall: (message) => watcher().seedCall(message),
-      records,
-      now: Date.now,
-      log: console,
-    });
+    const { run, suggest } = commandTools(vars, watcher);
     const result = await handleInteraction(
       await request.text(),
       request.headers.get('x-signature-ed25519'),
@@ -1568,12 +1656,7 @@ export default {
             await noted;
           }
         },
-        suggest: suggestOptions({
-          recentMatches: () => watcher().recentMatches(),
-          config: () => loadConfig(vars),
-          http: socketHttp(connect, SUGGEST_TIMEOUT_MS),
-          records,
-        }),
+        suggest,
         editReply: editOriginalReply(),
         log: console,
         now: Date.now,

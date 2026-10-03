@@ -10,6 +10,7 @@ import {
   qualified,
   removeVip,
   reservedIds,
+  reservedListing,
   syncVip,
   vipDue,
   type VipGrant,
@@ -339,5 +340,28 @@ describe('addVip and removeVip', () => {
 
     await expect(addVip({ steamId: ASH, name: 'Ash', days: 7, now: NOW, state: empty, rcon })).rejects.toThrow(/refused/);
     expect(rcon.put).not.toHaveBeenCalled();
+  });
+});
+
+describe('reservedListing', () => {
+  it('lists everyone on the reserved list, the lines removing players, and the slots held back, whatever the file holds', () => {
+    const text = [
+      '[/Script/WDGame.WDGameSession]',
+      'MaxReservedSlots=2',
+      '+DefaultReservedPlayerIds=76561198000000001',
+      'DefaultReservedPlayerIds="76561198000000002"',
+      '-DefaultReservedPlayerIds=76561198000000003',
+      '+DefaultReservedPlayerIds=76561198000000001',
+      '[/Script/Other]',
+      '+DefaultReservedPlayerIds=76561198000000009',
+    ].join('\r\n');
+
+    expect(reservedListing(text)).toEqual({
+      ids: ['76561198000000001', '76561198000000002'],
+      removals: ['-DefaultReservedPlayerIds=76561198000000003'],
+      maxSlots: 2,
+    });
+    expect(() => reservedIds(text)).toThrow();
+    expect(reservedListing('')).toEqual({ ids: [], removals: [], maxSlots: null });
   });
 });

@@ -42,8 +42,8 @@ const OLD = '76561198000000004';
 const players = {
   players: [
     { name: 'Ash', steamId: ASH, faction: 'Valkyra', kills: 5, deaths: 2 },
-    { name: 'Bo', steamId: BO, faction: 'Kharr', kills: 1, deaths: 1 },
-    { name: 'Ashley', steamId: CY, faction: 'Kharr', kills: 0, deaths: 0 },
+    { name: 'Bo', steamId: BO, faction: 'Manticore', kills: 1, deaths: 1 },
+    { name: 'Ashley', steamId: CY, faction: 'Manticore', kills: 0, deaths: 0 },
   ],
 };
 const status = {
@@ -51,7 +51,7 @@ const status = {
   players: { current: 3, max: 98 },
   factionScores: [
     { name: 'Valkyra', colorHex: '#3366ff', score: 40 },
-    { name: 'Kharr', colorHex: '#ff3333', score: 35 },
+    { name: 'Manticore', colorHex: '#ff3333', score: 35 },
   ],
 };
 const settings = `[/Script/WDGame.WDGameSession]\n+DefaultReservedPlayerIds=${BO}\n`;
@@ -172,23 +172,30 @@ describe('runStaffCommand', () => {
 
     const reply = await run('switchteam', { player: ASH });
 
-    expect(sent).toContain(`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'Kharr' })}`);
+    expect(sent).toContain(`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'Manticore' })}`);
     expect(sent).toContain(`POST /v1/players/${ASH}/kill {}`);
-    expect(records.log).toHaveBeenCalledWith(ASH, { action: 'switchteam', at: NOW, by: '42', name: 'Ash', detail: 'Valkyra to Kharr' });
-    expect(reply).toEqual({ content: '🔀 Moved **Ash** to **Kharr**. They respawn on the new side.' });
+    expect(records.log).toHaveBeenCalledWith(ASH, { action: 'switchteam', at: NOW, by: '42', name: 'Ash', detail: 'Valkyra to Manticore' });
+    expect(reply).toEqual({ content: '🔀 Moved **Ash** to 🦂 **Manticore**. They respawn on the new side.' });
   });
 
-  it('/switchteam asks for the team when there are three, and refuses a team not playing', async () => {
-    const three = { ...status, factionScores: [...status.factionScores, { name: 'Haldor', colorHex: '#33ff33', score: 1 }] };
+  it("/switchteam asks for the team when there are three, and only moves players to one of the game's teams in the match", async () => {
+    const three = { ...status, factionScores: [...status.factionScores, { name: 'LONESTAR', colorHex: '#3333ff', score: 1 }] };
     const { run, sent } = setup({ 'GET /v1/status': [200, three] });
 
-    await expect(run('switchteam', { player: ASH })).resolves.toEqual({ content: 'Pick a team: Valkyra, Kharr, Haldor.' });
-    await expect(run('switchteam', { player: ASH, team: 'Nobody' })).resolves.toEqual({
-      content: 'No team called "Nobody". Teams now: Valkyra, Kharr, Haldor.',
-    });
+    await expect(run('switchteam', { player: ASH })).resolves.toEqual({ content: 'Pick a team: Valkyra, Manticore, LONESTAR.' });
+    await expect(run('switchteam', { player: ASH, team: 'Kharr' })).resolves.toEqual({ content: 'Pick Lonestar, Manticore or Valkyra.' });
     await expect(run('switchteam', { player: ASH, team: 'valkyra' })).resolves.toEqual({ content: '**Ash** is already on Valkyra.' });
-    await expect(run('switchteam', { player: ASH, team: 'haldor' })).resolves.toMatchObject({ content: expect.stringContaining('**Haldor**') });
-    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'Haldor' })}`]);
+    await expect(run('switchteam', { player: ASH, team: 'Lonestar' })).resolves.toMatchObject({ content: expect.stringContaining('🤠 **LONESTAR**') });
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'LONESTAR' })}`]);
+  });
+
+  it('/switchteam refuses a team that is not in the match', async () => {
+    const { run, sent } = setup();
+
+    await expect(run('switchteam', { player: ASH, team: 'Lonestar' })).resolves.toEqual({
+      content: 'Lonestar is not in this match. Teams now: Valkyra, Manticore.',
+    });
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
   });
 
   it('/ban bans through the records, then kicks the player if they are in game', async () => {
@@ -382,7 +389,7 @@ describe('runStaffCommand', () => {
     expect(records.player).toHaveBeenCalledWith(BO);
     expect(embed?.title).toBe('👤 Bo');
     expect(embed?.description).toContain(`\`${BO}\``);
-    expect(embed?.description).toContain('🟢 In game now on **Kharr**');
+    expect(embed?.description).toContain('🟢 In game now on 🦂 **Manticore**');
     expect(embed?.fields).toEqual(
       expect.arrayContaining([
         { name: 'Playtime · last 90 days', value: '12 h 10 min', inline: true },
@@ -428,7 +435,7 @@ describe('suggestStaff', () => {
 
     await expect(suggest({ name: 'kick', options: { player: 'ash' }, focused: 'player' })).resolves.toEqual([
       { name: `Ash · Valkyra · ${ASH}`, value: ASH },
-      { name: `Ashley · Kharr · ${CY}`, value: CY },
+      { name: `Ashley · Manticore · ${CY}`, value: CY },
     ]);
   });
 
@@ -436,7 +443,7 @@ describe('suggestStaff', () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'ban', options: { player: 'o' }, focused: 'player' })).resolves.toEqual([
-      { name: `Bo · Kharr · ${BO}`, value: BO },
+      { name: `Bo · Manticore · ${BO}`, value: BO },
       { name: `Oldtimer · ${OLD}`, value: OLD },
     ]);
     await expect(suggest({ name: 'vip', options: { subcommand: 'add', steam_id: 'old' }, focused: 'steam_id' })).resolves.toHaveLength(1);
@@ -449,19 +456,7 @@ describe('suggestStaff', () => {
       { name: `Oldtimer · ${OLD}`, value: OLD },
     ]);
     await expect(suggest({ name: 'vip', options: { subcommand: 'remove', steam_id: '' }, focused: 'steam_id' })).resolves.toEqual([
-      { name: `Bo · Kharr · ${BO}`, value: BO },
-    ]);
-  });
-
-  it('offers the other teams in the match for /switchteam, with how many are on each', async () => {
-    const { suggest } = setup();
-
-    await expect(suggest({ name: 'switchteam', options: { player: BO, team: '' }, focused: 'team' })).resolves.toEqual([
-      { name: '🐻 Valkyra · 1 player · 40 points', value: 'Valkyra' },
-    ]);
-    await expect(suggest({ name: 'switchteam', options: { team: 'k' }, focused: 'team' })).resolves.toEqual([
-      { name: '🐻 Valkyra · 1 player · 40 points', value: 'Valkyra' },
-      { name: '🔴 Kharr · 2 players · 35 points', value: 'Kharr' },
+      { name: `Bo · Manticore · ${BO}`, value: BO },
     ]);
   });
 
