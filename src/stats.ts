@@ -5,6 +5,7 @@ import { mapName } from './discord.ts';
 import type { Leaderboard, RankedPlayer } from './players.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 import { topPlayers, type MatchState, type MatchSummary, type RankedStats } from './tracking.ts';
+import type { WeaponBoard } from './weapons.ts';
 
 // Numbers for the community website, served by the Worker at GET /api/stats. Anyone can read them, so what is served
 // holds nothing private: no RCON address or password, and no Steam IDs. The stored stats keep the Steam IDs of the
@@ -292,8 +293,9 @@ export const discordDue = (stats: SiteStats, now: number): boolean =>
 
 export const recordDiscord = (stats: SiteStats, discord: DiscordCounts): SiteStats => ({ ...stats, discord });
 
-// The leaderboard and what seeding earns come from the player records, which are read separately.
-export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null };
+// The leaderboard and what seeding earns come from the player records, which are read separately. The weapons come
+// from the kill feed's records, already with public ids; null when the bot has never had the feed.
+export type PublicExtras = { leaderboard: Leaderboard; vip: VipRule | null; weapons: WeaponBoard | null };
 
 // Looks up a player's public id by Steam ID (see profiles.ts).
 export type IdOf = (steamId: string) => string | undefined;
@@ -311,6 +313,7 @@ export type PublicStats = Omit<SiteStats, 'hours' | 'matches' | 'currentMatch'> 
   currentMatch: (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null;
   leaderboard: Leaderboard<Public<RankedPlayer>>;
   vip: VipRule | null;
+  weapons: WeaponBoard | null;
 };
 
 const named = <T extends { steamId?: string }>(rows: T[], idOf: IdOf): Public<T>[] =>
@@ -359,7 +362,7 @@ export const publicStats = (
   { hours, matches, currentMatch, ...stats }: SiteStats,
   thresholds: Thresholds,
   now: number,
-  { leaderboard, vip }: PublicExtras,
+  { leaderboard, vip, weapons }: PublicExtras,
   idOf: IdOf,
 ): PublicStats => ({
   generatedAt: now,
@@ -377,4 +380,5 @@ export const publicStats = (
     seeding: named(leaderboard.seeding, idOf),
   },
   vip,
+  weapons,
 });

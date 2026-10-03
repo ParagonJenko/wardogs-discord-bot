@@ -117,6 +117,24 @@ import {
 } from './stats.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
 import { addVip, parseVipState, removeVip, syncVip, vipDue, type VipState } from './vip.ts';
+import {
+  FEED_PATH,
+  feedAuthorized,
+  MAX_FEED_BYTES,
+  MIN_FEED_TOKEN,
+  parseFeed,
+  parsePlayerWeapons,
+  parseWeaponDay,
+  playerWeaponDays,
+  playerWeaponsKey,
+  recordPlayerWeapons,
+  recordWeaponDay,
+  weaponBoard,
+  weaponDayKey,
+  weaponHolders,
+  type FeedKill,
+  type WeaponDay,
+} from './weapons.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -135,6 +153,10 @@ const MATCH_RECORDS_SEARCHED = 50;
 const RECORDS_PER_WRITE = 128;
 const LEADERBOARD_DAYS = 30;
 const LEADERBOARD_SIZE = 10;
+// The weapons in /api/stats: the top this many over the leaderboard's days.
+const WEAPONS_LISTED = 10;
+// Kill feed events already counted, remembered so a batch the game sends again is not counted twice.
+const KILLS_REMEMBERED = 5_000;
 const DAY_MS = 24 * 60 * 60_000;
 // How far back staff can pick players who are not online.
 const KNOWN_PLAYER_DAYS = 30;
@@ -165,8 +187,10 @@ const oneAtATime = () => {
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
 // status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
 // was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow), 'winsSettled'
-// (set once the matches saved before settleWin have been put right) and 'roundups' (the first day of the last week and
-// month whose roundup went out).
+// (set once the matches saved before settleWin have been put right), 'roundups' (the first day of the last week and
+// month whose roundup went out), and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
+// 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days) and 'killFeedSince' (the
+// UTC date of the first kill the feed sent).
 export class Watcher extends DurableObject<Env> {
   // Bans and the reserved list both live in the server's settings file. Changes to them run one at a time, so one
   // never overwrites another, or the VIP state, with what it read before the other finished.
@@ -186,6 +210,10 @@ export class Watcher extends DurableObject<Env> {
   private idKey: Promise<CryptoKey> | null = null;
   // Saves reading 'winsSettled' on every check once it is set.
   private winsSettled = false;
+  // Kill feed event ids already counted, oldest first.
+  private killsSeen = new Set<string>();
+  // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
+  private weaponDayCache = new Map<string, WeaponDay>();
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -575,17 +603,72 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
+  // A batch from the game's kill feed: the day's weapon totals and each killer's, in one write. Only storage is awaited,
+  // so no other batch is counted part-way through. Returns how many kills were new.
+  async recordKills(kills: FeedKill[]): Promise<number> {
+    const fresh = kills.filter((k, i) => !this.killsSeen.has(k.eventId) && kills.findIndex((o) => o.eventId === k.eventId) === i);
+    if (fresh.length === 0) return 0;
+    const now = Date.now();
+    const day = dayOf(now);
+    const dayKey = weaponDayKey(now);
+    const killers = [...new Set(fresh.map((k) => k.killerSteamId))];
+    const stored = await this.ctx.storage.get([dayKey, 'killFeedSince', ...killers.map(playerWeaponsKey)]);
+    const oldest = dayOf(now - (PROFILE_DAYS - 1) * DAY_MS);
+    const first = typeof stored.get('killFeedSince') !== 'string';
+    const write = this.ctx.storage.put({
+      [dayKey]: recordWeaponDay(parseWeaponDay(stored.get(dayKey)), fresh),
+      ...(first ? { killFeedSince: day } : {}),
+      ...Object.fromEntries(
+        killers.map((steamId) => {
+          const key = playerWeaponsKey(steamId);
+          const theirs = fresh.filter((k) => k.killerSteamId === steamId);
+          return [key, recordPlayerWeapons(parsePlayerWeapons(stored.get(key)), theirs, day, oldest)];
+        }),
+      ),
+    });
+    // Remembered as the write goes out, so a copy of this batch arriving now is not counted again.
+    for (const k of fresh) this.killsSeen.add(k.eventId);
+    for (const id of this.killsSeen) {
+      if (this.killsSeen.size <= KILLS_REMEMBERED) break;
+      this.killsSeen.delete(id);
+    }
+    try {
+      await write;
+    } catch (error) {
+      for (const k of fresh) this.killsSeen.delete(k.eventId);
+      throw error;
+    }
+    if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
+    return fresh.length;
+  }
+
+  // The weapons of the last `count` UTC days, oldest first, today last.
+  private async recentWeaponDays(now: number, count: number): Promise<WeaponDay[]> {
+    const keys = Array.from({ length: count }, (_, i) => weaponDayKey(now - (count - 1 - i) * DAY_MS));
+    const fresh = keys.slice(-2);
+    const read = keys.filter((key) => fresh.includes(key) || !this.weaponDayCache.has(key));
+    const stored = await this.ctx.storage.get(read);
+    for (const key of this.weaponDayCache.keys()) if (!keys.includes(key)) this.weaponDayCache.delete(key);
+    for (const key of read) if (!fresh.includes(key)) this.weaponDayCache.set(key, parseWeaponDay(stored.get(key)));
+    return keys.map((key) => (fresh.includes(key) ? parseWeaponDay(stored.get(key)) : (this.weaponDayCache.get(key) ?? {})));
+  }
+
   async stats(): Promise<PublicStats> {
     const config = loadConfig(stringVars(this.env));
     const now = Date.now();
-    const [stored, days] = await Promise.all([this.ctx.storage.get('stats'), this.recentDays(now)]);
-    const stats = parseStats(stored);
+    const [stored, days, weaponDays] = await Promise.all([
+      this.ctx.storage.get(['stats', 'killFeedSince']),
+      this.recentDays(now),
+      this.recentWeaponDays(now, LEADERBOARD_DAYS),
+    ]);
+    const stats = parseStats(stored.get('stats'));
+    const since = stored.get('killFeedSince');
     const board = leaderboard(days.slice(-LEADERBOARD_DAYS).map((d) => d.players), LEADERBOARD_DAYS, LEADERBOARD_SIZE);
-    const ids = await this.idsFor(namedSteamIds(stats, board));
+    const ids = await this.idsFor([...namedSteamIds(stats, board), ...weaponHolders(weaponDays)]);
+    const idOf = (steamId: string) => ids.get(steamId);
+    const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
-    return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, { leaderboard: board, vip: config.vip }, (steamId) =>
-      ids.get(steamId),
-    );
+    return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, { leaderboard: board, vip: config.vip, weapons }, idOf);
   }
 
   // The key for players' public ids, made the first time it is needed. Changing it would change every id, and break
@@ -665,7 +748,10 @@ export class Watcher extends DurableObject<Env> {
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
     const steamId = [...ids].find(([, known]) => known === id)?.[0];
     if (steamId === undefined) return null;
-    const [matches, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['state', 'vip', 'online'])]);
+    const [matches, stored] = await Promise.all([
+      this.matchRecords(now),
+      this.ctx.storage.get(['state', 'vip', 'online', 'killFeedSince', playerWeaponsKey(steamId)]),
+    ]);
     const snapshot = this.onlineNow(now, stored.get('online'));
     const inGame = snapshot?.players.find((p) => p.steamId === steamId);
     const tracked = parseState(stored.get('state'))?.match?.players[steamId];
@@ -679,6 +765,7 @@ export class Watcher extends DurableObject<Env> {
             deaths: tracked?.deaths ?? inGame.deaths ?? 0,
           };
     const config = loadConfig(stringVars(this.env));
+    const since = stored.get('killFeedSince');
     return buildProfile({
       steamId,
       id,
@@ -689,6 +776,10 @@ export class Watcher extends DurableObject<Env> {
       online,
       vip: parseVipState(stored.get('vip')).granted[steamId] ?? null,
       rule: config.vip,
+      weapons:
+        typeof since === 'string'
+          ? { since, used: playerWeaponDays(parsePlayerWeapons(stored.get(playerWeaponsKey(steamId))), days[0]?.day ?? since) }
+          : null,
     });
   }
 
@@ -915,16 +1006,57 @@ const publicRoute = (url: URL, watcher: () => DurableObjectStub<Watcher>): { key
   return null;
 };
 
+// A refused kill feed post is logged at most this often, so a wrong token does not fill the logs every two seconds.
+const REFUSAL_LOG_MS = 10 * 60_000;
+let refusalLoggedAt = 0;
+
+// The game's kill feed (see weapons.ts). It is only taken with the KILL_FEED_TOKEN secret as the bearer; without the
+// secret, the route is not there.
+const ingestKills = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
+  const token = vars['KILL_FEED_TOKEN']?.trim() ?? '';
+  if (token === '') return new Response('Not found', { status: 404 });
+  if (token.length < MIN_FEED_TOKEN) {
+    console.error(`Kill feed refused: KILL_FEED_TOKEN must be at least ${MIN_FEED_TOKEN} characters`);
+    return Response.json({ error: 'KILL_FEED_TOKEN is too short' }, { status: 500 });
+  }
+  if (!(await feedAuthorized(request.headers.get('authorization'), token))) {
+    if (Date.now() - refusalLoggedAt >= REFUSAL_LOG_MS) {
+      refusalLoggedAt = Date.now();
+      console.error('Kill feed refused: the token does not match KILL_FEED_TOKEN. Check Token under [WDServerFeed] in ServerSettings.ini.');
+    }
+    return Response.json({ error: 'Unknown kill feed token' }, { status: 401 });
+  }
+  if (Number(request.headers.get('content-length') ?? 0) > MAX_FEED_BYTES) return Response.json({ error: 'Batch too large' }, { status: 413 });
+  const text = await request.text();
+  if (text.length > MAX_FEED_BYTES) return Response.json({ error: 'Batch too large' }, { status: 413 });
+  let batch: ReturnType<typeof parseFeed> = null;
+  try {
+    batch = parseFeed(JSON.parse(text));
+  } catch {
+    // Not JSON: refused below.
+  }
+  if (batch === null) return Response.json({ error: 'Not a kill feed batch' }, { status: 400 });
+  try {
+    const accepted = batch.kills.length === 0 ? 0 : await watcher().recordKills(batch.kills);
+    return Response.json({ ok: true, accepted, skipped: batch.skipped });
+  } catch (error) {
+    console.error(`Kill feed batch failed: ${errorText(error)}`);
+    return Response.json({ error: 'Could not record the kills' }, { status: 503 });
+  }
+};
+
 export default {
   async scheduled(_controller, env) {
     await env.WATCHER.get(env.WATCHER.idFromName('watcher')).check();
   },
 
-  // GET /api/stats, /api/players and /api/player feed the community website. Slash commands: Discord POSTs signed
-  // interactions to this Worker's URL.
+  // GET /api/stats, /api/players and /api/player feed the community website. The game POSTs its kill feed to
+  // /api/ingest/events, after whatever path its Url has. Slash commands: Discord POSTs signed interactions to this
+  // Worker's URL.
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
+    if (request.method === 'POST' && url.pathname.endsWith(FEED_PATH)) return ingestKills(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname.startsWith('/api/')) {
       const route = publicRoute(url, watcher);
       if (route === null) return Response.json({ error: 'Not found' }, { status: 404, headers: PUBLIC_HEADERS });

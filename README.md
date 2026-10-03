@@ -32,7 +32,8 @@ On Cloudflare it also serves **`GET /api/stats`** for a community website: live 
 population, daily peaks, the busiest hours, the current and recent matches, Discord member counts and a public
 leaderboard (see [Website stats](#website-stats)). It serves a page of stats for every player, too (see
 [Player pages](#player-pages)). It keeps [player records](#player-records):
-every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. And it gives
+every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
+kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's. And it gives
 [automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
@@ -336,10 +337,21 @@ There is no chat log command: the game's RCON API has no way to read chat.
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
 | `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
+| `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |
 
 Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password. Each player on the
 leaderboard and in the current and recent matches has their name, their totals and an `id` for their
 [player page](#player-pages). Matches recorded before ids were added have names only.
+
+`weapons` has:
+
+| Field      | What                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| `days`     | How many UTC days it covers, today included: 30                                                |
+| `since`    | The UTC day the bot first had the kill feed. Kills before it have no weapon                    |
+| `kills`    | Every kill in the feed in those days, and `headshots`, how many of them were headshots         |
+| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon`, `vehicle-weapon`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
+| `longest`  | The longest kill of all: `{ weapon, distance, name, id }`, or null                             |
 
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
@@ -378,6 +390,7 @@ A player page has:
 | `online`   | When they are in game now: the map, their side, and their kills and deaths this match      |
 | `vip`      | `{ until }` while they have a reserved slot from the bot                                   |
 | `seeding`  | Their seed days in the VIP window and the rule they count towards, or `null` when automatic VIP is off |
+| `weapons`  | From the [kill feed](#weapon-stats): `since` (as in `/api/stats`) and `used`, a row for each weapon on each day they killed with it in the last 90 days: `day`, `name`, `kind`, `kills`, `headshots` and `longest` (metres, or null). `null` until the bot has had the feed |
 
 - Players are known by a public `id`, never their Steam ID: the first 12 hex characters of an HMAC of the Steam ID,
   with a random key the bot makes the first time it needs one and keeps in its storage (`playerIdKey`). Ids stay the
@@ -394,6 +407,55 @@ A player page has:
 
 The Node/Docker version does not serve player pages.
 
+## Weapon stats
+
+The game server can send the bot every kill as it happens: who killed whom, with what, from how far, and whether it was
+a headshot. The bot adds them up by weapon for the website: the top 10 weapons over the last 30 days in
+[`/api/stats`](#website-stats), and each player's weapons on their [player page](#player-pages).
+
+To turn it on:
+
+1. Make a long random token, such as the output of `openssl rand -hex 32`, and store it as a secret:
+   ```bash
+   npx wrangler secret put KILL_FEED_TOKEN
+   ```
+   It must be at least 16 characters.
+2. In the game server's `ServerSettings.ini` (your host's file manager or config editor), add this section, with the
+   Worker's URL and the same token:
+   ```ini
+   [WDServerFeed]
+   Url=https://wardogs-discord-bot.<you>.workers.dev
+   Token=<the token>
+   ```
+   Only the Worker's URL, with nothing after it: the game adds `/api/ingest/events` itself.
+3. Restart the game server. It reads the section when it starts, so the daily restart also does.
+
+When the first kills arrive, the Worker logs `Kill feed: first kills received`. `Kill feed refused: the token does not
+match` means `Token` in the file is not the secret.
+
+- **One feed per server.** The game sends its kills to one URL. If `[WDServerFeed]` already points at another tool,
+  such as a server panel, pointing it at the bot stops that tool getting them.
+- **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
+- **What counts.** A kill counts for the weapon that made it: guns, grenades and tools, a vehicle's gun, a vehicle
+  (running someone over, or blowing up with them in it) and things built, like barbed wire, which the game blames on
+  whoever built it. Suicides, falls and deaths with nobody to blame are left out. The feed does not say who is on which
+  side, so team kills count too.
+- **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
+  [Warcon](https://github.com/warcon-app/warcon)'s list. A new one is named from its tag (`Id.Item.WEPN_035` is
+  "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`. Tags with the same name, like each side's M113, are one
+  weapon.
+- **Distances** are between the killer and the victim, in metres. A vehicle blowing up has none, so its average
+  distance is left out.
+- **A batch sent twice** counts once: the bot remembers the last 5,000 kills it counted, until it restarts.
+- **`/removematch`** does not change weapon stats: they come from the feed, not from matches.
+- **Requests.** Each batch is one Worker request. The game sends one at most every 2 seconds while people are being
+  killed, and a capture of a busy server saw about 550 an hour: some 6,600 a day for a server live 12 hours a day,
+  against the free plan's 100,000. Each is one storage write, of the day's totals and each killer's.
+- **Turning it off:** delete the secret (`npx wrangler secret delete KILL_FEED_TOKEN`), and the section from
+  `ServerSettings.ini`. Without the secret, the bot answers the game with a 404. The stats it kept stay.
+
+The Node/Docker version does not take the kill feed: the game needs a public URL to send it to.
+
 ## Player records
 
 On Cloudflare, the bot also keeps records for leaderboards and seeder rewards (such as VIP). They are keyed by
@@ -405,6 +467,8 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Each player, each UTC day    | Name, seeding minutes, live minutes, whether they had a successful seed, matches played, kills, deaths |
 | Each player's staff history  | The last 50 warnings, kicks, bans, unbans, team moves and VIP changes made through the bot: when, by whom (Discord user ID), and why |
 | Bans the bot made            | Name, reason, who made it, when a timed ban ends, and whether it waits for them to join |
+| Each UTC day's weapons       | From the [kill feed](#weapon-stats): each weapon's kills, headshots, distances and longest kill, with the Steam ID and name of who made it |
+| Each player's weapons        | From the kill feed: their kills, headshots and longest kill with each weapon, on each of their last 90 UTC days |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
@@ -593,6 +657,8 @@ when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for b
 - `/serverstatus` requests are only accepted with a valid Discord signature (checked against
   `DISCORD_PUBLIC_KEY`) and a timestamp within 5 minutes, so nobody else can make the Worker call your
   server and a captured request cannot be replayed later.
+- The [kill feed](#weapon-stats) is only taken with `KILL_FEED_TOKEN` as the bearer, so nobody else can add kills.
+  Anyone who has the token can, so keep it secret like the password.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.
 
 ## Development

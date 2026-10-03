@@ -298,13 +298,14 @@ describe('publicStats', () => {
 
     const { hours: _hours, ...stats } = emptyStats();
 
-    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip }, () => undefined)).toEqual({
+    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip, weapons: null }, () => undefined)).toEqual({
       ...stats,
       generatedAt: MIDNIGHT,
       thresholds,
       hourly: { days: DAYS_KEPT, players: Array(24).fill(null), busy: Array(24).fill(null) },
       leaderboard,
       vip,
+      weapons: null,
     });
   });
 });
@@ -321,7 +322,7 @@ describe('publicStats and Steam IDs', () => {
   );
 
   it('swaps every Steam ID for the player’s public id', () => {
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null }, (steamId) => ids[steamId]);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, weapons: null }, (steamId) => ids[steamId]);
 
     expect(served.currentMatch?.top).toEqual([
       { id: 'b2b2b2b2b2b2', name: 'Bo', kills: 9, deaths: 3 },
@@ -341,7 +342,7 @@ describe('publicStats and Steam IDs', () => {
   });
 
   it('leaves out ids it does not know, and still no Steam IDs', () => {
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null }, () => undefined);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, weapons: null }, () => undefined);
 
     expect(served.leaderboard.kills[0]).not.toHaveProperty('id');
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
