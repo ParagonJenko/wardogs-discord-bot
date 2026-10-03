@@ -855,9 +855,11 @@ const vipText = ({ record, reserved, now }: PlayerProfile): string => {
   // The reserved list is the truth when it can be read; otherwise the bot's record is shown as only that.
   const lines = [
     reserved === null
-      ? record.vip === null
-        ? "Couldn't read the reserved list"
-        : `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`
+      ? record.staffSpot
+        ? "🎖️ Staff spot: a reserved slot while they are staff, by the bot's records\n(Couldn't check the reserved list.)"
+        : record.vip === null
+          ? "Couldn't read the reserved list"
+          : `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`
       : record.staffSpot
         ? reserved
           ? '🎖️ Staff spot: a reserved slot while they are staff'

@@ -844,6 +844,9 @@ describe('buildPlayerEmbed', () => {
     expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
       '🎖️ Staff spot: on the reserved list from the next check',
     );
+    expect(field(buildPlayerEmbed({ ...profile, reserved: null, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
+      "🎖️ Staff spot: a reserved slot while they are staff, by the bot's records\n(Couldn't check the reserved list.)",
+    );
     expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, vip } }), 'VIP')).toBe('None');
     expect(field(buildPlayerEmbed({ ...profile, record: { ...record, vipBlockedUntil: NOW + DAY } }), 'VIP')).toBe(
       `None\nStaff removed VIP: automatic VIP is off for them until ${t(NOW + DAY, 'f')}`,
