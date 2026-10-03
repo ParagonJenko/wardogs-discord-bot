@@ -190,6 +190,7 @@ import {
   DEFAULT_ROTATION,
   editRotations as editRotationBook,
   findRotation,
+  hasDefault,
   parseRotationBook,
   planToday,
   putRotation,
@@ -207,7 +208,7 @@ import {
   actionEdit,
   buildCatalog,
   buildRotationsPage,
-  RotationActionSchema,
+  readRotationAction,
   type RotationAction,
   type RotationCatalog,
   type RotationsActionResult,
@@ -738,12 +739,18 @@ export class Watcher extends DurableObject<Env> {
   // The saved rotations, starting Default as the server's rotation the first time (see seedDefault). Run in `serial`.
   private async ensureDefault(config: Config): Promise<RotationBook> {
     const saved = parseRotationBook(await this.ctx.storage.get('rotations'));
-    if (findRotation(saved, DEFAULT_ROTATION) !== null) return saved;
+    if (hasDefault(saved)) return saved;
+    // A Default staff made before, with maps, only needs its name put right.
+    const named = seedDefault(saved, []);
+    if (hasDefault(named)) {
+      await this.ctx.storage.put('rotations', named);
+      return named;
+    }
     const http = socketHttp(connect);
     // The settings file as it is, or what the server reports when the file has no rotation of its own.
     const inFile = serverEntries((await fetchConfig(config.rconUrl, config.rconPassword, http)).text);
     const entries = inFile.length > 0 ? inFile : rotationEntries(await fetchRotation(config.rconUrl, config.rconPassword, http));
-    const book = seedDefault(saved, entries);
+    const book = seedDefault(named, entries);
     if (book === saved) return saved;
     await this.ctx.storage.put('rotations', book);
     console.info(`Map rotation: saved the server's rotation as ${DEFAULT_ROTATION} (${entries.length} maps)`);
@@ -1936,7 +1943,7 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   if (route === 'GET /api/admin/rotations' || route === 'POST /api/admin/rotations') {
     try {
       if (route === 'GET /api/admin/rotations') return Response.json(await watcher().rotationsPage(), { headers });
-      const action = await readRotationsBody(request);
+      const action = await readRotationAction(request);
       if (action === null) return Response.json({ error: 'Not a rotations request' }, { status: 400, headers });
       const what = 'entries' in action ? ` (${action.entries.length} maps)` : 'days' in action ? ` for days ${action.days.join(',')}` : '';
       console.info(
@@ -1959,21 +1966,6 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   } catch (error) {
     console.error(`Staff page failed: ${errorText(error)}`);
     return Response.json({ error: 'The staff page is unavailable' }, { status: 503, headers });
-  }
-};
-
-// A rotation of 100 maps is about 15 KB.
-const ROTATIONS_BODY_BYTES = 65_536;
-
-const readRotationsBody = async (request: Request): Promise<RotationAction | null> => {
-  if (Number(request.headers.get('content-length') ?? 0) > ROTATIONS_BODY_BYTES) return null;
-  const body = await request.arrayBuffer();
-  if (body.byteLength > ROTATIONS_BODY_BYTES) return null;
-  try {
-    const parsed = RotationActionSchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
   }
 };
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RotationBook } from '../src/rotations.ts';
-import { actionEdit, buildCatalog, buildRotationsPage, RotationActionSchema } from '../src/rotationspage.ts';
+import { actionEdit, buildCatalog, buildRotationsPage, readRotationAction, RotationActionSchema } from '../src/rotationspage.ts';
 
 describe('buildCatalog', () => {
   it('lists each map by its players\' name, with its modes, modifiers and zone layouts', () => {
@@ -101,5 +101,31 @@ describe('the Rotations tab\'s changes', () => {
     expect(RotationActionSchema.safeParse({ action: 'schedule', days: [7], name: 'x' }).success).toBe(false);
     expect(RotationActionSchema.safeParse({ action: 'save', name: 'x', entries: Array.from({ length: 101 }, () => ({ map: 'Kavkazi' })) }).success).toBe(false);
     expect(RotationActionSchema.safeParse({ action: 'drop', name: 'x' }).success).toBe(false);
+  });
+});
+
+describe('readRotationAction', () => {
+  const streamed = (text: string, chunk = 4): Request => {
+    const bytes = new TextEncoder().encode(text);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let at = 0; at < bytes.length; at += chunk) controller.enqueue(bytes.slice(at, at + chunk));
+        controller.close();
+      },
+    });
+    return new Request('https://bot.example/api/admin/rotations', { method: 'POST', body, duplex: 'half' } as RequestInit);
+  };
+
+  it('reads a change sent in pieces', async () => {
+    await expect(readRotationAction(streamed(JSON.stringify({ action: 'use', name: 'Weekend' })))).resolves.toEqual({ action: 'use', name: 'Weekend' });
+  });
+
+  it('drops a body past the limit, said or not, and anything that is not a change', async () => {
+    const long = JSON.stringify({ action: 'use', name: 'x'.repeat(40) });
+    await expect(readRotationAction(streamed(long), 32)).resolves.toBeNull();
+    const said = new Request('https://bot.example/', { method: 'POST', body: long, headers: { 'content-length': '999999' } });
+    await expect(readRotationAction(said)).resolves.toBeNull();
+    await expect(readRotationAction(streamed('not json'))).resolves.toBeNull();
+    await expect(readRotationAction(streamed(JSON.stringify({ action: 'drop' })))).resolves.toBeNull();
   });
 });

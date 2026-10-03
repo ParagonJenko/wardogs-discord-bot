@@ -385,7 +385,8 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
 | --------------- | ------------------------------------------------------- | ------- |
 | `ROTATION_HOUR` | The hour (UTC, 0 to 23) each day's rotation starts      | `"5"`   |
 
-Up to 10 rotations, Default included, of up to 100 maps each. The Node/Docker version does not have map rotations.
+Up to 10 rotations besides Default, of up to 100 maps each. A rotation staff already called "Default" before this
+became Default; if it had no maps, it takes the server's. The Node/Docker version does not have map rotations.
 
 ### Rotations tab
 

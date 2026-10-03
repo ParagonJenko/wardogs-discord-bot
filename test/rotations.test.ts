@@ -9,6 +9,7 @@ import {
   putRotation,
   rotationDay,
   rotationName,
+  hasDefault,
   seedDefault,
   serverEntries,
   setRotationEntries,
@@ -166,6 +167,27 @@ describe('the Default rotation', () => {
     expect(seedDefault(seeded, [OZETI])).toBe(seeded);
     const nothing = book();
     expect(seedDefault(nothing, [])).toBe(nothing);
+  });
+
+  it('takes over a rotation staff already called "Default": an empty one gets the server\'s maps, one with maps keeps them', () => {
+    const legacy = (entries: RotationEntry[]): RotationBook => ({ ...book(), rotations: [...book().rotations, { name: 'default', entries }] });
+    const filled = seedDefault(legacy([]), [ZESTAFONA]);
+    expect(filled.rotations.at(-1)).toEqual({ name: 'Default', entries: [ZESTAFONA] });
+    expect(hasDefault(filled)).toBe(true);
+    const kept = seedDefault(legacy([BAKURANI]), []);
+    expect(kept.rotations.at(-1)).toEqual({ name: 'Default', entries: [BAKURANI] });
+    // Empty, and nothing from the server: still not set up.
+    expect(hasDefault(seedDefault(legacy([]), []))).toBe(false);
+  });
+
+  it("doesn't count against the most rotations staff can save", () => {
+    const ten: RotationBook = { ...empty, rotations: Array.from({ length: 10 }, (_, i) => ({ name: `R${i}`, entries: [BAKURANI] })) };
+    const seeded = seedDefault(ten, [OZETI]);
+    expect(seeded.rotations).toHaveLength(11);
+    expect(editRotations(seeded, { kind: 'add', name: 'R10', entry: BAKURANI }, at)).toEqual({ problem: expect.stringMatching(/already 10/) });
+    expect(editRotations(seeded, { kind: 'add', name: 'Default', entry: BAKURANI }, at)).not.toHaveProperty('problem');
+    // A full book without Default can still have one.
+    expect(editRotations(ten, { kind: 'save', name: 'default', entries: [OZETI] }, at)).not.toHaveProperty('problem');
   });
 
   it('plays on every day without a rotation of its own, or whose rotation has no maps', () => {

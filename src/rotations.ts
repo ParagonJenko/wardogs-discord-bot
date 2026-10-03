@@ -34,6 +34,7 @@ export const DAY_CHOICES: { name: string; value: string; days: number[] }[] = [
   { name: 'Every day', value: 'every-day', days: [0, 1, 2, 3, 4, 5, 6] },
 ];
 
+// Rotations staff can save besides Default, which never counts against it.
 export const MAX_ROTATIONS = 10;
 // The server takes far more, but this many is already a long day of matches.
 export const MAX_ROTATION_MAPS = 100;
@@ -111,11 +112,25 @@ export const rotationEntries = (rotation: Rotation): RotationEntry[] =>
     ...(zoneAlternator ? { zoneAlternator } : {}),
   }));
 
-// Saves the server's rotation as Default, first in the list, unless there is a Default already or the server has no maps.
-export const seedDefault = (book: RotationBook, entries: RotationEntry[]): RotationBook =>
-  findRotation(book, DEFAULT_ROTATION) !== null || entries.length === 0
-    ? book
-    : { ...book, rotations: [{ name: DEFAULT_ROTATION, entries }, ...book.rotations] };
+// Makes Default the server's rotation (`entries`), first in the list, the first time. A rotation staff already called
+// "Default" (any capitals, from before Default was kept for this) stays where it is, named Default, and keeps its maps if
+// it has any; one with none takes the server's. With no maps from the server either, there is no Default yet.
+export const seedDefault = (book: RotationBook, entries: RotationEntry[]): RotationBook => {
+  const existing = findRotation(book, DEFAULT_ROTATION);
+  if (existing !== null && existing.name === DEFAULT_ROTATION && existing.entries.length > 0) return book;
+  const filled = existing !== null && existing.entries.length > 0 ? existing.entries : entries;
+  if (filled.length === 0) {
+    return existing === null || existing.name === DEFAULT_ROTATION ? book : { ...book, rotations: book.rotations.map((r) => (r === existing ? { ...r, name: DEFAULT_ROTATION } : r)) };
+  }
+  if (existing === null) return { ...book, rotations: [{ name: DEFAULT_ROTATION, entries: filled }, ...book.rotations] };
+  return { ...book, rotations: book.rotations.map((r) => (r === existing ? { name: DEFAULT_ROTATION, entries: filled } : r)) };
+};
+
+// Whether Default is there with maps, so the server's rotation is not needed to make it.
+export const hasDefault = (book: RotationBook): boolean => {
+  const existing = findRotation(book, DEFAULT_ROTATION);
+  return existing !== null && existing.name === DEFAULT_ROTATION && existing.entries.length > 0;
+};
 
 // The rotation on the server for this day, as the bot put it there (or is putting it there).
 export const rotationToday = (book: RotationBook, today: RotationDay): AppliedRotation | null =>
@@ -220,7 +235,8 @@ export const editRotations = (
     const named = rotationName(edit.name);
     if ('problem' in named) return named;
     const existing = findRotation(book, named.name);
-    if (existing === null && book.rotations.length >= MAX_ROTATIONS) {
+    const own = book.rotations.filter((r) => !isDefault(r.name)).length;
+    if (existing === null && !isDefault(named.name) && own >= MAX_ROTATIONS) {
       return { problem: `There are already ${MAX_ROTATIONS} rotations. Delete one first.` };
     }
     const name = existing?.name ?? (isDefault(named.name) ? DEFAULT_ROTATION : named.name);
