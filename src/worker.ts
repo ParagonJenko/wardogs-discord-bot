@@ -13,6 +13,8 @@ import {
   CLEAR_LOGIN_COOKIE,
   createSession,
   finishLogin,
+  notSetUpText,
+  siteOriginOf,
   readSession,
   returnAddress,
   startLogin,
@@ -1368,11 +1370,11 @@ const publicRoute = (
 // be listed under OAuth2 → Redirects in the Discord Developer Portal.
 const callbackUrl = (request: Request): string => `${new URL(request.url).origin}${CALLBACK_PATH}`;
 
-const notSetUp = (missing: string[]): Response =>
-  new Response(`Staff sign-in is not set up. Missing: ${missing.join(', ')}. See the README, "Staff page".`, {
-    status: 503,
-    headers: { 'content-type': 'text/plain; charset=utf-8' },
-  });
+// Logged each time, so the reason the staff page cannot load is in the Worker logs, not only on the page.
+const notSetUp = (missing: string[]): Response => {
+  console.error(notSetUpText(missing));
+  return new Response(notSetUpText(missing), { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+};
 
 const staffLogin = async (request: Request, vars: Record<string, string>): Promise<Response> => {
   const config = adminAuthConfig(vars);
@@ -1423,16 +1425,19 @@ const staffCallback = async (request: Request, vars: Record<string, string>, wat
 // copy.
 const staffApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
   const config = adminAuthConfig(vars);
+  // The website may read even a refusal, so the page can say why. Without SITE_URL no site may.
   const headers = {
-    'access-control-allow-origin': 'missing' in config ? 'null' : config.siteOrigin,
+    'access-control-allow-origin': siteOriginOf(vars) ?? 'null',
     'access-control-allow-headers': 'authorization',
     'access-control-allow-methods': 'GET, OPTIONS',
     'access-control-max-age': '600',
     'cache-control': 'no-store',
     vary: 'origin',
   };
+  // Logged on the browser's preflight too: without SITE_URL the browser stops there and never sends the request.
+  if ('missing' in config) console.error(notSetUpText(config.missing));
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-  if ('missing' in config) return Response.json({ error: 'Staff sign-in is not set up' }, { status: 503, headers });
+  if ('missing' in config) return Response.json({ error: notSetUpText(config.missing) }, { status: 503, headers });
   if (request.method !== 'GET') return Response.json({ error: 'Not found' }, { status: 404, headers });
   const session = await readSession(config.clientSecret, request.headers.get('authorization'), Date.now());
   if (session === null) return Response.json({ error: 'Sign in again' }, { status: 401, headers });

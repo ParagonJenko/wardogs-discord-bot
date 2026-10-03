@@ -42,15 +42,24 @@ export type AdminAuthConfig = {
   siteOrigin: string;
 };
 
+// The website's origin from SITE_URL, or null when it is not set or not a URL.
+export const siteOriginOf = (vars: Record<string, string>): string | null => {
+  try {
+    const url = vars['SITE_URL']?.trim() ?? '';
+    return url === '' ? null : new URL(url).origin;
+  } catch {
+    return null;
+  }
+};
+
+// Why staff cannot sign in, for the logs and the staff page.
+export const notSetUpText = (missing: string[]): string =>
+  `Staff sign-in is not set up on the bot. Missing: ${missing.join(', ')}. See the bot's README, "Staff page".`;
+
 // The sign-in's settings, or what is missing while any are.
 export const adminAuthConfig = (vars: Record<string, string>): AdminAuthConfig | { missing: string[] } => {
   const value = (key: string): string => vars[key]?.trim() ?? '';
-  let siteOrigin = '';
-  try {
-    siteOrigin = value('SITE_URL') === '' ? '' : new URL(value('SITE_URL')).origin;
-  } catch {
-    // Reported as missing below.
-  }
+  const siteOrigin = siteOriginOf(vars) ?? '';
   const missing = [
     ...(/^\d+$/.test(value('DISCORD_APPLICATION_ID')) ? [] : ['DISCORD_APPLICATION_ID']),
     ...(value('DISCORD_CLIENT_SECRET') === '' ? ['DISCORD_CLIENT_SECRET'] : []),
