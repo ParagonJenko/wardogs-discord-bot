@@ -475,8 +475,8 @@ The Node/Docker version does not have the staff page.
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |
 
 Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password. Each player on the
-leaderboard, in the current and recent matches and in `seederVip` has their name, their totals and an `id` for their
-[player page](#player-pages). Matches recorded before ids were added have names only.
+leaderboard and in the current and recent matches has their name, their totals and an `id` for their
+[player page](#player-pages). Each player in `seederVip` has their `name`, `id` and `until`. Matches recorded before ids were added have names only.
 
 `weapons` has:
 

@@ -40,12 +40,13 @@ export const vipDue = (state: VipState, now: number): boolean => now - state.che
 
 export type SeederVip = { steamId: string; name: string; until: number };
 
-// Who has VIP from seeding now, for the website: the latest to earn it first.
+// Who has VIP from seeding now, for the website: the latest to earn it first. By when they earned it, not when it
+// ends, since staff can extend a seeder's VIP.
 export const seederVip = (state: VipState, now: number): SeederVip[] =>
   Object.entries(state.granted)
     .filter(([, g]) => g.source !== 'staff' && g.expiresAt > now)
-    .map(([steamId, g]) => ({ steamId, name: g.name, until: g.expiresAt }))
-    .sort((a, b) => b.until - a.until);
+    .sort(([, a], [, b]) => b.grantedAt - a.grantedAt)
+    .map(([steamId, g]) => ({ steamId, name: g.name, until: g.expiresAt }));
 
 // Who has earned VIP: enough seed days in the days given (the rule's window, ending today).
 export const qualified = (days: PlayerDay[], rule: VipRule): { steamId: string; name: string }[] =>

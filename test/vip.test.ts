@@ -221,7 +221,8 @@ describe('seederVip', () => {
     const state = {
       ...parseVipState(undefined),
       granted: {
-        [ASH]: { name: 'Ash', grantedAt: NOW - 3 * DAY, expiresAt: NOW + 4 * DAY, source: 'seeding' as const },
+        // Earned before Bo, then extended by staff past Bo's.
+        [ASH]: { name: 'Ash', grantedAt: NOW - 3 * DAY, expiresAt: NOW + 30 * DAY, source: 'seeding' as const },
         [BO]: { name: 'Bo', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY, source: 'seeding' as const },
         [ADMIN]: { name: 'Admin', grantedAt: NOW, expiresAt: NOW + 30 * DAY, source: 'staff' as const },
         // Saved before the bot kept how a player got VIP: counts as seeding.
@@ -233,7 +234,7 @@ describe('seederVip', () => {
 
     expect(seederVip(state, NOW)).toEqual([
       { steamId: BO, name: 'Bo', until: NOW + 6 * DAY },
-      { steamId: ASH, name: 'Ash', until: NOW + 4 * DAY },
+      { steamId: ASH, name: 'Ash', until: NOW + 30 * DAY },
       { steamId: CY, name: 'Cy', until: NOW + 2 * DAY },
     ]);
   });
