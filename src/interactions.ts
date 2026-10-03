@@ -267,7 +267,7 @@ export const COMMANDS = [
         description: 'Pick the rotation for a day of the week; it goes on the server each week as that day starts',
         options: [
           { type: STRING, name: 'day', description: 'Which day', required: true, choices: DAY_CHOICES.map(({ name, value }) => ({ name, value })) },
-          rotation('The rotation for that day (leave out to keep whatever the server has)', false),
+          rotation('The rotation for that day (leave out for Default)', false),
         ],
       },
       {
@@ -298,7 +298,7 @@ export const COMMANDS = [
       {
         type: SUBCOMMAND,
         name: 'delete',
-        description: 'Delete a saved rotation (the server keeps the maps it has)',
+        description: 'Delete a saved rotation; the days it was planned for go back to Default',
         options: [rotation('Pick the rotation')],
       },
     ],

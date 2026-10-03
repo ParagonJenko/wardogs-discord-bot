@@ -35,8 +35,11 @@ import {
 } from './rcon.ts';
 import {
   DAY_CHOICES,
+  DEFAULT_ROTATION,
   findRotation,
+  plannedRotation,
   rotationDay,
+  rotationEntries,
   rotationToday,
   WEEKDAYS,
   type RotationBook,
@@ -96,8 +99,9 @@ export type StaffRecords = {
   steam: (steamId: string) => Promise<SteamLookup>;
   // The saved map rotations, the week's plan, and the rotation on the server today (see rotations.ts).
   rotations: () => Promise<RotationBook>;
-  // Changes them as staff asked (`by`, a Discord user ID), and puts a rotation on the server when the change calls for it.
-  editRotations: (edit: RotationEdit, by: string) => Promise<RotationEditResult>;
+  // Changes them as staff asked (`by`, a Discord user ID, with the name they go by), and puts a rotation on the server
+  // when the change calls for it.
+  editRotations: (edit: RotationEdit, by: string, byName?: string) => Promise<RotationEditResult>;
 };
 
 export type StaffDeps = {
@@ -225,9 +229,12 @@ const serverNote = (server: RotationServer | undefined, name: string): string =>
   return server.outcome === 'updated' ? ` The server has **${name}** now, and plays it from the next map.` : ' The server already had these maps.';
 };
 
-// The days a rotation is planned for, by name.
+// Each day's rotation, Monday first: its own, or Default.
+const weekPlan = (book: RotationBook): (string | null)[] => WEEKDAYS.map((_, weekday) => plannedRotation(book, { day: '', weekday })?.name ?? null);
+
+// The days a rotation plays on, by name.
 const daysOf = (book: RotationBook, name: string): string[] =>
-  WEEKDAYS.filter((_, i) => book.week[i]?.toLowerCase() === name.toLowerCase());
+  WEEKDAYS.filter((_, i) => weekPlan(book)[i]?.toLowerCase() === name.toLowerCase());
 
 // Choices offered while staff type in an option with autocomplete.
 export const suggestStaff =
@@ -455,7 +462,7 @@ export const runStaffCommand =
       return { content: `🗺️ Ended the match. The server moves to ${described} after the end screen.` };
     }
 
-    if (name === 'rotations') return runRotations({ config, http, records, now, log }, options, by);
+    if (name === 'rotations') return runRotations({ config, http, records, now, log }, options, by, userName);
 
     if (name === 'vip') {
       const { found } = await anyTarget('steam_id');
@@ -515,6 +522,7 @@ const runRotations = async (
   { config, http, records, now, log }: StaffDeps,
   options: Record<string, string>,
   by: string,
+  byName: string | undefined,
 ): Promise<CommandReply> => {
   const { rconUrl, rconPassword, rotationHour } = config();
   const staff = `Discord user ${by}`;
@@ -522,7 +530,7 @@ const runRotations = async (
   const typed = (options['rotation'] ?? '').trim();
   const edit = async (change: RotationEdit): Promise<RotationEditResult> => {
     log.info(`/rotations ${sub} by ${staff}: ${JSON.stringify(change)}`);
-    return records.editRotations(change, by);
+    return records.editRotations(change, by, byName);
   };
   // Names for modes and lighting, and for the zones of each map, when the server gives them.
   const catalogFor = async (entries: RotationEntry[]): Promise<Pick<SetupCatalog, 'experiences' | 'lightings' | 'zones'>> => {
@@ -558,7 +566,7 @@ const runRotations = async (
       embeds: [
         buildRotationsEmbed({
           rotations: book.rotations.map((r) => ({ name: r.name, maps: r.entries.map((e) => mapName(e.map)) })),
-          week: book.week,
+          week: weekPlan(book),
           weekday: today.weekday,
           today: current,
           hour: rotationHour,
@@ -618,13 +626,7 @@ const runRotations = async (
   }
 
   if (sub === 'save') {
-    const current = await fetchRotation(rconUrl, rconPassword, http);
-    const entries = current.entries.map(({ map, experiences, lighting, zoneAlternator }): RotationEntry => ({
-      map,
-      ...(experiences && experiences.length > 0 ? { experiences } : {}),
-      ...(lighting ? { lighting } : {}),
-      ...(zoneAlternator ? { zoneAlternator } : {}),
-    }));
+    const entries = rotationEntries(await fetchRotation(rconUrl, rconPassword, http));
     const replaced = findRotation(await records.rotations(), typed) !== null;
     const result = await edit({ kind: 'save', name: typed, entries });
     if ('problem' in result) return { content: result.problem };
@@ -643,8 +645,10 @@ const runRotations = async (
     const result = await edit({ kind: 'delete', name: typed });
     if ('problem' in result) return { content: result.problem };
     const days = rotation === null ? [] : daysOf(before, rotation.name);
-    const cleared = days.length > 0 ? ` ${andList(days)} now keep whatever the server has.` : '';
-    return { content: `🗑️ Deleted **${rotation?.name ?? typed}**. The server keeps the maps it has.${cleared}` };
+    const fallback = findRotation(result.book, DEFAULT_ROTATION)?.name;
+    const back = fallback ? `go back to **${fallback}**` : 'keep whatever the server has';
+    const cleared = days.length > 0 ? ` ${andList(days)} ${back}.` : '';
+    return { content: `🗑️ Deleted **${rotation?.name ?? typed}**.${cleared}` + serverNote(result.server, result.book.applied?.name ?? '') };
   }
 
   if (sub === 'use') {
@@ -652,7 +656,7 @@ const runRotations = async (
     if ('problem' in result) return { content: result.problem };
     const name = result.rotation?.name ?? typed;
     const today = rotationDay(now(), rotationHour);
-    const tomorrow = result.book.week[(today.weekday + 1) % WEEKDAYS.length];
+    const tomorrow = weekPlan(result.book)[(today.weekday + 1) % WEEKDAYS.length];
     const next = Math.floor(Date.UTC(...dayParts(today.day, 1), rotationHour) / 1000);
     return {
       content:
@@ -670,9 +674,10 @@ const runRotations = async (
   const days = choice.days.map((d) => WEEKDAYS[d] ?? '');
   const today = rotationDay(now(), rotationHour);
   const when = choice.days.length === 1 ? `${days[0]}s` : choice.value === 'every-day' ? 'Every day' : andList(days);
-  if (result.rotation === null) return { content: `📅 ${when}: no rotation, so the server keeps whatever it has.` };
+  const planned = weekPlan(result.book)[choice.days[0] ?? 0];
+  if (!planned) return { content: `📅 ${when}: no rotation, so the server keeps whatever it has.` };
   const goesOn = choice.days.includes(today.weekday) ? ` It's ${WEEKDAYS[today.weekday]}, so it goes on today.` : '';
-  return { content: `📅 ${when}: **${result.rotation.name}**.${goesOn}` + serverNote(result.server, result.rotation.name) };
+  return { content: `📅 ${when}: **${planned}**.${goesOn}` + serverNote(result.server, planned) };
 };
 
 // A day as UTC year, month (from 0) and day, `ahead` days on.

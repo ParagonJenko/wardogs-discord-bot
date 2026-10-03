@@ -546,8 +546,8 @@ describe('/rotations', () => {
     const ctx = setup({ ...catalog, ...overrides });
     let book = start;
     ctx.records.rotations.mockImplementation(async () => book);
-    ctx.records.editRotations.mockImplementation(async (edit: RotationEdit, by: string): Promise<RotationEditResult> => {
-      const result = editRotations(book, edit, { today: rotationDay(NOW, 5), now: NOW, by });
+    ctx.records.editRotations.mockImplementation(async (edit: RotationEdit, by: string, byName?: string): Promise<RotationEditResult> => {
+      const result = editRotations(book, edit, { today: rotationDay(NOW, 5), now: NOW, by, ...(byName === undefined ? {} : { byName }) });
       if ('problem' in result) return result;
       const applied = result.book.applied;
       const chose = applied !== book.applied && applied?.pending === true;
@@ -663,7 +663,7 @@ describe('/rotations', () => {
     const { rotations, book } = withBook(two);
 
     await expect(rotations({ subcommand: 'delete', rotation: 'weekend' })).resolves.toEqual({
-      content: '🗑️ Deleted **Weekend**. The server keeps the maps it has. Saturday and Sunday now keep whatever the server has.',
+      content: '🗑️ Deleted **Weekend**. Saturday and Sunday keep whatever the server has.',
     });
     await expect(rotations({ subcommand: 'delete', rotation: 'Weekend' })).resolves.toEqual({
       content: 'There\'s no rotation called "Weekend". Pick one from the list.',
@@ -703,6 +703,30 @@ describe('/rotations', () => {
       description: '1. 🟧 **Bakurani** · King of the Hill · Day, clear\n2. 🟦 **Ozeti**',
       footer: { text: 'Planned for Monday, Tuesday, Wednesday, Thursday and Friday · On the server today' },
     });
+  });
+
+  it('plays Default on the days without a rotation, which goes back to it when one is deleted', async () => {
+    const withDefault: RotationBook = {
+      ...two,
+      rotations: [{ name: 'Default', entries: [{ map: 'Europe' }] }, ...two.rotations],
+      week: [null, null, 'Weekend', null, null, 'Weekend', 'Weekend'],
+      applied: { name: 'Weekend', day: '2026-09-30', at: 0, by: 'schedule', pending: false },
+    };
+    const { rotations, book } = withBook(withDefault);
+
+    await expect(rotations({ subcommand: 'delete', rotation: 'Default' })).resolves.toEqual({
+      content: "**Default** can't be deleted: it plays on every day without a rotation of its own. Change its maps instead.",
+    });
+    await expect(rotations({ subcommand: 'delete', rotation: 'Weekend' })).resolves.toEqual({
+      content:
+        '🗑️ Deleted **Weekend**. Wednesday, Saturday and Sunday go back to **Default**. The server has **Default** now, and plays it from the next map.',
+    });
+    await expect(rotations({ subcommand: 'schedule', day: 'friday', rotation: 'Rotation 1' })).resolves.toEqual({
+      content: '📅 Fridays: **Rotation 1**.',
+    });
+    await expect(rotations({ subcommand: 'schedule', day: 'friday' })).resolves.toEqual({ content: '📅 Fridays: **Default**.' });
+    expect(book().week).toEqual([null, null, null, null, null, null, null]);
+    expect(book().applied).toMatchObject({ name: 'Default', by: '42' });
   });
 
   it('explains how to start when there are no rotations', async () => {

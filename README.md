@@ -336,51 +336,68 @@ There is no chat log command: the game's RCON API has no way to read chat.
 ## Map rotations
 
 Staff save map rotations by name, such as "Rotation 1" and "Weekend", and pick which one the server plays on each day of
-the week. The bot puts a rotation on the server by writing its maps into `ServerSettings.ini` (`PUT /v1/config`, checked
-first with `POST /v1/config/validate`), as live builds have no other way to change the rotation. The server rebuilds its
-rotation straight away and plays it from the next map change, so the match on now is never cut short. Only the
-`RotationEntries` lines are written: whether the rotation is on, and in order or random, stay as they are.
+the week. **Default** starts as the rotation the server had when the bot first looked, and plays on every day without a
+rotation of its own. The easiest place to do all this is the staff page's [Rotations tab](#rotations-tab); the
+`/rotations` command does the same from Discord.
+
+The bot puts a rotation on the server by writing its maps into `ServerSettings.ini` (`PUT /v1/config`, checked first with
+`POST /v1/config/validate`), as live builds have no other way to change the rotation. The server rebuilds its rotation
+straight away and plays it from the next map change, so the match on now is never cut short. Only the `RotationEntries`
+lines are written: whether the rotation is on, and in order or random, stay as they are.
 
 | Command                 | What                                                                                     |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
 | `/rotations show`       | The saved rotations, the week and which one is on today; or, with `rotation`, its maps in order |
 | `/rotations use`        | Swaps the server to a rotation now, for the rest of the day                              |
-| `/rotations schedule`   | Picks the rotation for a day: one weekday, weekdays, the weekend or every day. Leave `rotation` out to clear it |
+| `/rotations schedule`   | Picks the rotation for a day: one weekday, weekdays, the weekend or every day. Leave `rotation` out for Default |
 | `/rotations add`        | Adds a map to a rotation, with the same options as `/setnextmap`, and `position` (default: the end). A new name starts a new rotation |
 | `/rotations remove`     | Takes a map out of a rotation, picked from its list                                      |
 | `/rotations save`       | Saves the rotation the server has now under a name, or in place of a saved one          |
-| `/rotations delete`     | Deletes a saved rotation. The days it was planned for keep whatever the server has      |
+| `/rotations delete`     | Deletes a saved rotation. The days it was planned for go back to Default                 |
 
-Setting up two rotations and a week, for example:
+Setting up a weekend rotation, for example (every other day keeps playing Default):
 
 ```
-/rotations save rotation:Rotation 1              (the rotation the server has now)
 /rotations add rotation:Weekend map:Ozeti infantry_only:True
 /rotations add rotation:Weekend map:Zestafona hardcore:True
-/rotations schedule day:Weekdays (Monday to Friday) rotation:Rotation 1
 /rotations schedule day:Weekend (Saturday and Sunday) rotation:Weekend
 ```
 
 - **Each day starts at `ROTATION_HOUR`** (UTC, default `5`: 6am in the UK in summer, 5am in winter), so a late night
-  still plays the evening's rotation. At the first check after that, the bot puts the day's rotation on the server. A day
-  with no rotation keeps whatever the server has.
-- **`/rotations use`** lasts until the next day starts; then the schedule takes over again. Planning today in
-  `/rotations schedule` puts that rotation on straight away too.
-- **Changing today's rotation** (adding, taking out or saving over its maps) puts it on the server again, unless it has
-  no maps left: the bot never leaves the server without a rotation.
+  still plays the evening's rotation. At the first check after that, the bot puts the day's rotation on the server: its
+  own, or Default.
+- **Default** can be changed like any rotation, but not renamed, deleted or left with no maps. The bot saves it from the
+  server at the first check after this deploy (from `ServerSettings.ini`, or what the server reports when the file has
+  no rotation), and the server already has those maps, so nothing changes in game. Without a Default (a server with no
+  maps), a day with no rotation of its own keeps whatever the server has.
+- **`/rotations use`** lasts until the next day starts; then the week takes over again. Planning today puts that
+  rotation on straight away too, and so does deleting today's rotation (Default goes on).
+- **Changing today's rotation** (its maps, or their order) puts it on the server again, unless it has no maps left: the
+  bot never leaves the server without a rotation.
 - In `add`, anything left out is the map's own: its first game mode, infantry only and hardcore off, and the map's own
   lighting and zones. A map can be in a rotation more than once, such as Bakurani by day and at dusk.
 - If the server can't take the rotation (it is not answering, or the settings file is read-only), the reply says why,
   and the bot tries again at every check until the server has it.
-- Changes made by hand on the server stay until the bot next puts a rotation on: the start of a day with one planned,
-  or a staff command. `/rotation` (for everyone) shows what the server is playing either way.
+- Changes made by hand on the server stay until the bot next puts a rotation on: the start of the next day, or a staff
+  change. `/rotation` (for everyone) shows what the server is playing either way.
 
 | Variable        | What                                                    | Default |
 | --------------- | ------------------------------------------------------- | ------- |
 | `ROTATION_HOUR` | The hour (UTC, 0 to 23) each day's rotation starts      | `"5"`   |
 
-Up to 10 rotations, of up to 100 maps each. The tools are on the [staff page](#staff-page) too. The Node/Docker version
-does not have map rotations.
+Up to 10 rotations, Default included, of up to 100 maps each. The Node/Docker version does not have map rotations.
+
+### Rotations tab
+
+The [staff page](#staff-page) has a tab of its own for rotations: the week, with each day's rotation to pick; what is on
+the server now, with the map being played and the next; and an editor where staff drag maps into a rotation, drag them
+into order, and set each one's mode, infantry only, hardcore, lighting and zones. Nothing changes until they press Save,
+and Put on server swaps to it for the rest of the day.
+
+It reads `GET /api/admin/rotations` (the saved rotations, the week, the server's rotation, and each map's modes,
+modifiers, lighting and zone layouts, kept for 10 minutes) and sends changes to `POST /api/admin/rotations`
+(`save`, with `from` to rename; `use`; `schedule`; `delete`), with the same rules as `/rotations`. Each change is logged
+as `Staff page: rotations <action> "<name>" by "<staff>" (Discord user <ID>)`.
 
 ## Moderation log
 
@@ -444,6 +461,7 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
 - **Admin tools**: every staff slash command, run from the page: warn, kick, move team, ban, unban, look up a player,
   give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders,
   [map rotations](#map-rotations), and remove a wrongly recorded match. See below.
+- **[Rotations](#rotations-tab)**: the week, what is on the server, and a drag and drop editor for the saved rotations.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
 Discord's **Administrator** permission, or with a role in `DISCORD_ADMIN_ROLE_IDS`, or the server's owner.

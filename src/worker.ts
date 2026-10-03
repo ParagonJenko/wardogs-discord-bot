@@ -118,9 +118,14 @@ import {
   addBan,
   fetchBans,
   fetchConfig,
+  fetchExperiences,
+  fetchLightings,
+  fetchMapExperiences,
+  fetchMaps,
   fetchPlayers,
   fetchRotation,
   fetchSnapshot,
+  fetchZones,
   isNotInGame,
   kickPlayer,
   putConfig,
@@ -182,18 +187,32 @@ import {
   type VipRemoveResult,
 } from './staff.ts';
 import {
+  DEFAULT_ROTATION,
   editRotations as editRotationBook,
   findRotation,
   parseRotationBook,
   planToday,
   putRotation,
   rotationDay,
+  rotationEntries,
   rotationToday,
+  seedDefault,
+  serverEntries,
   type RotationBook,
   type RotationEdit,
   type RotationEditResult,
   type RotationServer,
 } from './rotations.ts';
+import {
+  actionEdit,
+  buildCatalog,
+  buildRotationsPage,
+  RotationActionSchema,
+  type RotationAction,
+  type RotationCatalog,
+  type RotationsActionResult,
+  type RotationsPage,
+} from './rotationspage.ts';
 import {
   dayOf,
   discordDue,
@@ -266,6 +285,9 @@ const KNOWN_PLAYER_DAYS = 30;
 // Suggestions must reach Discord within 3 seconds.
 const SUGGEST_TIMEOUT_MS = 2_000;
 
+// What maps can be played with is read again after this long.
+const CATALOG_MS = 10 * 60_000;
+
 // A server that stopped answering this recently is most likely slow, not down, so the live status is left as it was.
 const OFFLINE_AFTER_MS = 3 * 60_000;
 
@@ -337,6 +359,8 @@ export class Watcher extends DurableObject<Env> {
   private steamChecks = new Map<string, SteamCheck | null>();
   // After Steam fails or refuses, the checks wait until then.
   private steamRetryAt = 0;
+  // What maps can be played with, for the staff page's rotations; it only changes with a game update.
+  private rotationCatalog: { at: number; catalog: RotationCatalog } | null = null;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -675,7 +699,7 @@ export class Watcher extends DurableObject<Env> {
     const now = Date.now();
     const today = rotationDay(now, config.rotationHour);
     try {
-      const saved = parseRotationBook(await this.ctx.storage.get('rotations'));
+      const saved = await this.ensureDefault(config);
       const book = planToday(saved, today, now);
       if (book !== saved) await this.ctx.storage.put('rotations', book);
       if (rotationToday(book, today)?.pending) await this.sendRotation(book, config);
@@ -711,18 +735,89 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
+  // The saved rotations, starting Default as the server's rotation the first time (see seedDefault). Run in `serial`.
+  private async ensureDefault(config: Config): Promise<RotationBook> {
+    const saved = parseRotationBook(await this.ctx.storage.get('rotations'));
+    if (findRotation(saved, DEFAULT_ROTATION) !== null) return saved;
+    const http = socketHttp(connect);
+    // The settings file as it is, or what the server reports when the file has no rotation of its own.
+    const inFile = serverEntries((await fetchConfig(config.rconUrl, config.rconPassword, http)).text);
+    const entries = inFile.length > 0 ? inFile : rotationEntries(await fetchRotation(config.rconUrl, config.rconPassword, http));
+    const book = seedDefault(saved, entries);
+    if (book === saved) return saved;
+    await this.ctx.storage.put('rotations', book);
+    console.info(`Map rotation: saved the server's rotation as ${DEFAULT_ROTATION} (${entries.length} maps)`);
+    return book;
+  }
+
   // The saved rotations, for /rotations.
   async rotationBook(): Promise<RotationBook> {
     return parseRotationBook(await this.ctx.storage.get('rotations'));
   }
 
+  // What maps can be played with, read from the server at most every CATALOG_MS.
+  private async catalog(config: Config): Promise<RotationCatalog | null> {
+    const now = Date.now();
+    if (this.rotationCatalog !== null && now - this.rotationCatalog.at < CATALOG_MS) return this.rotationCatalog.catalog;
+    const http = socketHttp(connect);
+    const { rconUrl, rconPassword } = config;
+    const optional = <T>(work: Promise<T>): Promise<T | null> => work.catch(() => null);
+    const [maps, experiences, lightings] = await Promise.all([
+      fetchMaps(rconUrl, rconPassword, http),
+      optional(fetchExperiences(rconUrl, rconPassword, http)),
+      optional(fetchLightings(rconUrl, rconPassword, http)),
+    ]);
+    const perMap = new Map(
+      await Promise.all(
+        maps.map(async (map) => {
+          const [own, zones] = await Promise.all([
+            optional(fetchMapExperiences(rconUrl, rconPassword, map.id, http)),
+            optional(fetchZones(rconUrl, rconPassword, map.id, http)),
+          ]);
+          return [map.id, { experiences: own, zones }] as const;
+        }),
+      ),
+    );
+    const catalog = buildCatalog({ maps, experiences, lightings, perMap });
+    // Only a full answer is kept, so a slow server is asked again next time.
+    if (experiences !== null && lightings !== null && [...perMap.values()].every((m) => m.experiences !== null && m.zones !== null)) {
+      this.rotationCatalog = { at: now, catalog };
+    }
+    return catalog;
+  }
+
+  // The staff page's Rotations tab. Without the server, the saved rotations and the week still show.
+  async rotationsPage(): Promise<RotationsPage> {
+    const config = loadConfig(stringVars(this.env));
+    const book = await this.serial(() => this.ensureDefault(config)).catch(async (error: unknown) => {
+      console.error(`Map rotation: Default could not be set up: ${errorText(error)}`);
+      return parseRotationBook(await this.ctx.storage.get('rotations'));
+    });
+    const [server, catalog] = await Promise.all([
+      fetchRotation(config.rconUrl, config.rconPassword, socketHttp(connect)).catch(() => null),
+      this.catalog(config).catch((error: unknown) => {
+        console.error(`Staff page: the maps could not be read: ${errorText(error)}`);
+        return null;
+      }),
+    ]);
+    return buildRotationsPage({ book, today: rotationDay(Date.now(), config.rotationHour), hour: config.rotationHour, server, catalog });
+  }
+
+  // A change from the staff page's Rotations tab, and the tab as it is after it.
+  async rotationsAction(action: RotationAction, by: string, byName: string): Promise<RotationsActionResult> {
+    const result = await this.editRotations(actionEdit(action), by, byName);
+    if ('problem' in result) return { problem: result.problem };
+    return { ...(await this.rotationsPage()), ...(result.server === undefined ? {} : { outcome: result.server }) };
+  }
+
   // Changes the saved rotations as staff asked, and when that changes what should be on the server today, puts it there.
-  async editRotations(edit: RotationEdit, by: string): Promise<RotationEditResult> {
+  async editRotations(edit: RotationEdit, by: string, byName?: string): Promise<RotationEditResult> {
     return this.serial(async () => {
       const config = loadConfig(stringVars(this.env));
       const now = Date.now();
       const saved = parseRotationBook(await this.ctx.storage.get('rotations'));
-      const edited = editRotationBook(saved, edit, { today: rotationDay(now, config.rotationHour), now, by });
+      const named = byName === undefined ? {} : { byName };
+      const edited = editRotationBook(saved, edit, { today: rotationDay(now, config.rotationHour), now, by, ...named });
       if ('problem' in edited) return edited;
       await this.ctx.storage.put('rotations', edited.book);
       // Only when this edit chose it, so a reply never reports on a rotation staff did not touch.
@@ -1743,7 +1838,7 @@ const commandTools = (
     nextMap: (map, playing) => watcher().stageNextMap(map, playing),
     steam: (steamId) => watcher().steamLookup(steamId),
     rotations: () => watcher().rotationBook(),
-    editRotations: (edit, by) => watcher().editRotations(edit, by),
+    editRotations: (edit, by, byName) => watcher().editRotations(edit, by, byName),
   };
   return {
     run: runCommand({
@@ -1837,6 +1932,24 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
       return Response.json({ error: failureText(name, error) }, { status: 502, headers });
     }
   }
+  // The Rotations tab: what it shows, and a change to the saved rotations.
+  if (route === 'GET /api/admin/rotations' || route === 'POST /api/admin/rotations') {
+    try {
+      if (route === 'GET /api/admin/rotations') return Response.json(await watcher().rotationsPage(), { headers });
+      const action = await readRotationsBody(request);
+      if (action === null) return Response.json({ error: 'Not a rotations request' }, { status: 400, headers });
+      const what = 'entries' in action ? ` (${action.entries.length} maps)` : 'days' in action ? ` for days ${action.days.join(',')}` : '';
+      console.info(
+        `Staff page: rotations ${action.action} ${JSON.stringify(action.name)}${what} by ${JSON.stringify(session.name)} (Discord user ${session.userId})`,
+      );
+      const result = await watcher().rotationsAction(action, session.userId, session.name);
+      if ('problem' in result) return Response.json({ error: result.problem }, { status: 400, headers });
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff page rotations failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't reach the rotations right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
   if (route !== 'GET /api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
   const asked = Number(url.searchParams.get('days'));
   const days = ADMIN_PERIODS.find((d) => d === asked) ?? ADMIN_DEFAULT_DAYS;
@@ -1846,6 +1959,21 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   } catch (error) {
     console.error(`Staff page failed: ${errorText(error)}`);
     return Response.json({ error: 'The staff page is unavailable' }, { status: 503, headers });
+  }
+};
+
+// A rotation of 100 maps is about 15 KB.
+const ROTATIONS_BODY_BYTES = 65_536;
+
+const readRotationsBody = async (request: Request): Promise<RotationAction | null> => {
+  if (Number(request.headers.get('content-length') ?? 0) > ROTATIONS_BODY_BYTES) return null;
+  const body = await request.arrayBuffer();
+  if (body.byteLength > ROTATIONS_BODY_BYTES) return null;
+  try {
+    const parsed = RotationActionSchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
   }
 };
 
