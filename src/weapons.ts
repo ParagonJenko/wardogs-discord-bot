@@ -92,6 +92,12 @@ export const weaponKind = (cause: string): WeaponKind => {
   return 'weapon';
 };
 
+const KIND_ORDER: WeaponKind[] = ['weapon', 'vehicle-weapon', 'vehicle', 'buildable'];
+
+// Tags of different kinds can share a name: the Talon 9K-SAM is both a stationary vehicle and that vehicle's gun. Merged,
+// they take the kind earlier in KIND_ORDER, so the kind never depends on which tag was counted first.
+const mergedKind = (a: WeaponKind, b: WeaponKind): WeaponKind => (KIND_ORDER.indexOf(a) <= KIND_ORDER.indexOf(b) ? a : b);
+
 // Names for the tags the game is known to send, as the game's weapon and vehicle lists name them. From Warcon
 // (https://github.com/warcon-app/warcon, src/lib/causes.ts, MIT licence). The game sends no names of its own, so a tag
 // not listed here is named from its last parts. Tags are matched in any case: the game writes `ID.Item.` for some.
@@ -350,7 +356,7 @@ export const weaponBoard = (days: WeaponDay[], period: number, since: string, co
       const known = weapons.get(name) ?? { kind: weaponKind(cause), kills: 0, headshots: 0, ranged: 0, distance: 0, longest: null };
       const longer = t.longest !== null && (known.longest === null || t.longest.distance > known.longest.distance);
       weapons.set(name, {
-        kind: known.kind,
+        kind: mergedKind(known.kind, weaponKind(cause)),
         kills: known.kills + t.kills,
         headshots: known.headshots + t.headshots,
         ranged: known.ranged + t.ranged,
@@ -399,6 +405,7 @@ export const playerWeaponDays = (record: PlayerWeapons, oldest: string): PlayerW
         const known = named.get(name) ?? { day, name, kind: weaponKind(cause), kills: 0, headshots: 0, longest: null };
         named.set(name, {
           ...known,
+          kind: mergedKind(known.kind, weaponKind(cause)),
           kills: known.kills + w.kills,
           headshots: known.headshots + w.headshots,
           longest: further(known.longest, w.longest),

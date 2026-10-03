@@ -1027,11 +1027,12 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
     return Response.json({ error: 'Unknown kill feed token' }, { status: 401 });
   }
   if (Number(request.headers.get('content-length') ?? 0) > MAX_FEED_BYTES) return Response.json({ error: 'Batch too large' }, { status: 413 });
-  const text = await request.text();
-  if (text.length > MAX_FEED_BYTES) return Response.json({ error: 'Batch too large' }, { status: 413 });
+  // Measured in bytes, as a body sent in chunks has no length up front.
+  const body = await request.arrayBuffer();
+  if (body.byteLength > MAX_FEED_BYTES) return Response.json({ error: 'Batch too large' }, { status: 413 });
   let batch: ReturnType<typeof parseFeed> = null;
   try {
-    batch = parseFeed(JSON.parse(text));
+    batch = parseFeed(JSON.parse(new TextDecoder().decode(body)));
   } catch {
     // Not JSON: refused below.
   }

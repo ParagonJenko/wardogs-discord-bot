@@ -222,6 +222,31 @@ describe('weaponBoard', () => {
     expect(JSON.stringify(board)).not.toMatch(/7656119|steamId/);
   });
 
+  it('gives tags of different kinds with the same name one kind, whichever came first', () => {
+    const vehicle = kill({ cause: 'Vehicle.Variant.Stationary.MistralAA' });
+    const gun = kill({ cause: 'Id.Vehicle.WeaponExtension.STN_01.MistralAA' });
+    const kinds = [
+      [vehicle, gun],
+      [gun, vehicle],
+    ].map((kills) => weaponBoard([recordWeaponDay({}, kills)], 30, '2026-09-20', 10, () => undefined).top);
+
+    expect(kinds).toEqual([
+      [expect.objectContaining({ name: 'Talon 9K-SAM', kind: 'vehicle-weapon', kills: 2 })],
+      [expect.objectContaining({ name: 'Talon 9K-SAM', kind: 'vehicle-weapon', kills: 2 })],
+    ]);
+    expect(
+      playerWeaponDays(
+        {
+          '2026-10-03': {
+            'Vehicle.Variant.Stationary.MistralAA': { kills: 1, headshots: 0, longest: null },
+            'Id.Vehicle.WeaponExtension.STN_01.MistralAA': { kills: 1, headshots: 0, longest: null },
+          },
+        },
+        '2026-10-01',
+      ),
+    ).toEqual([{ day: '2026-10-03', name: 'Talon 9K-SAM', kind: 'vehicle-weapon', kills: 2, headshots: 0, longest: null }]);
+  });
+
   it('is empty when nobody was killed in those days', () => {
     expect(weaponBoard([{}, {}], 30, '2026-09-20', 10, () => undefined)).toEqual({
       days: 30,
