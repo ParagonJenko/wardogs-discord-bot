@@ -298,13 +298,14 @@ describe('publicStats', () => {
 
     const { hours: _hours, ...stats } = emptyStats();
 
-    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip, weapons: null }, () => undefined)).toEqual({
+    expect(publicStats(emptyStats(), thresholds, MIDNIGHT, { leaderboard, vip, seederVip: [], weapons: null }, () => undefined)).toEqual({
       ...stats,
       generatedAt: MIDNIGHT,
       thresholds,
       hourly: { days: DAYS_KEPT, players: Array(24).fill(null), busy: Array(24).fill(null) },
       leaderboard,
       vip,
+      seederVip: [],
       weapons: null,
     });
   });
@@ -322,7 +323,7 @@ describe('publicStats and Steam IDs', () => {
   );
 
   it('swaps every Steam ID for the player’s public id', () => {
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, weapons: null }, (steamId) => ids[steamId]);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip: null, weapons: null }, (steamId) => ids[steamId]);
 
     expect(served.currentMatch?.top).toEqual([
       { id: 'b2b2b2b2b2b2', name: 'Bo', kills: 9, deaths: 3 },
@@ -337,12 +338,20 @@ describe('publicStats and Steam IDs', () => {
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
   });
 
+  it('names who has VIP from seeding by their public id', () => {
+    const seederVip = [{ steamId: '76561198000000001', name: 'Ash', until: MIDNIGHT + 86_400_000 }];
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip, weapons: null }, (steamId) => ids[steamId]);
+
+    expect(served.seederVip).toEqual([{ id: 'a1a1a1a1a1a1', name: 'Ash', until: MIDNIGHT + 86_400_000 }]);
+    expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
+  });
+
   it('lists everyone the public stats name, once each', () => {
     expect(namedSteamIds(stats, leaderboard).sort()).toEqual(['76561198000000001', '76561198000000002']);
   });
 
   it('leaves out ids it does not know, and still no Steam IDs', () => {
-    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, weapons: null }, () => undefined);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip: null, weapons: null }, () => undefined);
 
     expect(served.leaderboard.kills[0]).not.toHaveProperty('id');
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
