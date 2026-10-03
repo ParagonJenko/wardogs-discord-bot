@@ -229,8 +229,9 @@ export const steamPlayers = (playerDays: PlayerDay[], inGame: Iterable<string>):
   ...new Set([...playerDays.flatMap((d) => Object.keys(d)), ...inGame]),
 ];
 
-// Of `steamIds`, those whose account is worth a look or high risk, riskiest first.
-export const riskySteamIds = (steamIds: string[], checks: Map<string, SteamCheck | null>, now: number): string[] =>
+// Of `steamIds`, those whose account is worth a look or high risk: those in game first, as the ones staff can still act
+// on, so the staff page's limit never leaves them out, then riskiest first.
+export const riskySteamIds = (steamIds: string[], checks: Map<string, SteamCheck | null>, now: number, inGame: ReadonlySet<string> = new Set()): string[] =>
   steamIds
     .flatMap((steamId) => {
       const check = checks.get(steamId);
@@ -238,7 +239,7 @@ export const riskySteamIds = (steamIds: string[], checks: Map<string, SteamCheck
       const { score, risk } = assess(check, now);
       return risk === 'low' ? [] : [{ steamId, score }];
     })
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => Number(inGame.has(b.steamId)) - Number(inGame.has(a.steamId)) || b.score - a.score)
     .map((r) => r.steamId);
 
 const startOfDay = (at: number): number => Date.parse(`${new Date(at).toISOString().slice(0, 10)}T00:00:00Z`);
@@ -343,7 +344,9 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
       : [...s.serverBans.map((b) => b.steamId), ...Object.entries(s.banBook).flatMap(([steamId, ban]) => (ban.waiting ? [steamId] : []))],
   );
   const context = new Map(totals(s.playerDays).map((t) => [t.steamId, t]));
-  const rows = griefRows(s.grief);
+  // Those in game first, as the ones staff can still act on, so the limit never leaves them out.
+  const online = new Set(s.online?.players.map((p) => p.steamId) ?? []);
+  const rows = griefRows(s.grief).sort((a, b) => Number(online.has(b.steamId)) - Number(online.has(a.steamId)));
   const players = rows.slice(0, PLAYERS_LISTED).map((r): AdminGriefRow => {
     const t = context.get(r.steamId);
     return {
@@ -434,7 +437,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     if (s.steam === null) return null;
     const { checks, inGame, feed } = s.steam;
     const seen = steamPlayers(s.playerDays, inGame);
-    const risky = riskySteamIds(seen, checks, s.now);
+    const risky = riskySteamIds(seen, checks, s.now, inGame);
     const accounts = risky.slice(0, STEAM_ACCOUNTS_LISTED).flatMap((steamId): AdminSteamRow[] => {
       const check = checks.get(steamId);
       if (check === undefined || check === null) return [];

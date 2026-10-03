@@ -451,10 +451,11 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
   the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
   or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
-  suicides. Most flagged days first, with their matches, kills and time played for scale, and whether they are banned.
+  suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
+  and whether they are banned.
 - **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
-- **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, riskiest first,
-  with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
+- **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, those in game
+  first, then riskiest first, with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
   scale. With `STEAM_API_KEY` only.
 - **The moderation log**: every warning, kick, ban, unban and team move through the bot, with the reason and who did
   it, and bans made or lifted outside the bot.
@@ -617,7 +618,7 @@ The next check asks Steam about everyone in game. Each account gets points for w
 - **`/player`** shows the risk, the bans, how old the account is, the profile and when it was checked. For a player the
   bot has not checked, or not for a day, it asks Steam there and then, so staff can check anyone by Steam ID.
 - **The staff page** lists everyone seen in the period, or in game now, whose account is worth a look or high risk,
-  riskiest first, with their matches, kills, K/D and, from the [kill feed](#weapon-stats), headshots over the period.
+  those in game first, then riskiest first, so its limit of 100 never leaves out someone in game, with their matches, kills, K/D and, from the [kill feed](#weapon-stats), headshots over the period.
 - **Logs.** Each risky account found is logged (`Risky Steam account: …`). If Steam does not answer, the checks wait 10
   minutes (`Steam checks failed, trying again in 10 minutes`). `Steam refused STEAM_API_KEY (403)` means the key is
   wrong.

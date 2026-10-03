@@ -98,6 +98,12 @@ describe('buildAdminOverview', () => {
     ]);
   });
 
+  it('lists the griefers in game first, so the limit never leaves them out', () => {
+    const online = { at: NOW - 30_000, map: 'Europe', players: [{ steamId: BO, name: 'Bo', kills: 0, deaths: 0 }] };
+
+    expect(buildAdminOverview(sources({ online })).players.map((p) => p.steamId)).toEqual([BO, ASH]);
+  });
+
   it('shows each incident, newest first, with the map and weapon by name', () => {
     const overview = buildAdminOverview(sources());
 
@@ -268,17 +274,17 @@ describe('risky Steam accounts on the staff page', () => {
   const steam = { checks, inGame: new Set([DEE]), feed: new Map([[ASH, { kills: 30, headshots: 21 }]]) };
   const playerDays = [{ [ASH]: totals(), [BO]: totals({ name: 'Bo' }), [CY]: totals({ name: 'Cy' }) }];
 
-  it('lists everyone seen or in game whose account is worth a look, riskiest first, with their play for scale', () => {
+  it('lists everyone seen or in game whose account is worth a look, in game first, then riskiest, with their play for scale', () => {
     const overview = buildAdminOverview(sources({ steam, playerDays, serverBans: [{ steamId: BO, reason: 'Cheating', bannedBy: null }] }));
 
     expect(overview.steam).toMatchObject({ players: 4, checked: 4, high: 2, medium: 1, risk: { alert: 7, high: 4, medium: 2 } });
     expect(overview.steam?.flags.vacBan).toBe(3);
     expect(overview.steam?.accounts.map((a) => [a.name, a.risk, a.score])).toEqual([
-      ['Ash', 'high', 4],
       ['Dee', 'high', 4],
+      ['Ash', 'high', 4],
       ['Bo', 'medium', 3],
     ]);
-    expect(overview.steam?.accounts[0]).toEqual({
+    expect(overview.steam?.accounts.find((a) => a.steamId === ASH)).toEqual({
       steamId: ASH,
       name: 'Ash',
       id: 'a00000000001',
@@ -317,6 +323,8 @@ describe('risky Steam accounts on the staff page', () => {
   it('finds the players to look up, and the risky ones among them', () => {
     expect(steamPlayers(playerDays, [DEE, ASH])).toEqual([ASH, BO, CY, DEE]);
     expect(riskySteamIds([CY, BO, DEE, ASH, '76561198000000009'], checks, NOW)).toEqual([DEE, ASH, BO]);
+    // Those in game come first, however risky, so the page's limit never leaves them out.
+    expect(riskySteamIds([CY, BO, DEE, ASH], checks, NOW, new Set([BO]))).toEqual([BO, DEE, ASH]);
   });
 });
 
