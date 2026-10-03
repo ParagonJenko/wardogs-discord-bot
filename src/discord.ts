@@ -1,6 +1,7 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
-import { isBotBan, type BanRecord, type ModAction } from './moderation.ts';
+import { isBotBan, type BanRecord, type ModAction, type ModEntry } from './moderation.ts';
+import type { GriefAlert, Incident } from './griefing.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
@@ -819,6 +820,10 @@ const banText = ({ record, serverBan }: PlayerProfile): string => {
 const isBanned = ({ record, serverBan }: PlayerProfile): boolean =>
   serverBan === undefined ? record.ban !== null : serverBan !== null || record.ban?.waiting === true;
 
+// Who did something: a staff member as a Discord mention (which never pings with NO_PINGS), the bot, or someone outside
+// the bot, whose change the bot found on the server.
+const staffName = (by: string): string => (by === 'bot' ? 'the bot' : by === 'server' ? 'someone outside the bot' : `<@${by}>`);
+
 const historyText = (record: PlayerRecord): string => {
   if (record.log.length === 0) return 'Nothing through the bot yet.';
   const count = (action: ModAction, word: string): string[] => {
@@ -830,7 +835,7 @@ const historyText = (record: PlayerRecord): string => {
     .reverse()
     .slice(0, HISTORY_SHOWN)
     .map((e) => {
-      const by = e.by === 'bot' ? 'the bot' : `<@${e.by}>`;
+      const by = staffName(e.by);
       const detail = e.detail ? ` (${escapeMarkdown(e.detail)})` : '';
       return `${when(e.at, 'd')} **${ACTION_NAMES[e.action]}**${detail} by ${by}${e.reason ? `: ${cut(e.reason)}` : ''}`;
     });
@@ -863,5 +868,81 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
       { name: 'Staff history', value: historyText(record) },
     ],
     footer: { text: 'Staff history only covers what staff did through the bot.' },
+  };
+};
+
+// The moderation log channel: every warning, kick, ban, unban and team move, by staff through the bot, by the bot itself
+// (a timed ban ending), or found on the server's ban list (a ban made or lifted in game or in ServerSettings.ini).
+const MOD_STYLE: Record<ModAction, { emoji: string; color: number }> = {
+  warn: { emoji: '⚠️', color: 0xf1c40f },
+  kick: { emoji: '👢', color: 0xe67e22 },
+  ban: { emoji: '🔨', color: 0xe74c3c },
+  unban: { emoji: '✅', color: 0x2ecc71 },
+  switchteam: { emoji: '🔀', color: INFO_COLOR },
+  'vip-add': { emoji: '🎖️', color: INFO_COLOR },
+  'vip-remove': { emoji: '🎖️', color: INFO_COLOR },
+};
+
+// The staff page on the website, when SITE_URL is set.
+const staffPage = (siteUrl: string | undefined): Pick<Embed, 'url'> => (siteUrl ? { url: `${siteUrl.replace(/\/$/, '')}/admin` } : {});
+
+const MAX_LOGGED_REASON = 1000;
+
+const steamLine = (steamId: string): string => `\`${steamId}\` · [Steam profile](https://steamcommunity.com/profiles/${steamId})`;
+
+export const buildModLogMessage = (steamId: string, entry: ModEntry, siteUrl?: string): DiscordMessage => {
+  const style = MOD_STYLE[entry.action];
+  const name = entry.name ? playerName(entry.name) : 'Unknown player';
+  const reason = entry.reason ? escapeMarkdown(entry.reason.slice(0, MAX_LOGGED_REASON)) : null;
+  return {
+    embeds: [
+      {
+        title: `${style.emoji} ${ACTION_NAMES[entry.action]} · ${name}`,
+        ...staffPage(siteUrl),
+        description: [steamLine(steamId), ...(reason === null ? [] : [`**Reason:** ${reason}`])].join('\n'),
+        color: style.color,
+        fields: [
+          { name: 'By', value: entry.by === 'server' ? 'Outside the bot (in game, or in ServerSettings.ini)' : staffName(entry.by), inline: true },
+          ...(entry.detail ? [{ name: 'Details', value: escapeMarkdown(entry.detail), inline: true }] : []),
+        ],
+        timestamp: new Date(entry.at).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
+const INCIDENTS_LISTED = 5;
+
+const incidentLine = (i: Incident, weapon: (cause: string) => string): string => {
+  const how = i.cause === null ? '' : ` with ${escapeMarkdown(weapon(i.cause))}`;
+  const far = i.distance === null ? '' : ` from ${Math.round(i.distance)} m`;
+  const what = i.kind === 'team-kill' ? `Killed teammate **${playerName(i.victimName ?? 'unknown')}**` : 'Killed themselves in a vehicle';
+  return `${when(i.at, 'R')} ${what}${how}${far}${i.map ? ` on ${mapName(i.map)}` : ''}`;
+};
+
+// A player passing a griefing flag's mark today. `weapon` names a cause tag.
+export const buildGriefAlert = (alert: GriefAlert, weapon: (cause: string) => string, siteUrl?: string): DiscordMessage => {
+  const reasons = [
+    ...(alert.sameTeammate === null
+      ? []
+      : [`Killed teammate **${playerName(alert.sameTeammate.name)}** ${plural(alert.sameTeammate.kills, 'time')} today`]),
+    ...(alert.teamKills > 0 ? [`${plural(alert.teamKills, 'team kill')} today`] : []),
+    ...(alert.vehicleSuicides > 0 ? [`${plural(alert.vehicleSuicides, 'vehicle suicide')} today`] : []),
+  ];
+  const latest = alert.incidents.slice(-INCIDENTS_LISTED).map((i) => incidentLine(i, weapon));
+  return {
+    embeds: [
+      {
+        title: `🚩 Possible griefing · ${playerName(alert.name)}`,
+        ...staffPage(siteUrl),
+        description: [steamLine(alert.steamId), reasons.join(' · ')].join('\n'),
+        color: 0xe67e22,
+        fields: latest.length === 0 ? [] : [{ name: 'Latest', value: latest.join('\n') }],
+        footer: { text: 'From the kill feed. Sides come from the last check, up to a minute old: check before acting.' },
+        timestamp: new Date(alert.incidents.at(-1)?.at ?? Date.now()).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
   };
 };

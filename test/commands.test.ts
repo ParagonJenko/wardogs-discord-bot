@@ -23,6 +23,8 @@ const config: Config = {
   rconPassword: 'secret',
   webhookUrl: 'https://discord.com/api/webhooks/1/abc',
   statusWebhookUrl: undefined,
+  modLogWebhookUrl: undefined,
+  griefAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,

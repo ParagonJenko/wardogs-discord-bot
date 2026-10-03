@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { banReason } from '../src/moderation.ts';
 import {
+  buildGriefAlert,
   buildLastMatchEmbed,
+  buildModLogMessage,
   buildPlayerEmbed,
   buildMatchSummary,
   buildMessage,
@@ -828,6 +830,96 @@ describe('buildPlayerEmbed', () => {
         `${t(NOW - 2 * DAY, 'd')} **Warning** by <@42>: Language`,
       ].join('\n'),
     );
+  });
+
+  it('says when a ban was made or lifted outside the bot', () => {
+    const log = [{ action: 'ban' as const, at: NOW, by: 'server', reason: 'Cheating', detail: 'By Admin' }];
+
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, log } }), 'Staff history')).toBe(
+      ['1 ban', `${t(NOW, 'd')} **Ban** (By Admin) by someone outside the bot: Cheating`].join('\n'),
+    );
+  });
+});
+
+describe('buildModLogMessage', () => {
+  const NOW = Date.UTC(2026, 8, 30, 12);
+  const ID = '76561198000000001';
+
+  it('posts who did what to whom and why, mentioning staff without pinging them, linked to the staff page', () => {
+    const message = buildModLogMessage(
+      ID,
+      { action: 'ban', at: NOW, by: '42', byName: 'Paragon', name: 'Ash_*', reason: 'Team killing', detail: '7 days' },
+      'https://gaminginit.com/',
+    );
+
+    expect(message).toEqual({
+      embeds: [
+        {
+          title: '🔨 Ban · Ash\\_\\*',
+          url: 'https://gaminginit.com/admin',
+          description: `\`${ID}\` · [Steam profile](https://steamcommunity.com/profiles/${ID})\n**Reason:** Team killing`,
+          color: 0xe74c3c,
+          fields: [
+            { name: 'By', value: '<@42>', inline: true },
+            { name: 'Details', value: '7 days', inline: true },
+          ],
+          timestamp: new Date(NOW).toISOString(),
+        },
+      ],
+      allowed_mentions: { parse: [], roles: [] },
+    });
+  });
+
+  it('says when the bot did it, or when it was done outside the bot', () => {
+    const by = (entry: Parameters<typeof buildModLogMessage>[1]) => buildModLogMessage(ID, entry).embeds[0]?.fields?.[0]?.value;
+
+    expect(by({ action: 'unban', at: NOW, by: 'bot', name: 'Ash', reason: 'The ban ran out' })).toBe('the bot');
+    expect(by({ action: 'ban', at: NOW, by: 'server', name: 'Ash' })).toBe('Outside the bot (in game, or in ServerSettings.ini)');
+    expect(buildModLogMessage(ID, { action: 'kick', at: NOW, by: '42' }).embeds[0]?.title).toBe('👢 Kick · Unknown player');
+  });
+});
+
+describe('buildGriefAlert', () => {
+  const NOW = Date.UTC(2026, 8, 30, 12);
+  const t = (at: number, style: string) => `<t:${at / 1000}:${style}>`;
+  const ASH = '76561198000000001';
+  const BO = '76561198000000002';
+
+  it('says what the player did today and lists the latest incidents, without pinging anyone', () => {
+    const message = buildGriefAlert(
+      {
+        steamId: ASH,
+        name: 'Ash',
+        teamKills: 3,
+        vehicleSuicides: 0,
+        sameTeammate: { steamId: BO, name: 'Bo', kills: 2 },
+        incidents: [
+          {
+            at: NOW,
+            kind: 'team-kill',
+            map: 'Europe',
+            steamId: ASH,
+            name: 'Ash',
+            faction: 'Valkyra',
+            victimSteamId: BO,
+            victimName: 'Bo',
+            cause: 'Id.Item.AK74M',
+            distance: 12.6,
+            tags: [],
+          },
+        ],
+      },
+      () => 'AK74',
+      'https://gaminginit.com',
+    );
+
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(message.embeds[0]).toMatchObject({
+      title: '🚩 Possible griefing · Ash',
+      url: 'https://gaminginit.com/admin',
+      description: `\`${ASH}\` · [Steam profile](https://steamcommunity.com/profiles/${ASH})\nKilled teammate **Bo** 2 times today · 3 team kills today`,
+      fields: [{ name: 'Latest', value: `${t(NOW, 'R')} Killed teammate **Bo** with AK74 from 13 m on Ozeti` }],
+    });
   });
 });
 

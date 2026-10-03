@@ -18,6 +18,8 @@ It also posts:
   edited every minute with the state, players, map, next map, score and top players.
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, and the highlights.
+- **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban and team
+  move with its reason and who did it, bans made or lifted outside the bot, and possible griefing as it happens.
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
 pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
@@ -34,8 +36,10 @@ leaderboard (see [Website stats](#website-stats)). It serves a page of stats for
 [Player pages](#player-pages)). It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
 kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
-[live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. And it gives
-[automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week.
+[live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. It gives
+[automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week. And it runs the website's
+[staff page](#staff-page): staff sign in with Discord to see possible griefers (team kills, suicides in vehicles), the
+moderation log and the bans on the server.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
@@ -315,11 +319,107 @@ works when it matches exactly one player.
   seeding and matches over the last 90 days, VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
   unbans, team moves and VIP changes, with who did each.
 
-The staff history only covers what staff do through the bot, from the deploy with these commands on. Each action is
+The staff history covers what staff do through the bot, from the deploy with these commands on, and bans made or lifted
+outside the bot, from the deploy with the [moderation log](#moderation-log) on. Each action is
 also logged in the Worker logs with the staff member's Discord user ID. If a reply says an action could not be
 confirmed, check in game before trying again: it may have gone through.
 
 There is no chat log command: the game's RCON API has no way to read chat.
+
+## Moderation log
+
+A staff-only Discord channel where the bot posts, as they happen:
+
+| Post                    | When                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| ⚠️ Warning, 👢 Kick, 🔨 Ban, ✅ Unban, 🔀 Team move | Staff use `/warn`, `/kick`, `/ban`, `/unban` or `/switchteam`. With the player, their Steam ID, the reason, the length of a ban and who did it |
+| ✅ Unban by the bot      | A timed ban runs out                                                                       |
+| 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
+| 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. With their latest incidents. Needs the [kill feed](#weapon-stats) |
+
+To set it up:
+
+1. Make a channel only staff can see, such as `#mod-log`.
+2. In that channel: settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
+3. Store it as a secret:
+   ```bash
+   npx wrangler secret put DISCORD_MODLOG_WEBHOOK_URL
+   ```
+
+- Staff are mentioned by name (`@Sarge`), which never pings them. Posts link to the [staff page](#staff-page) when
+  `SITE_URL` is set.
+- **Bans outside the bot.** Each check (every minute) reads the server's ban list (`GET /v1/bans`) and compares it with
+  the last one. A ban that appeared or went that the bot did not make is posted, and goes in the player's staff history
+  (`/player`) too. The first check after the deploy only saves the list, so the bans already there are not posted. It
+  costs one more RCON request a minute.
+- **Kicks outside the bot** cannot be seen: the game's RCON does not report them, and its kill feed only has deaths.
+- **Possible griefing** posts can be turned off with `GRIEF_ALERTS` `"off"` in the `vars` block of `wrangler.jsonc`.
+  They are a reason to look, not proof: sides come from the bot's last check (see [Staff page](#staff-page)).
+- A post that fails is logged (`Moderation log post failed`) and not retried: the staff history has it either way.
+- **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_MODLOG_WEBHOOK_URL`). The staff history and
+  the staff page still record everything.
+
+The Node/Docker version does not have the moderation log.
+
+## Staff page
+
+The website has a page for staff (gaminginit's `/admin`). Staff sign in with Discord, and the page shows:
+
+- **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
+  the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
+  or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
+  suicides. Most flagged days first, with their matches, kills and time played for scale, and whether they are banned.
+- **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
+- **The moderation log**: every warning, kick, ban, unban and team move through the bot, with the reason and who did
+  it, and bans made or lifted outside the bot.
+- **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
+  player to join.
+
+Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
+Discord's **Administrator** permission, or with a role in `DISCORD_ADMIN_ROLE_IDS`, or the server's owner.
+
+To set it up, with the [slash commands](#slash-commands) app:
+
+1. In the [Discord Developer Portal](https://discord.com/developers/applications), open the app → **OAuth2**:
+   - Under **Redirects**, add the Worker's URL with `/auth/callback` on the end, such as
+     `https://wardogs-discord-bot.<you>.workers.dev/auth/callback`, and save.
+   - Click **Reset Secret** under Client Secret, copy it, and store it:
+     ```bash
+     npx wrangler secret put DISCORD_CLIENT_SECRET
+     ```
+2. In the `vars` block of `wrangler.jsonc`, set `DISCORD_APPLICATION_ID` to the app's **Application ID** (General
+   Information; the same one as in `.env`). `DISCORD_GUILD_ID` and `SITE_URL` must be set too.
+3. `npm run deploy`.
+
+How it works:
+
+- The page's "Sign in with Discord" goes to `<worker>/auth/login`, which sends the browser to Discord. Discord asks the
+  person to let the app know who they are, their servers and their roles in them (scopes `identify`, `guilds` and
+  `guilds.members.read`), once. Discord then sends them back to `/auth/callback`, and the Worker asks Discord whether
+  they are staff in your server. The Discord access token is used for that and then dropped.
+- Staff go back to the page with a session that lasts 8 hours. It is signed with `DISCORD_CLIENT_SECRET`, so resetting
+  the client secret signs everyone out. Someone who stops being staff can use a session they already have until it
+  runs out.
+- Anyone else goes back to the page with why: not in the server, or not staff. Each sign-in is logged
+  (`Staff signed in: …`, `Staff sign-in refused: …`).
+- The page reads `GET /api/admin/overview?days=1|7|30` with the session as a bearer token. Only `SITE_URL` may read it
+  from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord.
+- Sign-ins only go back to pages on `SITE_URL`, so a session is never handed to another site.
+
+What the griefing figures can and cannot tell:
+
+- **Sides.** The kill feed does not say who is on which side, so the bot takes it from its last check (every minute),
+  like the [live match](#live-match). A kill between two players on the same side is a team kill. A player who switched
+  sides in the last minute, or joined since the last check, can be counted wrongly, and a team kill where either side is
+  not known is left out.
+- **Suicides** are deaths the game tags as a suicide, or a player killing themselves. A suicide with a vehicle (the game
+  blames the vehicle, or says it blew up or ran someone over) is a vehicle suicide. `/switchteam` kills the player so
+  they respawn, which the game may count as a suicide.
+- **Vehicles destroyed** without anyone dying in them are not in the feed, so they are not counted.
+- Each day keeps its latest 300 incidents; the counts are always complete.
+- They start from the deploy with this feature. Like the other records, they are kept for good.
+
+The Node/Docker version does not have the staff page.
 
 ## Website stats
 
@@ -516,6 +616,8 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Each UTC day's weapons       | From the [kill feed](#weapon-stats): each weapon's kills, headshots, distances and longest kill, with the Steam ID and name of who made it |
 | Each player's weapons        | From the kill feed: their kills, headshots and longest kill with each weapon, on each of their last 90 UTC days |
 | The live match               | From the kill feed: the match on now, for the [live page](#live-match). Its last 40 deaths, and each player's totals and streaks |
+| Each UTC day's griefing      | From the kill feed, for the [staff page](#staff-page): each player's team kills (and whom), times team killed, suicides and vehicle suicides, and the day's latest 300 team kills and vehicle suicides |
+| The server's ban list        | As at the last check, to notice bans made or lifted outside the bot ([moderation log](#moderation-log)) |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running
   when the bot started. Its kills and deaths go on the day it ended, to everyone seen in it, including players who
@@ -706,6 +808,8 @@ when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for b
   server and a captured request cannot be replayed later.
 - The [kill feed](#weapon-stats) is only taken with `KILL_FEED_TOKEN` as the bearer, so nobody else can add kills.
   Anyone who has the token can, so keep it secret like the password.
+- The [staff page](#staff-page)'s data is only served for a session the Worker signed after Discord confirmed the person
+  is staff in `DISCORD_GUILD_ID`. Keep `DISCORD_CLIENT_SECRET` secret: anyone with it could sign their own sessions.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.
 
 ## Development

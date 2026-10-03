@@ -5,9 +5,19 @@ import { z } from 'zod';
 
 export type ModAction = 'warn' | 'kick' | 'ban' | 'unban' | 'switchteam' | 'vip-add' | 'vip-remove';
 
-// `by` is the staff member's Discord user ID, or "bot" for something the bot did itself (a ban running out).
-// `name` is the player's name at the time; `detail` says more, such as a ban's length or the team moved to.
-export type ModEntry = { action: ModAction; at: number; by: string; name?: string; reason?: string; detail?: string };
+// `by` is the staff member's Discord user ID, "bot" for something the bot did itself (a ban running out), or "server" for
+// a ban made or lifted outside the bot (in game, in ServerSettings.ini or by another tool), which the bot found on the
+// server's ban list. `byName` is the staff member's Discord name at the time. `name` is the player's name at the time;
+// `detail` says more, such as a ban's length or the team moved to.
+export type ModEntry = {
+  action: ModAction;
+  at: number;
+  by: string;
+  byName?: string;
+  name?: string;
+  reason?: string;
+  detail?: string;
+};
 
 export const modLogKey = (steamId: string): string => `mod:${steamId}`;
 
@@ -19,6 +29,7 @@ const ModLogSchema = z.array(
     action: z.enum(['warn', 'kick', 'ban', 'unban', 'switchteam', 'vip-add', 'vip-remove']),
     at: z.number(),
     by: z.string(),
+    byName: z.string().optional(),
     name: z.string().optional(),
     reason: z.string().optional(),
     detail: z.string().optional(),
@@ -110,3 +121,33 @@ export const banReason = (reason: string, until: number | null): string =>
 // some other way. The bot only lifts, or describes, a ban whose reason is exactly the one it wrote.
 export const isBotBan = (serverReason: string | null, ban: BanRecord): boolean =>
   (serverReason ?? '').trim() === ban.serverReason.trim();
+
+// The bans on the server at the last check, by Steam ID, so a ban made or lifted outside the bot is noticed. The bot
+// keeps it up to date with its own bans as it makes and lifts them, so only other changes show up.
+export type ServerBan = { reason: string | null; bannedBy: string | null };
+export type ServerBans = Record<string, ServerBan>;
+
+const ServerBansSchema = z.record(z.string(), z.object({ reason: z.string().nullable(), bannedBy: z.string().nullable() }));
+
+// Null before the bot first read the server's ban list.
+export const parseServerBans = (raw: unknown): ServerBans | null => {
+  const parsed = ServerBansSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+};
+
+// What changed on the server's ban list since the last check.
+export const banChanges = (
+  before: ServerBans,
+  now: { steamId: string; reason: string | null; bannedBy: string | null }[],
+): { added: { steamId: string; ban: ServerBan }[]; lifted: { steamId: string; ban: ServerBan }[] } => {
+  const current = new Set(now.map((b) => b.steamId));
+  return {
+    added: now.filter((b) => before[b.steamId] === undefined).map(({ steamId, reason, bannedBy }) => ({ steamId, ban: { reason, bannedBy } })),
+    lifted: Object.entries(before)
+      .filter(([steamId]) => !current.has(steamId))
+      .map(([steamId, ban]) => ({ steamId, ban })),
+  };
+};
+
+// The actions posted to the moderation log channel. VIP changes are not moderation.
+export const POSTED_ACTIONS: readonly ModAction[] = ['warn', 'kick', 'ban', 'unban', 'switchteam'];

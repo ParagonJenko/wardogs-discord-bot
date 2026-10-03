@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   appendMod,
   BAN_LENGTHS,
+  banChanges,
+  parseServerBans,
   banReason,
   expiredBans,
   isBotBan,
@@ -79,5 +81,25 @@ describe('ban book', () => {
   it('offers lengths from an hour to permanent', () => {
     expect(BAN_LENGTHS.map((l) => l.value)).toEqual(['1h', '1d', '3d', '7d', '30d', 'permanent']);
     expect(BAN_LENGTHS.at(-1)?.ms).toBeNull();
+  });
+});
+
+describe("the server's ban list", () => {
+  it('reads the saved list, and null before the bot first read one', () => {
+    const saved = { [ASH]: { reason: 'Cheating', bannedBy: null } };
+
+    expect(parseServerBans(saved)).toEqual(saved);
+    expect(parseServerBans(undefined)).toBeNull();
+    expect(parseServerBans({ [ASH]: { reason: 1 } })).toBeNull();
+  });
+
+  it('finds the bans made and lifted since the last check', () => {
+    const before = { [ASH]: { reason: 'Cheating', bannedBy: null } };
+
+    expect(banChanges(before, [{ steamId: BO, reason: 'Racism', bannedBy: 'Admin' }])).toEqual({
+      added: [{ steamId: BO, ban: { reason: 'Racism', bannedBy: 'Admin' } }],
+      lifted: [{ steamId: ASH, ban: { reason: 'Cheating', bannedBy: null } }],
+    });
+    expect(banChanges(before, [{ steamId: ASH, reason: 'Changed', bannedBy: null }])).toEqual({ added: [], lifted: [] });
   });
 });

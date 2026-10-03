@@ -127,6 +127,21 @@ describe('handleInteraction', () => {
     expect(d.runCommand).toHaveBeenCalledWith({ name: 'broadcast', options: { message: 'Seeding now!' }, userId: '42' });
   });
 
+  it('passes on the name the sender goes by in the server: their nickname, else their display name, else their username', async () => {
+    const d = deps();
+    const users = [
+      { nick: 'Sarge', user: { id: '42', username: 'paragon', global_name: 'Paragon' } },
+      { nick: null, user: { id: '42', username: 'paragon', global_name: 'Paragon' } },
+      { user: { id: '42', username: 'paragon' } },
+    ];
+    for (const member of users) {
+      const { body, signature, timestamp } = await signed({ ...broadcast(String(ADMINISTRATOR)), member: { ...member, permissions: String(ADMINISTRATOR) } });
+      await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+    }
+
+    expect(d.runCommand.mock.calls.map(([request]) => request.userName)).toEqual(['Sarge', 'Paragon', 'paragon']);
+  });
+
   it('refuses /broadcast from anyone who is not an Administrator, Manage Server included, even if Discord let it through', async () => {
     const d = deps();
     const results = await Promise.all(

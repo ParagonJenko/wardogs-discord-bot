@@ -254,14 +254,22 @@ const InteractionSchema = z.object({
     .object({
       permissions: z.string().optional(),
       roles: z.array(z.string()).optional(),
-      user: z.object({ id: z.string() }).optional(),
+      nick: z.string().nullish(),
+      user: z.object({ id: z.string(), username: z.string().optional(), global_name: z.string().nullish() }).optional(),
     })
     .optional(),
   guild_id: z.string().optional(),
 });
 
-// A subcommand's name is in `options.subcommand`. `focused` is the option being typed in, for suggestions.
-export type CommandRequest = { name: CommandName; options: Record<string, string>; userId: string | null; focused?: string };
+// A subcommand's name is in `options.subcommand`. `focused` is the option being typed in, for suggestions. `userName` is
+// the name the sender goes by in the server, for the moderation log.
+export type CommandRequest = {
+  name: CommandName;
+  options: Record<string, string>;
+  userId: string | null;
+  userName?: string;
+  focused?: string;
+};
 export type CommandReply = { content?: string; embeds?: Embed[] };
 // An option value offered while someone types, such as a match to pick.
 export type Choice = { name: string; value: string };
@@ -339,6 +347,8 @@ export const handleInteraction = async (
   if (interaction.type === PING) return { status: 200, body: { type: PONG } };
 
   const name = interaction.data?.name;
+  const member = interaction.member;
+  const userName = member?.nick || member?.user?.global_name || member?.user?.username;
   const toRequest = (command: CommandName): CommandRequest => {
     const top = interaction.data?.options ?? [];
     const subcommand = top.find((o) => o.type === SUBCOMMAND);
@@ -351,6 +361,7 @@ export const handleInteraction = async (
         ...options.flatMap((o) => (o.value === undefined ? [] : [[o.name, String(o.value)]])),
       ]),
       userId: interaction.member?.user?.id ?? null,
+      ...(userName ? { userName } : {}),
       ...(focused === undefined ? {} : { focused }),
     };
   };
