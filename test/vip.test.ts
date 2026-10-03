@@ -13,6 +13,7 @@ import {
   reservedIds,
   reservedListing,
   seederVip,
+  staffSpotsDue,
   syncVip,
   vipDue,
   type VipGrant,
@@ -263,6 +264,20 @@ describe('planStaffSpots', () => {
         [CY]: { name: 'Moth', since: NOW - DAY },
       },
     });
+  });
+});
+
+describe('staffSpotsDue', () => {
+  it('is due when someone linked has no staff spot yet, or has one but is no longer linked', () => {
+    const synced = { ...parseVipState(undefined), staffSpots: { [ASH]: { name: 'Sarge', since: NOW } } };
+
+    expect(staffSpotsDue(synced, [ASH])).toBe(false);
+    expect(staffSpotsDue(parseVipState(undefined), [])).toBe(false);
+    // Linked before the bot kept staff spots, or just now.
+    expect(staffSpotsDue(parseVipState(undefined), [ASH])).toBe(true);
+    expect(staffSpotsDue(synced, [ASH, BO])).toBe(true);
+    // Unlinked.
+    expect(staffSpotsDue(synced, [])).toBe(true);
   });
 });
 

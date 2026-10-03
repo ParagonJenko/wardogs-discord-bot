@@ -244,7 +244,18 @@ import {
 } from './stats.ts';
 import { teamBoard } from './teams.ts';
 import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
-import { addVip, parseVipState, removeVip, reservedListing, seederVip, syncVip, vipDue, type ReservedListing, type VipState } from './vip.ts';
+import {
+  addVip,
+  parseVipState,
+  removeVip,
+  reservedListing,
+  seederVip,
+  staffSpotsDue,
+  syncVip,
+  vipDue,
+  type ReservedListing,
+  type VipState,
+} from './vip.ts';
 import {
   FEED_PATH,
   feedAuthorized,
@@ -316,10 +327,6 @@ const oneAtATime = () => {
     return run;
   };
 };
-
-// The VIP state, due at the next check: after a staff member links or unlinks their Steam account, their staff spot
-// is put on or taken off the reserved list within a minute, not at the next 10-minute mark.
-const syncSoon = (raw: unknown): VipState => ({ ...parseVipState(raw), checkedAt: 0 });
 
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 // Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
@@ -1166,8 +1173,9 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their time is up, and keeps a
-  // staff spot on the reserved list for each staff member who linked their Steam account. VIP staff gave ends on time
-  // even when automatic VIP is off.
+  // staff spot on the reserved list for each staff member who linked their Steam account. A staff member who linked
+  // or unlinked since the last update is seen to at the next check. VIP staff gave ends on time even when automatic
+  // VIP is off.
   private async updateVip(config: Config): Promise<void> {
     const rule = config.vip;
     const storage = this.ctx.storage;
@@ -1178,7 +1186,7 @@ export class Watcher extends DurableObject<Env> {
     const staff = staffBySteam(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
     const idle = Object.keys(state.granted).length === 0 && staff.size === 0 && Object.keys(state.staffSpots).length === 0;
     if (rule === null && idle) return;
-    if (!vipDue(state, now)) return;
+    if (!vipDue(state, now) && !staffSpotsDue(state, staff.keys())) return;
     const days = await storage.get(keys);
     const staffIds = new Set(staff.keys());
     try {
@@ -1614,13 +1622,13 @@ export class Watcher extends DurableObject<Env> {
         const target = action.userId ?? user.id;
         const was = profiles[target];
         if (was === undefined) return { steamId: null };
-        await storage.put({ [STAFF_PROFILES_KEY]: unlinkSteam(profiles, target), vip: syncSoon(await storage.get('vip')) });
+        await storage.put(STAFF_PROFILES_KEY, unlinkSteam(profiles, target));
         console.info(`Staff page: ${JSON.stringify(user.name)} unlinked Steam account ${was.steamId} from Discord user ${target}`);
         return { steamId: null };
       }
       const linked = linkSteam(profiles, user, action.steamId, Date.now());
       if ('problem' in linked) return linked;
-      await storage.put({ [STAFF_PROFILES_KEY]: linked.profiles, vip: syncSoon(await storage.get('vip')) });
+      await storage.put(STAFF_PROFILES_KEY, linked.profiles);
       console.info(`Staff page: ${JSON.stringify(user.name)} (Discord user ${user.id}) linked Steam account ${linked.steamId}`);
       return { steamId: linked.steamId };
     });
