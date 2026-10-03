@@ -5,6 +5,7 @@ import { ranks, totals, type MatchRecord, type PlayerDay, type PlayerTotals, typ
 import type { FactionScore, Player } from './rcon.ts';
 import { byKills } from './tracking.ts';
 import type { VipGrant } from './vip.ts';
+import type { PlayerWeaponsPage } from './weapons.ts';
 
 // Player pages for the website: GET /api/player?id=<id> serves one player's page, and GET /api/players the list to
 // find them in. Both are public, so players are known by a public id instead of their Steam ID: the first 6 bytes
@@ -99,6 +100,8 @@ export type PlayerProfile = {
   vip: { until: number } | null;
   // How close they are to earning seeder VIP: seed days in the bot's window. Null when automatic VIP is off.
   seeding: { rule: VipRule; seedDays: number } | null;
+  // Their kills by weapon each day, from the game's kill feed. Null when the bot has never had the feed.
+  weapons: PlayerWeaponsPage | null;
 };
 
 export type DayRecords = { day: string; players: PlayerDay };
@@ -145,10 +148,11 @@ export type ProfileSources = {
   online: OnlineNow | null;
   vip: VipGrant | null;
   rule: VipRule | null;
+  weapons: PlayerWeaponsPage | null;
 };
 
 // Null when the bot has nothing on them in those days.
-export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online, vip, rule }: ProfileSources): PlayerProfile | null => {
+export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online, vip, rule, weapons }: ProfileSources): PlayerProfile | null => {
   const mine = (d: DayRecords): PlayerTotals | undefined => d.players[steamId];
   // Everyone in a match is credited with it on the day it ended, so anyone with a match has a day too.
   const name = days.map(mine).findLast((t) => t !== undefined)?.name;
@@ -174,6 +178,7 @@ export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online
     online,
     vip: vip === null || vip.expiresAt <= now ? null : { until: vip.expiresAt },
     seeding: rule === null ? null : { rule, seedDays: seedDays(rule.windowDays) },
+    weapons,
   };
 };
 
