@@ -13,7 +13,6 @@ import {
   type FeedSources,
   type Period,
 } from '../src/roundup.ts';
-import type { WeaponDay } from '../src/weapons.ts';
 
 const HOUR = 60 * 60_000;
 const at = (date: string, hour = 0): number => Date.parse(`${date}T00:00:00Z`) + hour * HOUR;
@@ -321,18 +320,12 @@ describe('buildRoundup', () => {
       headshots,
       weapons,
     });
-    const longest = (distance: number, steamId: string, name: string): WeaponDay[string] => ({
-      kills: 1,
-      headshots: 0,
-      ranged: 1,
-      distance,
-      longest: { distance, steamId, name },
-    });
     const feed: FeedSources = {
       since: '2026-09-01',
       kills: [
-        kills('a', 'Ash', '2026-09-28', 4, {
-          'Id.Item.AK74M': { kills: 10, headshots: 4 },
+        kills('a', 'Ash', '2026-09-28', 7, {
+          // 3 headshots on teammates, which do not count.
+          'Id.Item.AK74M': { kills: 13, headshots: 7, teamKills: 3, teamHeadshots: 3, longest: 300 },
           // A team kill with the mortar does not count.
           'Vehicle.Variant.Stationary.Mortar': { kills: 3, headshots: 0, teamKills: 1 },
           'Id.Vehicle.WeaponExtension.STN_03.MainBarrel': { kills: 2, headshots: 0 },
@@ -340,24 +333,19 @@ describe('buildRoundup', () => {
         }),
         kills('b', 'Bo', '2026-09-29', 6, {
           'Id.Item.M249': { kills: 6, headshots: 1 },
-          'Id.Item.SV98': { kills: 4, headshots: 4 },
+          'Id.Item.SV98': { kills: 4, headshots: 4, longest: 512.4 },
           'Id.Item.Glock17': { kills: 2, headshots: 1 },
           'Vehicle.Variant.Land.Wheeled.Humvee.Default': { kills: 2, headshots: 0 },
         }),
         kills('e', 'Eve', '2026-09-30', 0, { 'Id.Item.RPG7': { kills: 2, headshots: 0 } }),
         kills('c', 'Cy', '2026-10-04', 0, {
-          'Vehicle.Variant.Stationary.Mortar': { kills: 5, headshots: 0 },
+          // Not a shot.
+          'Vehicle.Variant.Stationary.Mortar': { kills: 5, headshots: 0, longest: 900 },
           'Id.Item.AK74M': { kills: 1, headshots: 0 },
           'Id.Vehicle.WeaponExtension.TNK_01.Heavy': { kills: 3, headshots: 0 },
         }),
         // After the week.
-        kills('c', 'Cy', '2026-10-05', 99, { 'Id.Item.AK74M': { kills: 99, headshots: 99 } }),
-      ],
-      weapons: [
-        { day: '2026-09-29', weapons: { 'Id.Item.SV98': longest(512.4, 'b', 'Bo') } },
-        // Not a shot.
-        { day: '2026-10-04', weapons: { 'Vehicle.Variant.Stationary.Mortar': longest(900, 'c', 'Cy') } },
-        { day: '2026-10-05', weapons: { 'Id.Item.SV98': longest(2000, 'c', 'Cy') } },
+        kills('c', 'Cy', '2026-10-05', 99, { 'Id.Item.SV98': { kills: 99, headshots: 99, longest: 2000 } }),
       ],
     };
     const awarded = buildRoundup({ period: WEEK, days, matches, idOf, feed })?.awards;
@@ -383,6 +371,7 @@ describe('buildRoundup', () => {
     });
 
     it('gives each award to one player', () => {
+      // Ash's 7 headshots include 3 on teammates, so Bo's 6 win.
       expect(awarded).toMatchObject({
         from: '2026-09-28',
         headshots: { name: 'Bo', id: 'bbbbbbbbbbbb', headshots: 6 },
@@ -399,13 +388,14 @@ describe('buildRoundup', () => {
       expect(later?.from).toBe('2026-09-30');
       expect(later?.roles[0]?.top).toEqual([{ name: 'Cy', id: 'cccccccccccc', kills: 1 }]);
       expect(later?.longest).toBeNull();
+      expect(later?.headshots).toBeNull();
       expect(later?.melee).toBeNull();
     });
 
     it('has none without the kill feed, or with only team kills', () => {
       expect(roundup?.awards).toBeNull();
       const teamKills = [kills('a', 'Ash', '2026-09-28', 0, { 'Id.Item.AK74M': { kills: 2, headshots: 0, teamKills: 2 } })];
-      expect(buildRoundup({ period: WEEK, days, matches, idOf, feed: { ...feed, kills: teamKills, weapons: [] } })?.awards).toBeNull();
+      expect(buildRoundup({ period: WEEK, days, matches, idOf, feed: { ...feed, kills: teamKills } })?.awards).toBeNull();
     });
   });
 });

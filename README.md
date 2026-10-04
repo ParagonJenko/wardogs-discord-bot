@@ -169,8 +169,8 @@ And 🌟 shout-outs, one player each:
 
 | Shout-out               | Who                                                                                 |
 | ----------------------- | ----------------------------------------------------------------------------------- |
-| 💀 Headhunter           | Most headshots (fewer kills first when level)                                       |
-| 📏 Longest shot         | The longest kill with a hand-held weapon, and the weapon                            |
+| 💀 Headhunter           | Most headshots, not on teammates (fewer kills first when level)                     |
+| 📏 Longest shot         | The longest kill with a hand-held weapon, not on a teammate, and the weapon         |
 | 🧰 Jack of all trades   | Kills with the most different weapons                                               |
 | 🚗 Road rage            | Most players run over, or blown up in a vehicle                                     |
 | 🔨 Bonk                 | Most melee kills: fists, the Halligan bar, hammers, drills and the defibrillator    |
@@ -180,7 +180,7 @@ And 🌟 shout-outs, one player each:
 
 The last two come from the player records, so they need no kill feed. A weapon the bot does not know (see
 `ROLES` in `src/weapons.ts`) counts for no role. Kills from before this update still include team kills, as
-the bot did not keep them apart until then.
+the bot did not keep them apart until then, and have no longest shot.
 
 - Names link to each player's page on the website when `SITE_URL` is set. Posts never ping anyone.
 - It goes out at `ROUNDUP_HOUR` (UTC, default `17`: 6pm in the UK in summer, 5pm in winter), on the Monday, and on the
@@ -610,7 +610,7 @@ How headshots are judged:
   acting.
 
 The records start with the first kill after this is deployed, and keep each kill for 30 days. The counts (kills,
-headshots and team kills by weapon) stay 62 days, for the [roundups' awards](#roundups). They are keyed by Steam ID, so
+headshots, team kills and the longest kill by weapon) stay 62 days, for the [roundups' awards](#roundups). They are keyed by Steam ID, so
 only signed-in staff see them.
 
 ### Staff Steam accounts

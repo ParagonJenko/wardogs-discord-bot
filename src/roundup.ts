@@ -5,7 +5,7 @@ import { leaderboard, totals, type MatchRecord, type PlayerDay, type RankedPlaye
 import type { FactionScore } from './rcon.ts';
 import { dayOf } from './stats.ts';
 import { byKills } from './tracking.ts';
-import { weaponKind, weaponName, weaponRole, type WeaponDay, type WeaponRole } from './weapons.ts';
+import { weaponKind, weaponName, weaponRole, type WeaponRole } from './weapons.ts';
 
 // Weekly and monthly roundups: the best players and the best team over a UTC week (Monday to Sunday) or calendar month,
 // from the player records. Posted to Discord when a week or month ends, and shown by /roundup. Players are named with
@@ -145,7 +145,8 @@ export type RoleAward = (typeof ROLE_AWARDS)[number];
 
 type Kills = RoundupPlayer & { kills: number };
 
-// The awards from the kill feed. Team kills do not count, except on days saved before the bot kept them apart.
+// The awards from the kill feed. Team kills do not count, except on days saved before the bot kept them apart, which
+// have no longest shots.
 export type FeedAwards = {
   // The first UTC day of the period the feed covers: later than the period's first when the feed began during it.
   from: string;
@@ -166,14 +167,12 @@ export type FeedAwards = {
 // Looks up a player's public id by Steam ID (see profiles.ts).
 export type IdOf = (steamId: string) => string | undefined;
 
-// The kill feed's records for the awards (see killfeed.ts and weapons.ts).
+// The kill feed's records for the awards (see killfeed.ts).
 export type FeedSources = {
   // The first UTC day the kill records have.
   since: string;
   // Each player's kill days. Days outside the period are left out.
   kills: KillDaySummary[];
-  // Each UTC day's kills by weapon, for the longest shot. Days outside the period are left out.
-  weapons: { day: string; weapons: WeaponDay }[];
 };
 
 export type RoundupSources = {
@@ -266,18 +265,23 @@ const feedAwards = (
   const inPeriod = new Set(covered.filter((day) => day >= from));
   type Tally = { roles: Map<WeaponRole, number>; headshots: number; kills: number; weapons: Set<string>; name: string };
   const players = new Map<string, Tally>();
+  // With a hand-held weapon. Ties go to the earliest, which got there first.
+  let longest: { distance: number; steamId: string; cause: string } | null = null;
   // Days are oldest first, so each player keeps their latest name, unless the player records have one.
   for (const d of [...feed.kills].sort((a, b) => a.day.localeCompare(b.day))) {
     if (!inPeriod.has(d.day)) continue;
     const known = players.get(d.steamId) ?? { roles: new Map(), headshots: 0, kills: 0, weapons: new Set(), name: d.steamId };
-    known.headshots += d.headshots;
     if (d.name !== '') known.name = d.name;
     for (const [cause, w] of Object.entries(d.weapons)) {
+      if (w.longest !== undefined && weaponKind(cause) === 'weapon' && (longest === null || w.longest > longest.distance)) {
+        longest = { distance: w.longest, steamId: d.steamId, cause };
+      }
       const kills = w.kills - (w.teamKills ?? 0);
       if (kills <= 0) continue;
       const role = weaponRole(cause);
       known.roles.set(role, (known.roles.get(role) ?? 0) + kills);
       known.kills += kills;
+      known.headshots += w.headshots - (w.teamHeadshots ?? 0);
       known.weapons.add(weaponName(cause));
     }
     players.set(d.steamId, known);
@@ -295,28 +299,16 @@ const feedAwards = (
     .filter((row) => row.headshots > 0)
     .sort((a, b) => b.headshots - a.headshots || a.kills - b.kills || a.name.localeCompare(b.name));
   const [variety] = mostFirst(rows, (row) => row.weapons.size);
-
-  // Ties go to the earliest, which got there first.
-  let longest: { distance: number; steamId: string; name: string; cause: string } | null = null;
-  for (const { day, weapons } of [...feed.weapons].sort((a, b) => a.day.localeCompare(b.day))) {
-    if (!inPeriod.has(day)) continue;
-    for (const [cause, w] of Object.entries(weapons)) {
-      if (w.longest === null || weaponKind(cause) !== 'weapon') continue;
-      if (longest === null || w.longest.distance > longest.distance) longest = { ...w.longest, cause };
-    }
-  }
+  const holder = longest === null ? undefined : rows.find((row) => row.steamId === longest?.steamId);
 
   return {
     from,
     roles: ROLE_AWARDS.map((role) => ({ role, top: board(role) })),
     headshots: headshots === undefined ? null : named(headshots.steamId, headshots.name, { headshots: headshots.headshots }),
     longest:
-      longest === null
+      longest === null || holder === undefined
         ? null
-        : named(longest.steamId, nameOf.get(longest.steamId) ?? longest.name, {
-            distance: longest.distance,
-            weapon: weaponName(longest.cause),
-          }),
+        : named(longest.steamId, holder.name, { distance: longest.distance, weapon: weaponName(longest.cause) }),
     variety: variety === undefined ? null : named(variety.steamId, variety.name, { weapons: variety.weapons.size }),
     roadKills: winner('vehicle'),
     melee: winner('melee'),

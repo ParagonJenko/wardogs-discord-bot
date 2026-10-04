@@ -62,9 +62,9 @@ export type DayKill = Omit<StaffKill, 'killer' | 'killerName'>;
 
 export type WeaponCount = { kills: number; headshots: number };
 
-// A weapon on a player's day, with the team kills among its kills. Left out when there are none, and on days saved
-// before team kills were counted.
-export type DayWeapon = WeaponCount & { teamKills?: number };
+// A weapon on a player's day, with the team kills and their headshots among its kills, and the longest of the other
+// kills, in metres. Each is left out when there is none, and on days saved before the bot counted them.
+export type DayWeapon = WeaponCount & { teamKills?: number; teamHeadshots?: number; longest?: number };
 
 // A player's UTC day. `weapons` is by cause tag; `list` their latest kills, oldest first.
 export type KillDay = {
@@ -96,7 +96,16 @@ const DayKillSchema = z.object({
 
 const KillFeedSchema = z.array(DayKillSchema.extend({ killer: z.string(), killerName: z.string() }));
 
-const WeaponsSchema = z.record(z.string(), z.object({ kills: count, headshots: count, teamKills: count.optional() }));
+const WeaponsSchema = z.record(
+  z.string(),
+  z.object({
+    kills: count,
+    headshots: count,
+    teamKills: count.optional(),
+    teamHeadshots: count.optional(),
+    longest: z.number().nonnegative().optional(),
+  }),
+);
 
 // Nothing saved yet, or anything unrecognisable, is an empty feed.
 export const parseKillFeed = (raw: unknown): StaffKill[] => {
@@ -148,10 +157,14 @@ export const recordKillDay = (known: KillDay | null, steamId: string, day: strin
     next.headshots += kill.headshot ? 1 : 0;
     const weapon = next.weapons[kill.cause] ?? { kills: 0, headshots: 0 };
     const teamKills = (weapon.teamKills ?? 0) + (kill.teamKill ? 1 : 0);
+    const teamHeadshots = (weapon.teamHeadshots ?? 0) + (kill.teamKill && kill.headshot ? 1 : 0);
+    const longest = kill.teamKill || kill.distance === null ? weapon.longest : Math.max(weapon.longest ?? 0, kill.distance);
     next.weapons[kill.cause] = {
       kills: weapon.kills + 1,
       headshots: weapon.headshots + (kill.headshot ? 1 : 0),
       ...(teamKills > 0 ? { teamKills } : {}),
+      ...(teamHeadshots > 0 ? { teamHeadshots } : {}),
+      ...(longest === undefined ? {} : { longest }),
     };
     added.push(kill);
   }

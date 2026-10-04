@@ -725,10 +725,8 @@ export class Watcher extends DurableObject<Env> {
   // period.
   private async roundupFor(period: Period, now: number): Promise<Roundup | null> {
     const covered = periodDays(period);
-    const weaponKeys = covered.map((day) => weaponDayKey(Date.parse(`${day}T00:00:00Z`)));
-    const [days, matches, stored] = await Promise.all([this.recentDays(now), this.matchRecords(now), this.ctx.storage.get(weaponKeys)]);
-    const weapons = covered.map((day, i) => ({ day, weapons: parseWeaponDay(stored.get(weaponKeys[i] ?? '')) }));
-    const feed = this.roundupFeed(covered, weapons);
+    const [days, matches] = await Promise.all([this.recentDays(now), this.matchRecords(now)]);
+    const feed = this.roundupFeed(covered);
     const ids = await this.idsFor([
       ...days.flatMap((d) => (covered.includes(d.day) ? Object.keys(d.players) : [])),
       ...(feed?.kills.map((d) => d.steamId) ?? []),
@@ -738,12 +736,12 @@ export class Watcher extends DurableObject<Env> {
 
   // The kill feed's records over a period's days. Null before the first kill, or if the database cannot be read, so
   // the roundup goes out without its awards.
-  private roundupFeed(covered: string[], weapons: FeedSources['weapons']): FeedSources | null {
+  private roundupFeed(covered: string[]): FeedSources | null {
     try {
       const sql = this.killSql();
       const since = firstKillDay(sql);
       if (since === null) return null;
-      return { since, kills: killDaySummaries(sql, covered[0] ?? '', covered[covered.length - 1] ?? ''), weapons };
+      return { since, kills: killDaySummaries(sql, covered[0] ?? '', covered[covered.length - 1] ?? '') };
     } catch (error) {
       console.error(`Roundup awards failed: ${errorText(error)}`);
       return null;
