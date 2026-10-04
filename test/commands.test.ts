@@ -267,7 +267,7 @@ describe('runCommand', () => {
     const suggest = suggestOptions({ recentMatches: async () => [ozeti, europe], config: () => config, http: rcon({}).http, records });
 
     await expect(suggest({ name: 'removematch', options: { match: '' }, userId: '42' })).resolves.toEqual([
-      { name: '🟦 Ozeti · Valkyra won 70, Kharr 67, Haldor 41 · 69 min · ended 30 Sep 14:05 UTC', value: String(ozeti.endedAt) },
+      { name: '🟦 Ozeti · 🔴 Valkyra won 70, Kharr 67, Haldor 41 · 69 min · ended 30 Sep 14:05 UTC', value: String(ozeti.endedAt) },
       { name: '🟪 Zestafona · 69 min · ended 30 Sep 13:05 UTC', value: String(europe.endedAt) },
     ]);
     await expect(suggest({ name: 'removematch', options: { match: 'zest' }, userId: '42' })).resolves.toHaveLength(1);

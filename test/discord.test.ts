@@ -16,6 +16,7 @@ import {
   buildLiveStatus,
   buildStatusEmbed,
   buildVipMessage,
+  factionDot,
   postWebhook,
   type DiscordMessage,
 } from '../src/discord.ts';
@@ -447,6 +448,12 @@ describe('faction emojis', () => {
       '🐻 **Valkyra 52**\n🦂 MANTICORE 40\n🤠 Lonestar 20',
     );
     expect(embedOf(summary)?.description).toBe('🏆 🐻 **Valkyra** won');
+  });
+
+  it('gives each faction a dot in its colour for choices: its own, or the nearest to its colour in game', () => {
+    expect(['Lonestar', 'MANTICORE', 'Valkyra'].map((name) => factionDot(name))).toEqual(['🔵 ', '🟢 ', '🔴 ']);
+    expect(factionDot('Kharr', '#f4900c')).toBe('🟠 ');
+    expect(factionDot('Kharr')).toBe('');
   });
 });
 

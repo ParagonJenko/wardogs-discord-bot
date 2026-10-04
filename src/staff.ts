@@ -5,6 +5,7 @@ import {
   buildRotationsEmbed,
   buildSavedRotationEmbed,
   factionBadge,
+  factionDot,
   factionKey,
   mapEmoji,
   mapName,
@@ -133,9 +134,9 @@ export const VIP_REASONS = [
   { value: 'other', name: 'Other' },
 ] as const;
 export const VIP_NOTE_MAX_LENGTH = 200;
-// The game's three teams. /switchteam only moves players to one of them: "🤠 Lonestar".
+// The game's three teams. /switchteam only moves players to one of them, each with its colour: "🔵 Lonestar".
 export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
-export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionBadge(team)}${team}`, value: team }));
+export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionDot(team)}${team}`, value: team }));
 // The game shows a private message on one line; "Staff warning: " takes the rest of its 200 characters.
 // The game shows a private message on one line of up to 200 characters; the prefix and the rules note take the rest.
 export const WARNING_MAX_LENGTH = 140;
@@ -188,8 +189,9 @@ const MAX_CHOICES = 25;
 
 const fit = (text: string): string => (text.length > MAX_CHOICE_NAME ? `${text.slice(0, MAX_CHOICE_NAME - 1)}…` : text);
 
+// "Vex · 🔴 Valkyra · 7656…": the team with its colour, to spot at a glance.
 const playerChoice = (player: Named & { faction?: string | undefined }): Choice => ({
-  name: fit([player.name.slice(0, 60), ...(player.faction ? [player.faction] : []), player.steamId].join(' · ')),
+  name: fit([player.name.slice(0, 60), ...(player.faction ? [`${factionDot(player.faction)}${player.faction}`] : []), player.steamId].join(' · ')),
   value: player.steamId,
 });
 

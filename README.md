@@ -269,7 +269,7 @@ command to the Worker's URL; nothing has to stay connected.
 
 Commands reply publicly in the channel, except the staff commands, whose replies only the sender sees. If the game
 server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
-commands, run `npm run register` again.
+commands, or changing a fixed list of choices (such as `/switchteam`'s teams), run `npm run register` again.
 
 Staff commands use the RCON password's write access, change the records or show Steam IDs, so they are locked down:
 
@@ -311,7 +311,8 @@ commands to. Alerts, top seeders and match summaries work in both.
 
 ## Staff commands
 
-For players, staff start typing and pick from the list, which shows each player's name, team and Steam ID.
+For players, staff start typing and pick from the list, which shows each player's name, team and Steam ID. Teams
+in the lists staff pick from have a dot in their colour, to spot at a glance: 🔵 Lonestar, 🟢 Manticore, 🔴 Valkyra.
 `/warn`, `/kick` and `/switchteam` list the players in game. `/player`, `/ban` and `/vip add` also list players seen
 in the last 30 days and players with VIP or a ban from the bot, and take any Steam ID. A name typed without picking
 works when it matches exactly one player.
@@ -320,9 +321,9 @@ works when it matches exactly one player.
 - **`/kick`** needs a reason; the player sees it. They can rejoin.
 - Warnings, kicks and the kick that comes with a ban tell the player where the rules are: "… | Rules: our Discord at
   gaminginit.com" (`SITE_URL`), or "… | Rules are in our Discord" without it.
-- **`/switchteam`** only offers the game's three teams: Lonestar, Manticore and Valkyra. A team that is not in the
-  match is refused. With two teams, leave `team` out to move them to the other one. Like the game's own console, the
-  bot then kills the player so they respawn on the new side.
+- **`/switchteam`** only offers the game's three teams: 🔵 Lonestar, 🟢 Manticore and 🔴 Valkyra. A team that is not
+  in the match is refused. With two teams, leave `team` out to move them to the other one. Like the game's own
+  console, the bot then kills the player so they respawn on the new side.
 - **`/ban`** needs a length and a reason. The server's own bans are permanent (they go into `ServerSettings.ini`), so
   for a timed ban the bot writes when it ends into the reason, remembers it, and lifts the ban itself at the first
   check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly

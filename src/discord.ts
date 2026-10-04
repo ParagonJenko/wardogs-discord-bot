@@ -164,6 +164,16 @@ const factionEmoji = (name: string): string => {
 // The emoji to show before a faction's name: its own, or the dot nearest its colour for any other faction.
 export const factionBadge = (name: string, colorHex?: string): string => factionEmoji(name) || dot(colorHex);
 
+// Each faction's colour in game as a dot: Lonestar blue, Manticore green, Valkyra red.
+const FACTION_DOT: Record<string, string> = { lonestar: '🔵', manticore: '🟢', valkyra: '🔴' };
+
+// The dot in a faction's colour and a space, for the choices staff pick from, where a colour is quicker to spot than an
+// emoji: 🔵 Lonestar. Any other faction gets the dot nearest its colour, or nothing without one.
+export const factionDot = (name: string, colorHex?: string): string => {
+  const known = FACTION_DOT[factionKey(name)];
+  return known ? `${known} ` : dot(colorHex);
+};
+
 // One line per faction, highest first, the leader in bold: 🐻 **Valkyra 100**
 const scoreLines = (scores: FactionScore[]): string =>
   byScore(scores)
@@ -259,11 +269,12 @@ export const buildSeedCall = (
 };
 
 // `markdown` escapes names and bolds the winner, for embeds; without it the text is plain, for a menu.
+// Plain text without markdown is for a choice, so each faction's name has its colour's dot too.
 const result = (scores: FactionScore[], markdown = true): string[] => {
   const ranked = byScore(scores);
   const [first, second, ...rest] = ranked;
   if (!first || !second) return [];
-  const name = (s: FactionScore): string => (markdown ? escapeMarkdown(s.name) : s.name);
+  const name = (s: FactionScore): string => (markdown ? escapeMarkdown(s.name) : `${factionDot(s.name, s.colorHex)}${s.name}`);
   const winner = markdown ? `**${name(first)}**` : name(first);
   const draw = first.score === second.score;
   if (rest.length === 0) {

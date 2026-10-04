@@ -530,8 +530,8 @@ describe('suggestStaff', () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'kick', options: { player: 'ash' }, focused: 'player' })).resolves.toEqual([
-      { name: `Ash · Valkyra · ${ASH}`, value: ASH },
-      { name: `Ashley · Manticore · ${CY}`, value: CY },
+      { name: `Ash · 🔴 Valkyra · ${ASH}`, value: ASH },
+      { name: `Ashley · 🟢 Manticore · ${CY}`, value: CY },
     ]);
   });
 
@@ -539,7 +539,7 @@ describe('suggestStaff', () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'ban', options: { player: 'o' }, focused: 'player' })).resolves.toEqual([
-      { name: `Bo · Manticore · ${BO}`, value: BO },
+      { name: `Bo · 🟢 Manticore · ${BO}`, value: BO },
       { name: `Oldtimer · ${OLD}`, value: OLD },
     ]);
     await expect(suggest({ name: 'vip', options: { subcommand: 'add', steam_id: 'old' }, focused: 'steam_id' })).resolves.toHaveLength(1);
@@ -552,7 +552,7 @@ describe('suggestStaff', () => {
       { name: `Oldtimer · ${OLD}`, value: OLD },
     ]);
     await expect(suggest({ name: 'vip', options: { subcommand: 'remove', steam_id: '' }, focused: 'steam_id' })).resolves.toEqual([
-      { name: `Bo · Manticore · ${BO}`, value: BO },
+      { name: `Bo · 🟢 Manticore · ${BO}`, value: BO },
     ]);
   });
 
