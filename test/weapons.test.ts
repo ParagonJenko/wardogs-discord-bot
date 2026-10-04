@@ -142,23 +142,26 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('ID.Item.BuildTool.Hammer.Large')).toBe('Large hammer');
     expect(weaponName('Id.Item.SR_04')).toBe('AMR 50');
     expect(weaponName('Id.Item.WEPN_030')).toBe('FAL');
+    expect(weaponName('Id.Item.WEPN_033')).toBe('Bushmaster M17S');
+    expect(weaponName('Id.Item.WEPN_035')).toBe('Scout Rifle TD');
+    expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('Stingray');
     expect(weaponName('Id.Item.Launcher_04')).toBe('9K333 Verba');
   });
 
   it('tells the tags it has a name for from those it names from the tag', () => {
     expect(isNamed('Id.Item.AK74M')).toBe(true);
     expect(isNamed('ID.ITEM.LAUNCHER_04')).toBe(true);
-    expect(isNamed('Id.Item.WEPN_035')).toBe(false);
+    expect(isNamed('Id.Item.WEPN_099')).toBe(false);
     expect(isNamed('Vehicle.Variant.Land.Wheeled.Hilux.Default')).toBe(false);
   });
 
   it('names anything else from its tag', () => {
-    expect(weaponName('Id.Item.WEPN_035')).toBe('WEPN 035');
+    expect(weaponName('Id.Item.WEPN_099')).toBe('WEPN 099');
     expect(weaponName('Id.Item.Defibrillator.Heavy')).toBe('Defibrillator Heavy');
     expect(weaponName('Vehicle.Variant.Land.Wheeled.Hilux.MountedMachineGun')).toBe('Hilux (mounted machine gun)');
     expect(weaponName('Vehicle.Variant.Land.Wheeled.Hilux.Default')).toBe('Hilux');
-    expect(weaponName('Id.Vehicle.WeaponExtension.STN_05.MainBarrel')).toBe('STN 05 Main barrel');
-    expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('STN 05');
+    expect(weaponName('Id.Vehicle.WeaponExtension.STN_09.MainBarrel')).toBe('STN 09 Main barrel');
+    expect(weaponName('Vehicle.Variant.Stationary.STN_09')).toBe('STN 09');
     expect(weaponName('Id.Buildable.SandbagWall')).toBe('Sandbag wall');
   });
 
@@ -188,14 +191,16 @@ describe('weaponName and weaponKind', () => {
 
 describe('weaponRole', () => {
   it('sorts the weapons the game is known to send by what they are for', () => {
-    expect(['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual([
+    expect(['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual([
+      'assault',
       'assault',
       'assault',
       'assault',
       'assault',
     ]);
     expect(weaponRole('Id.Item.LMG_02')).toBe('machine-gun');
-    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
+    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.WEPN_035', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
+      'marksman',
       'marksman',
       'marksman',
       'marksman',
@@ -222,8 +227,9 @@ describe('weaponRole', () => {
         'Id.Vehicle.WeaponExtension.STN_03.MainBarrel',
         'Id.Vehicle.WeaponExtension.TNK_01.Artillery',
         'Id.Vehicle.WeaponExtension.STN_01.MistralAA',
+        'Vehicle.Variant.Stationary.STN_05',
       ].map(weaponRole),
-    ).toEqual(['support', 'support', 'support', 'support']);
+    ).toEqual(['support', 'support', 'support', 'support', 'support']);
     expect(weaponRole('Id.Vehicle.WeaponExtension.TNK_01.Heavy')).toBe('vehicle-gun');
     // The SPH-2 running someone over.
     expect(weaponRole('Vehicle.Variant.Land.Tracked.TNK_01.Artillery')).toBe('vehicle');
@@ -231,7 +237,7 @@ describe('weaponRole', () => {
   });
 
   it('leaves out what it does not know', () => {
-    expect(weaponRole('Id.Item.WEPN_035')).toBe('other');
+    expect(weaponRole('Id.Item.WEPN_099')).toBe('other');
     expect(weaponRole('ID.Item.SmokeGrenade.White')).toBe('other');
   });
 });

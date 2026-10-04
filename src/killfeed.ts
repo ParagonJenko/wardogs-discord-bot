@@ -450,7 +450,7 @@ export type AdminKills = {
   unnamedWeapons: AdminUnnamedWeapon[];
 };
 
-// A weapon the bot has no name for, so it is named from the game's tag, like "WEPN 035", until it is added to NAMES in
+// A weapon the bot has no name for, so it is named from the game's tag, like "WEPN 099", until it is added to NAMES in
 // weapons.ts. The game's own kill feed names it, so staff can find out what it is when someone kills with it: those
 // who used it most are listed, those in game first, as the ones to watch. `longest` is in metres, of the kills that
 // were not team kills, and null when the game sent no distance. Tags with the same name are one weapon.

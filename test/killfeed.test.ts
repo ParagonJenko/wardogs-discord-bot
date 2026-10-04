@@ -377,12 +377,12 @@ describe('buildAdminKills', () => {
       days: 1,
       since: '2026-10-04',
       from: '2026-10-04',
-      kept: [summary(ASH, '2026-10-04', { 'Id.Item.WEPN_035': [1, 0] })],
+      kept: [summary(ASH, '2026-10-04', { 'Id.Item.WEPN_099': [1, 0] })],
       inGame: new Set(),
-      feed: [kill(ASH, CY, { cause: 'Id.Item.WEPN_035' })],
+      feed: [kill(ASH, CY, { cause: 'Id.Item.WEPN_099' })],
     });
-    expect(page.feed[0]).toMatchObject({ weapon: 'WEPN 035', weaponKind: 'weapon', weaponNamed: false });
-    expect(page.unnamedWeapons.map((w) => [w.name, w.kills])).toEqual([['WEPN 035', 1]]);
+    expect(page.feed[0]).toMatchObject({ weapon: 'WEPN 099', weaponKind: 'weapon', weaponNamed: false });
+    expect(page.unnamedWeapons.map((w) => [w.name, w.kills])).toEqual([['WEPN 099', 1]]);
   });
 });
 
@@ -393,17 +393,17 @@ describe('unnamedWeapons', () => {
       weapons,
     });
     const kept = [
-      day(ASH, '2026-10-02', { 'Id.Item.WEPN_035': { kills: 4, headshots: 1, longest: 340.96 }, [AK]: { kills: 9, headshots: 2 } }),
-      day(BO, '2026-10-03', { 'Id.Item.WEPN_035': { kills: 2, headshots: 0, longest: 120 }, 'Id.Item.SMG_03': { kills: 3, headshots: 0 } }),
-      day(ASH, '2026-10-04', { 'ID.Item.WEPN_035': { kills: 1, headshots: 1 } }),
+      day(ASH, '2026-10-02', { 'Id.Item.WEPN_099': { kills: 4, headshots: 1, longest: 340.96 }, [AK]: { kills: 9, headshots: 2 } }),
+      day(BO, '2026-10-03', { 'Id.Item.WEPN_099': { kills: 2, headshots: 0, longest: 120 }, 'Id.Item.SMG_03': { kills: 3, headshots: 0 } }),
+      day(ASH, '2026-10-04', { 'ID.Item.WEPN_099': { kills: 1, headshots: 1 } }),
       day(CY, '2026-10-04', { 'Id.Item.SMG_03': { kills: 3, headshots: 1, longest: 40 }, 'Id.Item.SR_04': { kills: 5, headshots: 2 } }),
       day(DEE, '2026-10-04', { 'Id.Item.WEPN_032': { kills: 0, headshots: 0 } }),
     ];
     const weapons = unnamedWeapons(kept, new Set([BO]));
     // The AK74 and the AMR 50 have names. The game writes ID.Item. for some tags: the same weapon.
-    expect(weapons.map((w) => w.name)).toEqual(['WEPN 035', 'SMG 03']);
+    expect(weapons.map((w) => w.name)).toEqual(['WEPN 099', 'SMG 03']);
     expect(weapons[0]).toEqual({
-      name: 'WEPN 035',
+      name: 'WEPN 099',
       kind: 'weapon',
       kills: 7,
       longest: 341,
