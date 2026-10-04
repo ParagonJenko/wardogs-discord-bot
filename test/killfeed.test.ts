@@ -25,7 +25,9 @@ import {
   STAFF_SOCKET_PROTOCOL,
   tally,
   toStaffKills,
+  unnamedWeapons,
   writeKillDays,
+  type DayWeapon,
   type KillDay,
   type KillDaySummary,
   type Sql,
@@ -358,6 +360,7 @@ describe('buildAdminKills', () => {
         victim: { steamId: CY, name: 'Cy' },
         weapon: 'SVD',
         weaponKind: 'weapon',
+        weaponNamed: true,
         distance: 312.3,
         headshot: false,
         tags: [],
@@ -365,6 +368,61 @@ describe('buildAdminKills', () => {
       },
       expect.objectContaining({ at: 1, map: 'Bakurani', killer: { steamId: ASH, name: 'Ash' }, headshot: true }),
     ]);
+    expect(page.unnamedWeapons).toEqual([]);
+  });
+
+  it('marks a kill with a weapon the bot has no name for', () => {
+    const page = buildAdminKills({
+      now: NOW,
+      days: 1,
+      since: '2026-10-04',
+      from: '2026-10-04',
+      kept: [summary(ASH, '2026-10-04', { 'Id.Item.WEPN_030': [1, 0] })],
+      inGame: new Set(),
+      feed: [kill(ASH, CY, { cause: 'Id.Item.WEPN_030' })],
+    });
+    expect(page.feed[0]).toMatchObject({ weapon: 'WEPN 030', weaponKind: 'weapon', weaponNamed: false });
+    expect(page.unnamedWeapons.map((w) => [w.name, w.kills])).toEqual([['WEPN 030', 1]]);
+  });
+});
+
+describe('unnamedWeapons', () => {
+  it('lists the weapons the bot has no name for, most kills first, with who used them, those in game first', () => {
+    const day = (steamId: string, date: string, weapons: Record<string, DayWeapon>): KillDaySummary => ({
+      ...summary(steamId, date, {}),
+      weapons,
+    });
+    const kept = [
+      day(ASH, '2026-10-02', { 'Id.Item.WEPN_030': { kills: 4, headshots: 1, longest: 340.96 }, [AK]: { kills: 9, headshots: 2 } }),
+      day(BO, '2026-10-03', { 'Id.Item.WEPN_030': { kills: 2, headshots: 0, longest: 120 }, 'Id.Item.SMG_03': { kills: 3, headshots: 0 } }),
+      day(ASH, '2026-10-04', { 'ID.Item.WEPN_030': { kills: 1, headshots: 1 } }),
+      day(CY, '2026-10-04', { 'Id.Item.SMG_03': { kills: 3, headshots: 1, longest: 40 }, 'Id.Item.SR_04': { kills: 5, headshots: 2 } }),
+      day(DEE, '2026-10-04', { 'Id.Item.WEPN_032': { kills: 0, headshots: 0 } }),
+    ];
+    const weapons = unnamedWeapons(kept, new Set([BO]));
+    // The AK74 and the AMR 50 have names. The game writes ID.Item. for some tags: the same weapon.
+    expect(weapons.map((w) => w.name)).toEqual(['WEPN 030', 'SMG 03']);
+    expect(weapons[0]).toEqual({
+      name: 'WEPN 030',
+      kind: 'weapon',
+      kills: 7,
+      longest: 341,
+      lastDay: '2026-10-04',
+      users: 2,
+      players: [
+        { steamId: BO, name: 'Bo', kills: 2, inGame: true },
+        { steamId: ASH, name: 'Ash', kills: 5, inGame: false },
+      ],
+    });
+    expect(weapons[1]).toMatchObject({ kills: 6, longest: 40, lastDay: '2026-10-04', users: 2 });
+    expect(weapons[1]?.players.map((p) => p.name)).toEqual(['Bo', 'Cy']);
+  });
+
+  it('lists up to five players for each', () => {
+    const kept = Array.from({ length: 7 }, (_, i) => summary(`7656119900000000${i}`, '2026-10-04', { 'Id.Item.WEPN_026': [i + 1, 0] }));
+    const [weapon] = unnamedWeapons(kept, new Set());
+    expect(weapon).toMatchObject({ kills: 28, users: 7, longest: null });
+    expect(weapon?.players.map((p) => p.kills)).toEqual([7, 6, 5, 4, 3]);
   });
 });
 
@@ -419,6 +477,7 @@ describe('buildPlayerKills', () => {
       victim: { steamId: BO, name: 'Bo' },
       weapon: 'M113 APC',
       weaponKind: 'vehicle',
+      weaponNamed: true,
       distance: null,
       headshot: false,
       tags: ['RoadKill'],
