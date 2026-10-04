@@ -122,16 +122,24 @@ describe('buildAdminOverview', () => {
     });
   });
 
-  it("lists what staff did in the period, newest first, without VIP changes", () => {
+  it('lists what staff did in the period, newest first, VIP changes included', () => {
     const entry = (at: number, overrides: Partial<ModEntry> = {}): ModEntry => ({ action: 'kick', at, by: '42', reason: 'TK', ...overrides });
     const modLogs = new Map<string, ModEntry[]>([
-      [ASH, [entry(NOW - 8 * DAY), entry(NOW - DAY, { byName: 'Paragon', name: 'Ash' }), entry(NOW, { action: 'vip-add' })]],
+      [
+        ASH,
+        [
+          entry(NOW - 8 * DAY),
+          entry(NOW - DAY, { byName: 'Paragon', name: 'Ash' }),
+          entry(NOW, { action: 'vip-add', name: 'Ash', reason: 'Friend', detail: '30 days' }),
+        ],
+      ],
       [DEE, [entry(NOW - 2 * DAY, { action: 'ban', by: 'server', name: 'Dee', detail: 'By Admin' })]],
     ]);
 
     const overview = buildAdminOverview(sources({ modLogs }));
 
     expect(overview.moderation).toEqual([
+      { at: NOW, action: 'vip-add', player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, by: '42', reason: 'Friend', detail: '30 days' },
       { at: NOW - DAY, action: 'kick', player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, by: '42', byName: 'Paragon', reason: 'TK' },
       { at: NOW - 2 * DAY, action: 'ban', player: { steamId: DEE, name: 'Dee' }, by: 'server', reason: 'TK', detail: 'By Admin' },
     ]);

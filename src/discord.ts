@@ -962,8 +962,9 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
   };
 };
 
-// The moderation log channel: every warning, kick, ban, unban and team move, by staff through the bot, by the bot itself
-// (a timed ban ending), or found on the server's ban list (a ban made or lifted in game or in ServerSettings.ini).
+// The moderation log channel: every warning, kick, ban, unban, team move and VIP added or removed, by staff through the
+// bot, by the bot itself (a timed ban ending), or found on the server's ban list (a ban made or lifted in game or in
+// ServerSettings.ini).
 const MOD_STYLE: Record<ModAction, { emoji: string; color: number }> = {
   warn: { emoji: '⚠️', color: 0xf1c40f },
   kick: { emoji: '👢', color: 0xe67e22 },

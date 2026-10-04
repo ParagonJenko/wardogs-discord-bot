@@ -278,10 +278,14 @@ describe('runStaffCommand', () => {
     await as('kick', { player: ASH, reason: 'Teamkilling' });
     await as('ban', { player: ASH, duration: '1d', reason: 'Teamkilling' });
     await as('unban', { steam_id: OLD });
+    await as('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', days: '30' });
+    await as('vip', { subcommand: 'remove', steam_id: ASH });
 
     expect(records.log).toHaveBeenCalledWith(ASH, { action: 'kick', at: NOW, by: '42', byName: 'Paragon', name: 'Ash', reason: 'Teamkilling' });
     expect(records.ban).toHaveBeenCalledWith(expect.objectContaining({ steamId: ASH, by: '42', byName: 'Paragon' }));
     expect(records.unban).toHaveBeenCalledWith({ steamId: OLD, name: 'Oldtimer' }, '42', 'Paragon');
+    expect(records.vipAdd).toHaveBeenCalledWith(expect.objectContaining({ steamId: ASH, by: '42', byName: 'Paragon' }));
+    expect(records.vipRemove).toHaveBeenCalledWith(expect.objectContaining({ steamId: ASH, by: '42', byName: 'Paragon' }));
   });
 
   it('/setnextmap queues the map; /changemap also ends the match', async () => {
@@ -369,22 +373,52 @@ describe('runStaffCommand', () => {
   it('/vip add and /vip remove go through the records', async () => {
     const { run, records } = setup();
 
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '30' })).resolves.toEqual({
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'regular', days: '30' })).resolves.toEqual({
       content: `🎖️ Gave **Ash** a reserved slot until <t:${(NOW + 30 * 86_400_000) / 1000}:f>. It starts after the server's next restart.`,
     });
     await expect(run('vip', { subcommand: 'remove', steam_id: BO })).resolves.toEqual({
       content: "🎖️ Took **Bo** off the reserved list. It takes effect after the server's next restart. Automatic VIP will not give it back for 7 days.",
     });
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '0' })).resolves.toEqual({
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'regular', days: '0' })).resolves.toEqual({
       content: 'Give VIP for 1 to 365 days, or set permanent to True.',
     });
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH })).resolves.toEqual({ content: 'Give VIP for 1 to 365 days, or set permanent to True.' });
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '30', permanent: 'true' })).resolves.toEqual({
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'regular' })).resolves.toEqual({
+      content: 'Give VIP for 1 to 365 days, or set permanent to True.',
+    });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'regular', days: '30', permanent: 'true' })).resolves.toEqual({
       content: 'Pick a number of days or permanent, not both.',
     });
     expect(records.vipAdd).toHaveBeenCalledTimes(1);
-    expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: 30, by: '42' });
+    expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: 30, reason: 'Regular', by: '42' });
     expect(records.vipRemove).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', by: '42' });
+  });
+
+  it('/vip add needs a reason from the list, with a note for Other, and keeps the note with it', async () => {
+    const { run, records } = setup();
+    const pick = 'Pick why they get VIP: Friend, Regular, Seeder, Paid, Other.';
+
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, days: '7' })).resolves.toEqual({ content: pick });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'bribe', days: '7' })).resolves.toEqual({ content: pick });
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'other', note: '  ', days: '7' })).resolves.toEqual({
+      content: 'Say why in note when the reason is Other.',
+    });
+    expect(records.vipAdd).not.toHaveBeenCalled();
+
+    await run('vip', { subcommand: 'add', steam_id: ASH, reason: 'paid', note: ' Patreon, October ', days: '30' });
+    await run('vip', { subcommand: 'add', steam_id: BO, reason: 'other', note: 'Event winner', permanent: 'true' });
+    await run('vip', { subcommand: 'add', steam_id: ASH, reason: 'seeder', days: '7' });
+    expect(records.vipAdd.mock.calls.map(([request]) => request.reason)).toEqual(['Paid: Patreon, October', 'Other: Event winner', 'Seeder']);
+  });
+
+  it('/vip remove keeps a reason when one is given', async () => {
+    const { run, records } = setup();
+
+    await run('vip', { subcommand: 'remove', steam_id: BO, reason: ' Payment ended ' });
+    await run('vip', { subcommand: 'remove', steam_id: BO, reason: '   ' });
+    expect(records.vipRemove.mock.calls).toEqual([
+      [{ steamId: BO, name: 'Bo', reason: 'Payment ended', by: '42' }],
+      [{ steamId: BO, name: 'Bo', by: '42' }],
+    ]);
   });
 
   it('/vip remove leaves a staff spot, which only unlinking takes away', async () => {
@@ -400,16 +434,16 @@ describe('runStaffCommand', () => {
     const { run, records } = setup();
     records.vipAdd.mockResolvedValueOnce({ outcome: 'added' }).mockResolvedValueOnce({ outcome: 'extended' }).mockResolvedValueOnce({ outcome: 'already-reserved' });
 
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, permanent: 'true' })).resolves.toEqual({
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', permanent: 'true' })).resolves.toEqual({
       content: "🎖️ Gave **Ash** a permanent reserved slot, with no end date. It starts after the server's next restart.",
     });
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, permanent: 'true' })).resolves.toEqual({
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', permanent: 'true' })).resolves.toEqual({
       content: '🎖️ **Ash** keeps their reserved slot, with no end date.',
     });
-    await expect(run('vip', { subcommand: 'add', steam_id: ASH, permanent: 'true' })).resolves.toEqual({
+    await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', permanent: 'true' })).resolves.toEqual({
       content: '**Ash** already has a permanent reserved slot, with no end date. Nothing changed.',
     });
-    expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: null, by: '42' });
+    expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: null, reason: 'Friend', by: '42' });
   });
 
   it('/player shows the records with what the server says now', async () => {
