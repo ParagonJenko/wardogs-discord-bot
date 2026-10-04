@@ -435,10 +435,10 @@ export const rotationSlot = (rotation: Rotation, status: { rotationIndex: number
 // The rotation as it is written, so the server plays it from its first map at the next map change. On a change the
 // server keeps the slot it is on and goes to the next slot in the new list, whatever map is there now, so a rotation
 // written from the top would start part-way round, or send the server back to the map just played. Instead the first
-// map goes in the slot after the server's, and the rest follow in order round. Without a slot, it is written as it is.
-export const fromTheStart = (entries: RotationEntry[], slot: number | null): RotationEntry[] => {
+// map goes in the slot after the server's, and the rest follow in order round.
+export const fromTheStart = (entries: RotationEntry[], slot: number): RotationEntry[] => {
   const n = entries.length;
-  if (slot === null || n === 0) return entries;
+  if (n === 0) return entries;
   const first = (slot + 1) % n;
   return entries.map((_, i) => entries[(((i - first) % n) + n) % n] as RotationEntry);
 };
@@ -451,21 +451,19 @@ type SettingsFile = {
   slot: () => Promise<number | null>;
 };
 
-// What putting a rotation on did: nothing, as the server already goes to its first map next, or wrote it, with the map
-// the server goes to next (null when its slot could not be told, so the rotation was written as it is).
-export type RotationPut = { written: false } | { written: true; next: RotationEntry | null };
-
 // Puts these maps in the server's rotation, so it plays them from the first at the next map change (see fromTheStart).
-// Throws with the reason when the server cannot be read, or would refuse or ignore the change.
-export const putRotation = async (file: SettingsFile, entries: RotationEntry[]): Promise<RotationPut> => {
+// False when the server already goes to the first next, so nothing was written. Throws with the reason when the server
+// cannot be read, does not say which slot it is on, or would refuse or ignore the change.
+export const putRotation = async (file: SettingsFile, entries: RotationEntry[]): Promise<boolean> => {
   if (entries.length === 0) throw new Error('refusing to leave the server with no maps');
   const config = await file.fetchConfig();
   const slot = await file.slot();
+  if (slot === null) throw new Error("the server didn't say which slot of its rotation it is on");
   const written = fromTheStart(entries, slot);
-  if (sameEntries(serverEntries(config.text), written)) return { written: false };
+  if (sameEntries(serverEntries(config.text), written)) return false;
   if (!config.writable) throw new Error('the server settings are read-only over RCON');
   const text = setRotationEntries(config.text, written);
   const problem = refusal(await file.validate(text), 'RotationEntries') ?? refusal(await file.put({ ...config, text }), 'RotationEntries');
   if (problem !== null) throw new Error(problem);
-  return { written: true, next: slot === null ? null : (entries[0] ?? null) };
+  return true;
 };

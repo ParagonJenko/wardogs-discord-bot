@@ -389,8 +389,8 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
   has no maps left: the bot never leaves the server without a rotation.
 - In `add`, anything left out is the map's own: its first game mode, infantry only and hardcore off, and the map's own
   lighting and zones. A map can be in a rotation more than once, such as Bakurani by day and at dusk.
-- If the server can't take the rotation (it is not answering, or the settings file is read-only), the reply says why,
-  and the bot tries again at every check until the server has it.
+- If the server can't take the rotation (it is not answering, doesn't say where it is in its rotation, or the settings
+  file is read-only), the reply says why, and the bot tries again at every check until the server has it.
 - Changes made by hand on the server stay until the bot next puts a rotation on: the start of the next day, or a staff
   change. `/rotation` (for everyone) shows what the server is playing either way.
 
