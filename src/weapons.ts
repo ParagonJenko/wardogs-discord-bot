@@ -172,6 +172,8 @@ const NAMES: Record<string, string> = {
   'Id.Item.RPG7': 'RPG-7',
   'Id.Item.CGM4': 'MAAWS',
   'Id.Item.MMGL': 'MGL-40',
+  // Not in Warcon's list. The one launcher the game has that is not named here.
+  'Id.Item.Launcher_04': '9K333 Verba',
   'Id.Item.M67Grenade': 'M67 frag grenade',
   'Id.Item.C4Explosive': 'C4 charge',
   'Id.Item.IED.Explosive': 'IED',
@@ -236,6 +238,9 @@ const NAMES: Record<string, string> = {
 };
 
 const BY_TAG = new Map(Object.entries(NAMES).map(([cause, name]) => [cause.toLowerCase(), name]));
+
+// Whether the bot has a name for a tag, rather than making one from the tag.
+export const isNamed = (cause: string): boolean => BY_TAG.has(cause.toLowerCase());
 
 // `WEPN_035` → `WEPN 035`, `MountedMachineGuns` → `Mounted machine guns`. A code name keeps its capitals.
 const words = (part: string): string =>
@@ -314,6 +319,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.RPG7': 'demolition',
   'Id.Item.CGM4': 'demolition',
   'Id.Item.MMGL': 'demolition',
+  'Id.Item.Launcher_04': 'demolition',
   'Id.Item.M67Grenade': 'demolition',
   'Id.Item.C4Explosive': 'demolition',
   'Id.Item.IED.Explosive': 'demolition',

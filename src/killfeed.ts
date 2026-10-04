@@ -3,7 +3,7 @@ import type { AdminPlayer } from './admin.ts';
 import { mapName } from './discord.ts';
 import { sameSide } from './griefing.ts';
 import type { IdOf } from './stats.ts';
-import { weaponKind, weaponName, type FeedKill, type WeaponKind } from './weapons.ts';
+import { isNamed, weaponKind, weaponName, type FeedKill, type WeaponKind } from './weapons.ts';
 
 // The staff page's kill feed, from the game's kill feed: every kill, with who killed whom, with what, from how far and
 // whether it was a headshot, and who gets far more headshots than the server's players get with the same weapons. Many
@@ -414,7 +414,8 @@ export const headshotRows = (period: KillDaySummary[], kept: KillDaySummary[]): 
 
 // What the staff page shows.
 
-// A kill. `killer` and `victim` have no public id: the page opens their kills instead.
+// A kill. `killer` and `victim` have no public id: the page opens their kills instead. `weaponNamed` is false when the
+// bot has no name for the weapon, so `weapon` is made from the game's tag (see AdminUnnamedWeapon).
 export type AdminKill = {
   at: number;
   map: string;
@@ -422,6 +423,7 @@ export type AdminKill = {
   victim: AdminPlayer;
   weapon: string;
   weaponKind: WeaponKind;
+  weaponNamed: boolean;
   distance: number | null;
   headshot: boolean;
   tags: string[];
@@ -444,7 +446,27 @@ export type AdminKills = {
   players: AdminHeadshotRow[];
   // The server's latest kills, newest first, whatever the period.
   feed: AdminKill[];
+  // Over every day kept, whatever the period: most kills first.
+  unnamedWeapons: AdminUnnamedWeapon[];
 };
+
+// A weapon the bot has no name for, so it is named from the game's tag, like "WEPN 030", until it is added to NAMES in
+// weapons.ts. The game's own kill feed names it, so staff can find out what it is when someone kills with it: those
+// who used it most are listed, those in game first, as the ones to watch. `longest` is in metres, of the kills that
+// were not team kills, and null when the game sent no distance. Tags with the same name are one weapon.
+export type AdminUnnamedWeapon = {
+  name: string;
+  kind: WeaponKind;
+  kills: number;
+  longest: number | null;
+  // The last UTC day someone killed with it.
+  lastDay: string;
+  // Everyone who killed with it, of whom `players` lists up to UNNAMED_PLAYERS_LISTED.
+  users: number;
+  players: (AdminPlayer & { kills: number; inGame: boolean })[];
+};
+
+export const UNNAMED_PLAYERS_LISTED = 5;
 
 // One weapon in a player's kills, with what someone with the server's usual aim would get with it. Tags with the same
 // name are one weapon.
@@ -487,6 +509,7 @@ const killOf = (k: DayKill, ref: (steamId: string, name: string) => AdminPlayer)
   victim: ref(k.victim, k.victimName),
   weapon: weaponName(k.cause),
   weaponKind: weaponKind(k.cause),
+  weaponNamed: isNamed(k.cause),
   distance: k.distance === null ? null : round1(k.distance),
   headshot: k.headshot,
   tags: k.tags,
@@ -504,6 +527,36 @@ export type KillSources = {
   // Every day kept (KILL_DAYS_KEPT), oldest first.
   kept: KillDaySummary[];
   inGame: ReadonlySet<string>;
+};
+
+// The weapons in `kept` the bot has no name for. `kept` is oldest first, so a player's latest name wins.
+export const unnamedWeapons = (kept: KillDaySummary[], inGame: ReadonlySet<string>): AdminUnnamedWeapon[] => {
+  type Weapon = Omit<AdminUnnamedWeapon, 'users' | 'players'> & { players: Map<string, { name: string; kills: number }> };
+  const weapons = new Map<string, Weapon>();
+  for (const d of kept) {
+    for (const [cause, w] of Object.entries(d.weapons)) {
+      if (w.kills === 0 || isNamed(cause)) continue;
+      const name = weaponName(cause);
+      const known = weapons.get(name) ?? { name, kind: weaponKind(cause), kills: 0, longest: null, lastDay: d.day, players: new Map() };
+      known.kills += w.kills;
+      if (w.longest !== undefined) known.longest = Math.max(known.longest ?? 0, w.longest);
+      if (d.day > known.lastDay) known.lastDay = d.day;
+      const player = known.players.get(d.steamId);
+      known.players.set(d.steamId, { name: d.name || (player?.name ?? ''), kills: (player?.kills ?? 0) + w.kills });
+      weapons.set(name, known);
+    }
+  }
+  return [...weapons.values()]
+    .sort((a, b) => b.kills - a.kills || a.name.localeCompare(b.name))
+    .map(({ players, longest, ...w }) => ({
+      ...w,
+      longest: longest === null ? null : round1(longest),
+      users: players.size,
+      players: [...players]
+        .map(([steamId, p]) => ({ ...plain(steamId, p.name), kills: p.kills, inGame: inGame.has(steamId) }))
+        .sort((a, b) => Number(b.inGame) - Number(a.inGame) || b.kills - a.kills || a.name.localeCompare(b.name))
+        .slice(0, UNNAMED_PLAYERS_LISTED),
+    }));
 };
 
 export const buildAdminKills = (s: KillSources & { feed: StaffKill[] }): AdminKills => {
@@ -525,6 +578,7 @@ export const buildAdminKills = (s: KillSources & { feed: StaffKill[] }): AdminKi
       .slice(0, HEADSHOT_ROWS_LISTED)
       .map(({ steamId, name, ...r }) => ({ ...plain(steamId, name), ...r, inGame: s.inGame.has(steamId) })),
     feed: adminFeed(s.feed),
+    unnamedWeapons: unnamedWeapons(s.kept, s.inGame),
   };
 };
 

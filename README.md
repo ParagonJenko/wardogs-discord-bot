@@ -591,6 +591,10 @@ Many headshots, day after day, can be a sign of cheating. The staff page shows w
   with.
 - **A player's kills**: any name opens their history: their kills in the period by weapon, by day, and each kill (their
   latest 1,000 a day) with whom, the weapon, headshot, distance and map.
+- **Weapons to name**: the weapons the bot has no name for, so it names them from the game's tag (`WEPN 030`), over
+  the last 30 days, most kills first: their kills, longest kill and who used them most, those in game first. The game's
+  own kill feed names them, so staff can watch one of those players and see what it is. Their kills in the live feed
+  are marked too. Tell whoever runs the bot, who adds the name to `NAMES` in `src/weapons.ts`.
 
 How headshots are judged:
 
@@ -875,11 +879,13 @@ match` means `Token` in the file is not the secret.
   far a mine was from whoever laid it, or an emplacement from its target, says nothing about their aim. Each weapon
   still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
-  [Warcon](https://github.com/warcon-app/warcon)'s list, and `Id.Item.SR_04` as the AMR 50: Warcon has no name for it,
-  and its kills, the longest of any hand-held weapon on average, are the .50 cal's. A new one is named from its tag (`Id.Item.WEPN_035` is
-  "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`. Tags with the same name, like each side's M113, or the
-  mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel (`Id.Vehicle.WeaponExtension.STN_03.MainBarrel`), are
-  one weapon.
+  [Warcon](https://github.com/warcon-app/warcon)'s list. Two more Warcon has no name for: `Id.Item.SR_04` is the AMR
+  50, as its kills, the longest of any hand-held weapon on average, are the .50 cal's, and `Id.Item.Launcher_04` the
+  9K333 Verba, the game's one launcher not named otherwise. A new one is named from its tag (`Id.Item.WEPN_035` is
+  "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`; the staff page lists those
+  ([Weapons to name](#kills-and-headshots)), so staff can find out what they are in game. Tags with the same name, like
+  each side's M113, or the mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel
+  (`Id.Vehicle.WeaponExtension.STN_03.MainBarrel`), are one weapon.
 - **Distances** are between the killer and the victim, in metres. A vehicle blowing up has none, so its average
   distance is left out.
 - **A batch sent twice** counts once: the bot remembers the last 5,000 kills it counted, until it restarts.
