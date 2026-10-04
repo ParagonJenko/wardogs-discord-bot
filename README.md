@@ -875,7 +875,8 @@ match` means `Token` in the file is not the secret.
   far a mine was from whoever laid it, or an emplacement from its target, says nothing about their aim. Each weapon
   still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
-  [Warcon](https://github.com/warcon-app/warcon)'s list. A new one is named from its tag (`Id.Item.WEPN_035` is
+  [Warcon](https://github.com/warcon-app/warcon)'s list, and `Id.Item.SR_04` as the AMR 50: Warcon has no name for it,
+  and its kills, the longest of any hand-held weapon on average, are the .50 cal's. A new one is named from its tag (`Id.Item.WEPN_035` is
   "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`. Tags with the same name, like each side's M113, or the
   mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel (`Id.Vehicle.WeaponExtension.STN_03.MainBarrel`), are
   one weapon.

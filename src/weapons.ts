@@ -163,6 +163,9 @@ const NAMES: Record<string, string> = {
   'Id.Item.Mosin': 'Mosin Nagant',
   'Id.Item.SV98': 'SV98',
   'Id.Item.MK22': 'MK22',
+  // Not in Warcon's list. The one sniper rifle left unnamed besides the Scout Rifle TD, and its kills are the AMR 50's:
+  // the longest of any hand-held weapon on average, far past the Scout Rifle's 300 m.
+  'Id.Item.SR_04': 'AMR 50',
   'Id.Item.CombatBow': 'Compound bow',
   'Id.Item.Glock17': 'GGX 17',
   'Id.Item.Judge': 'Judge',
@@ -304,6 +307,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.Mosin': 'marksman',
   'Id.Item.SV98': 'marksman',
   'Id.Item.MK22': 'marksman',
+  'Id.Item.SR_04': 'marksman',
   'Id.Item.CombatBow': 'marksman',
   'Id.Item.Glock17': 'sidearm',
   'Id.Item.Judge': 'sidearm',

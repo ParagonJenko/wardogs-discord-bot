@@ -139,6 +139,7 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Item.AK74M')).toBe('AK74');
     expect(weaponName('id.item.svdm')).toBe('SVD');
     expect(weaponName('ID.Item.BuildTool.Hammer.Large')).toBe('Large hammer');
+    expect(weaponName('Id.Item.SR_04')).toBe('AMR 50');
   });
 
   it('names anything else from its tag', () => {
@@ -179,7 +180,12 @@ describe('weaponRole', () => {
   it('sorts the weapons the game is known to send by what they are for', () => {
     expect(['Id.Item.AK74M', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual(['assault', 'assault', 'assault']);
     expect(weaponRole('Id.Item.LMG_02')).toBe('machine-gun');
-    expect(['Id.Item.SV98', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual(['marksman', 'marksman', 'marksman']);
+    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
+      'marksman',
+      'marksman',
+      'marksman',
+      'marksman',
+    ]);
     expect(weaponRole('Id.Item.Glock17')).toBe('sidearm');
     expect(['Id.Item.RPG7', 'Id.Item.M67Grenade', 'Id.Item.IED.Explosive'].map(weaponRole)).toEqual(['demolition', 'demolition', 'demolition']);
     expect(['Id.Item.Fists', 'ID.Item.BuildTool.Hammer.Large', 'Id.Item.Defibrillator.Heavy'].map(weaponRole)).toEqual([
