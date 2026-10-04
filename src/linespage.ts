@@ -35,9 +35,9 @@ export const linesContext = (config: Config): LinesContext => ({
   seeding: config.seedingMessages !== null,
 });
 
-// A list's placeholders, each with the value checked against (the longest it is likely to be) and shown in the
-// preview, and what goes before and after its line.
-type Frame = { values: Record<string, string>; before: string; after: string };
+// A list's placeholders, each with the value the preview shows (`values`) and the longest it can be when the message
+// goes out (`longest`), which lines are checked against; and what goes before and after its line.
+type Frame = { values: Record<string, string>; longest: Record<string, string>; before: string; after: string };
 
 type ListDefinition = {
   id: string;
@@ -60,7 +60,25 @@ const FACTIONS = [
 
 // The match messages only go out with a website, so a list's preview without one stands in for it.
 const site = (context: LinesContext): string => context.siteHost ?? 'your website';
-const halfwayScore = (context: LinesContext): string => String(Math.ceil(context.scoreToWin / 2));
+
+// {team} is the name as the server spells it ("Lone Star"), and a team without a list of its own could be called
+// anything, so lines are checked with it this long. A longer name is cut short with "…".
+export const TEAM_LONGEST = 16;
+
+// {team} and {score}: the team shown, and the score shown and the highest it can be when the message goes out.
+const teamValues = (team: string, score: number, highest: number) => ({
+  values: { team, score: String(score) },
+  longest: { team: 'x'.repeat(TEAM_LONGEST), score: String(highest) },
+});
+
+// The halfway message names the leader's score as it is when the message goes out: from half the winning score up
+// to the winning score. The 90-point message always names 90% of it.
+const halfwayValues = (team: string, context: LinesContext) => teamValues(team, Math.ceil(context.scoreToWin / 2), context.scoreToWin);
+const nearlyValues = (team: string, context: LinesContext) =>
+  teamValues(team, nearlyScore(context.scoreToWin), nearlyScore(context.scoreToWin));
+
+// Placeholders whose value is the same in the preview and in game.
+const exact = (values: Record<string, string>) => ({ values, longest: values });
 const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vip)}`;
 const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context))}`;
 
@@ -74,8 +92,9 @@ export const LISTS: ListDefinition[] = [
     kind: 'seeding',
     get: (lines) => lines.seeding,
     set: (lines, seeding) => ({ ...lines, seeding }),
+    // At most one fewer than it needs to go live, as someone is on.
     frame: (context) => ({
-      values: { needed: morePlayers(Math.max(1, context.live - 1)) },
+      ...exact({ needed: morePlayers(Math.max(1, context.live - 1)) }),
       before: '',
       after: ` ${seedingReward(context.siteHost, context.vip)}`,
     }),
@@ -88,7 +107,7 @@ export const LISTS: ListDefinition[] = [
     kind: 'match',
     get: (lines) => lines.tenMinutes,
     set: (lines, tenMinutes) => ({ ...lines, tenMinutes }),
-    frame: (context) => ({ values: { site: site(context) }, before: '', after: '' }),
+    frame: (context) => ({ ...exact({ site: site(context) }), before: '', after: '' }),
   },
   ...FACTIONS.map(
     (faction): ListDefinition => ({
@@ -100,7 +119,7 @@ export const LISTS: ListDefinition[] = [
       get: (lines) => lines.halfway[faction.key] ?? [],
       set: (lines, list) => ({ ...lines, halfway: { ...lines.halfway, [faction.key]: list } }),
       frame: (context) => ({
-        values: { team: faction.name, score: halfwayScore(context) },
+        ...halfwayValues(faction.name, context),
         before: `${HALFWAY_START} `,
         after: halfwayAfter(context),
       }),
@@ -114,7 +133,7 @@ export const LISTS: ListDefinition[] = [
     kind: 'match',
     get: (lines) => lines.halfwayLevel,
     set: (lines, halfwayLevel) => ({ ...lines, halfwayLevel }),
-    frame: (context) => ({ values: {}, before: '', after: halfwayAfter(context) }),
+    frame: (context) => ({ ...exact({}), before: '', after: halfwayAfter(context) }),
   },
   {
     id: 'halfwayOther',
@@ -125,7 +144,7 @@ export const LISTS: ListDefinition[] = [
     get: (lines) => lines.halfwayOther,
     set: (lines, halfwayOther) => ({ ...lines, halfwayOther }),
     frame: (context) => ({
-      values: { team: 'Other team', score: halfwayScore(context) },
+      ...halfwayValues('Other team', context),
       before: `${HALFWAY_START} `,
       after: halfwayAfter(context),
     }),
@@ -140,7 +159,7 @@ export const LISTS: ListDefinition[] = [
       get: (lines) => lines.nearly[faction.key] ?? [],
       set: (lines, list) => ({ ...lines, nearly: { ...lines.nearly, [faction.key]: list } }),
       frame: (context) => ({
-        values: { team: faction.name, score: String(nearlyScore(context.scoreToWin)) },
+        ...nearlyValues(faction.name, context),
         before: '',
         after: nearlyAfter(context),
       }),
@@ -155,7 +174,7 @@ export const LISTS: ListDefinition[] = [
     get: (lines) => lines.nearlyOther,
     set: (lines, nearlyOther) => ({ ...lines, nearlyOther }),
     frame: (context) => ({
-      values: { team: 'Other team', score: String(nearlyScore(context.scoreToWin)) },
+      ...nearlyValues('Other team', context),
       before: '',
       after: nearlyAfter(context),
     }),
@@ -202,7 +221,7 @@ const lineProblem = (line: string, frame: Frame): string | null => {
     const known = Object.keys(frame.values).map((name) => `{${name}}`);
     return `has {${unknown}}, which the bot can't fill in. ${known.length === 0 ? 'These lines have nothing to fill in' : `It can fill in ${listOf(known)}`}`;
   }
-  const over = `${frame.before}${fillLine(line, frame.values)}${frame.after}`.length - MAX_LENGTH;
+  const over = `${frame.before}${fillLine(line, frame.longest)}${frame.after}`.length - MAX_LENGTH;
   return over > 0 ? `is ${over} character${over === 1 ? '' : 's'} too long for the game, with what the bot adds to it` : null;
 };
 

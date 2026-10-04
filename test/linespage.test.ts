@@ -8,6 +8,7 @@ import {
   parseSavedLines,
   readLinesAction,
   resolveLines,
+  TEAM_LONGEST,
   type LinesContext,
   type SavedLines,
 } from '../src/linespage.ts';
@@ -106,6 +107,44 @@ describe('editLines', () => {
     expect(save({}, 'tenMinutes', [`${'x'.repeat(200 - 'gaminginit.com'.length)}{site}`])).toHaveProperty('saved');
     expect(save({}, 'tenMinutes', [`${'x'.repeat(201 - 'gaminginit.com'.length)}{site}`])).toHaveProperty('problem');
   });
+
+  it('checks {score} and {team} at the longest they can be when the message goes out, not as the preview shows them', () => {
+    const room = 200 - 'Halfway there! '.length - ' Seed on 3 days in a week and get a reserved slot. How at gaminginit.com'.length;
+
+    // The preview shows 50, but the leader can be on 100 when the message goes out.
+    expect(save({}, 'halfway.lonestar', [`${'x'.repeat(room - 3)}{score}`])).toHaveProperty('saved');
+    expect(save({}, 'halfway.lonestar', [`${'x'.repeat(room - 2)}{score}`])).toEqual({
+      problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.',
+    });
+    // The server may spell the team "Lone Star", and any other team could be called anything.
+    expect(save({}, 'halfway.lonestar', [`${'x'.repeat(room - TEAM_LONGEST)}{team}`])).toHaveProperty('saved');
+    expect(save({}, 'halfwayOther', [`${'x'.repeat(room - TEAM_LONGEST + 1)}{team}`])).toHaveProperty('problem');
+  });
+
+  it('keeps every line it saves from being cut short in game', () => {
+    const room = 200 - 'Halfway there! '.length - ' Seed on 3 days in a week and get a reserved slot. How at gaminginit.com'.length;
+    const line = `${'x'.repeat(room - TEAM_LONGEST - 4)}{team} {score}`;
+    const sent = milestones(
+      {
+        key: 'Europe#1',
+        startedAt: 0,
+        lastSeenAt: 0,
+        liveAt: 0,
+        summarisable: true,
+        peakPlayers: 40,
+        players: {},
+        factionScores: [{ name: 'L'.repeat(TEAM_LONGEST), score: 100 }],
+      },
+      0,
+      { siteHost: 'gaminginit.com', scoreToWin: 100 },
+      vip,
+      () => 0,
+      resolveLines((save({}, 'halfwayOther', [line]) as { saved: SavedLines }).saved),
+    );
+
+    expect(sent[0]?.text.length).toBe(200);
+    expect(sent[0]?.text.endsWith('…')).toBe(false);
+  });
 });
 
 describe('buildLinesPage', () => {
@@ -120,6 +159,7 @@ describe('buildLinesPage', () => {
       off: null,
       lines: ['Green on {score}.'],
       values: { team: 'Manticore', score: '90' },
+      longest: { team: 'x'.repeat(TEAM_LONGEST), score: '90' },
       before: '',
       after: ' Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
       changed: { at: 5, by: '42', byName: 'Sarge' },

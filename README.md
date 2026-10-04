@@ -1105,6 +1105,9 @@ scores, any other team) has its own editor:
 - Each line shows the whole message as it goes out in game, with what the bot adds before and after it (such as
   "Halfway there!" and the seeding call to action) and its placeholders filled in, and how many of the game's 200
   characters it uses. A line that doesn't fit, or has a placeholder the bot can't fill in for that list, can't be saved.
+  The count takes each placeholder at the longest it can be when the message goes out, not as the preview shows it:
+  the halfway `{score}` as the winning score (the leader can be anywhere from half of it up), and `{team}` as 16
+  characters (the server may spell a faction its own way, and any other team could be called anything).
   The lines are checked against the bot's settings now (`SITE_URL`, VIP, `SCORE_TO_WIN`, `LIVE_THRESHOLD`); if those
   change and a saved line no longer fits, the page marks it, and the bot cuts it short with "…" until it is changed.
 - Nothing changes until staff press Save. The next message of that kind uses the new lines.
