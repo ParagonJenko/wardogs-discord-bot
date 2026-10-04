@@ -150,6 +150,8 @@ const NAMES: Record<string, string> = {
   'Id.Item.TAR21': 'T-21',
   'Id.Item.AK74M': 'AK74',
   'Id.Item.WEPN_029': 'Galil',
+  // Not in Warcon's list. Staff matched it with the game's own kill feed.
+  'Id.Item.WEPN_030': 'FAL',
   'Id.Item.M4': 'M4',
   'Id.Item.MP9': 'AMP-9',
   'Id.Item.Vector': 'Super-45',
@@ -299,6 +301,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.TAR21': 'assault',
   'Id.Item.AK74M': 'assault',
   'Id.Item.WEPN_029': 'assault',
+  'Id.Item.WEPN_030': 'assault',
   'Id.Item.M4': 'assault',
   'Id.Item.MP43': 'assault',
   'Id.Item.MP9': 'assault',
