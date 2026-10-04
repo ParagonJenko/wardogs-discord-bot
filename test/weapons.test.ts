@@ -141,6 +141,7 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('id.item.svdm')).toBe('SVD');
     expect(weaponName('ID.Item.BuildTool.Hammer.Large')).toBe('Large hammer');
     expect(weaponName('Id.Item.SR_04')).toBe('AMR 50');
+    expect(weaponName('Id.Item.WEPN_030')).toBe('FAL');
     expect(weaponName('Id.Item.Launcher_04')).toBe('9K333 Verba');
   });
 
@@ -187,7 +188,12 @@ describe('weaponName and weaponKind', () => {
 
 describe('weaponRole', () => {
   it('sorts the weapons the game is known to send by what they are for', () => {
-    expect(['Id.Item.AK74M', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual(['assault', 'assault', 'assault']);
+    expect(['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual([
+      'assault',
+      'assault',
+      'assault',
+      'assault',
+    ]);
     expect(weaponRole('Id.Item.LMG_02')).toBe('machine-gun');
     expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
       'marksman',
