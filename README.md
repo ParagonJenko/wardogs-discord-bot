@@ -453,21 +453,25 @@ The Node/Docker version does not have the moderation log.
 
 ## Staff page
 
-The website has a page for staff (gaminginit's `/admin`). Staff sign in with Discord, and the page shows:
+The website has a page for staff (gaminginit's `/admin`), in tabs for watching the server live, reviewing what the bot
+flagged, and any player's history. Staff sign in with Discord, and the page shows:
 
 - **Who is in game now**, from the bot's last check (every minute): each player's team, kills and deaths this match,
   time on the server today, whether they are new (first seen today, in 90 days), their
-  [Steam account](#risky-steam-accounts)'s risk, today's griefing flags, VIP and bans. Nothing while the server has not
+  [Steam account](#risky-steam-accounts)'s risk, today's headshots against what their weapons usually get
+  ([Kills and headshots](#kills-and-headshots)), today's griefing flags, VIP and bans. Nothing while the server has not
   answered for 3 minutes.
+- **The kill feed, live**: every kill a second or two after the game sends it (see below).
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
   the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
   or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
   suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
   and whether they are banned.
 - **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
-- **[Kills and headshots](#kills-and-headshots)**: the server's latest kills, who gets far more headshots than the
-  server's players get with the same weapons, over today, 7 or 30 days, and any player's every kill, with the weapon.
-  From the [kill feed](#weapon-stats).
+- **[Kills and headshots](#kills-and-headshots)**: who gets far more headshots than the server's players get with the
+  same weapons, over today, 7 or 30 days, and any player's every kill, with the weapon. From the
+  [kill feed](#weapon-stats).
+- **Any player's history**: their record (as `/player` shows it), their kills and headshots, and their team kills.
 - **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, those in game
   first, then riskiest first, with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
   scale. With `STEAM_API_KEY` only.
@@ -519,9 +523,14 @@ How it works:
   (`Staff signed in: …`, `Staff sign-in refused: …`).
 - The page reads `GET /api/admin/overview?days=1|7|30` with the session as a bearer token. Only `SITE_URL` may read it
   from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord. Each load also
-  reads the server's ban list and `ServerSettings.ini` (two RCON requests). Its Kills tab reads
-  `GET /api/admin/kills?days=1|7|30`, and `&player=<Steam ID>` for one player's kills, the same way, only while it is
-  open.
+  reads the server's ban list and `ServerSettings.ini` (two RCON requests). With it, the page reads
+  `GET /api/admin/kills?days=1|7|30` for the headshots list, and `&player=<Steam ID>` for one player's kills, the same
+  way.
+- The live kill feed is a WebSocket, `GET /api/admin/live`. A browser can't send a header with one, so the page sends
+  its session as the socket's second subprotocol (`wardogs-staff`, then the session), which keeps it out of addresses
+  and logs. The Worker checks the session and that the socket comes from `SITE_URL`, and the Durable Object keeps it
+  (up to 50 at once), sending the latest 250 kills when it opens and then each batch's kills as they come in. It closes
+  a socket whose session has run out (code 4401) at the next batch. The page closes it while its browser tab is hidden.
 - Sign-ins only go back to pages on `SITE_URL`, so a session is never handed to another site.
 
 Admin tools: the page runs the staff commands through the bot, as the signed-in staff member:
@@ -537,15 +546,16 @@ Admin tools: the page runs the staff commands through the bot, as the signed-in 
 
 ### Kills and headshots
 
-Many headshots, day after day, can be a sign of cheating. The staff page's Kills tab shows who gets them, from the
+Many headshots, day after day, can be a sign of cheating. The staff page shows who gets them, from the
 [kill feed](#weapon-stats):
 
-- **The kill feed**: the server's latest 250 kills, newest first: who killed whom, with what, from how far, on which
-  map, and whether it was a headshot, a team kill or through a wall.
+- **The kill feed, live**: the server's latest 250 kills, newest first, each a second or two after the game sends it:
+  who killed whom, with what, from how far, on which map, and whether it was a headshot, a team kill or through a wall.
+- **Today's headshots** of everyone in game, on the server list, when they are unlikely by luck.
 - **Headshots**: everyone with a headshot in the period, those in game first, then most flagged days, then least likely
   by luck, with their headshots, what is usual for their weapons, the chance by luck, and the weapon they killed most
   with.
-- **A player's kills**: any name on the tab opens their kills in the period: by weapon, by day, and each kill (their
+- **A player's kills**: any name opens their history: their kills in the period by weapon, by day, and each kill (their
   latest 1,000 a day) with whom, the weapon, headshot, distance and map.
 
 How headshots are judged:
