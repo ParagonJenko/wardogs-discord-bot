@@ -879,15 +879,15 @@ match` means `Token` in the file is not the secret.
   far a mine was from whoever laid it, or an emplacement from its target, says nothing about their aim. Each weapon
   still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
-  [Warcon](https://github.com/warcon-app/warcon)'s list. Some Warcon has no name for: `Id.Item.WEPN_030` is the FAL
-  and `Id.Item.WEPN_033` the Bushmaster M17S, as staff found in game; `Id.Item.WEPN_035` the Scout Rifle TD,
+  [Warcon](https://github.com/warcon-app/warcon)'s list. Some Warcon has no name for: `Id.Item.WEPN_030` is the FAL,
+  `WEPN_033` the Bushmaster M17S, `SMG_03` the PP-19 Vityaz, `WEPN_028` the MP5, `WEPN_026` the M1911, `WEPN_027` the
+  Deagle and `WEPN_032` the GGX 18, as staff found in game; `Id.Item.WEPN_035` the Scout Rifle TD,
   `Id.Item.Launcher_04` the 9K333 Verba and `Vehicle.Variant.Stationary.STN_05` the Stingray, as [Wardogs
   Zone](https://wardogs.zone/database), whose pages go by the game's tags, names them; and `Id.Item.SR_04` the AMR 50,
-  the one sniper rifle left. `SMG_03`, `WEPN_026`, `WEPN_027`, `WEPN_028` and `WEPN_032` are still unnamed: the MP5,
-  PP-19 Vityaz, M1911, GGX 18 and Deagle, in some order. A new one is named from its tag (`Id.Item.WEPN_099` is "WEPN
-  099") until it is added to `NAMES` in `src/weapons.ts`; the staff page lists those ([Weapons to
-  name](#kills-and-headshots)), so staff can find out what they are in game. Tags with the same name, like each side's
-  M113, or the mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel
+  the one sniper rifle left. That names all 34 of the game's weapons. A new one is named from its tag
+  (`Id.Item.WEPN_099` is "WEPN 099") until it is added to `NAMES` in `src/weapons.ts`; the staff page lists those
+  ([Weapons to name](#kills-and-headshots)), so staff can find out what they are in game. Tags with the same name,
+  like each side's M113, or the mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel
   (`Id.Vehicle.WeaponExtension.STN_03.MainBarrel`), are one weapon.
 - **Distances** are between the killer and the victim, in metres. A vehicle blowing up has none, so its average
   distance is left out.

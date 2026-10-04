@@ -145,6 +145,11 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Item.WEPN_033')).toBe('Bushmaster M17S');
     expect(weaponName('Id.Item.WEPN_035')).toBe('Scout Rifle TD');
     expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('Stingray');
+    expect(weaponName('Id.Item.SMG_03')).toBe('PP-19 Vityaz');
+    expect(weaponName('Id.Item.WEPN_028')).toBe('MP5');
+    expect(weaponName('Id.Item.WEPN_026')).toBe('M1911');
+    expect(weaponName('Id.Item.WEPN_027')).toBe('Deagle');
+    expect(weaponName('Id.Item.WEPN_032')).toBe('GGX 18');
     expect(weaponName('Id.Item.Launcher_04')).toBe('9K333 Verba');
   });
 
@@ -191,7 +196,13 @@ describe('weaponName and weaponKind', () => {
 
 describe('weaponRole', () => {
   it('sorts the weapons the game is known to send by what they are for', () => {
-    expect(['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual([
+    expect(
+      ['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.SMG_03', 'Id.Item.WEPN_028', 'Id.Item.M500'].map(
+        weaponRole,
+      ),
+    ).toEqual([
+      'assault',
+      'assault',
       'assault',
       'assault',
       'assault',
@@ -206,7 +217,12 @@ describe('weaponRole', () => {
       'marksman',
       'marksman',
     ]);
-    expect(weaponRole('Id.Item.Glock17')).toBe('sidearm');
+    expect(['Id.Item.Glock17', 'Id.Item.WEPN_026', 'Id.Item.WEPN_027', 'Id.Item.WEPN_032'].map(weaponRole)).toEqual([
+      'sidearm',
+      'sidearm',
+      'sidearm',
+      'sidearm',
+    ]);
     expect(['Id.Item.RPG7', 'Id.Item.Launcher_04', 'Id.Item.M67Grenade', 'Id.Item.IED.Explosive'].map(weaponRole)).toEqual([
       'demolition',
       'demolition',

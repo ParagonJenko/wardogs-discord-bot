@@ -144,8 +144,6 @@ const mergedKind = (a: WeaponKind, b: WeaponKind): WeaponKind => (KIND_ORDER.ind
 // Names for the tags the game is known to send, as the game's weapon and vehicle lists name them. From Warcon
 // (https://github.com/warcon-app/warcon, src/lib/causes.ts, MIT licence). The game sends no names of its own, so a tag
 // not listed here is named from its last parts. Tags are matched in any case: the game writes `ID.Item.` for some.
-// Still unnamed: Id.Item.SMG_03, WEPN_026, WEPN_027, WEPN_028 and WEPN_032, which are the MP5, the PP-19 Vityaz, the
-// M1911, the GGX 18 and the Deagle in some order.
 const NAMES: Record<string, string> = {
   'Id.Item.A91': 'A-91',
   'Id.Item.KH2002': 'KH-2002',
@@ -157,6 +155,9 @@ const NAMES: Record<string, string> = {
   'Id.Item.WEPN_033': 'Bushmaster M17S',
   'Id.Item.M4': 'M4',
   'Id.Item.MP9': 'AMP-9',
+  // Not in Warcon's list, nor the pistols below. Staff matched them with the game's own kill feed.
+  'Id.Item.SMG_03': 'PP-19 Vityaz',
+  'Id.Item.WEPN_028': 'MP5',
   'Id.Item.Vector': 'Super-45',
   'Id.Item.MP43': 'MP43',
   'Id.Item.M500': 'M500',
@@ -176,6 +177,9 @@ const NAMES: Record<string, string> = {
   'Id.Item.CombatBow': 'Compound bow',
   'Id.Item.Glock17': 'GGX 17',
   'Id.Item.Judge': 'Judge',
+  'Id.Item.WEPN_026': 'M1911',
+  'Id.Item.WEPN_032': 'GGX 18',
+  'Id.Item.WEPN_027': 'Deagle',
   'Id.Item.RPG7': 'RPG-7',
   'Id.Item.CGM4': 'MAAWS',
   'Id.Item.MMGL': 'MGL-40',
@@ -314,6 +318,8 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.M4': 'assault',
   'Id.Item.MP43': 'assault',
   'Id.Item.MP9': 'assault',
+  'Id.Item.SMG_03': 'assault',
+  'Id.Item.WEPN_028': 'assault',
   'Id.Item.Vector': 'assault',
   'Id.Item.M500': 'assault',
   'Id.Item.M249': 'machine-gun',
@@ -329,6 +335,9 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.CombatBow': 'marksman',
   'Id.Item.Glock17': 'sidearm',
   'Id.Item.Judge': 'sidearm',
+  'Id.Item.WEPN_026': 'sidearm',
+  'Id.Item.WEPN_032': 'sidearm',
+  'Id.Item.WEPN_027': 'sidearm',
   'Id.Item.RPG7': 'demolition',
   'Id.Item.CGM4': 'demolition',
   'Id.Item.MMGL': 'demolition',
