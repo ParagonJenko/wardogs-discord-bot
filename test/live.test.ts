@@ -62,6 +62,20 @@ describe('recordLive', () => {
     expect(match).toMatchObject({ kills: 4, headshots: 1, teamKills: 0, otherDeaths: 0, map: 'Kavkazi' });
   });
 
+  it('takes the longest kill from hand-held weapons only', () => {
+    const match = play([
+      death(ASH, BO, 10, { distance: 80, cause: 'Id.Item.SVDM' }),
+      death(ASH, CY, 20, { distance: 851.1, cause: 'Id.Item.ATMine' }),
+      death(ASH, BO, 30, { distance: 706.8, cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel' }),
+      death(ASH, CY, 40, { distance: 300, cause: 'Id.Buildable.BarbedWire' }),
+      death(BO, DEE, 50, { distance: 500, cause: 'Vehicle.Variant.Stationary.MistralAA' }),
+    ]);
+
+    expect(match.players.find((p) => p.steamId === ASH)).toMatchObject({ kills: 4, longest: 80, longestCause: 'Id.Item.SVDM' });
+    expect(match.players.find((p) => p.steamId === BO)).toMatchObject({ kills: 1, longest: null, longestCause: null });
+    expect(stats(match).highlights.longest).toEqual({ player: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' }, weapon: 'SVD', distance: 80 });
+  });
+
   it('counts kills close together as a multi-kill', () => {
     const match = play([death(ASH, BO, 10), death(ASH, CY, 15), death(ASH, BO, 22), death(ASH, CY, 60)]);
 
@@ -178,6 +192,13 @@ describe('liveStats', () => {
       mostHeadshots: { player: { name: 'Cy', faction: 'Lonestar' }, headshots: 1 },
       rivalry: { killer: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' }, victim: { name: 'Bo', id: 'b2b2b2b2b2b2', faction: 'Lonestar' }, kills: 4 },
     });
+  });
+
+  it('leaves out a longest kill saved before only hand-held weapons counted', () => {
+    const match = play([death(ASH, BO, 10, { distance: 120 }), death(CY, DEE, 20, { distance: 300 })]);
+    const saved = { ...match, players: match.players.map((p) => (p.steamId === CY ? { ...p, longest: 851.1, longestCause: 'Id.Item.ATMine' } : p)) };
+
+    expect(stats(saved).highlights.longest).toEqual({ player: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' }, weapon: 'AK74', distance: 120 });
   });
 
   it('has no highlights it cannot back up', () => {

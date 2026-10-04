@@ -25,7 +25,7 @@ const QUIET_MS = 20 * 60_000;
 const CLOCK_SLACK = 30;
 
 // A player in this match. `chain` is their kills in a row each within MULTI_KILL_SECONDS of the last, the last at
-// `chainTime`; `longest` is their longest kill in metres, with `longestCause`.
+// `chainTime`; `longest` is their longest kill with a hand-held weapon in metres, with `longestCause`.
 export type LivePlayer = {
   steamId: string;
   name: string;
@@ -228,7 +228,7 @@ export const recordLive = (
         k.chain = chained ? k.chain + 1 : 1;
         k.chainTime = e.time;
         k.bestChain = Math.max(k.bestChain, k.chain);
-        if (e.distance !== null && (k.longest === null || e.distance > k.longest)) {
+        if (e.distance !== null && weaponKind(e.cause) === 'weapon' && (k.longest === null || e.distance > k.longest)) {
           k.longest = e.distance;
           k.longestCause = e.cause;
         }
@@ -339,7 +339,8 @@ export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
       weapons.set(name, { ...known, kills: known.kills + kills });
     }
   }
-  const longest = best(match.players, (p) => p.longest ?? -1, 0);
+  // A match saved before only hand-held weapons counted can have another longest kill, such as a mine's.
+  const longest = best(match.players, (p) => (p.longestCause !== null && weaponKind(p.longestCause) === 'weapon' ? (p.longest ?? -1) : -1), 0);
   const multi = best(match.players, (p) => p.bestChain, 2);
   const streak = best(match.players, (p) => p.bestStreak, 3);
   const headshots = best(match.players, (p) => p.headshots, 1);
