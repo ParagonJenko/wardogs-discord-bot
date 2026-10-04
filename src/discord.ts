@@ -150,14 +150,19 @@ const colourOf = (hex: string | undefined): number | null => {
 const byScore = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
 
 // Each faction's own emoji: the Lonestar cowboy, the Valkyra bear and the Manticore's scorpion tail.
-const FACTION_EMOJI: Record<string, string> = { lonestar: '🤠', valkyra: '🐻', manticore: '🦂' };
+// A Map, like FACTION_DOT, so a faction the server calls "Constructor" doesn't find Object's own properties.
+const FACTION_EMOJI = new Map([
+  ['lonestar', '🤠'],
+  ['valkyra', '🐻'],
+  ['manticore', '🦂'],
+]);
 
 // How a faction is looked up, whatever the server calls it: "Lonestar", "LONESTAR" and "Lone Star" are the same.
 export const factionKey = (name: string): string => name.toLowerCase().replace(/[^a-z]/g, '');
 
 // A faction's own emoji and a space, or nothing for a faction without one.
 const factionEmoji = (name: string): string => {
-  const emoji = FACTION_EMOJI[factionKey(name)];
+  const emoji = FACTION_EMOJI.get(factionKey(name));
   return emoji ? `${emoji} ` : '';
 };
 
@@ -165,12 +170,16 @@ const factionEmoji = (name: string): string => {
 export const factionBadge = (name: string, colorHex?: string): string => factionEmoji(name) || dot(colorHex);
 
 // Each faction's colour in game as a dot: Lonestar blue, Manticore green, Valkyra red.
-const FACTION_DOT: Record<string, string> = { lonestar: '🔵', manticore: '🟢', valkyra: '🔴' };
+const FACTION_DOT = new Map([
+  ['lonestar', '🔵'],
+  ['manticore', '🟢'],
+  ['valkyra', '🔴'],
+]);
 
 // The dot in a faction's colour and a space, for the choices staff pick from, where a colour is quicker to spot than an
 // emoji: 🔵 Lonestar. Any other faction gets the dot nearest its colour, or nothing without one.
 export const factionDot = (name: string, colorHex?: string): string => {
-  const known = FACTION_DOT[factionKey(name)];
+  const known = FACTION_DOT.get(factionKey(name));
   return known ? `${known} ` : dot(colorHex);
 };
 

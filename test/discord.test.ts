@@ -455,6 +455,14 @@ describe('faction emojis', () => {
     expect(factionDot('Kharr', '#f4900c')).toBe('🟠 ');
     expect(factionDot('Kharr')).toBe('');
   });
+
+  it("doesn't take a faction called Constructor for one of its own", () => {
+    expect(factionDot('Constructor')).toBe('');
+    expect(factionDot('toString', '#ff3333')).toBe('🔴 ');
+    expect(buildPlayersEmbed([{ steamId: '1', name: 'Ash', kills: 1, deaths: 0, faction: 'Constructor' }]).fields).toEqual([
+      { name: 'Constructor', value: '1 player', inline: true },
+    ]);
+  });
 });
 
 describe('buildRotationEmbed', () => {

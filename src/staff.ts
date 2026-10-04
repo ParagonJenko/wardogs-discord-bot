@@ -31,6 +31,7 @@ import {
   messagePlayer,
   queueMap,
   switchFaction,
+  type FactionScore,
   type HttpClient,
   type Player,
 } from './rcon.ts';
@@ -189,11 +190,16 @@ const MAX_CHOICES = 25;
 
 const fit = (text: string): string => (text.length > MAX_CHOICE_NAME ? `${text.slice(0, MAX_CHOICE_NAME - 1)}…` : text);
 
-// "Vex · 🔴 Valkyra · 7656…": the team with its colour, to spot at a glance.
-const playerChoice = (player: Named & { faction?: string | undefined }): Choice => ({
-  name: fit([player.name.slice(0, 60), ...(player.faction ? [`${factionDot(player.faction)}${player.faction}`] : []), player.steamId].join(' · ')),
-  value: player.steamId,
-});
+// "Vex · 🔴 Valkyra · 7656…": the team with its colour, to spot at a glance. `scores` has the colour in game of a team
+// that isn't one of the game's own three.
+const playerChoice = (player: Named & { faction?: string | undefined }, scores: FactionScore[] = []): Choice => {
+  const team = (faction: string): string =>
+    `${factionDot(faction, scores.find((s) => factionKey(s.name) === factionKey(faction))?.colorHex)}${faction}`;
+  return {
+    name: fit([player.name.slice(0, 60), ...(player.faction ? [team(player.faction)] : []), player.steamId].join(' · ')),
+    value: player.steamId,
+  };
+};
 
 const matching = <T extends Named>(players: T[], typed: string): T[] => {
   const lower = typed.trim().toLowerCase();
@@ -260,9 +266,11 @@ export const suggestStaff =
     const typed = options[focused ?? ''] ?? '';
     const { rconUrl, rconPassword } = config();
     const online = (): Promise<Player[]> => fetchPlayers(rconUrl, rconPassword, http);
+    // Each team's colour in game, for the players in game.
+    const scores = async (): Promise<FactionScore[]> => (await optional(fetchStatus(rconUrl, rconPassword, http)))?.factionScores ?? [];
     const players = async (offline: boolean): Promise<Choice[]> => {
-      const [live, known] = await Promise.all([online().catch(() => []), offline ? records.knownPlayers() : []]);
-      return matching(merge(live, known), typed).map((p) => playerChoice(live.find((l) => l.steamId === p.steamId) ?? p));
+      const [live, known, teams] = await Promise.all([online().catch(() => []), offline ? records.knownPlayers() : [], scores()]);
+      return matching(merge(live, known), typed).map((p) => playerChoice(live.find((l) => l.steamId === p.steamId) ?? p, teams));
     };
     const choices = await (async (): Promise<Choice[]> => {
       if (name === 'rotations' && focused === 'rotation') return rotationChoices(await records.rotations(), typed, options['subcommand']);
@@ -282,12 +290,17 @@ export const suggestStaff =
       if (focused === 'player' && ['player', 'ban'].includes(name)) return players(true);
       if (name === 'vip' && options['subcommand'] === 'add') return players(true);
       if (name === 'vip' && options['subcommand'] === 'remove') {
-        const [serverConfig, live, known] = await Promise.all([fetchConfig(rconUrl, rconPassword, http), online().catch(() => []), records.knownPlayers()]);
-        return matching(namedIds(reservedIds(serverConfig.text), merge(live, known)), typed).map(playerChoice);
+        const [serverConfig, live, known, teams] = await Promise.all([
+          fetchConfig(rconUrl, rconPassword, http),
+          online().catch(() => []),
+          records.knownPlayers(),
+          scores(),
+        ]);
+        return matching(namedIds(reservedIds(serverConfig.text), merge(live, known)), typed).map((p) => playerChoice(p, teams));
       }
       if (name === 'unban') {
         const [bans, known] = await Promise.all([fetchBans(rconUrl, rconPassword, http), records.knownPlayers()]);
-        return matching(namedIds(bans.map((b) => b.steamId), known), typed).map(playerChoice);
+        return matching(namedIds(bans.map((b) => b.steamId), known), typed).map((p) => playerChoice(p));
       }
       const lower = typed.trim().toLowerCase();
       const named = (items: { id: string; name: string }[]): Choice[] =>
