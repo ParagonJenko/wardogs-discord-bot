@@ -16,6 +16,7 @@ import {
   buildLiveStatus,
   buildStatusEmbed,
   buildVipMessage,
+  factionDot,
   postWebhook,
   type DiscordMessage,
 } from '../src/discord.ts';
@@ -447,6 +448,20 @@ describe('faction emojis', () => {
       '🐻 **Valkyra 52**\n🦂 MANTICORE 40\n🤠 Lonestar 20',
     );
     expect(embedOf(summary)?.description).toBe('🏆 🐻 **Valkyra** won');
+  });
+
+  it('gives each faction a dot in its colour for choices: its own, or the nearest to its colour in game', () => {
+    expect(['Lonestar', 'MANTICORE', 'Valkyra'].map((name) => factionDot(name))).toEqual(['🔵 ', '🟢 ', '🔴 ']);
+    expect(factionDot('Kharr', '#f4900c')).toBe('🟠 ');
+    expect(factionDot('Kharr')).toBe('');
+  });
+
+  it("doesn't take a faction called Constructor for one of its own", () => {
+    expect(factionDot('Constructor')).toBe('');
+    expect(factionDot('toString', '#ff3333')).toBe('🔴 ');
+    expect(buildPlayersEmbed([{ steamId: '1', name: 'Ash', kills: 1, deaths: 0, faction: 'Constructor' }]).fields).toEqual([
+      { name: 'Constructor', value: '1 player', inline: true },
+    ]);
   });
 });
 

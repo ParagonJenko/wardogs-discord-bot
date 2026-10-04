@@ -566,9 +566,9 @@ describe('COMMANDS', () => {
           name: 'team',
           required: false,
           choices: [
-            { name: '🤠 Lonestar', value: 'Lonestar' },
-            { name: '🦂 Manticore', value: 'Manticore' },
-            { name: '🐻 Valkyra', value: 'Valkyra' },
+            { name: '🔵 Lonestar', value: 'Lonestar' },
+            { name: '🟢 Manticore', value: 'Manticore' },
+            { name: '🔴 Valkyra', value: 'Valkyra' },
           ],
         },
       ],
