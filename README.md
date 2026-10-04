@@ -754,8 +754,8 @@ leaderboard and in the current and recent matches has their name, their totals a
 | `days`     | How many UTC days it covers, today included: 30                                                |
 | `since`    | The UTC day the bot first had the kill feed. Kills before it have no weapon                    |
 | `kills`    | Every kill in the feed in those days, and `headshots`, how many of them were headshots         |
-| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon`, `vehicle-weapon`, `emplacement`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
-| `longest`  | The longest kill of all: `{ weapon, distance, name, id }`, or null                             |
+| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon` for hand-held, `placed`, `vehicle-weapon`, `emplacement`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
+| `longest`  | The longest kill of all with a hand-held weapon: `{ weapon, distance, name, id }`, or null     |
 
 `teams` has:
 
@@ -865,11 +865,15 @@ match` means `Token` in the file is not the secret.
 - **One feed per server.** The game sends its kills to one URL. If `[WDServerFeed]` already points at another tool,
   such as a server panel, pointing it at the bot stops that tool getting them.
 - **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
-- **What counts.** A kill counts for the weapon that made it: guns, grenades and tools, a vehicle's gun, an emplacement
-  (the L81 mortar and other fixed weapons, which the game counts as vehicles though nobody drives them), a vehicle
-  (running someone over, or blowing up with them in it) and things built, like barbed wire, which the game blames on
-  whoever built it. Suicides, falls and deaths with nobody to blame are left out. The feed does not say who is on which
-  side, so team kills count too.
+- **What counts.** A kill counts for the weapon that made it: guns, launchers, grenades and tools, things placed (mines,
+  claymores, C4, IEDs), a vehicle's gun, an emplacement (the L81 mortar and other fixed weapons, such as AA, which the
+  game counts as vehicles though nobody drives them), a vehicle (running someone over, or blowing up with them in it)
+  and things built, like barbed wire. The game blames placed and built things on whoever put them there. Suicides,
+  falls and deaths with nobody to blame are left out. The feed does not say who is on which side, so team kills count
+  too.
+- **Longest kill.** The longest kill of all, and the live match's, count hand-held weapons only (`kind` `weapon`): how
+  far a mine was from whoever laid it, or an emplacement from its target, says nothing about their aim. Each weapon
+  still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
   [Warcon](https://github.com/warcon-app/warcon)'s list. A new one is named from its tag (`Id.Item.WEPN_035` is
   "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`. Tags with the same name, like each side's M113, or the
@@ -916,7 +920,7 @@ kills and other deaths (`otherDeaths`: suicides and falls), and:
 | `feed`       | The last 40 deaths, newest first: `killer` (null for a fall or suicide) and `victim` (`name`, `id`, `faction`), `weapon`, `kind`, `distance`, `headshot`, `teamKill`, `tags` (`RoadKill`, `Penetration`, `Ricochet`, `WeaponMelee`, `VehicleExplosion`, `Falling`, `Suicide`), and the killer's `streak` and `chain` after it |
 | `players`    | The top 10 by kills, then fewest deaths: kills, deaths, headshots, team kills, `streak` (kills since they last died), `bestStreak` and the `weapon` they have the most kills with |
 | `weapons`    | The top 5 weapons this match                                                                   |
-| `highlights` | `firstBlood`, `longest` kill, `bestStreak` (3 or more), `onFire` (up to 3 players on 5 or more kills without dying now), `bestMultiKill` (2 or more kills each within 8 seconds), `mostHeadshots`, and a `rivalry` (one player killing another 3 or more times) |
+| `highlights` | `firstBlood`, `longest` kill (hand-held weapons only), `bestStreak` (3 or more), `onFire` (up to 3 players on 5 or more kills without dying now), `bestMultiKill` (2 or more kills each within 8 seconds), `mostHeadshots`, and a `rivalry` (one player killing another 3 or more times) |
 
 - **Sides.** The feed does not say who is on which side, so the bot takes it from its last check of the server. Two
   players on the same side make a team kill, which counts as neither a kill nor towards a streak.

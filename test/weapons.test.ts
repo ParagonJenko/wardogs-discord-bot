@@ -156,8 +156,15 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Vehicle.WeaponExtension.STN_03.MainBarrel')).toBe('L81 mortar');
   });
 
-  it('tells hand-held weapons from vehicles, their guns, emplacements and things built', () => {
+  it('tells hand-held weapons from things placed, vehicles, their guns, emplacements and things built', () => {
     expect(weaponKind('Id.Item.M4')).toBe('weapon');
+    expect(weaponKind('Id.Item.RPG7')).toBe('weapon');
+    expect(weaponKind('Id.Item.M67Grenade')).toBe('weapon');
+    expect(weaponKind('Id.Item.ATMine')).toBe('placed');
+    expect(weaponKind('Id.Item.Claymore')).toBe('placed');
+    expect(weaponKind('Id.Item.C4Explosive')).toBe('placed');
+    expect(weaponKind('Id.Item.IED.Explosive')).toBe('placed');
+    expect(weaponKind('Id.Item.VehicleSupplyCrate.Pallet.MunitionsSupply')).toBe('placed');
     expect(weaponKind('Id.Vehicle.WeaponExtension.WHL_05.RingMinigun')).toBe('vehicle-weapon');
     expect(weaponKind('Vehicle.Variant.Land.Wheeled.Humvee.Default')).toBe('vehicle');
     expect(weaponKind('Id.Buildable.BarbedWire')).toBe('buildable');
@@ -294,6 +301,34 @@ describe('weaponBoard', () => {
       longest: { weapon: 'SVD', distance: 650, name: 'Bo', id: 'b2b2b2b2b2b2' },
     });
     expect(JSON.stringify(board)).not.toMatch(/7656119|steamId/);
+  });
+
+  it('takes the longest kill of all from hand-held weapons only', () => {
+    const board = weaponBoard(
+      [
+        ...days,
+        recordWeaponDay({}, [
+          kill({ cause: 'Id.Item.ATMine', killerSteamId: CY, killerName: 'Cy', distance: 851.1 }),
+          kill({ cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel', killerSteamId: CY, killerName: 'Cy', distance: 706.8 }),
+          kill({ cause: 'Vehicle.Variant.Stationary.MistralAA', killerSteamId: CY, killerName: 'Cy', distance: 900 }),
+          kill({ cause: 'Id.Buildable.BarbedWire', killerSteamId: CY, killerName: 'Cy', distance: 1200 }),
+        ]),
+      ],
+      30,
+      '2026-09-20',
+      10,
+      (steamId) => ids[steamId],
+    );
+
+    expect(board.longest).toEqual({ weapon: 'SVD', distance: 650, name: 'Bo', id: 'b2b2b2b2b2b2' });
+    // Each still has its own longest kill.
+    expect(board.top.find((w) => w.name === 'AT mine')).toMatchObject({ kind: 'placed', longest: { distance: 851.1, name: 'Cy' } });
+  });
+
+  it('has no longest kill of all without a hand-held weapon’s', () => {
+    const board = weaponBoard([recordWeaponDay({}, [kill({ cause: 'Id.Item.Claymore', distance: 30 })])], 30, '2026-09-20', 10, () => undefined);
+
+    expect(board.longest).toBeNull();
   });
 
   it('gives tags of different kinds with the same name one kind, whichever came first', () => {
