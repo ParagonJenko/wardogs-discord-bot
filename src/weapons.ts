@@ -114,18 +114,23 @@ export const feedAuthorized = async (header: string | null, token: string): Prom
   return difference === 0;
 };
 
-// What sort of thing killed: a hand-held weapon (guns, grenades, tools), a vehicle's gun, a vehicle itself (run over,
-// or blown up), or something built, such as barbed wire, which the game blames on whoever built it.
-export type WeaponKind = 'weapon' | 'vehicle-weapon' | 'vehicle' | 'buildable';
+// What sort of thing killed: a hand-held weapon (guns, launchers, grenades, tools), something placed and left to go off
+// (mines, charges, a supply pallet), a vehicle's gun (an emplacement's too: AA, mortars), a vehicle itself (run over,
+// or blown up), or something built, such as barbed wire. The game blames placed and built things on whoever put them
+// there, from wherever they are now.
+export type WeaponKind = 'weapon' | 'placed' | 'vehicle-weapon' | 'vehicle' | 'buildable';
+
+const PLACED = /^Id\.Item\.(ATMine|Claymore|C4Explosive|IED\.|VehicleSupplyCrate\.)/i;
 
 export const weaponKind = (cause: string): WeaponKind => {
   if (/^Id\.Vehicle\.WeaponExtension\./i.test(cause)) return 'vehicle-weapon';
   if (/^Vehicle\./i.test(cause)) return 'vehicle';
   if (/^Id\.Buildable\./i.test(cause)) return 'buildable';
+  if (PLACED.test(cause)) return 'placed';
   return 'weapon';
 };
 
-const KIND_ORDER: WeaponKind[] = ['weapon', 'vehicle-weapon', 'vehicle', 'buildable'];
+const KIND_ORDER: WeaponKind[] = ['weapon', 'placed', 'vehicle-weapon', 'vehicle', 'buildable'];
 
 // Tags of different kinds can share a name: the Talon 9K-SAM is both a stationary vehicle and that vehicle's gun. Merged,
 // they take the kind earlier in KIND_ORDER, so the kind never depends on which tag was counted first.
@@ -366,7 +371,7 @@ export type WeaponBoard = {
   headshots: number;
   // Most kills first.
   top: WeaponRow[];
-  // The longest kill of all, and what with.
+  // The longest kill of all with a hand-held weapon, and what with.
   longest: { distance: number; weapon: string; name: string; id?: string } | null;
 };
 
@@ -399,8 +404,10 @@ export const weaponBoard = (days: WeaponDay[], period: number, since: string, co
     }
   }
   const all = [...weapons].sort(([a, x], [b, y]) => y.kills - x.kills || a.localeCompare(b));
+  // Only a hand-held weapon's kill can be the longest of all: how far a mine was from whoever laid it, or an emplacement
+  // from its target, says nothing about their aim.
   const furthest = all.reduce<[string, LongestKill] | null>((best, [name, w]) => {
-    if (w.longest === null || (best !== null && w.longest.distance <= best[1].distance)) return best;
+    if (w.kind !== 'weapon' || w.longest === null || (best !== null && w.longest.distance <= best[1].distance)) return best;
     return [name, w.longest];
   }, null);
   return {
