@@ -519,6 +519,7 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
   give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders,
   [map rotations](#map-rotations), and remove a wrongly recorded match. See below.
 - **[Rotations](#rotations-tab)**: the week, what is on the server, and a drag and drop editor for the saved rotations.
+- **[Lines](#lines-tab)**: the lines the bot says in game, to reword, add or take out.
 - **[Staff Steam accounts](#staff-steam-accounts)**: who has linked theirs, so the bot never counts them as seeders.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
@@ -1059,8 +1060,8 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
   stays live. It only counts as seeding again once it has stayed below 20 for `DROP_GRACE_MINUTES` (5) in a row, and
   only then do seeding messages start. Until then nobody gets one, however many rejoin.
 - It is the same whether the server is filling up from empty or building back up after dropping from live.
-- The opening line is picked at random from `SEEDING` in `src/lines.ts`; `{needed}` is filled in, such as
-  "15 more players". The reward after it comes from `VIP_SEED_DAYS` and `VIP_SEED_MINUTES`, so it always matches what
+- The opening line is picked at random from the seeding lines (staff change them on the [Lines tab](#lines-tab));
+  `{needed}` is filled in, such as "15 more players". The reward after it comes from `VIP_SEED_DAYS` and `VIP_SEED_MINUTES`, so it always matches what
   the bot does.
 - When a match message (below) is due on the same check, it goes first and the seeding message waits a minute.
 - Set `SEEDING_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to
@@ -1078,11 +1079,10 @@ leaderboard, the Discord and seeding:
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
-- Every line the bot says in game is in one list, `src/lines.ts`: the seeding lines, the 10-minute lines, and for halfway and 90 points
-  a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any other
-  faction. Each time a message goes out, one line is picked at random from its list (for halfway and 90 points, from
-  the leading faction's list). Add, remove or reword lines there and `npm run deploy`; `{team}`, `{score}` and
-  `{site}` are filled in. The tests check every line still fits the game's 200 characters.
+- Each message's line is picked at random from its list: the seeding lines, the 10-minute lines, and for halfway and
+  90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any
+  other faction (for halfway and 90 points, from the leading faction's list). Staff change them on the staff page's
+  [Lines tab](#lines-tab). `{team}`, `{score}` and `{site}` are filled in.
 - The halfway and 90-point messages name only the team in front. Factions are matched however the server spells them
   ("LONESTAR", "Lone Star").
 - Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst. The 90-point
@@ -1095,6 +1095,31 @@ leaderboard, the Discord and seeding:
 
 Set `MATCH_MESSAGES` to `"off"` in the `vars` block of `wrangler.jsonc` to stop them, and `SCORE_TO_WIN` if a match
 is won at a score other than 100. They need `SITE_URL`; without it none are sent.
+
+### Lines tab
+
+The [staff page](#staff-page) has a tab for the lines the bot says in game, so staff can reword them, add new ones or
+take some out without a deploy. Each list (seeding, 10 minutes in, halfway and 90 points for each faction, level
+scores, any other team) has its own editor:
+
+- Each line shows the whole message as it goes out in game, with what the bot adds before and after it (such as
+  "Halfway there!" and the seeding call to action) and its placeholders filled in, and how many of the game's 200
+  characters it uses. A line that doesn't fit, or has a placeholder the bot can't fill in for that list, can't be saved.
+  The count takes each placeholder at the longest it can be when the message goes out, not as the preview shows it:
+  the halfway `{score}` as the winning score (the leader can be anywhere from half of it up), and `{team}` as 16
+  characters (the server may spell a faction its own way, and any other team could be called anything).
+  The lines are checked against the bot's settings now (`SITE_URL`, VIP, `SCORE_TO_WIN`, `LIVE_THRESHOLD`); if those
+  change and a saved line no longer fits, the page marks it, and the bot cuts it short with "…" until it is changed.
+- Nothing changes until staff press Save. The next message of that kind uses the new lines.
+- **Use the bot's lines** puts a list back to the bot's own, in `src/lines.ts`. Lists staff never changed (or saved the
+  same as the bot's) always use the bot's own, so lines reworded in `src/lines.ts` reach them on the next deploy. Lists
+  staff changed keep staff's lines.
+- Each list says who changed it last and when. A list has 1 to 50 lines.
+- The page reads `GET /api/admin/lines` and sends changes to `POST /api/admin/lines` (`{"action": "save", "list":
+  "halfway.valkyra", "lines": ["…"]}`, or `{"action": "reset", "list": "…"}`). Each change is logged as
+  `Staff page: lines <action> "<list>" by "<staff>" (Discord user <ID>)`.
+
+The Node/Docker version has no staff page, so it says the lines in `src/lines.ts`.
 
 ## Run with Node or Docker
 

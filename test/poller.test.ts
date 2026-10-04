@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
+import { DEFAULT_LINES, type Lines } from '../src/lines.ts';
 import { createJoinCheck, createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
 import type { SeedCredit } from '../src/players.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
@@ -713,7 +714,12 @@ describe('in-game messages', () => {
 
   const on = { siteHost: 'gaminginit.com', scoreToWin: 100 };
 
-  const messagesPoller = (snapshots: Snapshot[], broadcast = vi.fn(async (_message: string) => {}), matchMessages: typeof on | null = on) => {
+  const messagesPoller = (
+    snapshots: Snapshot[],
+    broadcast = vi.fn(async (_message: string) => {}),
+    matchMessages: typeof on | null = on,
+    lines?: () => Promise<Lines>,
+  ) => {
     const queue = [...snapshots];
     const log = { info: vi.fn(), error: vi.fn() };
     let clock = 0;
@@ -728,9 +734,20 @@ describe('in-game messages', () => {
       broadcast,
       // The first line of every list, so the texts are known.
       random: () => 0,
+      ...(lines === undefined ? {} : { lines }),
     });
     return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, broadcast, log };
   };
+
+  const matchSnapshots = () => [
+    withScores(crowd(5), 0, 0),
+    withScores(crowd(22), 5, 3),
+    withScores(crowd(22), 20, 12),
+    withScores(crowd(22), 35, 20),
+    withScores(crowd(22), 52, 30),
+    withScores(crowd(22), 91, 70),
+    withScores(crowd(22), 95, 80),
+  ];
 
   it('sends each message once as the match goes on, and saves which were sent', async () => {
     const { run, broadcast, log } = messagesPoller([
@@ -769,6 +786,36 @@ describe('in-game messages', () => {
     // Halfway fails once and is not tried again; ten minutes in is a different message, due on the last check.
     expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com']);
     expect(log.error).toHaveBeenCalledWith('In-game message failed: RCON request timed out after 8000ms');
+  });
+
+  it("says the lines staff put in place of the bot's", async () => {
+    const staff: Lines = {
+      ...DEFAULT_LINES,
+      tenMinutes: ['Ten minutes in. Rules at {site}'],
+      halfway: { ...DEFAULT_LINES.halfway, valkyra: ['{team} on {score}, comrades.'] },
+      nearlyOther: ['{team} nearly there on {score}.'],
+    };
+    const { run, broadcast } = messagesPoller(matchSnapshots(), undefined, on, async () => staff);
+
+    await run(7);
+
+    expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
+      'Ten minutes in. Rules at gaminginit.com',
+      'Halfway there! Valkyra on 52, comrades. Check the leaderboard and join our Discord at gaminginit.com',
+      // Valkyra's 90-point lines are still the bot's.
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+    ]);
+  });
+
+  it("says the bot's own lines when staff's can't be read, and logs it", async () => {
+    const { run, broadcast, log } = messagesPoller(matchSnapshots(), undefined, on, async () => {
+      throw new Error('storage is down');
+    });
+
+    await run(7);
+
+    expect(broadcast.mock.calls.map(([m]) => m.split(' ')[0])).toEqual(['10', 'Halfway', 'Valkyra']);
+    expect(log.error).toHaveBeenCalledWith("Reading the in-game lines failed, so the bot's own are used: storage is down");
   });
 
   describe('while seeding', () => {
@@ -851,7 +898,7 @@ describe('in-game messages', () => {
 
     // The checks the bot runs, on one clock and store: a check on each whole minute, and a quick join check every 5
     // seconds between them. `who` says who is in game at each second.
-    const joinBot = (who: (second: number) => Player[], overrides: Partial<Config> = {}) => {
+    const joinBot = (who: (second: number) => Player[], overrides: Partial<Config> = {}, lines?: () => Promise<Lines>) => {
       let second = 0;
       const sent: [second: number, message: string][] = [];
       const broadcast = vi.fn(async (message: string) => {
@@ -866,6 +913,7 @@ describe('in-game messages', () => {
         store: memoryStore(),
         broadcast,
         random: () => 0,
+        ...(lines === undefined ? {} : { lines }),
       };
       const check = createPoller({ ...deps, fetchSnapshot: async () => snapshot(who(second)), send: vi.fn(async () => {}) });
       const joinCheck = createJoinCheck({ ...deps, fetchPlayers });
@@ -880,6 +928,17 @@ describe('in-game messages', () => {
 
     // n players, and from these seconds on, one more each.
     const joining = (n: number, ...joins: number[]) => (second: number) => crowd(n + joins.filter((at) => second >= at).length);
+
+    it("says staff's seeding lines, on joining and every 5 minutes", async () => {
+      const { runUntil, sent } = joinBot(joining(3, 100), {}, async () => ({ ...DEFAULT_LINES, seeding: ['Help us seed: {needed}'] }));
+
+      await runUntil(130);
+
+      expect(sent.map(([at, m]) => [at, m.split(' Top seeders')[0]])).toEqual([
+        [60, 'Help us seed: 17 more players'],
+        [130, 'Help us seed: 16 more players'],
+      ]);
+    });
 
     it('sends one 30 seconds after someone joins, and the 5-minute ones count from it', async () => {
       const { runUntil, sent } = joinBot(joining(3, 100));

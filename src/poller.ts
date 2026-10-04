@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { initialState, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
+import { DEFAULT_LINES, type Lines } from './lines.ts';
 import {
   joinMessageDue,
   JoinWatchSchema,
@@ -60,6 +61,8 @@ type PollerDeps = {
   broadcast?: (message: string) => Promise<void>;
   // Picks which line an in-game message uses.
   random?: () => number;
+  // The in-game lines, when staff can change them (see linespage.ts); the bot's own otherwise.
+  lines?: () => Promise<Lines>;
   // Staff's Steam IDs: they are never named as top seeders (see staffprofiles.ts). Only asked when the server goes live.
   staff?: () => Promise<ReadonlySet<string>>;
 };
@@ -176,6 +179,17 @@ export const JOIN_CHECK_MS = 5_000;
 // (LIVE_THRESHOLD): never once it has that many, even before the next check marks it live.
 const canSeedMessage = (seeding: boolean, players: number, live: number): boolean => seeding && players > 0 && players < live;
 
+// The in-game lines. If staff's can't be read, the bot's own go out, so a message is never lost to it.
+const readLines = async (lines: (() => Promise<Lines>) | undefined, log: Logger): Promise<Lines> => {
+  if (lines === undefined) return DEFAULT_LINES;
+  try {
+    return await lines();
+  } catch (error) {
+    log.error(`Reading the in-game lines failed, so the bot's own are used: ${errorText(error)}`);
+    return DEFAULT_LINES;
+  }
+};
+
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
 export const createPoller = ({
   config,
@@ -187,6 +201,7 @@ export const createPoller = ({
   stats,
   broadcast,
   random = Math.random,
+  lines,
   staff,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
@@ -251,9 +266,10 @@ export const createPoller = ({
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
+    const wording = broadcast === undefined ? DEFAULT_LINES : await readLines(lines, log);
     const { messages, send: milestone } =
       config.matchMessages !== null && broadcast !== undefined && status.players > 0
-        ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random)
+        ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random, wording)
         : { messages: state.messages, send: null };
     const seedingRule = config.seedingMessages;
     const watched = watchJoins(state.joins, steamIds(players), time, canSeedMessage(seedingNow, status.players, config.rules.live));
@@ -267,7 +283,7 @@ export const createPoller = ({
         seedingMessageDue(state.seedMessageAt, time, seedingRule, config.pollIntervalMs));
     const seedingText =
       milestone === null && seedingRule !== null && broadcast !== undefined && seedingDue
-        ? seedingMessage(status.players, config.rules.live, seedingRule, config.vip, random)
+        ? seedingMessage(status.players, config.rules.live, seedingRule, config.vip, random, wording)
         : null;
     const seedMessageAt = seedingText === null ? state.seedMessageAt : time;
     const joins = seedingText === null ? watched : { ...watched, lastJoinAt: null };
@@ -339,6 +355,7 @@ type JoinCheckDeps = {
   log: Logger;
   store: StateStore;
   random?: () => number;
+  lines?: () => Promise<Lines>;
 };
 
 // Returns a function that runs one quick join check: between the checks, while the server seeds, it reads who is in
@@ -346,7 +363,7 @@ type JoinCheckDeps = {
 // several join together). It must not run at the same time as a check, as both save the state. It answers whether to
 // keep running them: only while the last check found the server seeding. It never throws.
 export const createJoinCheck =
-  ({ config, fetchPlayers, broadcast, now, log, store, random = Math.random }: JoinCheckDeps) =>
+  ({ config, fetchPlayers, broadcast, now, log, store, random = Math.random, lines }: JoinCheckDeps) =>
   async (): Promise<boolean> => {
     try {
       const rule = config.seedingMessages;
@@ -360,7 +377,7 @@ export const createJoinCheck =
         await store.save({ ...state, joins: watched });
         return true;
       }
-      const message = seedingMessage(count, config.rules.live, rule, config.vip, random);
+      const message = seedingMessage(count, config.rules.live, rule, config.vip, random, await readLines(lines, log));
       try {
         await broadcast(message);
         log.info(`Sent in game: ${message}`);
