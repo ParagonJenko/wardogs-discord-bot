@@ -76,6 +76,15 @@ describe('recordLive', () => {
     expect(stats(match).highlights.longest).toEqual({ player: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' }, weapon: 'SVD', distance: 80 });
   });
 
+  it('lets a hand-held kill replace a longest kill saved before only hand-held weapons counted', () => {
+    const match = play([death(CY, DEE, 10, { distance: 120 })]);
+    const saved = { ...match, players: match.players.map((p) => (p.steamId === CY ? { ...p, longest: 851.1, longestCause: 'Id.Item.ATMine' } : p)) };
+    const resumed = play([death(CY, ASH, 20, { distance: 300, cause: 'Id.Item.SVDM' })], saved);
+
+    expect(resumed.players.find((p) => p.steamId === CY)).toMatchObject({ longest: 300, longestCause: 'Id.Item.SVDM' });
+    expect(stats(resumed).highlights.longest).toEqual({ player: { name: 'Cy', faction: 'Lonestar' }, weapon: 'SVD', distance: 300 });
+  });
+
   it('counts kills close together as a multi-kill', () => {
     const match = play([death(ASH, BO, 10), death(ASH, CY, 15), death(ASH, BO, 22), death(ASH, CY, 60)]);
 
