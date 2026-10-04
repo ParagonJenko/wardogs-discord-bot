@@ -65,6 +65,7 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     online: null,
     match: {},
     history: [],
+    headshots: new Map(),
     ...overrides,
   };
 };
@@ -376,6 +377,7 @@ describe('the server list on the staff page', () => {
         reserved: { ids: [DEE], maxSlots: 2 },
         serverBans: [{ steamId: DEE, reason: 'Cheating', bannedBy: null }],
         steam: { checks: new Map([[ASH, check]]), inGame: new Set([ASH, DEE, BO]), feed: new Map() },
+        headshots: new Map([[ASH, { kills: 12, headshots: 11, expected: 3.1, chance: 0.0000002, flagged: true }]]),
         ...overrides,
       }),
     );
@@ -399,10 +401,19 @@ describe('the server list on the staff page', () => {
       griefFlags: ['teamKills', 'sameTeammate'],
       teamKillsToday: 3,
       vehicleSuicidesToday: 0,
+      headshotsToday: { kills: 12, headshots: 11, expected: 3.1, chance: 0.0000002, flagged: true },
       banned: false,
       reserved: false,
     });
-    expect(list?.players[0]).toMatchObject({ kills: 2, firstSeen: '2026-10-03', steam: null, griefFlags: [], banned: true, reserved: true });
+    expect(list?.players[0]).toMatchObject({
+      kills: 2,
+      firstSeen: '2026-10-03',
+      steam: null,
+      griefFlags: [],
+      headshotsToday: null,
+      banned: true,
+      reserved: true,
+    });
     expect(list?.players[2]).toMatchObject({ faction: null, kills: null, minutesToday: 0, firstSeen: null });
   });
 

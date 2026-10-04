@@ -499,8 +499,53 @@ export const buildAdminKills = (s: KillSources & { feed: StaffKill[] }): AdminKi
     players: rows
       .slice(0, HEADSHOT_ROWS_LISTED)
       .map(({ steamId, name, ...r }) => ({ ...plain(steamId, name), ...r, inGame: s.inGame.has(steamId) })),
-    feed: s.feed.toReversed().map((k) => ({ ...killOf(k, plain), killer: plain(k.killer, k.killerName) })),
+    feed: adminFeed(s.feed),
   };
+};
+
+// Kills as the staff page shows them, newest first.
+export const adminFeed = (kills: StaffKill[]): AdminKill[] =>
+  kills.toReversed().map((k) => ({ ...killOf(k, plain), killer: plain(k.killer, k.killerName) }));
+
+// A player's headshots on one day, as the Kills tab judges them.
+export type HeadshotDay = Omit<AdminKillDay, 'day'>;
+
+// The headshots on `day` of each of `steamIds` who killed someone that day. `kept` is every day kept, as for
+// headshotRows.
+export const headshotsOn = (kept: KillDaySummary[], day: string, steamIds: Iterable<string>): Map<string, HeadshotDay> => {
+  const wanted = new Set(steamIds);
+  const server = tally(kept);
+  const own = tallies(kept.filter((d) => wanted.has(d.steamId)));
+  return new Map(
+    kept
+      .filter((d) => d.day === day && wanted.has(d.steamId))
+      .map((d): [string, HeadshotDay] => {
+        const odds = headshotOdds(d.weapons, server, own.get(d.steamId) ?? tally([]));
+        return [
+          d.steamId,
+          {
+            kills: d.kills,
+            headshots: d.headshots,
+            expected: odds === null ? null : round1(odds.expected),
+            chance: odds?.chance ?? null,
+            flagged: flaggedDay(d.kills, odds),
+          },
+        ];
+      }),
+  );
+};
+
+// The staff page's live kill feed is a WebSocket (GET /api/admin/live). Browsers can't send a header with one, so the
+// page sends its session as the second subprotocol: ['wardogs-staff', <session>]. The socket sends the latest kills
+// when it opens, then each batch's kills as they come in, newest first.
+export const STAFF_SOCKET_PROTOCOL = 'wardogs-staff';
+
+export type StaffLiveMessage = { type: 'feed'; feed: AdminKill[] } | { type: 'kills'; kills: AdminKill[] };
+
+// The session in a Sec-WebSocket-Protocol header, or null when it is not the staff page's.
+export const socketSession = (header: string | null): string | null => {
+  const [protocol, session] = (header ?? '').split(',').map((p) => p.trim());
+  return protocol === STAFF_SOCKET_PROTOCOL && session ? session : null;
 };
 
 export const buildPlayerKills = (

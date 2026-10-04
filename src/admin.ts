@@ -1,5 +1,6 @@
 import { mapName } from './discord.ts';
 import { dayFlags, FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
+import type { HeadshotDay } from './killfeed.ts';
 import { isBotBan, type BanBook, type ModAction, type ModEntry } from './moderation.ts';
 import { totals, type PlayerDay } from './players.ts';
 import type { DayRecords, OnlineSnapshot } from './profiles.ts';
@@ -147,6 +148,8 @@ export type AdminOnlinePlayer = AdminPlayer & {
   griefFlags: Flag[];
   teamKillsToday: number;
   vehicleSuicidesToday: number;
+  // Today's headshots, judged against what their weapons usually get (see killfeed.ts). Null with no kills today.
+  headshotsToday: HeadshotDay | null;
   banned: boolean;
   // On the reserved list, from the bot or by hand. Null when ServerSettings.ini could not be read.
   reserved: boolean | null;
@@ -219,6 +222,8 @@ export type AdminSources = {
   online: OnlineSnapshot | null;
   match: Record<string, { kills: number; deaths: number; faction?: string }>;
   history: DayRecords[];
+  // Today's headshots of those in game who killed someone today, by Steam ID.
+  headshots: Map<string, HeadshotDay>;
 };
 
 // The staff page lists at most this many risky accounts.
@@ -280,6 +285,7 @@ const onlinePlayers = (
         griefFlags: g === undefined ? [] : dayFlags(g),
         teamKillsToday: g?.teamKills ?? 0,
         vehicleSuicidesToday: g?.vehicleSuicides ?? 0,
+        headshotsToday: s.headshots.get(p.steamId) ?? null,
         banned: banned.has(p.steamId),
         reserved: reserved === null ? null : reserved.has(p.steamId),
       };

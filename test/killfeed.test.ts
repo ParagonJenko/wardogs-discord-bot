@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import {
+  adminFeed,
   buildAdminKills,
   buildPlayerKills,
   chanceOfAtLeast,
@@ -12,6 +13,7 @@ import {
   flaggedDay,
   headshotOdds,
   headshotRows,
+  headshotsOn,
   killDaySummaries,
   parseKillFeed,
   playerKillDays,
@@ -19,6 +21,8 @@ import {
   readKillDays,
   recordKillDay,
   recordKillFeed,
+  socketSession,
+  STAFF_SOCKET_PROTOCOL,
   tally,
   toStaffKills,
   writeKillDays,
@@ -424,5 +428,41 @@ describe('buildPlayerKills', () => {
       byDay: [],
       list: [],
     });
+  });
+});
+
+describe('the live kill feed', () => {
+  it('sends a batch newest first, as the feed shows it', () => {
+    const feed = adminFeed([kill(ASH, CY, { at: 1, headshot: true }), kill(BO, CY, { at: 2 })]);
+    expect(feed.map((k) => [k.at, k.killer.name, k.victim.name, k.weapon, k.headshot])).toEqual([
+      [2, 'Bo', 'Cy', 'AK74', false],
+      [1, 'Ash', 'Cy', 'AK74', true],
+    ]);
+  });
+
+  it('reads the session the staff page sends as the socket’s second subprotocol', () => {
+    expect(socketSession(`${STAFF_SOCKET_PROTOCOL}, abc.def`)).toBe('abc.def');
+    expect(socketSession(`${STAFF_SOCKET_PROTOCOL},abc.def`)).toBe('abc.def');
+    expect(socketSession(STAFF_SOCKET_PROTOCOL)).toBeNull();
+    expect(socketSession('chat, abc.def')).toBeNull();
+    expect(socketSession(null)).toBeNull();
+  });
+});
+
+describe('headshotsOn', () => {
+  it('judges today’s headshots of the players asked about who killed someone today', () => {
+    const kept = [
+      ...crowd('2026-10-03'),
+      ...crowd('2026-10-04'),
+      summary(ASH, '2026-10-04', { [AK]: [12, 10] }),
+      summary(BO, '2026-10-04', { [AK]: [8, 2] }),
+      summary(CY, '2026-10-03', { [AK]: [20, 5] }),
+    ];
+    const today = headshotsOn(kept, '2026-10-04', [ASH, BO, CY, DEE]);
+    expect([...today.keys()]).toEqual([ASH, BO]);
+    expect(today.get(ASH)).toMatchObject({ kills: 12, headshots: 10, flagged: true });
+    expect(today.get(ASH)?.expected).toBeCloseTo(3, 0);
+    expect(today.get(BO)).toMatchObject({ kills: 8, headshots: 2, flagged: false });
+    expect(today.get(BO)?.chance).toBeGreaterThan(0.3);
   });
 });

@@ -280,10 +280,12 @@ import {
 } from './weapons.ts';
 import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveSnapshot } from './live.ts';
 import {
+  adminFeed,
   buildAdminKills,
   buildPlayerKills,
   createKillDays,
   firstKillDay,
+  headshotsOn,
   KILL_DAYS_KEPT,
   KILL_FEED_KEY,
   killDaySummaries,
@@ -293,13 +295,17 @@ import {
   readKillDays,
   recordKillDay,
   recordKillFeed,
+  socketSession,
+  STAFF_SOCKET_PROTOCOL,
   toStaffKills,
   writeKillDays,
   type AdminKills,
   type AdminPlayerKills,
+  type HeadshotDay,
   type KillDaySummary,
   type Sql,
   type StaffKill,
+  type StaffLiveMessage,
 } from './killfeed.ts';
 
 type Env = {
@@ -325,6 +331,12 @@ const WEAPONS_LISTED = 10;
 const KILLS_REMEMBERED = 5_000;
 // Live pages open at once, at most. Each is one WebSocket to the Durable Object.
 const LIVE_VIEWERS = 500;
+// The staff page's live kill feed: its sockets are tagged apart from the live page's, and fewer may be open.
+const LIVE_TAG = 'live';
+const STAFF_TAG = 'staff';
+const STAFF_VIEWERS = 50;
+// The Worker hands the Durable Object a signed-in staff page's socket at this address, which nothing outside reaches.
+const STAFF_SOCKET_PATH = '/staff-socket';
 const DAY_MS = 24 * 60 * 60_000;
 // How far back staff can pick players who are not online.
 const KNOWN_PLAYER_DAYS = 30;
@@ -1314,6 +1326,7 @@ export class Watcher extends DurableObject<Env> {
     if (staffKills.length > 0) this.recordKillDays(day, now, staffKills);
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
+    if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     await this.broadcastLive();
     return fresh.length;
   }
@@ -1380,6 +1393,17 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
+  // Today's headshots of those in game, for the staff page's server list. A failure only leaves them out.
+  private headshotsToday(now: number, steamIds: string[]): Map<string, HeadshotDay> {
+    if (steamIds.length === 0) return new Map();
+    try {
+      return headshotsOn(this.keptKillDays(this.killSql(), now), dayOf(now), steamIds);
+    } catch (error) {
+      console.error(`Staff page: today's headshots could not be read: ${errorText(error)}`);
+      return new Map();
+    }
+  }
+
   // One player's kills over the last `days` UTC days, for the Kill feed tab.
   async adminPlayerKills(steamId: string, days: number): Promise<AdminPlayerKills> {
     const now = Date.now();
@@ -1426,7 +1450,7 @@ export class Watcher extends DurableObject<Env> {
 
   // Sends every open live page what it shows now. A page that has gone is skipped; the runtime closes it.
   private async broadcastLive(): Promise<void> {
-    const sockets = this.ctx.getWebSockets();
+    const sockets = this.ctx.getWebSockets(LIVE_TAG);
     if (sockets.length === 0) return;
     try {
       const message = JSON.stringify(await this.live());
@@ -1446,12 +1470,44 @@ export class Watcher extends DurableObject<Env> {
   // every check. The object can sleep between them; the sockets stay open.
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected a WebSocket', { status: 426 });
-    if (this.ctx.getWebSockets().length >= LIVE_VIEWERS) return new Response('Too many live pages open', { status: 503 });
+    const url = new URL(request.url);
+    if (url.pathname === STAFF_SOCKET_PATH) return this.staffSocket(Number(url.searchParams.get('until')));
+    if (this.ctx.getWebSockets(LIVE_TAG).length >= LIVE_VIEWERS) return new Response('Too many live pages open', { status: 503 });
     const snapshot = JSON.stringify(await this.live());
     const { 0: client, 1: server } = new WebSocketPair();
-    this.ctx.acceptWebSocket(server);
+    this.ctx.acceptWebSocket(server, [LIVE_TAG]);
     server.send(snapshot);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // A signed-in staff page's live kill feed (see staffSocket below), open until its session runs out (`until`). It gets
+  // the latest kills straight away, then each batch's as it comes in.
+  private async staffSocket(until: number): Promise<Response> {
+    if (this.ctx.getWebSockets(STAFF_TAG).length >= STAFF_VIEWERS) return new Response('Too many staff pages open', { status: 503 });
+    const feed = parseKillFeed(await this.ctx.storage.get(KILL_FEED_KEY));
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server, [STAFF_TAG]);
+    server.serializeAttachment({ until });
+    server.send(JSON.stringify({ type: 'feed', feed: adminFeed(feed) } satisfies StaffLiveMessage));
+    return new Response(null, { status: 101, webSocket: client, headers: { 'sec-websocket-protocol': STAFF_SOCKET_PROTOCOL } });
+  }
+
+  // Sends every open staff page a batch's kills. One whose session has run out is closed instead, with 4401: the page
+  // then asks its user to sign in again.
+  private broadcastStaff(message: StaffLiveMessage): void {
+    const sockets = this.ctx.getWebSockets(STAFF_TAG);
+    if (sockets.length === 0) return;
+    const now = Date.now();
+    const text = JSON.stringify(message);
+    for (const socket of sockets) {
+      const until = z.object({ until: z.number() }).safeParse(socket.deserializeAttachment()).data?.until ?? 0;
+      try {
+        if (until > now) socket.send(text);
+        else socket.close(4401, 'Sign in again');
+      } catch {
+        // Closing already.
+      }
+    }
   }
 
   // Pages only send pings, which the auto-response answers.
@@ -1705,6 +1761,7 @@ export class Watcher extends DurableObject<Env> {
       online,
       match: parseState(stored.get('state'))?.match?.players ?? {},
       history: recent,
+      headshots: this.headshotsToday(now, online?.players.map((p) => p.steamId) ?? []),
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);
@@ -2159,6 +2216,24 @@ const readStaffBody = async (request: Request): Promise<z.infer<typeof StaffBody
   }
 };
 
+// The staff page's live kill feed (see killfeed.ts), for a signed-in session from the website only. Sockets are not
+// bound by CORS, so the Origin is checked here. The Durable Object keeps the socket, until the session runs out.
+const staffSocket = async (
+  request: Request,
+  secret: string,
+  siteOrigin: string | null,
+  watcher: () => DurableObjectStub<Watcher>,
+): Promise<Response> => {
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected a WebSocket', { status: 426 });
+  if (siteOrigin === null || request.headers.get('origin') !== siteOrigin) return new Response('Not the staff page', { status: 403 });
+  const token = socketSession(request.headers.get('sec-websocket-protocol'));
+  const session = token === null ? null : await readSession(secret, `Bearer ${token}`, Date.now());
+  if (session === null) return new Response('Sign in again', { status: 401 });
+  const url = new URL(STAFF_SOCKET_PATH, request.url);
+  url.searchParams.set('until', String(session.expiresAt));
+  return watcher().fetch(new Request(url, request));
+};
+
 // The staff page's data, for a signed-in session only. Only the website may read it from a browser, and nothing keeps a
 // copy.
 const staffApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
@@ -2176,6 +2251,9 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   if ('missing' in config) console.error(notSetUpText(config.missing));
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
   if ('missing' in config) return Response.json({ error: notSetUpText(config.missing) }, { status: 503, headers });
+  if (request.method === 'GET' && new URL(request.url).pathname === '/api/admin/live') {
+    return staffSocket(request, config.clientSecret, siteOriginOf(vars), watcher);
+  }
   const session = await readSession(config.clientSecret, request.headers.get('authorization'), Date.now());
   if (session === null) return Response.json({ error: 'Sign in again' }, { status: 401, headers });
   const url = new URL(request.url);
