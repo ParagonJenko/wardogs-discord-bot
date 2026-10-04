@@ -465,6 +465,9 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
   suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
   and whether they are banned.
 - **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
+- **[Kills and headshots](#kills-and-headshots)**: the server's latest kills, who gets far more headshots than the
+  server's players get with the same weapons, over today, 7 or 30 days, and any player's every kill, with the weapon.
+  From the [kill feed](#weapon-stats).
 - **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, those in game
   first, then riskiest first, with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
   scale. With `STEAM_API_KEY` only.
@@ -516,7 +519,9 @@ How it works:
   (`Staff signed in: …`, `Staff sign-in refused: …`).
 - The page reads `GET /api/admin/overview?days=1|7|30` with the session as a bearer token. Only `SITE_URL` may read it
   from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord. Each load also
-  reads the server's ban list and `ServerSettings.ini` (two RCON requests).
+  reads the server's ban list and `ServerSettings.ini` (two RCON requests). Its Kills tab reads
+  `GET /api/admin/kills?days=1|7|30`, and `&player=<Steam ID>` for one player's kills, the same way, only while it is
+  open.
 - Sign-ins only go back to pages on `SITE_URL`, so a session is never handed to another site.
 
 Admin tools: the page runs the staff commands through the bot, as the signed-in staff member:
@@ -529,6 +534,39 @@ Admin tools: the page runs the staff commands through the bot, as the signed-in 
   the [moderation log](#moderation-log) and the Worker logs, with the staff member's Discord user ID and name. Each is
   also logged as `Staff page: /<command> by "<name>" (Discord user <ID>)`.
 - The page asks before anything that changes the game or the records, such as a kick, a ban or a map change.
+
+### Kills and headshots
+
+Many headshots, day after day, can be a sign of cheating. The staff page's Kills tab shows who gets them, from the
+[kill feed](#weapon-stats):
+
+- **The kill feed**: the server's latest 250 kills, newest first: who killed whom, with what, from how far, on which
+  map, and whether it was a headshot, a team kill or through a wall.
+- **Headshots**: everyone with a headshot in the period, those in game first, then most flagged days, then least likely
+  by luck, with their headshots, what is usual for their weapons, the chance by luck, and the weapon they killed most
+  with.
+- **A player's kills**: any name on the tab opens their kills in the period: by weapon, by day, and each kill (their
+  latest 1,000 a day) with whom, the weapon, headshot, distance and map.
+
+How headshots are judged:
+
+- **Usual.** For each weapon, the share of headshots everyone else got with it over the last 30 days. A weapon few
+  people use is pulled towards the share for every weapon (as if it had 20 more kills at that share), so one lucky day
+  does not decide. Added up over a player's kills by weapon, that is how many headshots a player with the server's
+  usual aim would get: `expected`. A sniper rifle gets more headshots than a machine gun, so snipers are not flagged
+  for sniping.
+- **Chance by luck** (`chance`): how often a player with that usual aim would get at least as many headshots in as many
+  kills. It treats every kill as having the player's average usual share, which never makes it look less likely than
+  it is.
+- **Flagged**: a day with **10 or more kills** and a chance **below 1 in 1,000** (`HEADSHOT_FLAG` in
+  `src/killfeed.ts`). With a few hundred players a day, an honest player has a flagged day now and then; flagged day
+  after day is the red flag.
+- Nothing is judged until the other players have 100 kills between them.
+- **A reason to look, not proof.** Watch them play, and look at their kills (distances, weapons, wallbangs), before
+  acting.
+
+The records start with the first kill after this is deployed, and keep 30 days. They are keyed by Steam ID, so only
+signed-in staff see them.
 
 ### Staff Steam accounts
 
@@ -796,7 +834,8 @@ match` means `Token` in the file is not the secret.
 - **`/removematch`** does not change weapon stats: they come from the feed, not from matches.
 - **Requests.** Each batch is one Worker request. The game sends one at most every 2 seconds while people are being
   killed, and a capture of a busy server saw about 550 an hour: some 6,600 a day for a server live 12 hours a day,
-  against the free plan's 100,000. Each is one storage write, of the day's totals and each killer's.
+  against the free plan's 100,000. Each is one storage write, of the day's totals and each killer's, and one more row
+  for each killer's day on the staff page's [Kills tab](#kills-and-headshots).
 - **Turning it off:** delete the secret (`npx wrangler secret delete KILL_FEED_TOKEN`), and the section from
   `ServerSettings.ini`. Without the secret, the bot answers the game with a 404. The stats it kept stay.
 
@@ -862,6 +901,8 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Each player's weapons        | From the kill feed: their kills, headshots and longest kill with each weapon, on each of their last 90 UTC days |
 | The live match               | From the kill feed: the match on now, for the [live page](#live-match). Its last 40 deaths, and each player's totals and streaks |
 | Each UTC day's griefing      | From the kill feed, for the [staff page](#staff-page): each player's team kills (and whom), times team killed, suicides and vehicle suicides, and the day's latest 300 team kills and vehicle suicides |
+| The latest kills             | From the kill feed, for the staff page's [Kills tab](#kills-and-headshots): the server's latest 250 kills, with the Steam IDs and names of killer and victim |
+| Each player's kills, each UTC day | From the kill feed, for the Kills tab, in the Durable Object's SQLite database: their kills and headshots, by weapon too, and each kill (their latest 1,000) with whom, with what, how far, headshot, team kill and map. Kept 30 days |
 | The server's ban list        | As at the last check, to notice bans made or lifted outside the bot ([moderation log](#moderation-log)) |
 | Each player's Steam account  | From Steam, for [risky accounts](#risky-steam-accounts): their VAC, game, community and trading bans, whether the profile is public and set up, when the account was made, and when the bot checked |
 
@@ -875,8 +916,8 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 - A successful seed is being online for more than `VIP_SEED_MINUTES` (default 10) of that seeding, and the server
   then going live. Each time the server is seeded back to live counts, so after a crash the players who get it live
   again are credited too. It marks the day it went live (UTC), once however many times it happens that day.
-- Records are kept for good. They start from the first deploy with this feature; older matches only have the
-  public top 5, without Steam IDs.
+- Records are kept for good, except as the table says (each player's kills for the Kills tab: 30 days). They start from
+  the first deploy with this feature; older matches only have the public top 5, without Steam IDs.
 - Both are stored in the same Durable Object as the bot's state, so they are covered by the free plan: a check
   writes one row for the day's totals, however many players are online.
 

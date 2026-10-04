@@ -279,6 +279,28 @@ import {
   type WeaponDay,
 } from './weapons.ts';
 import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveSnapshot } from './live.ts';
+import {
+  buildAdminKills,
+  buildPlayerKills,
+  createKillDays,
+  firstKillDay,
+  KILL_DAYS_KEPT,
+  KILL_FEED_KEY,
+  killDaySummaries,
+  parseKillFeed,
+  playerKillDays,
+  pruneKillDays,
+  readKillDays,
+  recordKillDay,
+  recordKillFeed,
+  toStaffKills,
+  writeKillDays,
+  type AdminKills,
+  type AdminPlayerKills,
+  type KillDaySummary,
+  type Sql,
+  type StaffKill,
+} from './killfeed.ts';
 
 type Env = {
   WATCHER: DurableObjectNamespace<Watcher>;
@@ -344,8 +366,9 @@ const oneAtATime = () => {
 // notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page),
 // 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam account each
 // staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what Steam said about
-// that player's account, for risky accounts) and 'rotations' (the saved map rotations, the week's plan and the rotation
-// put on the server today).
+// that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan and the rotation
+// put on the server today) and 'killFeed' (the server's latest kills, for the staff page). The staff page's kills by
+// player and day are in the SQLite database's kill_days table (see killfeed.ts).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -386,6 +409,11 @@ export class Watcher extends DurableObject<Env> {
   private steamRetryAt = 0;
   // What maps can be played with, for the staff page's rotations; it only changes with a game update.
   private rotationCatalog: { at: number; catalog: RotationCatalog } | null = null;
+  // Past days of the staff page's kills, like dayCache: only today's and yesterday's are read each time.
+  private killDayCache = new Map<string, KillDaySummary[]>();
+  // Whether the kill_days table is known to be there, and the UTC day its old rows were last deleted.
+  private killTable = false;
+  private killsPrunedOn: string | null = null;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -1233,7 +1261,16 @@ export class Watcher extends DurableObject<Env> {
     const kills = fresh.filter(isKill);
     const killers = [...new Set(kills.map((k) => k.killerSteamId))];
     const griefKey = griefDayKey(now);
-    const stored = await this.ctx.storage.get([dayKey, griefKey, 'killFeedSince', 'live', 'online', 'state', ...killers.map(playerWeaponsKey)]);
+    const stored = await this.ctx.storage.get([
+      dayKey,
+      griefKey,
+      'killFeedSince',
+      'live',
+      'online',
+      'state',
+      KILL_FEED_KEY,
+      ...killers.map(playerWeaponsKey),
+    ]);
     const oldest = dayOf(now - (PROFILE_DAYS - 1) * DAY_MS);
     const first = typeof stored.get('killFeedSince') !== 'string';
     // The feed does not say who is on which side: the bot's last check does.
@@ -1242,11 +1279,17 @@ export class Watcher extends DurableObject<Env> {
     const factionOf = (steamId: string): string | null =>
       online?.players.find((p) => p.steamId === steamId)?.faction ?? tracked[steamId]?.faction ?? null;
     const grief = hasGrief(fresh, factionOf) ? recordGrief(parseGriefDay(stored.get(griefKey)), fresh, now, factionOf) : null;
+    const staffKills = toStaffKills(kills, now, factionOf);
     const write = this.ctx.storage.put({
       live: recordLive(parseLiveMatch(stored.get('live')), fresh, now, factionOf),
       ...(grief === null ? {} : { [griefKey]: grief.day }),
       ...(first ? { killFeedSince: day } : {}),
-      ...(kills.length === 0 ? {} : { [dayKey]: recordWeaponDay(parseWeaponDay(stored.get(dayKey)), kills) }),
+      ...(kills.length === 0
+        ? {}
+        : {
+            [dayKey]: recordWeaponDay(parseWeaponDay(stored.get(dayKey)), kills),
+            [KILL_FEED_KEY]: recordKillFeed(parseKillFeed(stored.get(KILL_FEED_KEY)), staffKills),
+          }),
       ...Object.fromEntries(
         killers.map((steamId) => {
           const key = playerWeaponsKey(steamId);
@@ -1267,10 +1310,95 @@ export class Watcher extends DurableObject<Env> {
       for (const e of fresh) this.killsSeen.delete(e.eventId);
       throw error;
     }
+    // Once the batch is counted, so a batch sent again after a failed write is not added twice.
+    if (staffKills.length > 0) this.recordKillDays(day, now, staffKills);
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     await this.broadcastLive();
     return fresh.length;
+  }
+
+  // The SQLite database, with the staff page's kill_days table, which is made the first time.
+  private killSql(): Sql {
+    const sql = this.ctx.storage.sql;
+    if (!this.killTable) {
+      createKillDays(sql);
+      this.killTable = true;
+    }
+    return sql;
+  }
+
+  // A batch's kills for the staff page: each killer's day, in one transaction, and once a day the days no longer kept
+  // go. A failure is only logged, as the batch's other records are saved already.
+  private recordKillDays(day: string, now: number, kills: StaffKill[]): void {
+    try {
+      const sql = this.killSql();
+      const killers = [...new Set(kills.map((k) => k.killer))];
+      this.ctx.storage.transactionSync(() => {
+        const known = readKillDays(sql, day, killers);
+        writeKillDays(
+          sql,
+          killers.map((steamId) => recordKillDay(known.get(steamId) ?? null, steamId, day, kills.filter((k) => k.killer === steamId))),
+        );
+        if (this.killsPrunedOn !== day) pruneKillDays(sql, dayOf(now - (KILL_DAYS_KEPT - 1) * DAY_MS));
+      });
+      this.killsPrunedOn = day;
+    } catch (error) {
+      console.error(`Staff page kill records failed: ${errorText(error)}`);
+    }
+  }
+
+  // Everyone's kill days over the KILL_DAYS_KEPT UTC days to `now`, oldest first.
+  private keptKillDays(sql: Sql, now: number): KillDaySummary[] {
+    const days = Array.from({ length: KILL_DAYS_KEPT }, (_, i) => dayOf(now - (KILL_DAYS_KEPT - 1 - i) * DAY_MS));
+    const past = days.slice(0, -2);
+    const missing = past.filter((day) => !this.killDayCache.has(day));
+    for (const day of this.killDayCache.keys()) if (!past.includes(day)) this.killDayCache.delete(day);
+    if (missing.length > 0) {
+      const read = new Map(missing.map((day): [string, KillDaySummary[]] => [day, []]));
+      for (const d of killDaySummaries(sql, missing[0] ?? '', missing[missing.length - 1] ?? '')) read.get(d.day)?.push(d);
+      for (const [day, list] of read) this.killDayCache.set(day, list);
+    }
+    const fresh = killDaySummaries(sql, days[days.length - 2] ?? '', days[days.length - 1] ?? '');
+    return [...past.flatMap((day) => this.killDayCache.get(day) ?? []), ...fresh];
+  }
+
+  // The staff page's Kill feed tab: the server's latest kills, and who gets the most headshots over the last `days` UTC
+  // days.
+  async adminKills(days: number): Promise<AdminKills> {
+    const now = Date.now();
+    const stored = await this.ctx.storage.get([KILL_FEED_KEY, 'online']);
+    const sql = this.killSql();
+    return buildAdminKills({
+      now,
+      days,
+      since: firstKillDay(sql),
+      from: dayOf(now - (days - 1) * DAY_MS),
+      kept: this.keptKillDays(sql, now),
+      inGame: new Set(this.onlineNow(now, stored.get('online'))?.players.map((p) => p.steamId)),
+      feed: parseKillFeed(stored.get(KILL_FEED_KEY)),
+    });
+  }
+
+  // One player's kills over the last `days` UTC days, for the Kill feed tab.
+  async adminPlayerKills(steamId: string, days: number): Promise<AdminPlayerKills> {
+    const now = Date.now();
+    const [stored, ids] = await Promise.all([this.ctx.storage.get('online'), this.idsFor([steamId])]);
+    const online = this.onlineNow(now, stored);
+    const sql = this.killSql();
+    const from = dayOf(now - (days - 1) * DAY_MS);
+    return buildPlayerKills({
+      now,
+      days,
+      since: firstKillDay(sql),
+      from,
+      kept: this.keptKillDays(sql, now),
+      inGame: new Set(online?.players.map((p) => p.steamId)),
+      steamId,
+      rows: playerKillDays(sql, steamId, from),
+      name: online?.players.find((p) => p.steamId === steamId)?.name,
+      idOf: (id) => ids.get(id),
+    });
   }
 
   // The live page: the server and its match from the last check, and the kill feed's match while it is the one on now.
@@ -2112,9 +2240,21 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
       return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
     }
   }
-  if (route !== 'GET /api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
   const asked = Number(url.searchParams.get('days'));
   const days = ADMIN_PERIODS.find((d) => d === asked) ?? ADMIN_DEFAULT_DAYS;
+  // The Kill feed tab: the latest kills and the headshots list, or one player's kills.
+  if (route === 'GET /api/admin/kills') {
+    const player = url.searchParams.get('player');
+    if (player !== null && !/^\d{17}$/.test(player)) return Response.json({ error: 'Not a Steam ID' }, { status: 400, headers });
+    try {
+      const page = player === null ? await watcher().adminKills(days) : await watcher().adminPlayerKills(player, days);
+      return Response.json(page, { headers });
+    } catch (error) {
+      console.error(`Staff page kills failed: ${errorText(error)}`);
+      return Response.json({ error: 'The kill feed is unavailable' }, { status: 503, headers });
+    }
+  }
+  if (route !== 'GET /api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
   try {
     const overview = await watcher().adminOverview(days);
     return Response.json({ ...overview, user: { id: session.userId, name: session.name } }, { headers });
