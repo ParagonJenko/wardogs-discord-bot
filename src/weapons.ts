@@ -150,10 +150,14 @@ const NAMES: Record<string, string> = {
   'Id.Item.TAR21': 'T-21',
   'Id.Item.AK74M': 'AK74',
   'Id.Item.WEPN_029': 'Galil',
-  // Not in Warcon's list. Staff matched it with the game's own kill feed.
+  // Not in Warcon's list. Staff matched these with the game's own kill feed.
   'Id.Item.WEPN_030': 'FAL',
+  'Id.Item.WEPN_033': 'Bushmaster M17S',
   'Id.Item.M4': 'M4',
   'Id.Item.MP9': 'AMP-9',
+  // Not in Warcon's list, nor the pistols below. Staff matched them with the game's own kill feed.
+  'Id.Item.SMG_03': 'PP-19 Vityaz',
+  'Id.Item.WEPN_028': 'MP5',
   'Id.Item.Vector': 'Super-45',
   'Id.Item.MP43': 'MP43',
   'Id.Item.M500': 'M500',
@@ -165,16 +169,21 @@ const NAMES: Record<string, string> = {
   'Id.Item.Mosin': 'Mosin Nagant',
   'Id.Item.SV98': 'SV98',
   'Id.Item.MK22': 'MK22',
-  // Not in Warcon's list. The one sniper rifle left unnamed besides the Scout Rifle TD, and its kills are the AMR 50's:
-  // the longest of any hand-held weapon on average, far past the Scout Rifle's 300 m.
+  // Not in Warcon's list. Wardogs Zone's pages go by the game's tags (wardogs.zone/database/wepn_035).
+  'Id.Item.WEPN_035': 'Scout Rifle TD',
+  // Not in Warcon's list. The game's one sniper rifle left, and its kills are the longest of any hand-held weapon on
+  // average, as the .50 cal's would be.
   'Id.Item.SR_04': 'AMR 50',
   'Id.Item.CombatBow': 'Compound bow',
   'Id.Item.Glock17': 'GGX 17',
   'Id.Item.Judge': 'Judge',
+  'Id.Item.WEPN_026': 'M1911',
+  'Id.Item.WEPN_032': 'GGX 18',
+  'Id.Item.WEPN_027': 'Deagle',
   'Id.Item.RPG7': 'RPG-7',
   'Id.Item.CGM4': 'MAAWS',
   'Id.Item.MMGL': 'MGL-40',
-  // Not in Warcon's list. The one launcher the game has that is not named here.
+  // Not in Warcon's list. As Wardogs Zone names it (wardogs.zone/database/launcher_04).
   'Id.Item.Launcher_04': '9K333 Verba',
   'Id.Item.M67Grenade': 'M67 frag grenade',
   'Id.Item.C4Explosive': 'C4 charge',
@@ -221,6 +230,9 @@ const NAMES: Record<string, string> = {
   'Vehicle.Variant.Stationary.Phalanx': 'Vanguard CIWS',
   'Vehicle.Variant.Stationary.Mortar': 'L81 mortar',
   'Vehicle.Variant.Stationary.MistralAA': 'Talon 9K-SAM',
+  // Not in Warcon's list. The anti-armour drone launcher, as Wardogs Zone names it
+  // (wardogs.zone/database/stationary-stn_05).
+  'Vehicle.Variant.Stationary.STN_05': 'Stingray',
   'Vehicle.Variant.Stationary.Loudspeaker': 'Loudspeaker',
   'Id.Vehicle.WeaponExtension.ROT_02.30mmCannon': 'Havoc 2A42 autocannon',
   'Id.Vehicle.WeaponExtension.ROT_02.122mm': 'Havoc B-13 rockets',
@@ -244,7 +256,7 @@ const BY_TAG = new Map(Object.entries(NAMES).map(([cause, name]) => [cause.toLow
 // Whether the bot has a name for a tag, rather than making one from the tag.
 export const isNamed = (cause: string): boolean => BY_TAG.has(cause.toLowerCase());
 
-// `WEPN_035` → `WEPN 035`, `MountedMachineGuns` → `Mounted machine guns`. A code name keeps its capitals.
+// `WEPN_099` → `WEPN 099`, `MountedMachineGuns` → `Mounted machine guns`. A code name keeps its capitals.
 const words = (part: string): string =>
   part
     .replace(/_/g, ' ')
@@ -302,9 +314,12 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.AK74M': 'assault',
   'Id.Item.WEPN_029': 'assault',
   'Id.Item.WEPN_030': 'assault',
+  'Id.Item.WEPN_033': 'assault',
   'Id.Item.M4': 'assault',
   'Id.Item.MP43': 'assault',
   'Id.Item.MP9': 'assault',
+  'Id.Item.SMG_03': 'assault',
+  'Id.Item.WEPN_028': 'assault',
   'Id.Item.Vector': 'assault',
   'Id.Item.M500': 'assault',
   'Id.Item.M249': 'machine-gun',
@@ -315,10 +330,14 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.Mosin': 'marksman',
   'Id.Item.SV98': 'marksman',
   'Id.Item.MK22': 'marksman',
+  'Id.Item.WEPN_035': 'marksman',
   'Id.Item.SR_04': 'marksman',
   'Id.Item.CombatBow': 'marksman',
   'Id.Item.Glock17': 'sidearm',
   'Id.Item.Judge': 'sidearm',
+  'Id.Item.WEPN_026': 'sidearm',
+  'Id.Item.WEPN_032': 'sidearm',
+  'Id.Item.WEPN_027': 'sidearm',
   'Id.Item.RPG7': 'demolition',
   'Id.Item.CGM4': 'demolition',
   'Id.Item.MMGL': 'demolition',

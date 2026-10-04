@@ -591,7 +591,7 @@ Many headshots, day after day, can be a sign of cheating. The staff page shows w
   with.
 - **A player's kills**: any name opens their history: their kills in the period by weapon, by day, and each kill (their
   latest 1,000 a day) with whom, the weapon, headshot, distance and map.
-- **Weapons to name**: the weapons the bot has no name for, so it names them from the game's tag (`WEPN 035`), over
+- **Weapons to name**: the weapons the bot has no name for, so it names them from the game's tag (`WEPN 099`), over
   the last 30 days, most kills first: their kills, longest kill and who used them most, those in game first. The game's
   own kill feed names them, so staff can watch one of those players and see what it is. Their kills in the live feed
   are marked too. Tell whoever runs the bot, who adds the name to `NAMES` in `src/weapons.ts`.
@@ -879,12 +879,15 @@ match` means `Token` in the file is not the secret.
   far a mine was from whoever laid it, or an emplacement from its target, says nothing about their aim. Each weapon
   still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
-  [Warcon](https://github.com/warcon-app/warcon)'s list. Three more Warcon has no name for: `Id.Item.SR_04` is the AMR
-  50, as its kills, the longest of any hand-held weapon on average, are the .50 cal's, `Id.Item.Launcher_04` the
-  9K333 Verba, the game's one launcher not named otherwise, and `Id.Item.WEPN_030` the FAL, as staff found in game. A
-  new one is named from its tag (`Id.Item.WEPN_035` is "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`;
-  the staff page lists those ([Weapons to name](#kills-and-headshots)), so staff can find out what they are in game.
-  Tags with the same name, like each side's M113, or the mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel
+  [Warcon](https://github.com/warcon-app/warcon)'s list. Some Warcon has no name for: `Id.Item.WEPN_030` is the FAL,
+  `WEPN_033` the Bushmaster M17S, `SMG_03` the PP-19 Vityaz, `WEPN_028` the MP5, `WEPN_026` the M1911, `WEPN_027` the
+  Deagle and `WEPN_032` the GGX 18, as staff found in game; `Id.Item.WEPN_035` the Scout Rifle TD,
+  `Id.Item.Launcher_04` the 9K333 Verba and `Vehicle.Variant.Stationary.STN_05` the Stingray, as [Wardogs
+  Zone](https://wardogs.zone/database), whose pages go by the game's tags, names them; and `Id.Item.SR_04` the AMR 50,
+  the one sniper rifle left. That names all 34 of the game's weapons. A new one is named from its tag
+  (`Id.Item.WEPN_099` is "WEPN 099") until it is added to `NAMES` in `src/weapons.ts`; the staff page lists those
+  ([Weapons to name](#kills-and-headshots)), so staff can find out what they are in game. Tags with the same name,
+  like each side's M113, or the mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel
   (`Id.Vehicle.WeaponExtension.STN_03.MainBarrel`), are one weapon.
 - **Distances** are between the killer and the victim, in metres. A vehicle blowing up has none, so its average
   distance is left out.
