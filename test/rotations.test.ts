@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ConfigResult, Rotation, ServerConfig } from '../src/rcon.ts';
 import {
-  aroundPlace,
   DEFAULT_ROTATION,
   editRotations,
+  fromTheStart,
   inSavedOrder,
   lastPutOnFirst,
   parseEntry,
@@ -12,14 +12,13 @@ import {
   putRotation,
   rotationDay,
   rotationName,
-  rotationPlace,
+  rotationSlot,
   hasDefault,
   seedDefault,
   serverEntries,
   setRotationEntries,
   type RotationBook,
   type RotationEntry,
-  type RotationPlace,
 } from '../src/rotations.ts';
 
 // Saturday 3 October 2026, 12:00 UTC.
@@ -354,11 +353,11 @@ describe('the rotation in ServerSettings.ini', () => {
 
 describe('putRotation', () => {
   const ok: ConfigResult = { ok: true, errors: [], ignored: [] };
-  const file = (config: Partial<ServerConfig> = {}, result: ConfigResult = ok, place: RotationPlace | null = null) => ({
+  const file = (config: Partial<ServerConfig> = {}, result: ConfigResult = ok, slot: number | null = null) => ({
     fetchConfig: vi.fn(async (): Promise<ServerConfig> => ({ revision: '7', writable: true, text: settings, ...config })),
     validate: vi.fn(async () => result),
     put: vi.fn(async () => result),
-    place: vi.fn(async () => place),
+    slot: vi.fn(async () => slot),
   });
 
   it('checks the new file, then writes it against the revision it read', async () => {
@@ -369,20 +368,24 @@ describe('putRotation', () => {
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
   });
 
-  it('carries on from where the server is, so the map just played does not come again', async () => {
+  it('starts from the first map: it goes in the slot after the one the server is on', async () => {
     // Bakurani is on, from the first slot. Written from the top, the second slot would send the server back to it.
-    const server = file({}, ok, { slot: 0, playing: BAKURANI });
-    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toEqual({ written: true, next: ZESTAFONA });
-    const text = setRotationEntries(settings, [BAKURANI, ZESTAFONA, OZETI]);
+    const server = file({}, ok, 0);
+    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toEqual({ written: true, next: OZETI });
+    const text = setRotationEntries(settings, [ZESTAFONA, OZETI, BAKURANI]);
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
   });
 
-  it('writes nothing when the server has these maps in the same order round, so it keeps its place', async () => {
-    const server = file({}, ok, { slot: 1, playing: OZETI });
+  it('writes nothing when the server already goes to the first map next', async () => {
+    const server = file({}, ok, 1);
     await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toEqual({ written: false });
-    await expect(putRotation(server, [OZETI, BAKURANI])).resolves.toEqual({ written: false });
-    expect(server.place).not.toHaveBeenCalled();
     expect(server.put).not.toHaveBeenCalled();
+  });
+
+  it('starts the same maps again from the first when the server is part-way round them', async () => {
+    const server = file({}, ok, 0);
+    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toEqual({ written: true, next: BAKURANI });
+    expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text: setRotationEntries(settings, [OZETI, BAKURANI]) });
   });
 
   it('says why when the server cannot take it', async () => {
@@ -394,69 +397,46 @@ describe('putRotation', () => {
     expect(server.fetchConfig).not.toHaveBeenCalled();
   });
 
-  it('writes nothing when it cannot tell where the server is', async () => {
+  it('writes nothing when it cannot tell which slot the server is on', async () => {
     const server = file();
-    server.place.mockRejectedValueOnce(new Error('RCON timed out'));
+    server.slot.mockRejectedValueOnce(new Error('RCON timed out'));
     await expect(putRotation(server, [ZESTAFONA])).rejects.toThrow(/timed out/);
     expect(server.put).not.toHaveBeenCalled();
   });
 });
 
-describe('aroundPlace', () => {
-  const DUSK: RotationEntry = { ...BAKURANI, lighting: 'DayEndClear' };
-  // The map the server plays next: the one in the slot after its own.
-  const next = (written: RotationEntry[], place: RotationPlace): RotationEntry | undefined => written[(place.slot + 1) % written.length];
-
-  it('puts the map after the one being played in the slot after the server\'s, keeping the order round', () => {
-    const place = { slot: 2, playing: BAKURANI };
-    const written = aroundPlace([OZETI, BAKURANI, ZESTAFONA], place);
-    expect(written).toEqual([ZESTAFONA, OZETI, BAKURANI]);
-    expect(next(written, place)).toEqual(ZESTAFONA);
-    // A slot past the end of the new list counts on round it.
-    expect(next(aroundPlace([OZETI, BAKURANI, ZESTAFONA], { slot: 4, playing: BAKURANI }), { slot: 4, playing: null })).toEqual(ZESTAFONA);
+describe('fromTheStart', () => {
+  it('puts the first map in the slot after the server\'s, and the rest after it in order round', () => {
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 0)).toEqual([ZESTAFONA, OZETI, BAKURANI]);
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 1)).toEqual([BAKURANI, ZESTAFONA, OZETI]);
+    // On the last slot, the next is the first: the rotation as it is.
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 2)).toEqual([OZETI, BAKURANI, ZESTAFONA]);
   });
 
-  it('goes back to the first map after the last', () => {
-    expect(aroundPlace([OZETI, ZESTAFONA, BAKURANI], { slot: 0, playing: BAKURANI })).toEqual([BAKURANI, OZETI, ZESTAFONA]);
+  it('counts a slot past the end of the new list on round it', () => {
+    const written = fromTheStart([OZETI, BAKURANI, ZESTAFONA], 7);
+    expect(written[8 % 3]).toEqual(OZETI);
   });
 
-  it('starts with the rotation\'s first map when the map being played is not in it', () => {
-    const place = { slot: 0, playing: BAKURANI };
-    const written = aroundPlace([OZETI, ZESTAFONA], place);
-    expect(next(written, place)).toEqual(OZETI);
-    expect(aroundPlace([OZETI, ZESTAFONA], { slot: 2, playing: null })).toEqual([ZESTAFONA, OZETI]);
-  });
-
-  it('finds the map being played by its setup first, and else by its map', () => {
-    const entries = [DUSK, OZETI, BAKURANI, ZESTAFONA];
-    expect(next(aroundPlace(entries, { slot: 0, playing: BAKURANI }), { slot: 0, playing: null })).toEqual(ZESTAFONA);
-    expect(next(aroundPlace(entries, { slot: 0, playing: { map: 'kavkazi' } }), { slot: 0, playing: null })).toEqual(OZETI);
-  });
-
-  it('writes the rotation as it is without a place', () => {
-    expect(aroundPlace([OZETI, BAKURANI], null)).toEqual([OZETI, BAKURANI]);
+  it('writes the rotation as it is without a slot', () => {
+    expect(fromTheStart([OZETI, BAKURANI], null)).toEqual([OZETI, BAKURANI]);
   });
 });
 
-describe('rotationPlace', () => {
+describe('rotationSlot', () => {
   const rotation = (entries: Rotation['entries']): Rotation => ({ enabled: true, mode: 'ordered', entries });
 
-  it('reads the slot marked now, with that entry\'s setup when it is the map being played', () => {
-    const server = rotation([
+  it('reads the slot marked now, or else the status\'s, and is null when neither says', () => {
+    const marked = rotation([
       { ...OZETI, status: null },
       { ...BAKURANI, status: 'now' },
       { ...ZESTAFONA, status: 'next' },
     ]);
-    expect(rotationPlace(server, { map: 'Kavkazi', rotationIndex: 1 })).toEqual({ slot: 1, playing: BAKURANI });
-    expect(rotationPlace(server, { map: '', rotationIndex: 1 })).toEqual({ slot: 1, playing: BAKURANI });
-    // Staff changed the map: the slot stays, and the map is the one being played.
-    expect(rotationPlace(server, { map: 'Europe', rotationIndex: 1 })).toEqual({ slot: 1, playing: { map: 'Europe' } });
-  });
-
-  it('takes the status\'s slot when no entry is marked, and is null when neither says', () => {
-    const server = rotation([{ ...OZETI, status: null }]);
-    expect(rotationPlace(server, { map: 'Kavkazi', rotationIndex: 3 })).toEqual({ slot: 3, playing: { map: 'Kavkazi' } });
-    expect(rotationPlace(server, { map: 'Kavkazi', rotationIndex: null })).toBeNull();
+    expect(rotationSlot(marked, { rotationIndex: 1 })).toBe(1);
+    expect(rotationSlot(marked, { rotationIndex: null })).toBe(1);
+    const plain = rotation([{ ...OZETI, status: null }]);
+    expect(rotationSlot(plain, { rotationIndex: 3 })).toBe(3);
+    expect(rotationSlot(plain, { rotationIndex: null })).toBeNull();
   });
 });
 

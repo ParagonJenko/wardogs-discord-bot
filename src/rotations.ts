@@ -5,9 +5,9 @@ import type { ConfigResult, MatchSetup, Rotation, ServerConfig } from './rcon.ts
 // Map rotations staff save by name, such as "Rotation 1" and "Weekend", and which one the server plays on each day of
 // the week. "Default" starts as the rotation the server had, and plays on every day without one of its own. The bot
 // puts a rotation on the server by writing its maps into ServerSettings.ini, as live builds have no other way to change
-// the rotation; the server rebuilds its rotation at once and plays it from the next map change, carrying on from the
-// slot it was on (see aroundPlace). Only the RotationEntries lines are written: whether the rotation is on, and in order
-// or random, stay as they are.
+// the rotation; the server rebuilds its rotation at once and plays it from the next map change, starting from its first
+// map (see fromTheStart). Only the RotationEntries lines are written: whether the rotation is on, and in order or
+// random, stay as they are.
 
 export type RotationEntry = { map: string } & MatchSetup;
 export type SavedRotation = { name: string; entries: RotationEntry[] };
@@ -403,8 +403,11 @@ const turnOf = <T, U>(list: T[], rotation: U[], match: (a: T, b: U) => boolean):
 
 const sameEntry = (a: RotationEntry, b: RotationEntry): boolean => key(a) === key(b);
 
+const sameEntries = (a: RotationEntry[], b: RotationEntry[]): boolean =>
+  a.length === b.length && a.every((entry, i) => b[i] !== undefined && sameEntry(entry, b[i]));
+
 // The server's rotation in the order of the saved one it is playing, as the bot writes a rotation starting part-way
-// round (see aroundPlace). `rotations` are tried in turn. Only the maps have to match, as the server may report a map's
+// round (see fromTheStart). `rotations` are tried in turn. Only the maps have to match, as the server may report a map's
 // settings differently from how they were saved. Unchanged when it is none of them.
 export const inSavedOrder = <E extends RotationEntry>(entries: E[], rotations: SavedRotation[]): E[] => {
   for (const rotation of rotations) {
@@ -421,60 +424,48 @@ export const lastPutOnFirst = (book: RotationBook): SavedRotation[] => {
   return last === null ? book.rotations : [last, ...book.rotations.filter((r) => r !== last)];
 };
 
-// Where the server is in its rotation: the slot it is on (from 0), and the map being played (with its setup when the
-// rotation's entry there is that map).
-export type RotationPlace = { slot: number; playing: RotationEntry | null };
-
-// From what the server reports: the rotation's entry marked "now" (or the status's slot, when no entry is), and the map
-// in the status. Null when the server does not say which slot it is on.
-export const rotationPlace = (rotation: Rotation, status: { map: string; rotationIndex: number | null }): RotationPlace | null => {
+// The slot (from 0) the server is on in its rotation: the entry marked "now", or else the status's. Null when neither
+// says.
+export const rotationSlot = (rotation: Rotation, status: { rotationIndex: number | null }): number | null => {
   const marked = rotation.entries.findIndex((e) => e.status === 'now');
   const slot = marked === -1 ? status.rotationIndex : marked;
-  if (slot === null || slot < 0) return null;
-  const [entry] = rotationEntries({ ...rotation, entries: rotation.entries.slice(marked, marked + 1) });
-  const playing = status.map === '' || (entry !== undefined && same(entry.map, status.map)) ? (entry ?? null) : { map: status.map };
-  return { slot, playing };
+  return slot === null || slot < 0 ? null : slot;
 };
 
-// The rotation as it is written, so the server carries on from where it is. On a change the server keeps the slot it
-// is on and goes to the slot after it in the new list, whatever map that is now, so a rotation written from the top
-// can send it back to the map just played. Instead, the slot after the server's gets the map after the one being
-// played (the first with its setup, or else with its map), or the rotation's first map when the map being played is
-// not in it, and the rest follow in order round. Without a place, the rotation is written as it is.
-export const aroundPlace = (entries: RotationEntry[], place: RotationPlace | null): RotationEntry[] => {
+// The rotation as it is written, so the server plays it from its first map at the next map change. On a change the
+// server keeps the slot it is on and goes to the next slot in the new list, whatever map is there now, so a rotation
+// written from the top would start part-way round, or send the server back to the map just played. Instead the first
+// map goes in the slot after the server's, and the rest follow in order round. Without a slot, it is written as it is.
+export const fromTheStart = (entries: RotationEntry[], slot: number | null): RotationEntry[] => {
   const n = entries.length;
-  if (place === null || n === 0) return entries;
-  const { playing } = place;
-  const exact = playing === null ? -1 : entries.findIndex((e) => sameEntry(e, playing));
-  const playingAt = exact !== -1 || playing === null ? exact : entries.findIndex((e) => same(e.map, playing.map));
-  const next = (playingAt + 1) % n;
-  const slot = (place.slot + 1) % n;
-  return entries.map((_, i) => entries[(((next + i - slot) % n) + n) % n] as RotationEntry);
+  if (slot === null || n === 0) return entries;
+  const first = (slot + 1) % n;
+  return entries.map((_, i) => entries[(((i - first) % n) + n) % n] as RotationEntry);
 };
 
 type SettingsFile = {
   fetchConfig: () => Promise<ServerConfig>;
   validate: (text: string) => Promise<ConfigResult>;
   put: (config: ServerConfig) => Promise<ConfigResult>;
-  // Where the server is in its rotation now.
-  place: () => Promise<RotationPlace | null>;
+  // The slot the server is on in its rotation now (see rotationSlot).
+  slot: () => Promise<number | null>;
 };
 
-// What putting a rotation on did: nothing, as the server had these maps in this order round already (it keeps its
-// place), or wrote them, with the map the server goes to next (null when its place could not be told).
+// What putting a rotation on did: nothing, as the server already goes to its first map next, or wrote it, with the map
+// the server goes to next (null when its slot could not be told, so the rotation was written as it is).
 export type RotationPut = { written: false } | { written: true; next: RotationEntry | null };
 
-// Puts these maps in the server's rotation, written around where the server is (see aroundPlace). Throws with the
-// reason when the server cannot be read, or would refuse or ignore the change.
+// Puts these maps in the server's rotation, so it plays them from the first at the next map change (see fromTheStart).
+// Throws with the reason when the server cannot be read, or would refuse or ignore the change.
 export const putRotation = async (file: SettingsFile, entries: RotationEntry[]): Promise<RotationPut> => {
   if (entries.length === 0) throw new Error('refusing to leave the server with no maps');
   const config = await file.fetchConfig();
-  if (turnOf(serverEntries(config.text), entries, sameEntry) !== null) return { written: false };
+  const slot = await file.slot();
+  const written = fromTheStart(entries, slot);
+  if (sameEntries(serverEntries(config.text), written)) return { written: false };
   if (!config.writable) throw new Error('the server settings are read-only over RCON');
-  const place = await file.place();
-  const written = aroundPlace(entries, place);
   const text = setRotationEntries(config.text, written);
   const problem = refusal(await file.validate(text), 'RotationEntries') ?? refusal(await file.put({ ...config, text }), 'RotationEntries');
   if (problem !== null) throw new Error(problem);
-  return { written: true, next: place === null ? null : (written[(place.slot + 1) % written.length] ?? null) };
+  return { written: true, next: slot === null ? null : (entries[0] ?? null) };
 };

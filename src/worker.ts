@@ -207,7 +207,7 @@ import {
   putRotation,
   rotationDay,
   rotationEntries,
-  rotationPlace,
+  rotationSlot,
   rotationToday,
   seedDefault,
   serverEntries,
@@ -765,13 +765,17 @@ export class Watcher extends DurableObject<Env> {
       const put = await putRotation(
         {
           ...this.settingsFile({ config, http }),
-          place: async () =>
-            rotationPlace(await fetchRotation(rconUrl, rconPassword, http), await fetchStatus(rconUrl, rconPassword, http)),
+          slot: async () =>
+            rotationSlot(await fetchRotation(rconUrl, rconPassword, http), await fetchStatus(rconUrl, rconPassword, http)),
         },
         rotation.entries,
       );
       await this.ctx.storage.put('rotations', done);
-      const next = put.written ? (put.next === null ? ', next map unknown' : `, next map ${put.next.map}`) : '';
+      const next = !put.written
+        ? ''
+        : put.next === null
+          ? ", but the server didn't say which slot it is on, so the next map is unknown"
+          : `, starting with ${put.next.map} at the next map change`;
       console.info(
         put.written
           ? `Map rotation: put ${JSON.stringify(rotation.name)} (${rotation.entries.length} maps) on the server for ${applied.day}, chosen by ${who}${next}`
