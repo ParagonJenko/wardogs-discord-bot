@@ -674,6 +674,25 @@ describe('/rotations', () => {
     });
   });
 
+  it("saves the server's rotation in the order of the one it replaces, as the bot writes it part-way round", async () => {
+    const { rotations, book } = withBook(
+      { ...parseRotationBook(undefined), rotations: [{ name: 'Rotation 1', entries: [{ map: 'Kavkazi' }, { map: 'Europe' }, { map: 'NorthAmerica' }] }] },
+      {
+        'GET /v1/rotation': [
+          200,
+          { enabled: true, mode: 'ordered', entries: [{ map: 'Europe', status: 'now' }, { map: 'NorthAmerica', lighting: 'DayClear' }, { map: 'Kavkazi' }] },
+        ],
+      },
+    );
+
+    await expect(rotations({ subcommand: 'save', rotation: 'Rotation 1' })).resolves.toEqual({
+      content: "💾 Saved the server's rotation as **Rotation 1** (3 maps), in place of the one saved before.",
+    });
+    expect(book().rotations).toEqual([
+      { name: 'Rotation 1', entries: [{ map: 'Kavkazi' }, { map: 'Europe' }, { map: 'NorthAmerica', lighting: 'DayClear' }] },
+    ]);
+  });
+
   it('plans the week, and puts a rotation planned for today on straight away', async () => {
     const { rotations, book } = withBook({ ...two, week: [null, null, null, null, null, null, null], applied: null });
 

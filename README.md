@@ -350,6 +350,14 @@ The bot puts a rotation on the server by writing its maps into `ServerSettings.i
 straight away and plays it from the next map change, so the match on now is never cut short. Only the `RotationEntries`
 lines are written: whether the rotation is on, and in order or random, stay as they are.
 
+The server keeps its place in the list when the rotation changes: it goes to the next slot in the new list, whatever map
+is there now. So the bot writes the rotation around that place: the next map is the one after the map being played, or
+the rotation's first map when the map being played is not in it. A swap no longer sends the server back to the map it
+just played, unless the rotation has that map twice in a row. The list in `ServerSettings.ini` can start part-way round, so a restart
+starts the server from there; the order round is the same. The Rotations tab and `/rotations save` show and save it in
+the saved rotation's order. A rotation the server already has, in the same order round, is not written again, so it
+keeps its place.
+
 | Command                 | What                                                                                     |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
 | `/rotations show`       | The saved rotations, the week and which one is on today; or, with `rotation`, its maps in order |

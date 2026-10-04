@@ -1,20 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ConfigResult, ServerConfig } from '../src/rcon.ts';
+import type { ConfigResult, Rotation, ServerConfig } from '../src/rcon.ts';
 import {
+  aroundPlace,
   DEFAULT_ROTATION,
   editRotations,
+  inSavedOrder,
+  lastPutOnFirst,
   parseEntry,
   parseRotationBook,
   planToday,
   putRotation,
   rotationDay,
   rotationName,
+  rotationPlace,
   hasDefault,
   seedDefault,
   serverEntries,
   setRotationEntries,
   type RotationBook,
   type RotationEntry,
+  type RotationPlace,
 } from '../src/rotations.ts';
 
 // Saturday 3 October 2026, 12:00 UTC.
@@ -349,23 +354,34 @@ describe('the rotation in ServerSettings.ini', () => {
 
 describe('putRotation', () => {
   const ok: ConfigResult = { ok: true, errors: [], ignored: [] };
-  const file = (config: Partial<ServerConfig> = {}, result: ConfigResult = ok) => ({
+  const file = (config: Partial<ServerConfig> = {}, result: ConfigResult = ok, place: RotationPlace | null = null) => ({
     fetchConfig: vi.fn(async (): Promise<ServerConfig> => ({ revision: '7', writable: true, text: settings, ...config })),
     validate: vi.fn(async () => result),
     put: vi.fn(async () => result),
+    place: vi.fn(async () => place),
   });
 
   it('checks the new file, then writes it against the revision it read', async () => {
     const server = file();
-    await expect(putRotation(server, [ZESTAFONA])).resolves.toBe(true);
+    await expect(putRotation(server, [ZESTAFONA])).resolves.toEqual({ written: true, next: null });
     const text = setRotationEntries(settings, [ZESTAFONA]);
     expect(server.validate).toHaveBeenCalledWith(text);
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
   });
 
-  it('writes nothing when the server has these maps already', async () => {
-    const server = file();
-    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toBe(false);
+  it('carries on from where the server is, so the map just played does not come again', async () => {
+    // Bakurani is on, from the first slot. Written from the top, the second slot would send the server back to it.
+    const server = file({}, ok, { slot: 0, playing: BAKURANI });
+    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toEqual({ written: true, next: ZESTAFONA });
+    const text = setRotationEntries(settings, [BAKURANI, ZESTAFONA, OZETI]);
+    expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
+  });
+
+  it('writes nothing when the server has these maps in the same order round, so it keeps its place', async () => {
+    const server = file({}, ok, { slot: 1, playing: OZETI });
+    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toEqual({ written: false });
+    await expect(putRotation(server, [OZETI, BAKURANI])).resolves.toEqual({ written: false });
+    expect(server.place).not.toHaveBeenCalled();
     expect(server.put).not.toHaveBeenCalled();
   });
 
@@ -376,5 +392,105 @@ describe('putRotation', () => {
     const server = file();
     await expect(putRotation(server, [])).rejects.toThrow(/no maps/);
     expect(server.fetchConfig).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when it cannot tell where the server is', async () => {
+    const server = file();
+    server.place.mockRejectedValueOnce(new Error('RCON timed out'));
+    await expect(putRotation(server, [ZESTAFONA])).rejects.toThrow(/timed out/);
+    expect(server.put).not.toHaveBeenCalled();
+  });
+});
+
+describe('aroundPlace', () => {
+  const DUSK: RotationEntry = { ...BAKURANI, lighting: 'DayEndClear' };
+  // The map the server plays next: the one in the slot after its own.
+  const next = (written: RotationEntry[], place: RotationPlace): RotationEntry | undefined => written[(place.slot + 1) % written.length];
+
+  it('puts the map after the one being played in the slot after the server\'s, keeping the order round', () => {
+    const place = { slot: 2, playing: BAKURANI };
+    const written = aroundPlace([OZETI, BAKURANI, ZESTAFONA], place);
+    expect(written).toEqual([ZESTAFONA, OZETI, BAKURANI]);
+    expect(next(written, place)).toEqual(ZESTAFONA);
+    // A slot past the end of the new list counts on round it.
+    expect(next(aroundPlace([OZETI, BAKURANI, ZESTAFONA], { slot: 4, playing: BAKURANI }), { slot: 4, playing: null })).toEqual(ZESTAFONA);
+  });
+
+  it('goes back to the first map after the last', () => {
+    expect(aroundPlace([OZETI, ZESTAFONA, BAKURANI], { slot: 0, playing: BAKURANI })).toEqual([BAKURANI, OZETI, ZESTAFONA]);
+  });
+
+  it('starts with the rotation\'s first map when the map being played is not in it', () => {
+    const place = { slot: 0, playing: BAKURANI };
+    const written = aroundPlace([OZETI, ZESTAFONA], place);
+    expect(next(written, place)).toEqual(OZETI);
+    expect(aroundPlace([OZETI, ZESTAFONA], { slot: 2, playing: null })).toEqual([ZESTAFONA, OZETI]);
+  });
+
+  it('finds the map being played by its setup first, and else by its map', () => {
+    const entries = [DUSK, OZETI, BAKURANI, ZESTAFONA];
+    expect(next(aroundPlace(entries, { slot: 0, playing: BAKURANI }), { slot: 0, playing: null })).toEqual(ZESTAFONA);
+    expect(next(aroundPlace(entries, { slot: 0, playing: { map: 'kavkazi' } }), { slot: 0, playing: null })).toEqual(OZETI);
+  });
+
+  it('writes the rotation as it is without a place', () => {
+    expect(aroundPlace([OZETI, BAKURANI], null)).toEqual([OZETI, BAKURANI]);
+  });
+});
+
+describe('rotationPlace', () => {
+  const rotation = (entries: Rotation['entries']): Rotation => ({ enabled: true, mode: 'ordered', entries });
+
+  it('reads the slot marked now, with that entry\'s setup when it is the map being played', () => {
+    const server = rotation([
+      { ...OZETI, status: null },
+      { ...BAKURANI, status: 'now' },
+      { ...ZESTAFONA, status: 'next' },
+    ]);
+    expect(rotationPlace(server, { map: 'Kavkazi', rotationIndex: 1 })).toEqual({ slot: 1, playing: BAKURANI });
+    expect(rotationPlace(server, { map: '', rotationIndex: 1 })).toEqual({ slot: 1, playing: BAKURANI });
+    // Staff changed the map: the slot stays, and the map is the one being played.
+    expect(rotationPlace(server, { map: 'Europe', rotationIndex: 1 })).toEqual({ slot: 1, playing: { map: 'Europe' } });
+  });
+
+  it('takes the status\'s slot when no entry is marked, and is null when neither says', () => {
+    const server = rotation([{ ...OZETI, status: null }]);
+    expect(rotationPlace(server, { map: 'Kavkazi', rotationIndex: 3 })).toEqual({ slot: 3, playing: { map: 'Kavkazi' } });
+    expect(rotationPlace(server, { map: 'Kavkazi', rotationIndex: null })).toBeNull();
+  });
+});
+
+describe('inSavedOrder', () => {
+  const saved = [
+    { name: 'Default', entries: [BAKURANI] },
+    { name: 'Rotation 1', entries: [BAKURANI, OZETI, ZESTAFONA] },
+  ];
+
+  it('turns the server\'s list to start where the saved rotation does', () => {
+    const server = [{ ...ZESTAFONA, status: 'next' }, { ...BAKURANI, status: null }, { ...OZETI, status: 'now' }];
+    expect(inSavedOrder(server, saved)).toEqual([
+      { ...BAKURANI, status: null },
+      { ...OZETI, status: 'now' },
+      { ...ZESTAFONA, status: 'next' },
+    ]);
+  });
+
+  it('matches by map when the server reports a setting differently', () => {
+    expect(inSavedOrder([{ map: 'Europe' }, { map: 'NorthAmerica' }, { map: 'Kavkazi' }], saved).map((e) => e.map)).toEqual([
+      'Kavkazi',
+      'Europe',
+      'NorthAmerica',
+    ]);
+  });
+
+  it('leaves a list that is no saved rotation as it is', () => {
+    expect(inSavedOrder([OZETI, BAKURANI, BAKURANI], saved)).toEqual([OZETI, BAKURANI, BAKURANI]);
+  });
+
+  it('tries the rotation put on last first', () => {
+    const applied = { name: 'Rotation 1', day: '2026-10-03', at: 1, by: 'schedule', pending: false };
+    expect(lastPutOnFirst({ ...book(), applied }).map((r) => r.name)).toEqual(['Rotation 1', 'Weekend']);
+    expect(lastPutOnFirst(book()).map((r) => r.name)).toEqual(['Rotation 1', 'Weekend']);
+    expect(lastPutOnFirst(book({ applied: { ...applied, name: 'Weekend' } })).map((r) => r.name)).toEqual(['Weekend', 'Rotation 1']);
   });
 });

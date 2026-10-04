@@ -37,6 +37,8 @@ import {
   DAY_CHOICES,
   DEFAULT_ROTATION,
   findRotation,
+  inSavedOrder,
+  lastPutOnFirst,
   plannedRotation,
   rotationDay,
   rotationEntries,
@@ -654,8 +656,14 @@ const runRotations = async (
   }
 
   if (sub === 'save') {
-    const entries = rotationEntries(await fetchRotation(rconUrl, rconPassword, http));
-    const replaced = findRotation(await records.rotations(), typed) !== null;
+    const book = await records.rotations();
+    const replacing = findRotation(book, typed);
+    // In the order of the rotation it is replacing, or another saved one it is, as the bot writes it part-way round.
+    const entries = inSavedOrder(rotationEntries(await fetchRotation(rconUrl, rconPassword, http)), [
+      ...(replacing === null ? [] : [replacing]),
+      ...lastPutOnFirst(book),
+    ]);
+    const replaced = replacing !== null;
     const result = await edit({ kind: 'save', name: typed, entries });
     if ('problem' in result) return { content: result.problem };
     const name = result.rotation?.name ?? typed;
