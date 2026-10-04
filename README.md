@@ -19,8 +19,8 @@ It also posts:
   edited every minute with the state, players, map, next map, score and top players.
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, and the highlights.
-- **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban and team
-  move with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
+- **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban, team
+  move and VIP added or removed with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
   in game with one of the [riskiest Steam accounts](#risky-steam-accounts).
 
 It also keeps **[map rotations](#map-rotations)** (Cloudflare only): staff save rotations by name, such as "Rotation 1"
@@ -197,8 +197,8 @@ The Node/Docker version does not post roundups.
 | `/unban`        | Staff only           | Lifts a ban                                                        |
 | `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
-| `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days, or for good with `permanent` |
-| `/vip remove`   | Staff only           | Takes a player off the reserved list; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
+| `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
+| `/vip remove`   | Staff only           | Takes a player off the reserved list, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
@@ -317,13 +317,15 @@ works when it matches exactly one player.
   server's own lighting and zones). So `/setnextmap map:Ozeti infantry_only:True` is the rotation's Ozeti, infantry
   only. `mode` and `zones` list the choices once a map is picked. The reply says the setup, such as
   "Next map: **Ozeti** · King of the Hill · Infantry only · Day, clear".
-- **`/vip add`** puts a player on the reserved list for the number of days given. It ends like automatic VIP: when
+- **`/vip add`** puts a player on the reserved list for the number of days given, and needs a `reason`: Friend,
+  Regular, Seeder, Paid or Other. `note` adds more, such as "Patreon, October", and is needed for Other. The reason
+  and note go in the staff history and the [moderation log](#moderation-log). It ends like automatic VIP: when
   the time is up, unless they have earned it by seeding by then. For a player who already has VIP from the bot, it
   sets the end to the later of the two. With `permanent` set to True instead of `days`, the slot has no end date: the
   bot leaves it on the list, as it does a slot added by hand, until staff remove it. That also makes VIP the bot gave
   earlier permanent. A reserved slot an admin added by hand in `ServerSettings.ini` is left as it is. **`/vip remove`**
   takes a player off the list, however they got there, and automatic VIP does not give it back for 7 days (`/vip add`
-  lifts that). Both take effect at the server's next restart, like automatic VIP.
+  lifts that). It takes an optional `reason`. Both take effect at the server's next restart, like automatic VIP.
 - **`/player`** shows the Steam ID with a link to the Steam profile, whether they are in game, their playtime,
   seeding and matches over the last 90 days, what Steam says about their account (see
   [Risky Steam accounts](#risky-steam-accounts)), VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
@@ -410,6 +412,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | Post                    | When                                                                                      |
 | ----------------------- | ----------------------------------------------------------------------------------------- |
 | ⚠️ Warning, 👢 Kick, 🔨 Ban, ✅ Unban, 🔀 Team move | Staff use `/warn`, `/kick`, `/ban`, `/unban` or `/switchteam`. With the player, their Steam ID, the reason, the length of a ban and who did it |
+| 🎖️ VIP added / removed  | Staff use `/vip add` or `/vip remove`. With the player, their Steam ID, the reason (Friend, Regular, Seeder, Paid or Other, and any note), how long and who did it. Not automatic VIP from seeding, which is announced in the alerts channel |
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
 | 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
@@ -457,8 +460,8 @@ The website has a page for staff (gaminginit's `/admin`). Staff sign in with Dis
 - **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, those in game
   first, then riskiest first, with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
   scale. With `STEAM_API_KEY` only.
-- **The moderation log**: every warning, kick, ban, unban and team move through the bot, with the reason and who did
-  it, and bans made or lifted outside the bot.
+- **The moderation log**: every warning, kick, ban, unban, team move and VIP added or removed through the bot, with the
+  reason and who did it, and bans made or lifted outside the bot.
 - **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
   player to join.
 - **The reserved slots**: everyone on the reserved list in `ServerSettings.ini`, with VIP from the bot and when it ends,

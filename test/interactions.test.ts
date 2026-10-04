@@ -262,6 +262,7 @@ describe('handleInteraction', () => {
             type: 1,
             options: [
               { name: 'steam_id', type: 3, value: '76561198000000001' },
+              { name: 'reason', type: 3, value: 'friend' },
               { name: 'days', type: 4, value: 30 },
             ],
           },
@@ -275,7 +276,7 @@ describe('handleInteraction', () => {
 
     expect(d.runCommand).toHaveBeenCalledWith({
       name: 'vip',
-      options: { subcommand: 'add', steam_id: '76561198000000001', days: '30' },
+      options: { subcommand: 'add', steam_id: '76561198000000001', reason: 'friend', days: '30' },
       userId: '42',
     });
   });
@@ -607,11 +608,31 @@ describe('COMMANDS', () => {
           type: 1,
           options: [
             { name: 'steam_id', autocomplete: true },
+            {
+              name: 'reason',
+              type: 3,
+              required: true,
+              choices: [
+                { name: 'Friend', value: 'friend' },
+                { name: 'Regular', value: 'regular' },
+                { name: 'Seeder', value: 'seeder' },
+                { name: 'Paid', value: 'paid' },
+                { name: 'Other', value: 'other' },
+              ],
+            },
             { name: 'days', type: 4, required: false, min_value: 1, max_value: 365 },
             { name: 'permanent', type: 5, required: false },
+            { name: 'note', type: 3, required: false, max_length: 200 },
           ],
         },
-        { name: 'remove', type: 1, options: [{ name: 'steam_id', autocomplete: true }] },
+        {
+          name: 'remove',
+          type: 1,
+          options: [
+            { name: 'steam_id', autocomplete: true },
+            { name: 'reason', type: 3, required: false, max_length: 200 },
+          ],
+        },
       ],
     });
     // Discord caps option descriptions at 100 characters.
@@ -666,11 +687,23 @@ describe('staff commands from the staff page', () => {
   it('takes a subcommand for /vip, and checks its options', () => {
     const steam_id = '76561198000000001';
 
-    expect(checkOptions('vip', { subcommand: 'add', steam_id, days: '7' })).toEqual({ options: { subcommand: 'add', steam_id, days: '7' } });
+    const reason = 'friend';
+
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, reason, days: '7' })).toEqual({ options: { subcommand: 'add', steam_id, reason, days: '7' } });
     expect(checkOptions('vip', { subcommand: 'remove', steam_id })).toEqual({ options: { subcommand: 'remove', steam_id } });
-    expect(checkOptions('vip', { subcommand: 'add', steam_id, permanent: true })).toEqual({ options: { subcommand: 'add', steam_id, permanent: 'true' } });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, reason, permanent: true })).toEqual({
+      options: { subcommand: 'add', steam_id, reason, permanent: 'true' },
+    });
     // Neither days nor permanent: /vip add says what it needs.
-    expect(checkOptions('vip', { subcommand: 'add', steam_id })).toEqual({ options: { subcommand: 'add', steam_id } });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, reason })).toEqual({ options: { subcommand: 'add', steam_id, reason } });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, days: '7' })).toEqual({ problem: '/vip needs reason.' });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, reason: 'bribe', days: '7' })).toEqual({ problem: 'Pick reason from the list.' });
+    expect(checkOptions('vip', { subcommand: 'add', steam_id, reason: 'other', note: 'x'.repeat(201), days: '7' })).toEqual({
+      problem: 'note can be at most 200 characters.',
+    });
+    expect(checkOptions('vip', { subcommand: 'remove', steam_id, reason: 'Payment ended' })).toEqual({
+      options: { subcommand: 'remove', steam_id, reason: 'Payment ended' },
+    });
     expect(checkOptions('vip', { subcommand: 'remove', steam_id, days: '7' })).toEqual({ problem: '/vip has no option called days.' });
     expect(checkOptions('vip', { steam_id })).toEqual({ problem: 'Pick add or remove.' });
   });

@@ -93,9 +93,9 @@ export type StaffRecords = {
   log: (steamId: string, entry: ModEntry) => Promise<void>;
   ban: (request: BanRequest) => Promise<BanResult>;
   unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
-  // `days` null: permanent, until staff remove it.
-  vipAdd: (request: Named & { days: number | null; by: string }) => Promise<VipAddResult>;
-  vipRemove: (request: Named & { by: string }) => Promise<VipRemoveResult>;
+  // `days` null: permanent, until staff remove it. `reason` is why, as the staff history and moderation log show it.
+  vipAdd: (request: Named & { days: number | null; reason: string; by: string; byName?: string }) => Promise<VipAddResult>;
+  vipRemove: (request: Named & { reason?: string; by: string; byName?: string }) => Promise<VipRemoveResult>;
   // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
   // the server was on when staff set it, or null when that could not be read.
   nextMap: (map: string, playing: string | null) => Promise<void>;
@@ -122,6 +122,15 @@ export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
 
 export const VIP_MAX_DAYS = 365;
+// Why staff give a player VIP with /vip add, by the value Discord sends. Other needs a note to say what it is.
+export const VIP_REASONS = [
+  { value: 'friend', name: 'Friend' },
+  { value: 'regular', name: 'Regular' },
+  { value: 'seeder', name: 'Seeder' },
+  { value: 'paid', name: 'Paid' },
+  { value: 'other', name: 'Other' },
+] as const;
+export const VIP_NOTE_MAX_LENGTH = 200;
 // The game's three teams. /switchteam only moves players to one of them: "🤠 Lonestar".
 export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
 export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionBadge(team)}${team}`, value: team }));
@@ -473,8 +482,9 @@ export const runStaffCommand =
       if ('problem' in found) return { content: found.problem };
       const { player } = found;
       if (options['subcommand'] === 'remove') {
-        log.info(`/vip remove by ${staff}: ${logged(player)}`);
-        const { outcome } = await records.vipRemove({ ...player, by });
+        const reason = text('reason');
+        log.info(`/vip remove by ${staff}: ${logged(player)}${reason ? `: ${JSON.stringify(reason)}` : ''}`);
+        const { outcome } = await records.vipRemove({ ...player, ...(reason ? { reason } : {}), by, ...named });
         if (outcome === 'staff-spot') {
           return {
             content: `${who(player)} is staff, with a staff spot that stays while their Steam account is linked. To take it away, unlink their Steam account on the staff page.`,
@@ -485,14 +495,19 @@ export const runStaffCommand =
           ? { content: `🎖️ Took ${who(player)} off the reserved list. It takes effect after the server's next restart. ${blocked}` }
           : { content: `${who(player)} wasn't on the reserved list. ${blocked}` };
       }
+      const why = VIP_REASONS.find((r) => r.value === options['reason']);
+      if (why === undefined) return { content: `Pick why they get VIP: ${VIP_REASONS.map((r) => r.name).join(', ')}.` };
+      const note = text('note');
+      if (why.value === 'other' && !note) return { content: 'Say why in note when the reason is Other.' };
+      const reason = note ? `${why.name}: ${note}` : why.name;
       const permanent = options['permanent'] === 'true';
       if (permanent && options['days'] !== undefined) return { content: 'Pick a number of days or permanent, not both.' };
       const days = permanent ? null : Math.trunc(Number(options['days']));
       if (days !== null && (!Number.isFinite(days) || days < 1 || days > VIP_MAX_DAYS)) {
         return { content: `Give VIP for 1 to ${VIP_MAX_DAYS} days, or set permanent to True.` };
       }
-      log.info(`/vip add by ${staff}: ${logged(player)} ${days === null ? 'permanently' : `for ${days} days`}`);
-      const result = await records.vipAdd({ ...player, days, by });
+      log.info(`/vip add by ${staff}: ${logged(player)} ${days === null ? 'permanently' : `for ${days} days`}: ${JSON.stringify(reason)}`);
+      const result = await records.vipAdd({ ...player, days, reason, by, ...named });
       if (result.outcome === 'already-reserved') {
         return { content: `${who(player)} already has a permanent reserved slot, with no end date. Nothing changed.` };
       }

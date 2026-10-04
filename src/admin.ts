@@ -389,7 +389,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
   const moderation = [...s.modLogs]
     .flatMap(([steamId, log]) =>
       log
-        .filter((e) => e.at >= since && !e.action.startsWith('vip'))
+        .filter((e) => e.at >= since)
         .map((e): AdminModEntry => {
           const { action, at, by, byName, reason, detail, name } = e;
           return {

@@ -3,7 +3,7 @@ import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
 import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
-import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, WARNING_MAX_LENGTH } from './staff.ts';
+import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, VIP_NOTE_MAX_LENGTH, VIP_REASONS, WARNING_MAX_LENGTH } from './staff.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
@@ -233,15 +233,26 @@ export const COMMANDS = [
         description: 'Give a player a reserved slot for a number of days, or permanently',
         options: [
           steamId('Pick the player, or type a name or Steam ID'),
+          {
+            type: STRING,
+            name: 'reason',
+            description: 'Why they get VIP; posted to the moderation log',
+            required: true,
+            choices: VIP_REASONS.map(({ name, value }) => ({ name, value })),
+          },
           { type: INTEGER, name: 'days', description: 'How many days (leave out when permanent)', required: false, min_value: 1, max_value: VIP_MAX_DAYS },
           { type: BOOLEAN, name: 'permanent', description: 'No end date, until staff remove it (default: off)', required: false },
+          { type: STRING, name: 'note', description: 'More about why (needed for Other)', required: false, max_length: VIP_NOTE_MAX_LENGTH },
         ],
       },
       {
         type: SUBCOMMAND,
         name: 'remove',
         description: 'Take a player off the reserved list; automatic VIP skips them for 7 days',
-        options: [steamId('Pick from the reserved list, or type a Steam ID')],
+        options: [
+          steamId('Pick from the reserved list, or type a Steam ID'),
+          { type: STRING, name: 'reason', description: 'Why; posted to the moderation log', required: false, max_length: VIP_NOTE_MAX_LENGTH },
+        ],
       },
     ],
   },

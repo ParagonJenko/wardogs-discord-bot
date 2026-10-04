@@ -71,7 +71,6 @@ import {
   parseServerBans,
   joinWork,
   parseModLog,
-  POSTED_ACTIONS,
   type BanRecord,
   type ModEntry,
   type ServerBan,
@@ -407,7 +406,7 @@ export class Watcher extends DurableObject<Env> {
   // Adds to a player's log, and changes their ban (null lifts it), the VIP state or the bot's copy of the server's ban
   // list (`serverBan`: the ban the bot just put on the server, or null for one it lifted) in the same write. The bot's
   // own bans go on that copy as it makes them, so the next check does not take them for bans made outside the bot.
-  // Warnings, kicks, bans, unbans and team moves then go to the moderation log channel.
+  // Every entry then goes to the moderation log channel.
   private async record(
     steamId: string,
     entry: ModEntry | null,
@@ -443,7 +442,6 @@ export class Watcher extends DurableObject<Env> {
   // Posted in the background, so a slow Discord never holds up a ban or the VIP update queued behind it. A post that
   // fails is logged, not retried: the staff history has the entry either way.
   private postModLog(steamId: string, entry: ModEntry): void {
-    if (!POSTED_ACTIONS.includes(entry.action)) return;
     const { modLogWebhookUrl, siteUrl } = this.posting();
     if (modLogWebhookUrl === undefined) return;
     this.ctx.waitUntil(
@@ -1768,7 +1766,7 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async vipAdd({ steamId, name, days, by }: Named & { days: number | null; by: string }): Promise<VipAddResult> {
+  async vipAdd({ steamId, name, days, reason, by, byName }: Named & { days: number | null; reason: string; by: string; byName?: string }): Promise<VipAddResult> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
@@ -1779,12 +1777,22 @@ export class Watcher extends DurableObject<Env> {
         return { outcome: change.outcome };
       }
       const outcome = change.outcome === 'extended' ? 'extended' : 'added';
-      await this.record(steamId, { action: 'vip-add', at: now, by, name, detail: days === null ? 'permanent' : `${days} day${days === 1 ? '' : 's'}` }, { vip: change.state });
+      const length = days === null ? 'permanent' : `${days} day${days === 1 ? '' : 's'}`;
+      const entry: ModEntry = {
+        action: 'vip-add',
+        at: now,
+        by,
+        ...(byName === undefined ? {} : { byName }),
+        name,
+        reason,
+        detail: outcome === 'extended' ? `${length} (already had VIP)` : length,
+      };
+      await this.record(steamId, entry, { vip: change.state });
       return { outcome, ...(change.until === undefined ? {} : { until: change.until }) };
     });
   }
 
-  async vipRemove({ steamId, name, by }: Named & { by: string }): Promise<VipRemoveResult> {
+  async vipRemove({ steamId, name, reason, by, byName }: Named & { reason?: string; by: string; byName?: string }): Promise<VipRemoveResult> {
     return this.serial(async () => {
       // A staff spot follows the staff member's linked Steam account: the next check would only put it back.
       if (await this.staffSteam().then((staff) => staff.has(steamId))) return { outcome: 'staff-spot' };
@@ -1792,7 +1800,17 @@ export class Watcher extends DurableObject<Env> {
       const state = parseVipState(await this.ctx.storage.get('vip'));
       const change = await removeVip({ steamId, now, state, rcon: this.settingsFile(this.rcon()) });
       const outcome = change.outcome === 'removed' ? 'removed' : 'not-reserved';
-      await this.record(steamId, { action: 'vip-remove', at: now, by, name }, { vip: change.state });
+      const entry: ModEntry = {
+        action: 'vip-remove',
+        at: now,
+        by,
+        ...(byName === undefined ? {} : { byName }),
+        name,
+        ...(reason === undefined ? {} : { reason }),
+        // Still logged: automatic VIP skips them for 7 days either way.
+        detail: outcome === 'removed' ? 'automatic VIP off for 7 days' : "wasn't on the reserved list; automatic VIP off for 7 days",
+      };
+      await this.record(steamId, entry, { vip: change.state });
       return { outcome };
     });
   }

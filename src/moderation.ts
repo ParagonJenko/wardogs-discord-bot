@@ -148,6 +148,3 @@ export const banChanges = (
       .map(([steamId, ban]) => ({ steamId, ban })),
   };
 };
-
-// The actions posted to the moderation log channel. VIP changes are not moderation.
-export const POSTED_ACTIONS: readonly ModAction[] = ['warn', 'kick', 'ban', 'unban', 'switchteam'];

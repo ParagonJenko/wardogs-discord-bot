@@ -908,6 +908,28 @@ describe('buildModLogMessage', () => {
     });
   });
 
+  it('posts VIP added and removed with the reason staff gave', () => {
+    const added = buildModLogMessage(ID, { action: 'vip-add', at: NOW, by: '42', name: 'Ash', reason: 'Paid: Patreon', detail: '30 days' }).embeds[0];
+    const removed = buildModLogMessage(ID, { action: 'vip-remove', at: NOW, by: '42', name: 'Ash', detail: 'automatic VIP off for 7 days' }).embeds[0];
+
+    expect(added).toMatchObject({
+      title: '🎖️ VIP added · Ash',
+      description: `\`${ID}\` · [Steam profile](https://steamcommunity.com/profiles/${ID})\n**Reason:** Paid: Patreon`,
+      fields: [
+        { name: 'By', value: '<@42>', inline: true },
+        { name: 'Details', value: '30 days', inline: true },
+      ],
+    });
+    expect(removed).toMatchObject({
+      title: '🎖️ VIP removed · Ash',
+      description: `\`${ID}\` · [Steam profile](https://steamcommunity.com/profiles/${ID})`,
+      fields: [
+        { name: 'By', value: '<@42>', inline: true },
+        { name: 'Details', value: 'automatic VIP off for 7 days', inline: true },
+      ],
+    });
+  });
+
   it('says when the bot did it, or when it was done outside the bot', () => {
     const by = (entry: Parameters<typeof buildModLogMessage>[1]) => buildModLogMessage(ID, entry).embeds[0]?.fields?.[0]?.value;
 
