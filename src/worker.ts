@@ -145,6 +145,7 @@ import {
   parseRoundupsPosted,
   periodDays,
   periodFor,
+  type FeedSources,
   type Period,
   type Roundup,
   type RoundupChoice,
@@ -287,6 +288,7 @@ import {
   firstKillDay,
   headshotsOn,
   KILL_DAYS_KEPT,
+  KILL_DAYS_STORED,
   KILL_FEED_KEY,
   killDaySummaries,
   parseKillFeed,
@@ -379,8 +381,8 @@ const oneAtATime = () => {
 // 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam account each
 // staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what Steam said about
 // that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan and the rotation
-// put on the server today) and 'killFeed' (the server's latest kills, for the staff page). The staff page's kills by
-// player and day are in the SQLite database's kill_days table (see killfeed.ts).
+// put on the server today) and 'killFeed' (the server's latest kills, for the staff page). Each player's kills by
+// day, for the staff page and the roundups' awards, are in the SQLite database's kill_days table (see killfeed.ts).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -719,12 +721,33 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // From the same records as the player pages. Null when nobody played in the period.
+  // From the same records as the player pages, and the kill feed's for the awards. Null when nobody played in the
+  // period.
   private async roundupFor(period: Period, now: number): Promise<Roundup | null> {
-    const [days, matches] = await Promise.all([this.recentDays(now), this.matchRecords(now)]);
-    const covered = new Set(periodDays(period));
-    const ids = await this.idsFor(days.flatMap((d) => (covered.has(d.day) ? Object.keys(d.players) : [])));
-    return buildRoundup({ period, days, matches, idOf: (steamId) => ids.get(steamId) });
+    const covered = periodDays(period);
+    const weaponKeys = covered.map((day) => weaponDayKey(Date.parse(`${day}T00:00:00Z`)));
+    const [days, matches, stored] = await Promise.all([this.recentDays(now), this.matchRecords(now), this.ctx.storage.get(weaponKeys)]);
+    const weapons = covered.map((day, i) => ({ day, weapons: parseWeaponDay(stored.get(weaponKeys[i] ?? '')) }));
+    const feed = this.roundupFeed(covered, weapons);
+    const ids = await this.idsFor([
+      ...days.flatMap((d) => (covered.includes(d.day) ? Object.keys(d.players) : [])),
+      ...(feed?.kills.map((d) => d.steamId) ?? []),
+    ]);
+    return buildRoundup({ period, days, matches, idOf: (steamId) => ids.get(steamId), ...(feed === null ? {} : { feed }) });
+  }
+
+  // The kill feed's records over a period's days. Null before the first kill, or if the database cannot be read, so
+  // the roundup goes out without its awards.
+  private roundupFeed(covered: string[], weapons: FeedSources['weapons']): FeedSources | null {
+    try {
+      const sql = this.killSql();
+      const since = firstKillDay(sql);
+      if (since === null) return null;
+      return { since, kills: killDaySummaries(sql, covered[0] ?? '', covered[covered.length - 1] ?? ''), weapons };
+    } catch (error) {
+      console.error(`Roundup awards failed: ${errorText(error)}`);
+      return null;
+    }
   }
 
   // For /roundup.
@@ -1353,7 +1376,9 @@ export class Watcher extends DurableObject<Env> {
           sql,
           killers.map((steamId) => recordKillDay(known.get(steamId) ?? null, steamId, day, kills.filter((k) => k.killer === steamId))),
         );
-        if (this.killsPrunedOn !== day) pruneKillDays(sql, dayOf(now - (KILL_DAYS_KEPT - 1) * DAY_MS));
+        if (this.killsPrunedOn !== day) {
+          pruneKillDays(sql, dayOf(now - (KILL_DAYS_STORED - 1) * DAY_MS), dayOf(now - (KILL_DAYS_KEPT - 1) * DAY_MS));
+        }
       });
       this.killsPrunedOn = day;
     } catch (error) {

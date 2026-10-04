@@ -18,7 +18,8 @@ It also posts:
 - **A [live server status](#live-server-status)** (Cloudflare only): one message in a channel of its own,
   edited every minute with the state, players, map, next map, score and top players.
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
-  kills, K/D, kills in a match, wins, MVPs, time played and seeding, and the highlights.
+  kills, K/D, kills in a match, wins, MVPs, time played and seeding, the highlights, and awards: the best assaulter,
+  support player, machine gunner, marksman, demolitions and vehicle crew, and shout-outs.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban, team
   move and VIP added or removed with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
   in game with one of the [riskiest Steam accounts](#risky-steam-accounts).
@@ -152,6 +153,35 @@ every month a roundup of the month before. Each one celebrates:
 | 🌱 Top seeders          | Seed days, then seeding time. Not [staff](#staff-steam-accounts)                       |
 | ✨ Highlights           | The biggest win, the closest finish, the map played most and the busiest day           |
 
+Then the awards. With the [kill feed](#weapon-stats) on, the top 3 by kills with each role's weapons (team kills don't
+count):
+
+| Award                   | Kills with                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| 🪖 Best assaulter       | Assault rifles, SMGs and shotguns                                                   |
+| 💣 Best support         | Mortars, the SPH-2's artillery and the other emplacements (CIWS, Talon 9K-SAM)      |
+| 🔥 Best machine gunner  | LMGs (M249 SAW, PKM)                                                                |
+| 🔭 Best marksman        | Marksman and sniper rifles, and the bow                                             |
+| 🧨 Best demolitions     | Launchers, grenades, mines, IEDs and C4                                             |
+| 🚁 Best vehicle crew    | Vehicle guns: tanks, helicopters and mounted guns                                   |
+
+And 🌟 shout-outs, one player each:
+
+| Shout-out               | Who                                                                                 |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| 💀 Headhunter           | Most headshots (fewer kills first when level)                                       |
+| 📏 Longest shot         | The longest kill with a hand-held weapon, and the weapon                            |
+| 🧰 Jack of all trades   | Kills with the most different weapons                                               |
+| 🚗 Road rage            | Most players run over, or blown up in a vehicle                                     |
+| 🔨 Bonk                 | Most melee kills: fists, the Halligan bar, hammers, drills and the defibrillator    |
+| 🤠 Quickdraw            | Most pistol kills                                                                   |
+| 📆 Ever-present         | On the server on the most days (more time played first when level)                  |
+| 🐣 Rookie of the week   | The player first seen this week (or month) who played the most. Only once the records go back 4 weeks before it |
+
+The last two come from the player records, so they need no kill feed. A weapon the bot does not know (see
+`ROLES` in `src/weapons.ts`) counts for no role. Kills from before this update still include team kills, as
+the bot did not keep them apart until then.
+
 - Names link to each player's page on the website when `SITE_URL` is set. Posts never ping anyone.
 - It goes out at `ROUNDUP_HOUR` (UTC, default `17`: 6pm in the UK in summer, 5pm in winter), on the Monday, and on the
   1st for the month. When the 1st is a Monday, both go out.
@@ -159,7 +189,11 @@ every month a roundup of the month before. Each one celebrates:
 - If the post fails, the bot tries again at each check until the end of that day. A bot deployed after that day waits
   for the next week, rather than posting a late one.
 - Anyone can see a roundup any time with `/roundup`: last week, last month, or this week or month so far.
-- They come from the [player records](#player-records), so they cover matches since those started.
+- They come from the [player records](#player-records), so they cover matches since those started. The awards from
+  the kill feed cover kills since the [staff page's kill records](#kills-and-headshots) started; the footer says so
+  when that was during the week or month.
+- Discord takes 6,000 characters a message. If it would be longer, names lose their links, and if it is still too long
+  the awards are left out.
 
 Set them in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
 
@@ -575,8 +609,9 @@ How headshots are judged:
 - **A reason to look, not proof.** Watch them play, and look at their kills (distances, weapons, wallbangs), before
   acting.
 
-The records start with the first kill after this is deployed, and keep 30 days. They are keyed by Steam ID, so only
-signed-in staff see them.
+The records start with the first kill after this is deployed, and keep each kill for 30 days. The counts (kills,
+headshots and team kills by weapon) stay 62 days, for the [roundups' awards](#roundups). They are keyed by Steam ID, so
+only signed-in staff see them.
 
 ### Staff Steam accounts
 
@@ -719,7 +754,7 @@ leaderboard and in the current and recent matches has their name, their totals a
 | `days`     | How many UTC days it covers, today included: 30                                                |
 | `since`    | The UTC day the bot first had the kill feed. Kills before it have no weapon                    |
 | `kills`    | Every kill in the feed in those days, and `headshots`, how many of them were headshots         |
-| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon`, `vehicle-weapon`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
+| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon`, `vehicle-weapon`, `emplacement`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
 | `longest`  | The longest kill of all: `{ weapon, distance, name, id }`, or null                             |
 
 `teams` has:
@@ -830,14 +865,16 @@ match` means `Token` in the file is not the secret.
 - **One feed per server.** The game sends its kills to one URL. If `[WDServerFeed]` already points at another tool,
   such as a server panel, pointing it at the bot stops that tool getting them.
 - **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
-- **What counts.** A kill counts for the weapon that made it: guns, grenades and tools, a vehicle's gun, a vehicle
+- **What counts.** A kill counts for the weapon that made it: guns, grenades and tools, a vehicle's gun, an emplacement
+  (the L81 mortar and other fixed weapons, which the game counts as vehicles though nobody drives them), a vehicle
   (running someone over, or blowing up with them in it) and things built, like barbed wire, which the game blames on
   whoever built it. Suicides, falls and deaths with nobody to blame are left out. The feed does not say who is on which
   side, so team kills count too.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
   [Warcon](https://github.com/warcon-app/warcon)'s list. A new one is named from its tag (`Id.Item.WEPN_035` is
-  "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`. Tags with the same name, like each side's M113, are one
-  weapon.
+  "WEPN 035") until it is added to `NAMES` in `src/weapons.ts`. Tags with the same name, like each side's M113, or the
+  mortar (`Vehicle.Variant.Stationary.Mortar`) and its barrel (`Id.Vehicle.WeaponExtension.STN_03.MainBarrel`), are
+  one weapon.
 - **Distances** are between the killer and the victim, in metres. A vehicle blowing up has none, so its average
   distance is left out.
 - **A batch sent twice** counts once: the bot remembers the last 5,000 kills it counted, until it restarts.

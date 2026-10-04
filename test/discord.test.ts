@@ -567,7 +567,29 @@ describe('buildRoundupMessage', () => {
     },
     closestMatch: { map: 'Bakurani', endedAt: 0, factionScores: [{ name: 'Lonestar', score: 100 }, { name: 'Valkyra', score: 98 }] },
     topMap: { map: 'Ozeti', matches: 8 },
+    regular: null,
+    rookie: null,
+    awards: null,
   };
+
+  const awards: NonNullable<Roundup['awards']> = {
+    from: '2026-09-28',
+    roles: [
+      { role: 'assault', top: [{ name: 'Ash', id: 'aaaaaaaaaaaa', kills: 40 }, { name: 'Bo_b', kills: 12 }] },
+      { role: 'support', top: [{ name: 'Cy', id: 'cccccccccccc', kills: 9 }] },
+      { role: 'machine-gun', top: [] },
+      { role: 'marksman', top: [{ name: 'Di', id: 'dddddddddddd', kills: 7 }] },
+      { role: 'demolition', top: [] },
+      { role: 'vehicle-gun', top: [] },
+    ],
+    headshots: { name: 'Di', id: 'dddddddddddd', headshots: 21 },
+    longest: { name: 'Di', id: 'dddddddddddd', distance: 742.4, weapon: 'SV98' },
+    variety: { name: 'Ash', id: 'aaaaaaaaaaaa', weapons: 9 },
+    roadKills: { name: 'Bo_b', kills: 3 },
+    melee: { name: 'Cy', id: 'cccccccccccc', kills: 1 },
+    sidearm: null,
+  };
+  const awarded: Roundup = { ...week, awards, regular: { name: 'Cy', id: 'cccccccccccc', days: 7, of: 7 }, rookie: { name: 'Eve', minutes: 380 } };
 
   it('celebrates the best team and players of the week, linking names to their player pages', () => {
     const message = buildRoundupMessage(week, 'https://gaminginit.com/');
@@ -606,6 +628,48 @@ describe('buildRoundupMessage', () => {
       "Weeks run Monday to Sunday, UTC.\nMVP: top of a match's scoreboard. Team of the week: best win rate, 3+ matches.\n" +
         'Live stats and leaderboard: gaminginit.com',
     );
+  });
+
+  it('adds the awards: the best at each role from the kill feed, and shout-outs', () => {
+    const message = buildRoundupMessage(awarded, 'https://gaminginit.com/');
+    expect(message.embeds).toHaveLength(2);
+    const embed = message.embeds[1];
+    const link = (name: string, id: string) => `**[${name}](https://gaminginit.com/player?id=${id})**`;
+    expect(embed?.title).toBe('🎖️ Awards · 28 Sep – 4 Oct');
+    expect(embed?.fields).toEqual([
+      { name: '🪖 Best assaulter', value: `🥇 ${link('Ash', 'aaaaaaaaaaaa')} · 40\n🥈 **Bo\\_b** · 12`, inline: true },
+      { name: '💣 Best support', value: `🥇 ${link('Cy', 'cccccccccccc')} · 9`, inline: true },
+      { name: '🔥 Best machine gunner', value: '–', inline: true },
+      { name: '🔭 Best marksman', value: `🥇 ${link('Di', 'dddddddddddd')} · 7`, inline: true },
+      { name: '🧨 Best demolitions', value: '–', inline: true },
+      { name: '🚁 Best vehicle crew', value: '–', inline: true },
+      {
+        name: '🌟 Shout-outs',
+        value: [
+          `💀 Headhunter: ${link('Di', 'dddddddddddd')} · 21 headshots`,
+          `📏 Longest shot: ${link('Di', 'dddddddddddd')} · 742 m · SV98`,
+          `🧰 Jack of all trades: ${link('Ash', 'aaaaaaaaaaaa')} · kills with 9 weapons`,
+          '🚗 Road rage: **Bo\\_b** · 3 run over or blown up',
+          `🔨 Bonk: ${link('Cy', 'cccccccccccc')} · 1 melee kill`,
+          `📆 Ever-present: ${link('Cy', 'cccccccccccc')} · on 7 of 7 days`,
+          '🐣 Rookie of the week: **Eve** · 6 h 20 min played',
+        ].join('\n'),
+      },
+    ]);
+    expect(embed?.footer?.text).toBe(
+      'Assault: assault rifles, SMGs and shotguns. Support: mortars, artillery and emplacements. Machine gunner: LMGs. ' +
+        'Marksman: marksman and sniper rifles, and the bow. Demolitions: launchers, grenades, mines and C4. ' +
+        "Vehicle crew: vehicle guns.\nKills from the game's kill feed; team kills don't count.\nRookie: first seen this week.",
+    );
+  });
+
+  it('says when the kill feed started during the period, and has shout-outs alone without it', () => {
+    const later = buildRoundupMessage({ ...awarded, awards: { ...awards, from: '2026-09-30' } }).embeds[1];
+    expect(later?.footer?.text).toContain("The kill feed's awards count from Wed 30 Sep.");
+    const noFeed = buildRoundupMessage({ ...awarded, awards: null, rookie: null }).embeds[1];
+    expect(noFeed?.fields).toEqual([{ name: '🌟 Shout-outs', value: '📆 Ever-present: **Cy** · on 7 of 7 days' }]);
+    expect(noFeed).not.toHaveProperty('footer');
+    expect(buildRoundupMessage(week).embeds).toHaveLength(1);
   });
 
   it('names the month, or a week or month still going', () => {
@@ -677,6 +741,37 @@ describe('buildRoundupMessage', () => {
     expect(field(buildRoundupMessage(longest, site), '🔫 Most kills')).not.toContain('player?id=');
     // With a short address the links fit.
     expect(field(buildRoundupMessage(longest, 'https://gaminginit.com'), '🔫 Most kills')).toContain('player?id=');
+
+    // The awards count too: both embeds together stay under the limit.
+    const withAwards = (who: string): Roundup => {
+      const one = { name: who, id: 'aaaaaaaaaaaa' };
+      const top = [1, 2, 3].map(() => ({ ...one, kills: 999 }));
+      return {
+        ...longest,
+        ...Object.fromEntries((['kills', 'kd', 'playtime', 'seeding', 'wins', 'mvps', 'bestMatch'] as const).map((board) => [board, longest[board].map((p) => ({ ...p, name: who }))])),
+        awards: {
+          ...awards,
+          roles: awards.roles.map(({ role }) => ({ role, top })),
+          headshots: { ...one, headshots: 999 },
+          longest: { ...one, distance: 999, weapon: 'Z20 Lakota miniguns' },
+          variety: { ...one, weapons: 99 },
+          roadKills: { ...one, kills: 999 },
+          melee: { ...one, kills: 999 },
+          sidearm: { ...one, kills: 999 },
+        },
+        regular: { ...one, days: 31, of: 31 },
+        rookie: { ...one, minutes: 99_999 },
+      };
+    };
+    const both = buildRoundupMessage(withAwards('A_Long_Player_Name_[WD]'), site).embeds;
+    expect(both).toHaveLength(2);
+    expect(both.reduce((sum, e) => sum + length(e), 0)).toBeLessThanOrEqual(6000);
+    expect(both.every((e) => e.fields?.every((f) => f.value.length <= 1024))).toBe(true);
+    expect(both[1]?.fields?.[0]?.value).not.toContain('player?id=');
+    // Too long even without links, the awards are left out.
+    const tooLong = buildRoundupMessage(withAwards(name), site).embeds;
+    expect(tooLong).toHaveLength(1);
+    expect(length(tooLong[0])).toBeLessThanOrEqual(6000);
   });
 });
 

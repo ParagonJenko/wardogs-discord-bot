@@ -165,7 +165,8 @@ describe('recordKillDay', () => {
       name: 'Ash',
       kills: 3,
       headshots: 2,
-      weapons: { [AK]: { kills: 2, headshots: 2 }, [SVD]: { kills: 1, headshots: 0 } },
+      // The team kill is counted apart too.
+      weapons: { [AK]: { kills: 2, headshots: 2 }, [SVD]: { kills: 1, headshots: 0, teamKills: 1 } },
     });
     expect(day.list).toHaveLength(3);
     expect(day.list[1]).toEqual({
@@ -217,9 +218,23 @@ describe('the kill_days table', () => {
       ['2026-10-04', 2, 2],
     ]);
     expect(firstKillDay(sql)).toBe('2026-10-03');
-    pruneKillDays(sql, '2026-10-04');
+    // Older days keep their counts but not their kills, and the oldest go.
+    pruneKillDays(sql, '2026-10-03', '2026-10-04');
+    expect(playerKillDays(sql, ASH, '2026-10-01').map((d) => [d.day, d.kills, d.list.length])).toEqual([
+      ['2026-10-03', 1, 0],
+      ['2026-10-04', 2, 2],
+    ]);
+    pruneKillDays(sql, '2026-10-04', '2026-10-04');
     expect(firstKillDay(sql)).toBe('2026-10-04');
     expect(playerKillDays(sql, ASH, '2026-10-01').map((d) => d.day)).toEqual(['2026-10-04']);
+  });
+
+  it('keeps the team kills by weapon', () => {
+    const sql = database();
+    createKillDays(sql);
+    const day = recordKillDay(null, ASH, '2026-10-04', [kill(ASH, BO, { cause: SVD, teamKill: true })]);
+    writeKillDays(sql, [day]);
+    expect(killDaySummaries(sql, '2026-10-04', '2026-10-04')[0]?.weapons).toEqual({ [SVD]: { kills: 1, headshots: 0, teamKills: 1 } });
   });
 
   it('has no first day before the first kill', () => {

@@ -114,21 +114,28 @@ export const feedAuthorized = async (header: string | null, token: string): Prom
   return difference === 0;
 };
 
-// What sort of thing killed: a hand-held weapon (guns, grenades, tools), a vehicle's gun, a vehicle itself (run over,
-// or blown up), or something built, such as barbed wire, which the game blames on whoever built it.
-export type WeaponKind = 'weapon' | 'vehicle-weapon' | 'vehicle' | 'buildable';
+// What sort of thing killed: a hand-held weapon (guns, grenades, tools), a vehicle's gun, an emplacement (a mortar or
+// another fixed weapon, which the game counts as a vehicle though nobody drives it), a vehicle itself (run over, or
+// blown up), or something built, such as barbed wire, which the game blames on whoever built it.
+export type WeaponKind = 'weapon' | 'vehicle-weapon' | 'emplacement' | 'vehicle' | 'buildable';
+
+// Vehicle.Variant.Stationary.Mortar is the mortar, Id.Vehicle.WeaponExtension.STN_03.MainBarrel its barrel.
+const EMPLACEMENT = /^(Vehicle\.Variant\.Stationary|Id\.Vehicle\.WeaponExtension\.STN_[^.]*)\./i;
+const VEHICLE_WEAPON = /^Id\.Vehicle\.WeaponExtension\./i;
+const VEHICLE = /^Vehicle\./i;
 
 export const weaponKind = (cause: string): WeaponKind => {
-  if (/^Id\.Vehicle\.WeaponExtension\./i.test(cause)) return 'vehicle-weapon';
-  if (/^Vehicle\./i.test(cause)) return 'vehicle';
+  if (EMPLACEMENT.test(cause)) return 'emplacement';
+  if (VEHICLE_WEAPON.test(cause)) return 'vehicle-weapon';
+  if (VEHICLE.test(cause)) return 'vehicle';
   if (/^Id\.Buildable\./i.test(cause)) return 'buildable';
   return 'weapon';
 };
 
-const KIND_ORDER: WeaponKind[] = ['weapon', 'vehicle-weapon', 'vehicle', 'buildable'];
+const KIND_ORDER: WeaponKind[] = ['weapon', 'vehicle-weapon', 'emplacement', 'vehicle', 'buildable'];
 
-// Tags of different kinds can share a name: the Talon 9K-SAM is both a stationary vehicle and that vehicle's gun. Merged,
-// they take the kind earlier in KIND_ORDER, so the kind never depends on which tag was counted first.
+// Tags of different kinds could share a name. Merged, they take the kind earlier in KIND_ORDER, so the kind never
+// depends on which tag was counted first.
 const mergedKind = (a: WeaponKind, b: WeaponKind): WeaponKind => (KIND_ORDER.indexOf(a) <= KIND_ORDER.indexOf(b) ? a : b);
 
 // Names for the tags the game is known to send, as the game's weapon and vehicle lists name them. From Warcon
@@ -219,6 +226,7 @@ const NAMES: Record<string, string> = {
   'Id.Vehicle.WeaponExtension.WHL_05.RingMinigun': 'Humvee minigun',
   'Id.Vehicle.WeaponExtension.WHL_07.MachineGun': 'Ural Defender M249',
   'Id.Vehicle.WeaponExtension.STN_01.MistralAA': 'Talon 9K-SAM',
+  'Id.Vehicle.WeaponExtension.STN_03.MainBarrel': 'L81 mortar',
 };
 
 const BY_TAG = new Map(Object.entries(NAMES).map(([cause, name]) => [cause.toLowerCase(), name]));
@@ -242,21 +250,92 @@ export const weaponName = (cause: string): string => {
   const known = BY_TAG.get(cause.toLowerCase());
   if (known !== undefined) return known;
   const parts = cause.split('.').filter(Boolean);
+  if (VEHICLE_WEAPON.test(cause)) {
+    // Id.Vehicle.WeaponExtension.STN_05.MainBarrel: the mount and the gun.
+    return parts.slice(3).map(words).join(' ') || words(cause);
+  }
+  if (VEHICLE.test(cause)) {
+    // Vehicle.Variant.Air.Rotary.Littlebird.Default: the model, and the variant unless it is Default.
+    const [model, variant] = parts.slice(4);
+    if (model === undefined) return words(parts.at(-1) ?? cause);
+    return variant !== undefined && variant !== 'Default' ? `${words(model)} (${words(variant).toLowerCase()})` : words(model);
+  }
+  if (weaponKind(cause) === 'buildable') return words(parts.at(-1) ?? cause);
+  // Id.Item.Mosin, Id.Item.Defibrillator.Standard
+  return parts.slice(2).map(words).join(' ') || words(cause);
+};
+
+// What a weapon is for, for the roundups' awards: assault (assault rifles, SMGs, shotguns), machine guns, marksman
+// (marksman and sniper rifles, the bow), sidearms, demolition (launchers, grenades, mines, C4), melee (fists and tools),
+// support (mortars, artillery and the other emplacements), a vehicle's guns, a vehicle itself, things built, or other
+// (smoke grenades, supply pallets, and tags not listed here).
+export type WeaponRole =
+  | 'assault'
+  | 'machine-gun'
+  | 'marksman'
+  | 'sidearm'
+  | 'demolition'
+  | 'melee'
+  | 'support'
+  | 'vehicle-gun'
+  | 'vehicle'
+  | 'buildable'
+  | 'other';
+
+const ROLES: Record<string, WeaponRole> = {
+  'Id.Item.A91': 'assault',
+  'Id.Item.KH2002': 'assault',
+  'Id.Item.TAR21': 'assault',
+  'Id.Item.AK74M': 'assault',
+  'Id.Item.WEPN_029': 'assault',
+  'Id.Item.M4': 'assault',
+  'Id.Item.MP43': 'assault',
+  'Id.Item.MP9': 'assault',
+  'Id.Item.Vector': 'assault',
+  'Id.Item.M500': 'assault',
+  'Id.Item.M249': 'machine-gun',
+  'Id.Item.LMG_02': 'machine-gun',
+  'Id.Item.SKS': 'marksman',
+  'Id.Item.SVDM': 'marksman',
+  'Id.Item.RFB': 'marksman',
+  'Id.Item.Mosin': 'marksman',
+  'Id.Item.SV98': 'marksman',
+  'Id.Item.MK22': 'marksman',
+  'Id.Item.CombatBow': 'marksman',
+  'Id.Item.Glock17': 'sidearm',
+  'Id.Item.Judge': 'sidearm',
+  'Id.Item.RPG7': 'demolition',
+  'Id.Item.CGM4': 'demolition',
+  'Id.Item.MMGL': 'demolition',
+  'Id.Item.M67Grenade': 'demolition',
+  'Id.Item.C4Explosive': 'demolition',
+  'Id.Item.IED.Explosive': 'demolition',
+  'Id.Item.ATMine': 'demolition',
+  'Id.Item.Claymore': 'demolition',
+  'Id.Item.Crowbar': 'melee',
+  'Id.Item.Fists': 'melee',
+  // The SPH-2's gun. The SPH-2 itself, running someone over, is a vehicle.
+  'Id.Vehicle.WeaponExtension.TNK_01.Artillery': 'support',
+};
+
+const ROLE_BY_TAG = new Map(Object.entries(ROLES).map(([cause, role]) => [cause.toLowerCase(), role]));
+
+export const weaponRole = (cause: string): WeaponRole => {
+  const known = ROLE_BY_TAG.get(cause.toLowerCase());
+  if (known !== undefined) return known;
+  // Hammers, drills and defibrillators of any size.
+  if (/^Id\.Item\.(BuildTool|RepairTool|Defibrillator)\./i.test(cause)) return 'melee';
   switch (weaponKind(cause)) {
-    case 'vehicle': {
-      // Vehicle.Variant.Air.Rotary.Littlebird.Default: the model, and the variant unless it is Default.
-      const [model, variant] = parts.slice(4);
-      if (model === undefined) return words(parts.at(-1) ?? cause);
-      return variant !== undefined && variant !== 'Default' ? `${words(model)} (${words(variant).toLowerCase()})` : words(model);
-    }
+    case 'emplacement':
+      return 'support';
     case 'vehicle-weapon':
-      // Id.Vehicle.WeaponExtension.STN_03.MainBarrel: the mount and the gun.
-      return parts.slice(3).map(words).join(' ') || words(cause);
+      return 'vehicle-gun';
+    case 'vehicle':
+      return 'vehicle';
     case 'buildable':
-      return words(parts.at(-1) ?? cause);
+      return 'buildable';
     default:
-      // Id.Item.Mosin, Id.Item.Defibrillator.Standard
-      return parts.slice(2).map(words).join(' ') || words(cause);
+      return 'other';
   }
 };
 

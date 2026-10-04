@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { KillDaySummary } from '../src/killfeed.ts';
 import type { MatchPlayer, MatchRecord, PlayerDay, PlayerTotals } from '../src/players.ts';
 import {
   buildRoundup,
@@ -9,8 +10,10 @@ import {
   parseRoundupsPosted,
   periodDays,
   periodFor,
+  type FeedSources,
   type Period,
 } from '../src/roundup.ts';
+import type { WeaponDay } from '../src/weapons.ts';
 
 const HOUR = 60 * 60_000;
 const at = (date: string, hour = 0): number => Date.parse(`${date}T00:00:00Z`) + hour * HOUR;
@@ -292,5 +295,117 @@ describe('buildRoundup', () => {
     const now = at('2026-09-29', 21);
     const soFar = buildRoundup({ period: currentPeriod('week', now), days, matches, idOf });
     expect(soFar).toMatchObject({ partial: true, matches: 2, players: 3 });
+    // Level on days, and Bo played longer.
+    expect(soFar?.regular).toEqual({ name: 'Bo', id: 'bbbbbbbbbbbb', days: 2, of: 2 });
+  });
+
+  it('names who was on the most days, more time played first when level', () => {
+    expect(roundup?.regular).toEqual({ name: 'Ash2', id: 'aaaaaaaaaaaa', days: 4, of: 7 });
+  });
+
+  it('names the rookie who played the most, once the records go back 4 weeks before the period', () => {
+    expect(roundup?.rookie).toBeNull();
+    // Ash played a month before; Bo the day before the week.
+    const longer = [day('2026-08-31', { a: totals('Ash', { liveMinutes: 10 }) }), ...days];
+    expect(buildRoundup({ period: WEEK, days: longer, matches, idOf })?.rookie).toEqual({ name: 'Cy', id: 'cccccccccccc', minutes: 100 });
+    const shorter = [day('2026-09-01', { a: totals('Ash', { liveMinutes: 10 }) }), ...days];
+    expect(buildRoundup({ period: WEEK, days: shorter, matches, idOf })?.rookie).toBeNull();
+  });
+
+  describe('awards from the kill feed', () => {
+    const kills = (steamId: string, name: string, date: string, headshots: number, weapons: KillDaySummary['weapons']): KillDaySummary => ({
+      day: date,
+      steamId,
+      name,
+      kills: Object.values(weapons).reduce((n, w) => n + w.kills, 0),
+      headshots,
+      weapons,
+    });
+    const longest = (distance: number, steamId: string, name: string): WeaponDay[string] => ({
+      kills: 1,
+      headshots: 0,
+      ranged: 1,
+      distance,
+      longest: { distance, steamId, name },
+    });
+    const feed: FeedSources = {
+      since: '2026-09-01',
+      kills: [
+        kills('a', 'Ash', '2026-09-28', 4, {
+          'Id.Item.AK74M': { kills: 10, headshots: 4 },
+          // A team kill with the mortar does not count.
+          'Vehicle.Variant.Stationary.Mortar': { kills: 3, headshots: 0, teamKills: 1 },
+          'Id.Vehicle.WeaponExtension.STN_03.MainBarrel': { kills: 2, headshots: 0 },
+          'Id.Item.Fists': { kills: 1, headshots: 0 },
+        }),
+        kills('b', 'Bo', '2026-09-29', 6, {
+          'Id.Item.M249': { kills: 6, headshots: 1 },
+          'Id.Item.SV98': { kills: 4, headshots: 4 },
+          'Id.Item.Glock17': { kills: 2, headshots: 1 },
+          'Vehicle.Variant.Land.Wheeled.Humvee.Default': { kills: 2, headshots: 0 },
+        }),
+        kills('e', 'Eve', '2026-09-30', 0, { 'Id.Item.RPG7': { kills: 2, headshots: 0 } }),
+        kills('c', 'Cy', '2026-10-04', 0, {
+          'Vehicle.Variant.Stationary.Mortar': { kills: 5, headshots: 0 },
+          'Id.Item.AK74M': { kills: 1, headshots: 0 },
+          'Id.Vehicle.WeaponExtension.TNK_01.Heavy': { kills: 3, headshots: 0 },
+        }),
+        // After the week.
+        kills('c', 'Cy', '2026-10-05', 99, { 'Id.Item.AK74M': { kills: 99, headshots: 99 } }),
+      ],
+      weapons: [
+        { day: '2026-09-29', weapons: { 'Id.Item.SV98': longest(512.4, 'b', 'Bo') } },
+        // Not a shot.
+        { day: '2026-10-04', weapons: { 'Vehicle.Variant.Stationary.Mortar': longest(900, 'c', 'Cy') } },
+        { day: '2026-10-05', weapons: { 'Id.Item.SV98': longest(2000, 'c', 'Cy') } },
+      ],
+    };
+    const awarded = buildRoundup({ period: WEEK, days, matches, idOf, feed })?.awards;
+
+    it('ranks each role by its kills, team kills left out, with their latest names', () => {
+      expect(Object.fromEntries((awarded?.roles ?? []).map(({ role, top }) => [role, top.map((p) => [p.name, p.kills])]))).toEqual({
+        assault: [
+          ['Ash2', 10],
+          ['Cy', 1],
+        ],
+        // The mortar and its barrel together.
+        support: [
+          ['Cy', 5],
+          ['Ash2', 4],
+        ],
+        'machine-gun': [['Bo', 6]],
+        marksman: [['Bo', 4]],
+        demolition: [['Eve', 2]],
+        'vehicle-gun': [['Cy', 3]],
+      });
+      expect(awarded?.roles[0]?.top[0]).toEqual({ name: 'Ash2', id: 'aaaaaaaaaaaa', kills: 10 });
+      expect(JSON.stringify(awarded)).not.toMatch(/steamId/);
+    });
+
+    it('gives each award to one player', () => {
+      expect(awarded).toMatchObject({
+        from: '2026-09-28',
+        headshots: { name: 'Bo', id: 'bbbbbbbbbbbb', headshots: 6 },
+        longest: { name: 'Bo', id: 'bbbbbbbbbbbb', distance: 512.4, weapon: 'SV98' },
+        variety: { name: 'Bo', weapons: 4 },
+        roadKills: { name: 'Bo', kills: 2 },
+        melee: { name: 'Ash2', kills: 1 },
+        sidearm: { name: 'Bo', kills: 2 },
+      });
+    });
+
+    it('counts from the first day the kill feed has, when that is during the period', () => {
+      const later = buildRoundup({ period: WEEK, days, matches, idOf, feed: { ...feed, since: '2026-09-30' } })?.awards;
+      expect(later?.from).toBe('2026-09-30');
+      expect(later?.roles[0]?.top).toEqual([{ name: 'Cy', id: 'cccccccccccc', kills: 1 }]);
+      expect(later?.longest).toBeNull();
+      expect(later?.melee).toBeNull();
+    });
+
+    it('has none without the kill feed, or with only team kills', () => {
+      expect(roundup?.awards).toBeNull();
+      const teamKills = [kills('a', 'Ash', '2026-09-28', 0, { 'Id.Item.AK74M': { kills: 2, headshots: 0, teamKills: 2 } })];
+      expect(buildRoundup({ period: WEEK, days, matches, idOf, feed: { ...feed, kills: teamKills, weapons: [] } })?.awards).toBeNull();
+    });
   });
 });
