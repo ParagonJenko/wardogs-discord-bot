@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ConfigResult, ServerConfig } from '../src/rcon.ts';
+import type { ConfigResult, Rotation, ServerConfig } from '../src/rcon.ts';
 import {
   DEFAULT_ROTATION,
   editRotations,
+  fromTheStart,
+  inSavedOrder,
+  lastPutOnFirst,
   parseEntry,
   parseRotationBook,
   planToday,
   putRotation,
   rotationDay,
   rotationName,
+  rotationSlot,
   hasDefault,
   seedDefault,
   serverEntries,
@@ -349,10 +353,11 @@ describe('the rotation in ServerSettings.ini', () => {
 
 describe('putRotation', () => {
   const ok: ConfigResult = { ok: true, errors: [], ignored: [] };
-  const file = (config: Partial<ServerConfig> = {}, result: ConfigResult = ok) => ({
+  const file = (config: Partial<ServerConfig> = {}, result: ConfigResult = ok, slot: number | null = 1) => ({
     fetchConfig: vi.fn(async (): Promise<ServerConfig> => ({ revision: '7', writable: true, text: settings, ...config })),
     validate: vi.fn(async () => result),
     put: vi.fn(async () => result),
+    slot: vi.fn(async () => slot),
   });
 
   it('checks the new file, then writes it against the revision it read', async () => {
@@ -363,10 +368,24 @@ describe('putRotation', () => {
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
   });
 
-  it('writes nothing when the server has these maps already', async () => {
-    const server = file();
+  it('starts from the first map: it goes in the slot after the one the server is on', async () => {
+    // Bakurani is on, from the first slot. Written from the top, the second slot would send the server back to it.
+    const server = file({}, ok, 0);
+    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toBe(true);
+    const text = setRotationEntries(settings, [ZESTAFONA, OZETI, BAKURANI]);
+    expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
+  });
+
+  it('writes nothing when the server already goes to the first map next', async () => {
+    const server = file({}, ok, 1);
     await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toBe(false);
     expect(server.put).not.toHaveBeenCalled();
+  });
+
+  it('starts the same maps again from the first when the server is part-way round them', async () => {
+    const server = file({}, ok, 0);
+    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toBe(true);
+    expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text: setRotationEntries(settings, [OZETI, BAKURANI]) });
   });
 
   it('says why when the server cannot take it', async () => {
@@ -376,5 +395,80 @@ describe('putRotation', () => {
     const server = file();
     await expect(putRotation(server, [])).rejects.toThrow(/no maps/);
     expect(server.fetchConfig).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when it cannot tell which slot the server is on, so it is tried again', async () => {
+    const server = file({}, ok, null);
+    await expect(putRotation(server, [ZESTAFONA])).rejects.toThrow(/didn't say which slot/);
+    server.slot.mockRejectedValueOnce(new Error('RCON timed out'));
+    await expect(putRotation(server, [ZESTAFONA])).rejects.toThrow(/timed out/);
+    expect(server.put).not.toHaveBeenCalled();
+  });
+});
+
+describe('fromTheStart', () => {
+  it('puts the first map in the slot after the server\'s, and the rest after it in order round', () => {
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 0)).toEqual([ZESTAFONA, OZETI, BAKURANI]);
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 1)).toEqual([BAKURANI, ZESTAFONA, OZETI]);
+    // On the last slot, the next is the first: the rotation as it is.
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 2)).toEqual([OZETI, BAKURANI, ZESTAFONA]);
+  });
+
+  it('counts a slot past the end of the new list on round it', () => {
+    const written = fromTheStart([OZETI, BAKURANI, ZESTAFONA], 7);
+    expect(written[8 % 3]).toEqual(OZETI);
+  });
+
+});
+
+describe('rotationSlot', () => {
+  const rotation = (entries: Rotation['entries']): Rotation => ({ enabled: true, mode: 'ordered', entries });
+
+  it('reads the slot marked now, or else the status\'s, and is null when neither says', () => {
+    const marked = rotation([
+      { ...OZETI, status: null },
+      { ...BAKURANI, status: 'now' },
+      { ...ZESTAFONA, status: 'next' },
+    ]);
+    expect(rotationSlot(marked, { rotationIndex: 1 })).toBe(1);
+    expect(rotationSlot(marked, { rotationIndex: null })).toBe(1);
+    const plain = rotation([{ ...OZETI, status: null }]);
+    expect(rotationSlot(plain, { rotationIndex: 3 })).toBe(3);
+    expect(rotationSlot(plain, { rotationIndex: null })).toBeNull();
+  });
+});
+
+describe('inSavedOrder', () => {
+  const saved = [
+    { name: 'Default', entries: [BAKURANI] },
+    { name: 'Rotation 1', entries: [BAKURANI, OZETI, ZESTAFONA] },
+  ];
+
+  it('turns the server\'s list to start where the saved rotation does', () => {
+    const server = [{ ...ZESTAFONA, status: 'next' }, { ...BAKURANI, status: null }, { ...OZETI, status: 'now' }];
+    expect(inSavedOrder(server, saved)).toEqual([
+      { ...BAKURANI, status: null },
+      { ...OZETI, status: 'now' },
+      { ...ZESTAFONA, status: 'next' },
+    ]);
+  });
+
+  it('matches by map when the server reports a setting differently', () => {
+    expect(inSavedOrder([{ map: 'Europe' }, { map: 'NorthAmerica' }, { map: 'Kavkazi' }], saved).map((e) => e.map)).toEqual([
+      'Kavkazi',
+      'Europe',
+      'NorthAmerica',
+    ]);
+  });
+
+  it('leaves a list that is no saved rotation as it is', () => {
+    expect(inSavedOrder([OZETI, BAKURANI, BAKURANI], saved)).toEqual([OZETI, BAKURANI, BAKURANI]);
+  });
+
+  it('tries the rotation put on last first', () => {
+    const applied = { name: 'Rotation 1', day: '2026-10-03', at: 1, by: 'schedule', pending: false };
+    expect(lastPutOnFirst({ ...book(), applied }).map((r) => r.name)).toEqual(['Rotation 1', 'Weekend']);
+    expect(lastPutOnFirst(book()).map((r) => r.name)).toEqual(['Rotation 1', 'Weekend']);
+    expect(lastPutOnFirst(book({ applied: { ...applied, name: 'Weekend' } })).map((r) => r.name)).toEqual(['Weekend', 'Rotation 1']);
   });
 });

@@ -350,6 +350,14 @@ The bot puts a rotation on the server by writing its maps into `ServerSettings.i
 straight away and plays it from the next map change, so the match on now is never cut short. Only the `RotationEntries`
 lines are written: whether the rotation is on, and in order or random, stay as they are.
 
+Each rotation the bot puts on starts from its first map at the next map change. The server keeps its place in the list
+when the rotation changes, and goes to the next slot in the new list, whatever map is there now. So the bot writes the
+rotation with its first map in that slot and the rest after it in order. That is also how each day's rotation starts
+from the top, even when it is the same as the day before. If the map being played is the rotation's first map, it plays
+twice in a row. The list in `ServerSettings.ini` can start part-way round, so a server restart starts from where the
+list starts; the next day's rotation then starts from the first map again. The Rotations tab and `/rotations save` show
+and save the server's list in the saved rotation's order.
+
 | Command                 | What                                                                                     |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
 | `/rotations show`       | The saved rotations, the week and which one is on today; or, with `rotation`, its maps in order |
@@ -377,12 +385,12 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
   maps), a day with no rotation of its own keeps whatever the server has.
 - **`/rotations use`** lasts until the next day starts; then the week takes over again. Planning today puts that
   rotation on straight away too, and so does deleting today's rotation (Default goes on).
-- **Changing today's rotation** (its maps, or their order) puts it on the server again, unless it has no maps left: the
-  bot never leaves the server without a rotation.
+- **Changing today's rotation** (its maps, or their order) puts it on the server again, from its first map, unless it
+  has no maps left: the bot never leaves the server without a rotation.
 - In `add`, anything left out is the map's own: its first game mode, infantry only and hardcore off, and the map's own
   lighting and zones. A map can be in a rotation more than once, such as Bakurani by day and at dusk.
-- If the server can't take the rotation (it is not answering, or the settings file is read-only), the reply says why,
-  and the bot tries again at every check until the server has it.
+- If the server can't take the rotation (it is not answering, doesn't say where it is in its rotation, or the settings
+  file is read-only), the reply says why, and the bot tries again at every check until the server has it.
 - Changes made by hand on the server stay until the bot next puts a rotation on: the start of the next day, or a staff
   change. `/rotation` (for everyone) shows what the server is playing either way.
 

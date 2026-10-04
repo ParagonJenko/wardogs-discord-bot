@@ -4,6 +4,8 @@ import { isModifier, MODIFIERS, modesFor } from './matchsetup.ts';
 import type { CatalogItem, Rotation } from './rcon.ts';
 import {
   DEFAULT_ROTATION,
+  inSavedOrder,
+  lastPutOnFirst,
   MAX_ROTATION_MAPS,
   MAX_ROTATIONS,
   plannedRotation,
@@ -79,7 +81,9 @@ export type RotationsPage = {
   plan: (string | null)[];
   // The rotation the bot put on the server today, and whether the server has it yet.
   current: AppliedRotation | null;
-  // The server's rotation as it reports it now, with the map being played and the next. Null when it could not be read.
+  // The server's rotation as it reports it now, with the map being played and the next, in the order of the saved
+  // rotation it is (the one the bot put on last, or else another); the bot writes it starting part-way round. Null
+  // when it could not be read.
   server: { enabled: boolean; mode: string; entries: (RotationEntry & { status: string | null })[] } | null;
   catalog: RotationCatalog | null;
 };
@@ -112,7 +116,10 @@ export const buildRotationsPage = ({
       : {
           enabled: server.enabled,
           mode: server.mode,
-          entries: server.entries.map(({ status, ...entry }) => ({ ...entry, status })),
+          entries: inSavedOrder(
+            server.entries.map(({ status, ...entry }) => ({ ...entry, status })),
+            lastPutOnFirst(book),
+          ),
         },
   catalog,
 });

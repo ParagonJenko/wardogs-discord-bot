@@ -125,6 +125,7 @@ import {
   fetchPlayers,
   fetchRotation,
   fetchSnapshot,
+  fetchStatus,
   fetchZones,
   isNotInGame,
   kickPlayer,
@@ -206,6 +207,7 @@ import {
   putRotation,
   rotationDay,
   rotationEntries,
+  rotationSlot,
   rotationToday,
   seedDefault,
   serverEntries,
@@ -758,11 +760,20 @@ export class Watcher extends DurableObject<Env> {
     }
     const who = applied.by === 'schedule' ? 'the schedule' : `Discord user ${applied.by}`;
     try {
-      const changed = await putRotation(this.settingsFile({ config, http: socketHttp(connect) }), rotation.entries);
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const changed = await putRotation(
+        {
+          ...this.settingsFile({ config, http }),
+          slot: async () =>
+            rotationSlot(await fetchRotation(rconUrl, rconPassword, http), await fetchStatus(rconUrl, rconPassword, http)),
+        },
+        rotation.entries,
+      );
       await this.ctx.storage.put('rotations', done);
       console.info(
         changed
-          ? `Map rotation: put ${JSON.stringify(rotation.name)} (${rotation.entries.length} maps) on the server for ${applied.day}, chosen by ${who}`
+          ? `Map rotation: put ${JSON.stringify(rotation.name)} (${rotation.entries.length} maps) on the server for ${applied.day}, chosen by ${who}, starting with ${rotation.entries[0]?.map} at the next map change`
           : `Map rotation: the server already has ${JSON.stringify(rotation.name)}`,
       );
       return { book: done, server: { outcome: changed ? 'updated' : 'unchanged' } };

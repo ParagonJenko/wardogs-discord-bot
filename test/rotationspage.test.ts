@@ -68,6 +68,30 @@ describe('buildRotationsPage', () => {
     expect(page).toMatchObject({ defaultName: 'Default', hour: 5, limits: { rotations: 10, maps: 100, name: 32 } });
   });
 
+  it("shows the server's rotation in the order of the saved one, as the bot writes it starting part-way round", () => {
+    const three: RotationBook = { ...book, rotations: [...book.rotations, { name: 'Rotation 1', entries: [{ map: 'Kavkazi' }, { map: 'Europe' }, { map: 'NorthAmerica' }] }] };
+    const page = buildRotationsPage({
+      book: three,
+      today: { day: '2026-10-03', weekday: 5 },
+      hour: 5,
+      server: {
+        enabled: true,
+        mode: 'ordered',
+        entries: [
+          { map: 'NorthAmerica', status: 'next' },
+          { map: 'Kavkazi', status: null },
+          { map: 'Europe', status: 'now' },
+        ],
+      },
+      catalog: null,
+    });
+    expect(page.server?.entries).toEqual([
+      { map: 'Kavkazi', status: null },
+      { map: 'Europe', status: 'now' },
+      { map: 'NorthAmerica', status: 'next' },
+    ]);
+  });
+
   it('shows yesterday\'s rotation as nothing chosen today', () => {
     const page = buildRotationsPage({ book, today: { day: '2026-10-04', weekday: 6 }, hour: 5, server: null, catalog: null });
     expect(page.current).toBeNull();
