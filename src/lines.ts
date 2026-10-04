@@ -1,6 +1,7 @@
-// The lines the bot says in game. Add, remove or reword any of them: each time a message goes out, one is picked at
-// random from its list. Keep them short, as the game shows a message on one line of up to 200 characters with the
-// call to action the bot adds after it.
+// The lines the bot says in game. Each time a message goes out, one is picked at random from its list. Staff can
+// replace any list on the staff page's Lines tab (see linespage.ts); a list they have not replaced uses the one here,
+// so rewording one here and deploying reaches every list staff left alone. Keep them short, as the game shows a message
+// on one line of up to 200 characters with the call to action the bot adds after it.
 //
 // Placeholders: {team} is the faction's name, {score} its points and {site} the website (SITE_URL, such as
 // gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players".
@@ -123,3 +124,25 @@ export const NEARLY: Record<string, string[]> = {
 // For a faction with no list above.
 export const HALFWAY_OTHER = ['{team} leads on {score}!'];
 export const NEARLY_OTHER = ['{team} has {score} points!'];
+
+// Every list, as the bot says them: these, or the ones staff put in their place.
+export type Lines = {
+  seeding: string[];
+  tenMinutes: string[];
+  // By faction (see factionKey).
+  halfway: Record<string, string[]>;
+  halfwayLevel: string[];
+  halfwayOther: string[];
+  nearly: Record<string, string[]>;
+  nearlyOther: string[];
+};
+
+export const DEFAULT_LINES: Lines = {
+  seeding: SEEDING,
+  tenMinutes: TEN_MINUTES,
+  halfway: HALFWAY,
+  halfwayLevel: HALFWAY_LEVEL,
+  halfwayOther: HALFWAY_OTHER,
+  nearly: NEARLY,
+  nearlyOther: NEARLY_OTHER,
+};

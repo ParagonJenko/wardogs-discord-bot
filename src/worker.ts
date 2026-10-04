@@ -98,6 +98,20 @@ import {
   type RankedPlayer,
   type SeedCredit,
 } from './players.ts';
+import type { Lines } from './lines.ts';
+import {
+  buildLinesPage,
+  editLines,
+  LINES_KEY,
+  linesContext,
+  parseSavedLines,
+  readLinesAction,
+  resolveLines,
+  type LinesAction,
+  type LinesActionResult,
+  type LinesPage,
+  type SavedLines,
+} from './linespage.ts';
 import { createJoinCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
 import {
   buildProfile,
@@ -381,7 +395,8 @@ const oneAtATime = () => {
 // 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam account each
 // staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what Steam said about
 // that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan and the rotation
-// put on the server today) and 'killFeed' (the server's latest kills, for the staff page). Each player's kills by
+// put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list) and 'killFeed' (the
+// server's latest kills, for the staff page). Each player's kills by
 // day, for the staff page and the roundups' awards, are in the SQLite database's kill_days table (see killfeed.ts).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
@@ -423,6 +438,9 @@ export class Watcher extends DurableObject<Env> {
   private steamRetryAt = 0;
   // What maps can be played with, for the staff page's rotations; it only changes with a game update.
   private rotationCatalog: { at: number; catalog: RotationCatalog } | null = null;
+  // Staff's in-game lines, once read: every check that can send an in-game message needs them. Every write goes through
+  // linesAction, so it is never stale.
+  private savedLines: SavedLines | null = null;
   // Past days of the staff page's kills, like dayCache: only today's and yesterday's are read each time.
   private killDayCache = new Map<string, KillDaySummary[]>();
   // Whether the kill_days table is known to be there, and the UTC day its old rows were last deleted.
@@ -559,6 +577,7 @@ export class Watcher extends DurableObject<Env> {
       now: Date.now,
       log: console,
       store: this.stateStore(),
+      lines: () => this.lines(),
     });
     if (await this.alerting(joinCheck)) await this.ctx.storage.setAlarm(Date.now() + JOIN_CHECK_MS);
   }
@@ -662,6 +681,7 @@ export class Watcher extends DurableObject<Env> {
       now: Date.now,
       log: console,
       store: this.stateStore(),
+      lines: () => this.lines(),
       staff: () => this.staffSteam(),
       stats: {
         check: (observation) =>
@@ -940,6 +960,37 @@ export class Watcher extends DurableObject<Env> {
       const { book, server } = await this.sendRotation(edited.book, config);
       return { ...edited, book, ...(server === null ? {} : { server }) };
     });
+  }
+
+  private async lineBook(): Promise<SavedLines> {
+    this.savedLines ??= parseSavedLines(await this.ctx.storage.get(LINES_KEY));
+    return this.savedLines;
+  }
+
+  // The lines the bot says in game: staff's, or its own (see linespage.ts).
+  async lines(): Promise<Lines> {
+    return resolveLines(await this.lineBook());
+  }
+
+  // The staff page's Lines tab.
+  async linesPage(): Promise<LinesPage> {
+    return buildLinesPage(await this.lineBook(), linesContext(loadConfig(stringVars(this.env))));
+  }
+
+  // A change from the Lines tab, and the tab as it is after it. The copy in memory changes before the write, so a second
+  // change that comes in while this one is being written starts from it.
+  async linesAction(action: LinesAction, by: string, byName: string): Promise<LinesActionResult> {
+    const context = linesContext(loadConfig(stringVars(this.env)));
+    const edited = editLines(await this.lineBook(), action, context, { by, byName, now: Date.now() });
+    if ('problem' in edited) return edited;
+    this.savedLines = edited.saved;
+    try {
+      await this.ctx.storage.put(LINES_KEY, edited.saved);
+    } catch (error) {
+      this.savedLines = null;
+      throw error;
+    }
+    return buildLinesPage(edited.saved, context);
   }
 
   // Lifts timed bans whose time is up, if the ban on the server is still the bot's. One that fails is tried again at
@@ -2326,6 +2377,24 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page rotations failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the rotations right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // The Lines tab: the lines the bot says in game, and a change to them.
+  if (route === 'GET /api/admin/lines' || route === 'POST /api/admin/lines') {
+    try {
+      if (route === 'GET /api/admin/lines') return Response.json(await watcher().linesPage(), { headers });
+      const action = await readLinesAction(request);
+      if (action === null) return Response.json({ error: 'Not a lines request' }, { status: 400, headers });
+      const what = action.action === 'save' ? ` (${action.lines.length} lines)` : '';
+      console.info(
+        `Staff page: lines ${action.action} ${JSON.stringify(action.list)}${what} by ${JSON.stringify(session.name)} (Discord user ${session.userId})`,
+      );
+      const result = await watcher().linesAction(action, session.userId, session.name);
+      if ('problem' in result) return Response.json({ error: result.problem }, { status: 400, headers });
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff page lines failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't reach the lines right now. If it was a change, check before trying again." }, { status: 503, headers });
     }
   }
   // A staff member links their Steam account, so the bot never counts them as a seeder, or unlinks one.

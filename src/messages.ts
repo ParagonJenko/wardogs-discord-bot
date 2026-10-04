@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
-import * as lines from './lines.ts';
+import { DEFAULT_LINES, type Lines } from './lines.ts';
 import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
@@ -23,73 +23,71 @@ const TEN_MINUTES = 10 * 60_000;
 const NEARLY = 0.9;
 
 // The game shows broadcasts in one line; keep them short.
-const MAX_LENGTH = 200;
+export const MAX_LENGTH = 200;
 
 const fit = (text: string): string => (text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text);
 
 const days = (count: number): string => `${count} day${count === 1 ? '' : 's'}`;
-const morePlayers = (count: number): string => `${count} more player${count === 1 ? '' : 's'}`;
+export const morePlayers = (count: number): string => `${count} more player${count === 1 ? '' : 's'}`;
+
+// The score a team has when the 90-point message goes out: 90% of the winning score.
+export const nearlyScore = (scoreToWin: number): number => Math.ceil(scoreToWin * NEARLY);
+
+// What the bot puts around the lines (see lines.ts). The staff page shows them too, so staff see the whole message.
+export const HALFWAY_START = 'Halfway there!';
+export const halfwayCall = (siteHost: string, vip: VipRule | null): string =>
+  vip ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}` : `Check the leaderboard and join our Discord at ${siteHost}`;
+export const nearlyCall = (siteHost: string): string => `Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`;
 
 type Milestone = { key: string; text: string };
 
 type Score = MatchState['factionScores'][number];
 
+// A line with its placeholders filled in. One it has no value for is left as it is.
+export const fillLine = (line: string, values: Record<string, string | number>): string =>
+  line.replace(/\{(\w+)\}/g, (whole, name: string) => (Object.hasOwn(values, name) ? String(values[name]) : whole));
+
 // A random line from a list, with its placeholders filled in.
-const pickLine = (list: string[], values: Record<string, string | number>, random: () => number): string => {
-  const line = list[Math.floor(random() * list.length)] ?? list[0] ?? '';
-  return line.replace(/\{(\w+)\}/g, (whole, name: string) => (name in values ? String(values[name]) : whole));
-};
+const pickLine = (list: string[], values: Record<string, string | number>, random: () => number): string =>
+  fillLine(list[Math.floor(random() * list.length)] ?? list[0] ?? '', values);
 
 // The team in front's line: from its own list, or the plain one for a faction without a list.
 const teamLine = (lists: Record<string, string[]>, other: string[], team: Score, score: number, random: () => number): string =>
   pickLine(lists[factionKey(team.name)] ?? other, { team: team.name, score }, random);
 
 // Only the team in front is named; when the top teams are level, nobody is.
-const halfwayLine = (scores: Score[], random: () => number): string => {
+const halfwayLine = (scores: Score[], lines: Lines, random: () => number): string => {
   const [first, second] = [...scores].sort((a, b) => b.score - a.score);
-  if (!first) return 'Halfway there!';
-  if (second && second.score === first.score) return pickLine(lines.HALFWAY_LEVEL, {}, random);
-  return `Halfway there! ${teamLine(lines.HALFWAY, lines.HALFWAY_OTHER, first, first.score, random)}`;
+  if (!first) return HALFWAY_START;
+  if (second && second.score === first.score) return pickLine(lines.halfwayLevel, {}, random);
+  return `${HALFWAY_START} ${teamLine(lines.halfway, lines.halfwayOther, first, first.score, random)}`;
 };
 
 // Everything this match has reached so far, in the order it happens.
-// `random` picks the lines; each message's line is chosen when it is sent.
+// `random` picks the lines; each message's line is chosen when it is sent. `lines` are staff's, or the bot's own.
 export const milestones = (
   match: MatchState,
   now: number,
   rule: MessageRule,
   vip: VipRule | null,
   random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
 ): Milestone[] => {
   const { siteHost, scoreToWin } = rule;
   const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
   const top = Math.max(0, leader?.score ?? 0);
-  const nearly = Math.ceil(scoreToWin * NEARLY);
+  const nearly = nearlyScore(scoreToWin);
   return [
     // Only when the bot saw the match start, so the time is right.
     ...(match.summarisable && match.liveAt !== null && now - match.liveAt >= TEN_MINUTES
-      ? [{ key: 'ten-minutes', text: pickLine(lines.TEN_MINUTES, { site: siteHost }, random) }]
+      ? [{ key: 'ten-minutes', text: pickLine(lines.tenMinutes, { site: siteHost }, random) }]
       : []),
     ...(top >= scoreToWin / 2
-      ? [
-          {
-            key: 'halfway',
-            text:
-              `${halfwayLine(match.factionScores, random)} ` +
-              (vip
-                ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}`
-                : `Check the leaderboard and join our Discord at ${siteHost}`),
-          },
-        ]
+      ? [{ key: 'halfway', text: `${halfwayLine(match.factionScores, lines, random)} ${halfwayCall(siteHost, vip)}` }]
       : []),
     // Once per match, for the first team to get there.
     ...(leader && leader.score >= nearly
-      ? [
-          {
-            key: 'nearly',
-            text: `${teamLine(lines.NEARLY, lines.NEARLY_OTHER, leader, nearly, random)} Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`,
-          },
-        ]
+      ? [{ key: 'nearly', text: `${teamLine(lines.nearly, lines.nearlyOther, leader, nearly, random)} ${nearlyCall(siteHost)}` }]
       : []),
   ].map((m) => ({ ...m, text: fit(m.text) }));
 };
@@ -104,8 +102,9 @@ export const nextMessage = (
   rule: MessageRule,
   vip: VipRule | null,
   random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
 ): { messages: MatchMessages; send: string | null } => {
-  const due = milestones(match, now, rule, vip, random);
+  const due = milestones(match, now, rule, vip, random, lines);
   if (previous === null || previous.match !== match.startedAt) {
     return { messages: { match: match.startedAt, sent: due.map((m) => m.key) }, send: null };
   }
@@ -118,7 +117,7 @@ export const nextMessage = (
 
 // What seeding earns, after the seeding line: a reserved slot when automatic VIP is on, otherwise a place on the
 // website's top seeders board.
-const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
+export const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
   if (vip) {
     const offer = `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a reserved slot.`;
     return siteHost ? `${offer} How at ${siteHost}` : offer;
@@ -134,8 +133,9 @@ export const seedingMessage = (
   rule: SeedingMessageRule,
   vip: VipRule | null,
   random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
 ): string =>
-  fit(`${pickLine(lines.SEEDING, { needed: morePlayers(Math.max(1, live - players)) }, random)} ${seedingReward(rule.siteHost, vip)}`);
+  fit(`${pickLine(lines.seeding, { needed: morePlayers(Math.max(1, live - players)) }, random)} ${seedingReward(rule.siteHost, vip)}`);
 
 // Whether the seeding message is due. Checks land a little early or late, so one within half a check of the time
 // counts: every 5 minutes stays every 5 minutes, not 6.

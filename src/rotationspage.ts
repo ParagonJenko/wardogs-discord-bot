@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { readJsonBody } from './body.ts';
 import { mapName } from './discord.ts';
 import { isModifier, MODIFIERS, modesFor } from './matchsetup.ts';
 import type { CatalogItem, Rotation } from './rcon.ts';
@@ -170,29 +171,8 @@ export type RotationsActionResult = { problem: string } | (RotationsPage & { out
 // A rotation of 100 maps is about 15 KB.
 export const ROTATIONS_BODY_BYTES = 65_536;
 
-// A change from the page, or null when it is not one. The body is read a chunk at a time and dropped once past the
-// limit, so one sent without a length is never held whole.
+// A change from the page, or null when it is not one.
 export const readRotationAction = async (request: Request, limit = ROTATIONS_BODY_BYTES): Promise<RotationAction | null> => {
-  if (Number(request.headers.get('content-length') ?? 0) > limit) return null;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const reader = request.body?.getReader();
-  for (;;) {
-    const read = reader === undefined ? { done: true as const } : await reader.read();
-    if (read.done) break;
-    size += read.value.byteLength;
-    if (size > limit) {
-      await reader?.cancel();
-      return null;
-    }
-    chunks.push(read.value);
-  }
-  const body = new Uint8Array(size);
-  chunks.reduce((at, chunk) => (body.set(chunk, at), at + chunk.byteLength), 0);
-  try {
-    const parsed = RotationActionSchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  const parsed = RotationActionSchema.safeParse(await readJsonBody(request, limit));
+  return parsed.success ? parsed.data : null;
 };
