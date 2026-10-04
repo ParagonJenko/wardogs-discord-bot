@@ -15,6 +15,7 @@ import {
   weaponHolders,
   weaponKind,
   weaponName,
+  weaponRole,
   type FeedKill,
 } from '../src/weapons.ts';
 
@@ -145,11 +146,17 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Item.Defibrillator.Heavy')).toBe('Defibrillator Heavy');
     expect(weaponName('Vehicle.Variant.Land.Wheeled.Hilux.MountedMachineGun')).toBe('Hilux (mounted machine gun)');
     expect(weaponName('Vehicle.Variant.Land.Wheeled.Hilux.Default')).toBe('Hilux');
-    expect(weaponName('Id.Vehicle.WeaponExtension.STN_03.MainBarrel')).toBe('STN 03 Main barrel');
+    expect(weaponName('Id.Vehicle.WeaponExtension.STN_05.MainBarrel')).toBe('STN 05 Main barrel');
+    expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('STN 05');
     expect(weaponName('Id.Buildable.SandbagWall')).toBe('Sandbag wall');
   });
 
-  it('tells hand-held weapons from things placed, vehicles, their guns and things built', () => {
+  it('names the mortar and its barrel alike', () => {
+    expect(weaponName('Vehicle.Variant.Stationary.Mortar')).toBe('L81 mortar');
+    expect(weaponName('Id.Vehicle.WeaponExtension.STN_03.MainBarrel')).toBe('L81 mortar');
+  });
+
+  it('tells hand-held weapons from things placed, vehicles, their guns, emplacements and things built', () => {
     expect(weaponKind('Id.Item.M4')).toBe('weapon');
     expect(weaponKind('Id.Item.RPG7')).toBe('weapon');
     expect(weaponKind('Id.Item.M67Grenade')).toBe('weapon');
@@ -159,10 +166,47 @@ describe('weaponName and weaponKind', () => {
     expect(weaponKind('Id.Item.IED.Explosive')).toBe('placed');
     expect(weaponKind('Id.Item.VehicleSupplyCrate.Pallet.MunitionsSupply')).toBe('placed');
     expect(weaponKind('Id.Vehicle.WeaponExtension.WHL_05.RingMinigun')).toBe('vehicle-weapon');
-    expect(weaponKind('Id.Vehicle.WeaponExtension.STN_03.MainBarrel')).toBe('vehicle-weapon');
     expect(weaponKind('Vehicle.Variant.Land.Wheeled.Humvee.Default')).toBe('vehicle');
-    expect(weaponKind('Vehicle.Variant.Stationary.MistralAA')).toBe('vehicle');
     expect(weaponKind('Id.Buildable.BarbedWire')).toBe('buildable');
+    // Mortars and the other fixed weapons are vehicles to the game, but nobody drives them.
+    expect(weaponKind('Vehicle.Variant.Stationary.Mortar')).toBe('emplacement');
+    expect(weaponKind('Id.Vehicle.WeaponExtension.STN_03.MainBarrel')).toBe('emplacement');
+    expect(weaponKind('id.vehicle.weaponextension.stn_01.mistralaa')).toBe('emplacement');
+  });
+});
+
+describe('weaponRole', () => {
+  it('sorts the weapons the game is known to send by what they are for', () => {
+    expect(['Id.Item.AK74M', 'Id.Item.Vector', 'Id.Item.M500'].map(weaponRole)).toEqual(['assault', 'assault', 'assault']);
+    expect(weaponRole('Id.Item.LMG_02')).toBe('machine-gun');
+    expect(['Id.Item.SV98', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual(['marksman', 'marksman', 'marksman']);
+    expect(weaponRole('Id.Item.Glock17')).toBe('sidearm');
+    expect(['Id.Item.RPG7', 'Id.Item.M67Grenade', 'Id.Item.IED.Explosive'].map(weaponRole)).toEqual(['demolition', 'demolition', 'demolition']);
+    expect(['Id.Item.Fists', 'ID.Item.BuildTool.Hammer.Large', 'Id.Item.Defibrillator.Heavy'].map(weaponRole)).toEqual([
+      'melee',
+      'melee',
+      'melee',
+    ]);
+  });
+
+  it('counts mortars, artillery and emplacements as support, and other vehicle guns apart', () => {
+    expect(
+      [
+        'Vehicle.Variant.Stationary.Mortar',
+        'Id.Vehicle.WeaponExtension.STN_03.MainBarrel',
+        'Id.Vehicle.WeaponExtension.TNK_01.Artillery',
+        'Id.Vehicle.WeaponExtension.STN_01.MistralAA',
+      ].map(weaponRole),
+    ).toEqual(['support', 'support', 'support', 'support']);
+    expect(weaponRole('Id.Vehicle.WeaponExtension.TNK_01.Heavy')).toBe('vehicle-gun');
+    // The SPH-2 running someone over.
+    expect(weaponRole('Vehicle.Variant.Land.Tracked.TNK_01.Artillery')).toBe('vehicle');
+    expect(weaponRole('Id.Buildable.BarbedWire')).toBe('buildable');
+  });
+
+  it('leaves out what it does not know', () => {
+    expect(weaponRole('Id.Item.WEPN_035')).toBe('other');
+    expect(weaponRole('ID.Item.SmokeGrenade.White')).toBe('other');
   });
 });
 
@@ -288,16 +332,18 @@ describe('weaponBoard', () => {
   });
 
   it('gives tags of different kinds with the same name one kind, whichever came first', () => {
-    const vehicle = kill({ cause: 'Vehicle.Variant.Stationary.MistralAA' });
-    const gun = kill({ cause: 'Id.Vehicle.WeaponExtension.STN_01.MistralAA' });
-    const kinds = [
-      [vehicle, gun],
-      [gun, vehicle],
-    ].map((kills) => weaponBoard([recordWeaponDay({}, kills)], 30, '2026-09-20', 10, () => undefined).top);
-
-    expect(kinds).toEqual([
-      [expect.objectContaining({ name: 'Talon 9K-SAM', kind: 'vehicle-weapon', kills: 2 })],
-      [expect.objectContaining({ name: 'Talon 9K-SAM', kind: 'vehicle-weapon', kills: 2 })],
+    const top = (causes: string[]) =>
+      weaponBoard([recordWeaponDay({}, causes.map((cause) => kill({ cause })))], 30, '2026-09-20', 10, () => undefined).top;
+    // The mortar and its barrel are one weapon.
+    const mortar = ['Vehicle.Variant.Stationary.Mortar', 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel'];
+    expect([top(mortar), top([...mortar].reverse())]).toEqual([
+      [expect.objectContaining({ name: 'L81 mortar', kind: 'emplacement', kills: 2 })],
+      [expect.objectContaining({ name: 'L81 mortar', kind: 'emplacement', kills: 2 })],
+    ]);
+    const hilux = ['Id.Item.Hilux', 'Vehicle.Variant.Land.Wheeled.Hilux.Default'];
+    expect([top(hilux), top([...hilux].reverse())]).toEqual([
+      [expect.objectContaining({ name: 'Hilux', kind: 'weapon', kills: 2 })],
+      [expect.objectContaining({ name: 'Hilux', kind: 'weapon', kills: 2 })],
     ]);
     expect(
       playerWeaponDays(
@@ -309,7 +355,7 @@ describe('weaponBoard', () => {
         },
         '2026-10-01',
       ),
-    ).toEqual([{ day: '2026-10-03', name: 'Talon 9K-SAM', kind: 'vehicle-weapon', kills: 2, headshots: 0, longest: null }]);
+    ).toEqual([{ day: '2026-10-03', name: 'Talon 9K-SAM', kind: 'emplacement', kills: 2, headshots: 0, longest: null }]);
   });
 
   it('is empty when nobody was killed in those days', () => {

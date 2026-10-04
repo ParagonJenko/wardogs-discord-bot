@@ -105,7 +105,7 @@ export const isSuicide = (e: FeedEvent): boolean =>
 // A death a vehicle made: run over, blown up, or by the vehicle itself rather than a gun on it. Emplacements such as
 // mortars are vehicles to the game, but not ones anyone drives, so they never count, whatever the tags say.
 export const byVehicle = (e: FeedEvent): boolean => {
-  if (e.cause !== null && /^Vehicle\.Variant\.Stationary\./i.test(e.cause)) return false;
+  if (e.cause !== null && weaponKind(e.cause) === 'emplacement') return false;
   return e.tags.includes('VehicleExplosion') || e.tags.includes('RoadKill') || (e.cause !== null && weaponKind(e.cause) === 'vehicle');
 };
 

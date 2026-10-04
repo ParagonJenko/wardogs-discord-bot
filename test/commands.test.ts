@@ -155,6 +155,9 @@ describe('runCommand', () => {
       biggestWin: null,
       closestMatch: null,
       topMap: null,
+      regular: { name: 'Ash', days: 2, of: 7 },
+      rookie: null,
+      awards: null,
     };
     const { run, roundup } = setup({}, null, config, found);
 
@@ -162,7 +165,7 @@ describe('runCommand', () => {
     await run({ name: 'roundup', options: { period: 'this-month' }, userId: null });
     await run({ name: 'roundup', options: { period: 'junk' }, userId: null });
 
-    expect(reply.embeds?.[0]?.title).toBe('🏆 Weekly roundup · 21 Sep – 27 Sep');
+    expect(reply.embeds?.map((e) => e.title)).toEqual(['🏆 Weekly roundup · 21 Sep – 27 Sep', '🎖️ Awards · 21 Sep – 27 Sep']);
     expect(roundup.mock.calls).toEqual([['week'], ['this-month'], ['week']]);
   });
 

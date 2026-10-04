@@ -59,6 +59,8 @@ describe('telling deaths apart', () => {
     expect(byVehicle(death(ASH, BO, { cause: 'Id.Vehicle.WeaponExtension.WHL_05.RingTurret' }))).toBe(false);
     expect(byVehicle(death(ASH, BO, { cause: 'Vehicle.Variant.Stationary.Mortar' }))).toBe(false);
     expect(byVehicle(death(ASH, ASH, { cause: 'Vehicle.Variant.Stationary.Mortar', tags: ['VehicleExplosion'] }))).toBe(false);
+    // The mortar's barrel.
+    expect(byVehicle(death(ASH, ASH, { cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel', tags: ['VehicleExplosion'] }))).toBe(false);
     expect(byVehicle(death(ASH, BO))).toBe(false);
   });
 

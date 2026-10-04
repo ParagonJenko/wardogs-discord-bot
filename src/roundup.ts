@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { factionKey } from './discord.ts';
+import type { KillDaySummary } from './killfeed.ts';
 import { leaderboard, totals, type MatchRecord, type PlayerDay, type RankedPlayer } from './players.ts';
 import type { FactionScore } from './rcon.ts';
 import { dayOf } from './stats.ts';
 import { byKills } from './tracking.ts';
+import { weaponKind, weaponName, weaponRole, type WeaponRole } from './weapons.ts';
 
 // Weekly and monthly roundups: the best players and the best team over a UTC week (Monday to Sunday) or calendar month,
 // from the player records. Posted to Discord when a week or month ends, and shown by /roundup. Players are named with
@@ -25,6 +27,8 @@ const HOUR_MS = 60 * 60_000;
 export const AWARDS_SHOWN = 3;
 // As on the leaderboard's K/D board: a team needs this many matches to be the best team.
 export const TEAM_MIN_MATCHES = 3;
+// A rookie is first seen in the period, by records going back at least this many days before it.
+export const ROOKIE_LOOKBACK_DAYS = 28;
 
 const startOf = (kind: RoundupKind, at: number): number => {
   const d = new Date(at);
@@ -118,18 +122,68 @@ export type Roundup = {
   closestMatch: MatchHighlight | null;
   // The map played most, when one was played more than any other.
   topMap: { map: string; matches: number } | null;
+  // On the server on the most of the period's days (`of`; so far, for a period still going).
+  regular: (RoundupPlayer & { days: number; of: number }) | null;
+  // The rookie who played the most. See ROOKIE_LOOKBACK_DAYS.
+  rookie: (RoundupPlayer & { minutes: number }) | null;
+  // Null without the kill feed's records, or kills in them.
+  awards: FeedAwards | null;
+};
+
+// The weapons the awards name the best players for: assault (assault rifles, SMGs, shotguns), support (mortars,
+// artillery and the other emplacements), machine guns, marksman (marksman and sniper rifles, the bow), demolition
+// (launchers, grenades, mines, C4) and a vehicle's guns. See weaponRole.
+export const ROLE_AWARDS = [
+  'assault',
+  'support',
+  'machine-gun',
+  'marksman',
+  'demolition',
+  'vehicle-gun',
+] as const satisfies readonly WeaponRole[];
+export type RoleAward = (typeof ROLE_AWARDS)[number];
+
+type Kills = RoundupPlayer & { kills: number };
+
+// The awards from the kill feed. Team kills do not count, except on days saved before the bot kept them apart, which
+// have no longest shots.
+export type FeedAwards = {
+  // The first UTC day of the period the feed covers: later than the period's first when the feed began during it.
+  from: string;
+  // The top 3 by kills with each role's weapons, in the order of ROLE_AWARDS.
+  roles: { role: RoleAward; top: Kills[] }[];
+  // Each award goes to one player, null when nobody earned it.
+  headshots: (RoundupPlayer & { headshots: number }) | null;
+  // With a hand-held weapon.
+  longest: (RoundupPlayer & { distance: number; weapon: string }) | null;
+  // Kills with the most different weapons.
+  variety: (RoundupPlayer & { weapons: number }) | null;
+  // Running someone over, or blowing up a vehicle with them in it.
+  roadKills: Kills | null;
+  melee: Kills | null;
+  sidearm: Kills | null;
 };
 
 // Looks up a player's public id by Steam ID (see profiles.ts).
 export type IdOf = (steamId: string) => string | undefined;
 
+// The kill feed's records for the awards (see killfeed.ts).
+export type FeedSources = {
+  // The first UTC day the kill records have.
+  since: string;
+  // Each player's kill days. Days outside the period are left out.
+  kills: KillDaySummary[];
+};
+
 export type RoundupSources = {
   period: Period;
-  // Each UTC day's player totals. Days outside the period are left out.
+  // Each UTC day's player totals. Days before the period tell rookies from the rest; days after it are left out.
   days: { day: string; players: PlayerDay }[];
   // Match records, in any order. Matches count in the period they ended in.
   matches: MatchRecord[];
   idOf: IdOf;
+  // Left out without the kill feed.
+  feed?: FeedSources;
 };
 
 const ranked = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
@@ -193,8 +247,77 @@ const best = (teams: TeamStanding[]): TeamStanding | null => {
 
 const top = <T>(rows: T[], order: (a: T, b: T) => number): T[] => [...rows].sort(order).slice(0, AWARDS_SHOWN);
 
+const minutesOf = (p: { seedingMinutes: number; liveMinutes: number }): number => p.seedingMinutes + p.liveMinutes;
+
+// The most first, then by name. Nobody without any.
+const mostFirst = <T extends { name: string }>(rows: T[], value: (row: T) => number): T[] =>
+  rows.filter((row) => value(row) > 0).sort((a, b) => value(b) - value(a) || a.name.localeCompare(b.name));
+
+// The awards from the kill feed's records over the period's days. `named` gives a player their name and public id.
+const feedAwards = (
+  feed: FeedSources,
+  covered: string[],
+  named: <T extends object>(steamId: string, name: string, row: T) => RoundupPlayer & T,
+  nameOf: Map<string, string>,
+): FeedAwards | null => {
+  const first = covered[0] ?? '';
+  const from = feed.since > first ? feed.since : first;
+  const inPeriod = new Set(covered.filter((day) => day >= from));
+  type Tally = { roles: Map<WeaponRole, number>; headshots: number; kills: number; weapons: Set<string>; name: string };
+  const players = new Map<string, Tally>();
+  // With a hand-held weapon. Ties go to the earliest, which got there first.
+  let longest: { distance: number; steamId: string; cause: string } | null = null;
+  // Days are oldest first, so each player keeps their latest name, unless the player records have one.
+  for (const d of [...feed.kills].sort((a, b) => a.day.localeCompare(b.day))) {
+    if (!inPeriod.has(d.day)) continue;
+    const known = players.get(d.steamId) ?? { roles: new Map(), headshots: 0, kills: 0, weapons: new Set(), name: d.steamId };
+    if (d.name !== '') known.name = d.name;
+    for (const [cause, w] of Object.entries(d.weapons)) {
+      if (w.longest !== undefined && weaponKind(cause) === 'weapon' && (longest === null || w.longest > longest.distance)) {
+        longest = { distance: w.longest, steamId: d.steamId, cause };
+      }
+      const kills = w.kills - (w.teamKills ?? 0);
+      if (kills <= 0) continue;
+      const role = weaponRole(cause);
+      known.roles.set(role, (known.roles.get(role) ?? 0) + kills);
+      known.kills += kills;
+      known.headshots += w.headshots - (w.teamHeadshots ?? 0);
+      known.weapons.add(weaponName(cause));
+    }
+    players.set(d.steamId, known);
+  }
+  const rows = [...players].map(([steamId, t]) => ({ steamId, ...t, name: nameOf.get(steamId) ?? t.name }));
+  if (rows.every((row) => row.kills === 0)) return null;
+  const roleKills = (role: WeaponRole) => (row: Tally) => row.roles.get(role) ?? 0;
+  const board = (role: WeaponRole): Kills[] =>
+    mostFirst(rows, roleKills(role))
+      .slice(0, AWARDS_SHOWN)
+      .map((row) => named(row.steamId, row.name, { kills: roleKills(role)(row) }));
+  const winner = (role: WeaponRole): Kills | null => board(role)[0] ?? null;
+  // Fewer kills for as many headshots is the better aim.
+  const [headshots] = rows
+    .filter((row) => row.headshots > 0)
+    .sort((a, b) => b.headshots - a.headshots || a.kills - b.kills || a.name.localeCompare(b.name));
+  const [variety] = mostFirst(rows, (row) => row.weapons.size);
+  const holder = longest === null ? undefined : rows.find((row) => row.steamId === longest?.steamId);
+
+  return {
+    from,
+    roles: ROLE_AWARDS.map((role) => ({ role, top: board(role) })),
+    headshots: headshots === undefined ? null : named(headshots.steamId, headshots.name, { headshots: headshots.headshots }),
+    longest:
+      longest === null || holder === undefined
+        ? null
+        : named(longest.steamId, holder.name, { distance: longest.distance, weapon: weaponName(longest.cause) }),
+    variety: variety === undefined ? null : named(variety.steamId, variety.name, { weapons: variety.weapons.size }),
+    roadKills: winner('vehicle'),
+    melee: winner('melee'),
+    sidearm: winner('sidearm'),
+  };
+};
+
 // Null when nobody was on the server in the period.
-export const buildRoundup = ({ period, days, matches, idOf }: RoundupSources): Roundup | null => {
+export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSources): Roundup | null => {
   const covered = new Set(periodDays(period));
   const inPeriod = days.filter((d) => covered.has(d.day) && Object.keys(d.players).length > 0);
   if (inPeriod.length === 0) return null;
@@ -257,6 +380,31 @@ export const buildRoundup = ({ period, days, matches, idOf }: RoundupSources): R
     .map((d) => ({ day: d.day, players: Object.keys(d.players).length }))
     .reduce<{ day: string; players: number } | null>((chosen, d) => (chosen === null || d.players > chosen.players ? d : chosen), null);
 
+  // Each player's latest name in the period, the days they were on and their minutes.
+  const nameOf = new Map<string, string>();
+  const onDays = new Map<string, { name: string; days: number; minutes: number }>();
+  for (const d of inPeriod) {
+    for (const [steamId, t] of Object.entries(d.players)) {
+      const known = onDays.get(steamId) ?? { days: 0, minutes: 0 };
+      nameOf.set(steamId, t.name);
+      onDays.set(steamId, { name: t.name, days: known.days + (minutesOf(t) > 0 ? 1 : 0), minutes: known.minutes + minutesOf(t) });
+    }
+  }
+  // More minutes breaks a tie on days.
+  const [regular] = [...onDays]
+    .filter(([, p]) => p.days > 0)
+    .sort(([, a], [, b]) => b.days - a.days || b.minutes - a.minutes || a.name.localeCompare(b.name));
+
+  // Rookies: on in the period, and on none of the days kept before it, once those go back far enough to tell.
+  const earlier = days.filter((d) => d.day < dayOf(period.start));
+  const seen = new Set(
+    earlier.flatMap((d) => Object.entries(d.players).flatMap(([steamId, t]) => (minutesOf(t) > 0 ? [steamId] : []))),
+  );
+  const recordsFrom = earlier.flatMap((d) => (Object.keys(d.players).length > 0 ? [d.day] : [])).sort()[0];
+  const longEnough = recordsFrom !== undefined && recordsFrom <= dayOf(period.start - ROOKIE_LOOKBACK_DAYS * DAY_MS);
+  const rookies = [...onDays].flatMap(([steamId, p]) => (seen.has(steamId) ? [] : [{ steamId, ...p }]));
+  const [rookie] = longEnough ? mostFirst(rookies, (p) => p.minutes) : [];
+
   const teams = standings(played);
   return {
     kind: period.kind,
@@ -289,5 +437,8 @@ export const buildRoundup = ({ period, days, matches, idOf }: RoundupSources): R
     // Only one decisive match, or all won by as much, has no closest finish of its own.
     closestMatch: closest === biggest ? null : highlight(closest),
     topMap: mostPlayed !== undefined && (nextMost === undefined || mostPlayed[1] > nextMost[1]) ? { map: mostPlayed[0], matches: mostPlayed[1] } : null,
+    regular: regular === undefined ? null : named(regular[0], regular[1].name, { days: regular[1].days, of: covered.size }),
+    rookie: rookie === undefined ? null : named(rookie.steamId, rookie.name, { minutes: rookie.minutes }),
+    awards: feed === undefined ? null : feedAwards(feed, periodDays(period), named, nameOf),
   };
 };

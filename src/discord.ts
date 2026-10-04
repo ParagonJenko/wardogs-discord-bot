@@ -4,7 +4,7 @@ import { isBotBan, type BanRecord, type ModAction, type ModEntry } from './moder
 import type { GriefAlert, Incident } from './griefing.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
-import type { MatchHighlight, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
+import type { MatchHighlight, RoleAward, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
 import { WEEKDAYS as ROTATION_DAYS } from './rotations.ts';
 import type { RecentMatch } from './stats.ts';
 import { assess, RISK_LABELS, steamFacts, type Risk, type SteamAlert, type SteamCheck, type SteamLookup } from './steam.ts';
@@ -624,7 +624,7 @@ export const buildVipMessage = (
 const ROUNDUP_COLOR = 0xf1c40f;
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-// Discord caps an embed at 6000 characters all told, and a field's value at 1024.
+// Discord caps a message's embeds at 6000 characters all told, and a field's value at 1024.
 const MAX_EMBED = 6000;
 const MAX_FIELD = 1024;
 
@@ -634,15 +634,18 @@ const dayLabel = (at: number, weekday = false): string => {
   return `${weekday ? `${WEEKDAYS[d.getUTCDay()]} ` : ''}${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
 };
 
+// "28 Sep – 4 Oct", or "September 2026" for a month.
+const periodLabel = (r: Roundup): string => {
+  const start = new Date(r.start);
+  return r.kind === 'month'
+    ? `${MONTH_NAMES[start.getUTCMonth()]} ${start.getUTCFullYear()}`
+    : [...new Set([dayLabel(r.start), dayLabel(r.end - 1)])].join(' – ');
+};
+
 // "Weekly roundup · 28 Sep – 4 Oct", "Monthly roundup · September 2026", or "This week so far · 28 Sep – 3 Oct".
 const roundupTitle = (r: Roundup): string => {
-  const start = new Date(r.start);
-  const when =
-    r.kind === 'month'
-      ? `${MONTH_NAMES[start.getUTCMonth()]} ${start.getUTCFullYear()}`
-      : [...new Set([dayLabel(r.start), dayLabel(r.end - 1)])].join(' – ');
   const name = r.partial ? `This ${r.kind} so far` : r.kind === 'month' ? 'Monthly roundup' : 'Weekly roundup';
-  return `🏆 ${name} · ${when}`;
+  return `🏆 ${name} · ${periodLabel(r)}`;
 };
 
 const matchCount = (count: number): string => `${count} ${count === 1 ? 'match' : 'matches'}`;
@@ -669,14 +672,18 @@ const embedLength = (embed: Embed): number =>
   (embed.footer?.text.length ?? 0) +
   (embed.fields ?? []).reduce((sum, f) => sum + f.name.length + f.value.length, 0);
 
-const buildRoundupEmbed = (r: Roundup, siteUrl: string | undefined, links: boolean): Embed => {
-  const pages = links && siteUrl ? siteUrl.replace(/\/$/, '') : null;
-  const who = (p: RoundupPlayer): string => {
-    const name = playerName(p.name);
-    return `**${pages && p.id ? `[${name}](${pages}/player?id=${p.id})` : name}**`;
-  };
-  const board = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string): string =>
-    rows.length === 0 ? '–' : ranked(rows.map((p) => `${who(p)} · ${value(p)}`));
+// A player's name in bold, linked to their page when `pages` is the website's address.
+const roundupName = (p: RoundupPlayer, pages: string | null): string => {
+  const name = playerName(p.name);
+  return `**${pages && p.id ? `[${name}](${pages}/player?id=${p.id})` : name}**`;
+};
+
+const roundupBoard = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string, pages: string | null): string =>
+  rows.length === 0 ? '–' : ranked(rows.map((p) => `${roundupName(p, pages)} · ${value(p)}`));
+
+const buildRoundupEmbed = (r: Roundup, pages: string | null, siteUrl: string | undefined): Embed => {
+  const who = (p: RoundupPlayer): string => roundupName(p, pages);
+  const board = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string): string => roundupBoard(rows, value, pages);
 
   // Whole hours, once there is at least one.
   const played = r.playedMs >= 60 * 60_000 ? `${Math.round(r.playedMs / (60 * 60_000))} h` : minutes(r.playedMs);
@@ -739,12 +746,70 @@ const buildRoundupEmbed = (r: Roundup, siteUrl: string | undefined, links: boole
   };
 };
 
-// The best players and team of a week or month. Names link to their player pages on the website, unless the links
-// would make it too long for Discord.
+const ROLE_TITLES: Record<RoleAward, string> = {
+  assault: '🪖 Best assaulter',
+  support: '💣 Best support',
+  'machine-gun': '🔥 Best machine gunner',
+  marksman: '🔭 Best marksman',
+  demolition: '🧨 Best demolitions',
+  'vehicle-gun': '🚁 Best vehicle crew',
+};
+
+const ROLE_RULES =
+  'Assault: assault rifles, SMGs and shotguns. Support: mortars, artillery and emplacements. Machine gunner: LMGs. ' +
+  'Marksman: marksman and sniper rifles, and the bow. Demolitions: launchers, grenades, mines and C4. ' +
+  'Vehicle crew: vehicle guns.';
+
+// "742 m", and to a tenth under 10 m: "4.5 m".
+const metres = (distance: number): string => `${distance < 10 ? Number(distance.toFixed(1)) : Math.round(distance)} m`;
+
+// The awards: the best at each role, from the kill feed, and shout-outs for the rest. Null when there are none.
+const buildAwardsEmbed = (r: Roundup, pages: string | null): Embed | null => {
+  const a = r.awards;
+  const who = (p: RoundupPlayer): string => roundupName(p, pages);
+  const shoutOuts = [
+    ...(a?.headshots ? [`💀 Headhunter: ${who(a.headshots)} · ${plural(a.headshots.headshots, 'headshot')}`] : []),
+    ...(a?.longest ? [`📏 Longest shot: ${who(a.longest)} · ${metres(a.longest.distance)} · ${escapeMarkdown(a.longest.weapon)}`] : []),
+    ...(a?.variety ? [`🧰 Jack of all trades: ${who(a.variety)} · kills with ${plural(a.variety.weapons, 'weapon')}`] : []),
+    ...(a?.roadKills ? [`🚗 Road rage: ${who(a.roadKills)} · ${a.roadKills.kills} run over or blown up`] : []),
+    ...(a?.melee ? [`🔨 Bonk: ${who(a.melee)} · ${plural(a.melee.kills, 'melee kill')}`] : []),
+    ...(a?.sidearm ? [`🤠 Quickdraw: ${who(a.sidearm)} · ${plural(a.sidearm.kills, 'pistol kill')}`] : []),
+    ...(r.regular ? [`📆 Ever-present: ${who(r.regular)} · on ${r.regular.days} of ${plural(r.regular.of, 'day')}`] : []),
+    ...(r.rookie ? [`🐣 Rookie of the ${r.kind}: ${who(r.rookie)} · ${hoursAndMinutes(r.rookie.minutes)} played`] : []),
+  ];
+  const fields: EmbedField[] = [
+    ...(a ? a.roles.map(({ role, top }) => ({ name: ROLE_TITLES[role], value: roundupBoard(top, (p) => String(p.kills), pages), inline: true })) : []),
+    ...(shoutOuts.length > 0 ? [{ name: '🌟 Shout-outs', value: shoutOuts.join('\n') }] : []),
+  ];
+  if (fields.length === 0) return null;
+  const from = a === null ? null : Date.parse(`${a.from}T00:00:00Z`);
+  const rules = [
+    ...(a ? [ROLE_RULES, "Kills from the game's kill feed; team kills don't count."] : []),
+    ...(from !== null && from > r.start ? [`The kill feed's awards count from ${dayLabel(from, true)}.`] : []),
+    ...(r.rookie ? [`Rookie: first seen this ${r.kind}.`] : []),
+  ];
+  return {
+    title: `🎖️ Awards · ${periodLabel(r)}`,
+    color: ROUNDUP_COLOR,
+    fields,
+    ...(rules.length > 0 ? { footer: { text: rules.join('\n') } } : {}),
+  };
+};
+
+const fits = (embeds: Embed[]): boolean =>
+  embeds.reduce((sum, e) => sum + embedLength(e), 0) <= MAX_EMBED &&
+  embeds.every((e) => (e.fields ?? []).every((f) => f.value.length <= MAX_FIELD));
+
+// The best players and team of a week or month, then the awards. Names link to their player pages on the website,
+// unless the links would make it too long for Discord, and the awards are left out if it is too long even then.
 export const buildRoundupMessage = (roundup: Roundup, siteUrl?: string): DiscordMessage => {
-  const linked = buildRoundupEmbed(roundup, siteUrl, true);
-  const fits = embedLength(linked) <= MAX_EMBED && (linked.fields ?? []).every((f) => f.value.length <= MAX_FIELD);
-  return { embeds: [fits ? linked : buildRoundupEmbed(roundup, siteUrl, false)], allowed_mentions: NO_PINGS };
+  const pages = siteUrl ? siteUrl.replace(/\/$/, '') : null;
+  const build = (links: string | null): Embed[] => {
+    const awards = buildAwardsEmbed(roundup, links);
+    return [buildRoundupEmbed(roundup, links, siteUrl), ...(awards === null ? [] : [awards])];
+  };
+  const embeds = [build(pages), build(null)].find(fits) ?? build(null).slice(0, 1);
+  return { embeds, allowed_mentions: NO_PINGS };
 };
 
 export type SeederRow = { steamId: string; name: string; seedingMinutes: number; seedDays: number; vipUntil: number | null };

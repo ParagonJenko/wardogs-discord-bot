@@ -11,8 +11,8 @@ import { weaponKind, weaponName, type FeedKill, type WeaponKind } from './weapon
 //
 // Two records. 'killFeed' (Durable Object storage, written with each batch) is the server's latest kills. The kill_days
 // table, in the Durable Object's SQLite database, has a row for each player on each UTC day they killed someone: their
-// kills and headshots, the same by weapon, and each kill. A batch writes one row per killer, as for their weapons, and
-// rows older than KILL_DAYS_KEPT days are deleted.
+// kills and headshots, the same by weapon, and each kill. A batch writes one row per killer, as for their weapons. Rows
+// keep their kills for KILL_DAYS_KEPT days, and their counts, which the roundups' awards read, for KILL_DAYS_STORED.
 
 export const KILL_FEED_KEY = 'killFeed';
 // The feed keeps the server's latest kills, up to this many, and fewer when their names are long, so the record stays
@@ -21,6 +21,8 @@ export const FEED_KEPT = 250;
 export const FEED_BYTES = 80_000;
 // The staff page's longest period.
 export const KILL_DAYS_KEPT = 30;
+// /roundup shows last month until the end of this one: 62 days at most.
+export const KILL_DAYS_STORED = 62;
 // A player's day keeps their latest kills, up to this many. Their counts are always complete.
 export const DAY_KILLS_KEPT = 1_000;
 // The headshots list, and a player's kills, on the staff page.
@@ -60,6 +62,10 @@ export type DayKill = Omit<StaffKill, 'killer' | 'killerName'>;
 
 export type WeaponCount = { kills: number; headshots: number };
 
+// A weapon on a player's day, with the team kills and their headshots among its kills, and the longest of the other
+// kills, in metres. Each is left out when there is none, and on days saved before the bot counted them.
+export type DayWeapon = WeaponCount & { teamKills?: number; teamHeadshots?: number; longest?: number };
+
 // A player's UTC day. `weapons` is by cause tag; `list` their latest kills, oldest first.
 export type KillDay = {
   day: string;
@@ -67,7 +73,7 @@ export type KillDay = {
   name: string;
   kills: number;
   headshots: number;
-  weapons: Record<string, WeaponCount>;
+  weapons: Record<string, DayWeapon>;
   list: DayKill[];
 };
 
@@ -90,7 +96,16 @@ const DayKillSchema = z.object({
 
 const KillFeedSchema = z.array(DayKillSchema.extend({ killer: z.string(), killerName: z.string() }));
 
-const WeaponsSchema = z.record(z.string(), z.object({ kills: count, headshots: count }));
+const WeaponsSchema = z.record(
+  z.string(),
+  z.object({
+    kills: count,
+    headshots: count,
+    teamKills: count.optional(),
+    teamHeadshots: count.optional(),
+    longest: z.number().nonnegative().optional(),
+  }),
+);
 
 // Nothing saved yet, or anything unrecognisable, is an empty feed.
 export const parseKillFeed = (raw: unknown): StaffKill[] => {
@@ -141,7 +156,16 @@ export const recordKillDay = (known: KillDay | null, steamId: string, day: strin
     next.kills += 1;
     next.headshots += kill.headshot ? 1 : 0;
     const weapon = next.weapons[kill.cause] ?? { kills: 0, headshots: 0 };
-    next.weapons[kill.cause] = { kills: weapon.kills + 1, headshots: weapon.headshots + (kill.headshot ? 1 : 0) };
+    const teamKills = (weapon.teamKills ?? 0) + (kill.teamKill ? 1 : 0);
+    const teamHeadshots = (weapon.teamHeadshots ?? 0) + (kill.teamKill && kill.headshot ? 1 : 0);
+    const longest = kill.teamKill || kill.distance === null ? weapon.longest : Math.max(weapon.longest ?? 0, kill.distance);
+    next.weapons[kill.cause] = {
+      kills: weapon.kills + 1,
+      headshots: weapon.headshots + (kill.headshot ? 1 : 0),
+      ...(teamKills > 0 ? { teamKills } : {}),
+      ...(teamHeadshots > 0 ? { teamHeadshots } : {}),
+      ...(longest === undefined ? {} : { longest }),
+    };
     added.push(kill);
   }
   return { ...next, list: [...next.list, ...added].slice(-DAY_KILLS_KEPT) };
@@ -247,9 +271,10 @@ export const playerKillDays = (sql: Sql, steamId: string, from: string): KillDay
     .toArray()
     .flatMap((row) => dayOfRow(row) ?? []);
 
-// Deletes the days before `oldest`.
-export const pruneKillDays = (sql: Sql, oldest: string): void => {
+// Deletes the days before `oldest`, and the kills of the days before `listedFrom`, which keep their counts.
+export const pruneKillDays = (sql: Sql, oldest: string, listedFrom: string): void => {
   sql.exec('DELETE FROM kill_days WHERE day < ?', oldest);
+  sql.exec("UPDATE kill_days SET list = '[]' WHERE day < ? AND list != '[]'", listedFrom);
 };
 
 // The first UTC day kept, or null before the first kill.
