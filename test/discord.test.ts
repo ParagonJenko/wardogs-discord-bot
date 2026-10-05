@@ -249,6 +249,27 @@ describe('buildMatchSummary', () => {
       text: 'UK · Live stats and leaderboard: gaminginit.com',
     });
   });
+
+  it('links the title to the match on the website, whether or not the site address ends in a slash', () => {
+    const ended = { ...summary, endedAt: 1_727_690_000_000 };
+
+    expect(embedOf(buildMatchSummary(ended, 'UK', 'https://gaminginit.com'))?.url).toBe(
+      'https://gaminginit.com/matches#match-1727690000000',
+    );
+    expect(embedOf(buildMatchSummary(ended, 'UK', 'https://gaminginit.com/'))).toMatchObject({
+      url: 'https://gaminginit.com/matches#match-1727690000000',
+      footer: { text: 'UK · Live stats and leaderboard: gaminginit.com' },
+    });
+  });
+
+  it('links the title to the website alone when it is not known when the match ended', () => {
+    expect(embedOf(buildMatchSummary(summary, 'UK', 'https://gaminginit.com/'))?.url).toBe('https://gaminginit.com/');
+    expect(embedOf(buildMatchSummary({ ...summary, endedAt: null }, 'UK', 'https://gaminginit.com'))?.url).toBe('https://gaminginit.com');
+  });
+
+  it('links nowhere without a website, even when it is known when the match ended', () => {
+    expect(embedOf(buildMatchSummary({ ...summary, endedAt: 1_727_690_000_000 }, 'UK'))?.url).toBeUndefined();
+  });
 });
 
 describe('buildStatusEmbed', () => {
@@ -560,6 +581,16 @@ describe('buildLastMatchEmbed', () => {
       timestamp: '2024-09-30T09:53:20.000Z',
     });
     expect(embed.fields?.at(-1)).toEqual({ name: 'Top players', value: '🥇 **Cy** · 12 kills · 3 deaths · 4.00 K/D' });
+  });
+
+  it('links its title to the match on the website, and leaves the footer as it was', () => {
+    const match = { map: 'Bakurani', endedAt: 1_727_690_000_000, durationMs: 60_000, peakPlayers: 64, factionScores: [], top: [] };
+
+    expect(buildLastMatchEmbed(match, 'https://gaminginit.com/')).toMatchObject({
+      url: 'https://gaminginit.com/matches#match-1727690000000',
+      footer: { text: 'Live stats and leaderboard: gaminginit.com' },
+    });
+    expect(buildLastMatchEmbed(match).url).toBeUndefined();
   });
 });
 
