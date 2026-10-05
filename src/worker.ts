@@ -59,7 +59,19 @@ import {
   type Choice,
 } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
-import { JOIN_LOG_KEY, parseJoinLog, recordJoins, type JoinLog } from './joinlog.ts';
+import {
+  createSessions,
+  JOIN_LOG_KEY,
+  parseJoinLog,
+  playerSessions,
+  pruneSessions,
+  recordJoins,
+  SESSION_DAYS_KEPT,
+  writeSessions,
+  type AdminSession,
+  type JoinEvent,
+  type JoinLog,
+} from './joinlog.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
@@ -401,7 +413,7 @@ const oneAtATime = () => {
 // put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list), 'killFeed' (the
 // server's latest kills, for the staff page) and 'joinLog' (who joined and left the server, for the staff page; see
 // joinlog.ts). Each player's kills by day, for the staff page and the roundups' awards, are in the SQLite database's
-// kill_days table (see killfeed.ts).
+// kill_days table (see killfeed.ts), and each player's times on the server, for their history, in its sessions table.
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -450,6 +462,9 @@ export class Watcher extends DurableObject<Env> {
   // Whether the kill_days table is known to be there, and the UTC day its old rows were last deleted.
   private killTable = false;
   private killsPrunedOn: string | null = null;
+  // The same for the sessions table.
+  private sessionTable = false;
+  private sessionsPrunedOn: string | null = null;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -605,14 +620,42 @@ export class Watcher extends DurableObject<Env> {
       observation.at,
       parseOnline(stored.get('online'))?.at ?? null,
     );
-    const joined: Record<string, JoinLog> = joins === joinLog ? {} : { [JOIN_LOG_KEY]: joins };
+    const joined: Record<string, JoinLog> = joins.log === joinLog ? {} : { [JOIN_LOG_KEY]: joins.log };
     if (observation.phase === 'empty' || observation.players.length === 0) {
       await this.ctx.storage.put({ stats, online, ...joined });
-      return;
+    } else {
+      const kind = observation.seeding ? 'seeding' : 'live';
+      const day = recordActivity(parsePlayerDay(stored.get(dayKey)), observation.players, kind, minutes);
+      await this.ctx.storage.put({ stats, online, ...joined, [dayKey]: day });
     }
-    const kind = observation.seeding ? 'seeding' : 'live';
-    const day = recordActivity(parsePlayerDay(stored.get(dayKey)), observation.players, kind, minutes);
-    await this.ctx.storage.put({ stats, online, ...joined, [dayKey]: day });
+    // Once the log is saved, so a check that failed before it is noted again by the next, and never twice.
+    if (joins.added.length > 0) this.recordSessions(joins.added, observation.at);
+  }
+
+  // The SQLite database, with the History tab's sessions table, which is made the first time.
+  private sessionSql(): Sql {
+    const sql = this.ctx.storage.sql;
+    if (!this.sessionTable) {
+      createSessions(sql);
+      this.sessionTable = true;
+    }
+    return sql;
+  }
+
+  // A row for each player who left, for their history, and once a day the ones no longer kept go. A failure is only
+  // logged, as the join log is saved already.
+  private recordSessions(added: JoinEvent[], now: number): void {
+    try {
+      const sql = this.sessionSql();
+      const day = dayOf(now);
+      this.ctx.storage.transactionSync(() => {
+        writeSessions(sql, added);
+        if (this.sessionsPrunedOn !== day) pruneSessions(sql, Date.parse(dayOf(now - (SESSION_DAYS_KEPT - 1) * DAY_MS)));
+      });
+      this.sessionsPrunedOn = day;
+    } catch (error) {
+      console.error(`Staff page session records failed: ${errorText(error)}`);
+    }
   }
 
   private async recordSeed(seeders: SeedCredit[], at: number, minMinutes: number): Promise<void> {
@@ -1495,14 +1538,17 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // One player's kills over the last `days` UTC days, for the Kill feed tab.
-  async adminPlayerKills(steamId: string, days: number): Promise<AdminPlayerKills> {
+  // One player's kills and times on the server over the last `days` UTC days, for the History tab.
+  async adminPlayerKills(steamId: string, days: number): Promise<AdminPlayerKills & { sessions: AdminSession[] }> {
     const now = Date.now();
-    const [stored, ids] = await Promise.all([this.ctx.storage.get('online'), this.idsFor([steamId])]);
-    const online = this.onlineNow(now, stored);
+    const [stored, ids] = await Promise.all([this.ctx.storage.get(['online', JOIN_LOG_KEY]), this.idsFor([steamId])]);
+    const online = this.onlineNow(now, stored.get('online'));
     const sql = this.killSql();
     const from = dayOf(now - (days - 1) * DAY_MS);
-    return buildPlayerKills({
+    // Their times on the server in the period, and the one they are on now while the server is answering.
+    const onNow = online?.players.some((p) => p.steamId === steamId) ? (parseJoinLog(stored.get(JOIN_LOG_KEY))?.inGame[steamId] ?? null) : null;
+    const sessions = playerSessions(this.sessionSql(), steamId, Date.parse(from), onNow, online?.at ?? now);
+    const kills = buildPlayerKills({
       now,
       days,
       since: firstKillDay(sql),
@@ -1514,6 +1560,7 @@ export class Watcher extends DurableObject<Env> {
       name: online?.players.find((p) => p.steamId === steamId)?.name,
       idOf: (id) => ids.get(id),
     });
+    return { ...kills, sessions };
   }
 
   // The live page: the server and its match from the last check, and the kill feed's match while it is the one on now.

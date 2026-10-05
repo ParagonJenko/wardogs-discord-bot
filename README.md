@@ -510,7 +510,8 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
   minute late, and someone on for less than a minute between two checks is missed. When the bot could not read the
   server for a while, the first check after notes everyone who joined or left meanwhile, with since when. The players
   on when the bot started keeping the log have no join, so their time on is left out when they leave. Stored as
-  `joinLog`, written only when someone joined or left.
+  `joinLog`, written only when someone joined or left. Each time someone leaves, their time on the server also goes in
+  the SQLite database's `sessions` table for their history, kept for 30 days.
 - **The kill feed, live**: every kill a second or two after the game sends it (see below).
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
   the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
@@ -521,7 +522,8 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
 - **[Kills and headshots](#kills-and-headshots)**: who gets far more headshots than the server's players get with the
   same weapons, over today, 7 or 30 days, and any player's every kill, with the weapon. From the
   [kill feed](#weapon-stats).
-- **Any player's history**: their record (as `/player` shows it), their kills and headshots, and their team kills.
+- **Any player's history**: their record (as `/player` shows it), their times on the server (when they joined and left,
+  and for how long), their kills and headshots, and their team kills.
 - **[Risky Steam accounts](#risky-steam-accounts)** among everyone seen in the period or in game now, those in game
   first, then riskiest first, with why, how old the account is, whether they are in game or banned, and their matches, kills, K/D and headshots for
   scale. With `STEAM_API_KEY` only.
@@ -576,7 +578,7 @@ How it works:
   from a browser, it is never cached, and it is the only place the bot shows Steam IDs outside Discord. Each load also
   reads the server's ban list and `ServerSettings.ini` (two RCON requests). With it, the page reads
   `GET /api/admin/kills?days=1|7|30` for the headshots list, and `&player=<Steam ID>` for one player's kills, the same
-  way.
+  way, with their times on the server in the period (`sessions`, newest first, the one they are on now first).
 - The live kill feed is a WebSocket, `GET /api/admin/live`. A browser can't send a header with one, so the page sends
   its session as the socket's second subprotocol (`wardogs-staff`, then the session), which keeps it out of addresses
   and logs. The Worker checks the session and that the socket comes from `SITE_URL`, and the Durable Object keeps it
