@@ -80,6 +80,8 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    ```
 3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`, and `SITE_URL` (your community
    website, such as `https://gaminginit.com`): post titles then link to it, and their footer points people there.
+   Set `SERVER_ID` to the server's ID for Join by ID in the game's server browser, and the alerts, `/serverstatus` and
+   the [live server status](#live-server-status) show it under **Join the server**, with how to join.
 4. Deploy:
    ```bash
    npm run deploy
@@ -107,6 +109,8 @@ One message in a channel of its own that the bot edits every minute, so anyone c
 - **Timing:** when the match started, or how long the server has been seeding.
 - **Score:** each team's score, with how many players are on each team.
 - **Top players:** the top 3 this match, by kills.
+- **Join the server:** the server's ID to copy, and how to join with it in game (Deploy → Server Browser → Join by
+  ID, paste the code, then Lookup), when `SERVER_ID` is set. Not shown while the server is offline.
 
 Discord shows when it was last updated next to the footer, and times like "34 minutes ago" count up by themselves.
 

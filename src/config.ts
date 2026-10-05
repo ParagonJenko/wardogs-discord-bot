@@ -48,6 +48,12 @@ const EnvSchema = z
     DISCORD_INVITE: invite.optional(),
     // The community website; Discord posts link to it.
     SITE_URL: z.url({ protocol: /^https?$/ }).optional(),
+    // The server's ID for Join by ID in the game's server browser; the status posts show it so people can join.
+    SERVER_ID: z
+      .string()
+      .trim()
+      .regex(/^[\w-]+$/, "must be the server's ID for Join by ID, like 2615de90-da95-4950-913a-246b1db49237")
+      .optional(),
     SEEDING_THRESHOLD: count(1),
     LIVE_THRESHOLD: count(20),
     LOW_POP_THRESHOLD: count(20),
@@ -111,6 +117,8 @@ export type Config = {
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
+  // The server's ID for Join by ID in game, when set.
+  serverId: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
   // Players from which the server counts as busy, for the website.
@@ -154,6 +162,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,
+    serverId: e.SERVER_ID,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,
     rules: {
       seeding: e.SEEDING_THRESHOLD,

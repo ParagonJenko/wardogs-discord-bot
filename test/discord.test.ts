@@ -28,6 +28,9 @@ const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
 const offer = 'Seed on 3 days in a week and get a reserved slot for a week.';
 const rule = "A seed counts when you're on for more than 10 min and the server goes live.";
 
+const serverId = '2615de90-da95-4950-913a-246b1db49237';
+const join = '```\n2615de90-da95-4950-913a-246b1db49237\n```\nIn game: Deploy → Server Browser → Join by ID, paste the code, then Lookup.';
+
 const embedOf = (message: DiscordMessage) => message.embeds[0];
 const field = (message: DiscordMessage, name: string) => embedOf(message)?.fields?.find((f) => f.name === name)?.value;
 
@@ -114,6 +117,14 @@ describe('buildMessage', () => {
     });
 
     expect(field(message, 'Top seeders')).toBe('🥇 Ash\\_1 · 42 min\n🥈 Bo · 30 min\n🥉 Cy · 12 min');
+  });
+
+  it('shows how to join with the server\'s ID, last, on every alert when there is one', () => {
+    for (const kind of ['seeding', 'live', 'lowPop'] as const) {
+      const fields = embedOf(buildMessage(kind, server, { lowPop: 20, vip, serverId }))?.fields;
+      expect(fields?.at(-1)).toEqual({ name: 'Join the server', value: join });
+    }
+    expect(field(buildMessage('live', server, { lowPop: 20 }), 'Join the server')).toBeUndefined();
   });
 
   it('adds no seeder list when nobody seeded', () => {
@@ -284,6 +295,10 @@ describe('buildStatusEmbed', () => {
   it('links to the website when there is one', () => {
     expect(buildStatusEmbed(status, rules, 'https://gaminginit.com')).toMatchObject({ url: 'https://gaminginit.com' });
   });
+
+  it("shows how to join with the server's ID when there is one", () => {
+    expect(buildStatusEmbed(status, rules, undefined, serverId).fields?.at(-1)).toEqual({ name: 'Join the server', value: join });
+  });
 });
 
 describe('buildLiveStatus', () => {
@@ -337,6 +352,11 @@ describe('buildLiveStatus', () => {
       ],
       allowed_mentions: { parse: [], roles: [] },
     });
+  });
+
+  it("shows how to join with the server's ID, but not while the server is offline", () => {
+    expect(embedOf(buildLiveStatus(view, rules, undefined, serverId))?.fields?.at(-1)).toEqual({ name: 'Join the server', value: join });
+    expect(embedOf(buildLiveStatus({ ...view, snapshot: null }, rules, undefined, serverId))?.fields).toBeUndefined();
   });
 
   it('does not tell people to get in when the server is full', () => {
