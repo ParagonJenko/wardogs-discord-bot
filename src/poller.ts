@@ -326,6 +326,7 @@ export const createPoller = ({
             seeders,
             vip: config.vip,
             siteUrl: config.siteUrl,
+            serverId: config.serverId,
           }),
         );
         log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);

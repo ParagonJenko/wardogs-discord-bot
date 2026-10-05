@@ -800,6 +800,7 @@ export class Watcher extends DurableObject<Env> {
         { snapshot, lastSeen: server === null ? null : { name: server.name, at: server.seenAt }, match, nextMap: next, now },
         config.rules,
         config.siteUrl,
+        config.serverId,
       );
       const ref = parseBoardRef(stored.get('board'));
       const shown = await showBoard(webhookUrl, message, ref);

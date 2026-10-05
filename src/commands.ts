@@ -112,9 +112,9 @@ export const runCommand =
       return { embeds: [buildSeedersEmbed(await seeders(days), days, seedMinutes, vip)] };
     }
 
-    const { rconUrl, rconPassword, rules, siteUrl, roleId, vip } = config();
+    const { rconUrl, rconPassword, rules, siteUrl, serverId, roleId, vip } = config();
     if (name === 'serverstatus') {
-      return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl)] };
+      return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl, serverId)] };
     }
     if (name === 'players') return { embeds: [buildPlayersEmbed(await fetchPlayers(rconUrl, rconPassword, http))] };
     if (name === 'rotation') return { embeds: [buildRotationEmbed(await fetchRotation(rconUrl, rconPassword, http))] };
@@ -126,7 +126,7 @@ export const runCommand =
       if (status.players >= rules.live) {
         return { content: `The server is already live (${status.players}/${status.maxPlayers} players), so no seeding call was sent.` };
       }
-      await seedCall(buildSeedCall(status, { lowPop: rules.lowPop, live: rules.live, roleId, vip, siteUrl, note, calledBy: userId }));
+      await seedCall(buildSeedCall(status, { lowPop: rules.lowPop, live: rules.live, roleId, vip, siteUrl, serverId, note, calledBy: userId }));
       log.info(`/seednow posted for Discord user ${userId ?? 'unknown'} at ${status.players}/${status.maxPlayers} players`);
       return {
         content: roleId

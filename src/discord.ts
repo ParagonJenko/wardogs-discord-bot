@@ -42,6 +42,7 @@ type MessageOptions = {
   seeders?: Seeder[];
   vip?: VipRule | null;
   siteUrl?: string;
+  serverId?: string;
 };
 
 const NO_PINGS = { parse: [], roles: [] };
@@ -199,6 +200,17 @@ const site = (siteUrl: string | undefined): Pick<Embed, 'url' | 'footer'> => {
   return { url: siteUrl, footer: { text: `Live stats and leaderboard: ${host}` } };
 };
 
+// How to join from the game, with the server's ID in a code block so it is easy to copy. Nothing without an ID.
+const joinField = (serverId: string | undefined): EmbedField[] =>
+  serverId
+    ? [
+        {
+          name: 'Join the server',
+          value: `\`\`\`\n${serverId}\n\`\`\`\nIn game: Deploy → Server Browser → Join by ID, paste the code, then Lookup.`,
+        },
+      ]
+    : [];
+
 const title = (kind: AlertKind, server: Population, lowPop: number): string => {
   const name = shorten(server.name);
   if (kind === 'seeding') return `🌱 ${name} is seeding`;
@@ -242,6 +254,7 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
     ...(kind === 'seeding' && options.vip
       ? [{ name: '🎖️ Seeder VIP', value: `${vipOffer(options.vip)}\n${vipRule(options.vip)}` }]
       : []),
+    ...joinField(options.serverId),
   ];
   return {
     ...(options.roleId ? { content: `<@&${options.roleId}>` } : {}),
@@ -345,7 +358,7 @@ const PHASE_LABELS: Record<Phase, { label: string; color: number }> = {
   empty: { label: '⚪ **Empty**', color: EMPTY_COLOR },
 };
 
-export const buildStatusEmbed = (status: ServerStatus, rules: AlertRules, siteUrl?: string): Embed => {
+export const buildStatusEmbed = (status: ServerStatus, rules: AlertRules, siteUrl?: string, serverId?: string): Embed => {
   const phase = phaseFor(status.players, rules);
   const toGo = phase === 'seeding' ? ` · ${Math.max(0, rules.live - status.players)} more to go live` : '';
   return {
@@ -356,6 +369,7 @@ export const buildStatusEmbed = (status: ServerStatus, rules: AlertRules, siteUr
       { name: 'Players', value: population(status.players, status.maxPlayers, phase) },
       ...(status.map ? [{ name: 'Map', value: mapTitle(status.map), inline: true }] : []),
       ...(status.factionScores.length > 0 ? [{ name: 'Score', value: scoreLines(status.factionScores), inline: true }] : []),
+      ...joinField(serverId),
     ],
     ...site(siteUrl),
   };
@@ -393,7 +407,8 @@ const scoreWithTeams = (scores: FactionScore[], players: Player[]): string => {
     .join('\n');
 };
 
-export const buildLiveStatus = (view: LiveView, rules: AlertRules, siteUrl?: string): DiscordMessage => {
+// How to join is left off while the server is offline.
+export const buildLiveStatus = (view: LiveView, rules: AlertRules, siteUrl?: string, serverId?: string): DiscordMessage => {
   const linked = site(siteUrl);
   const footer = { text: ['Updates every minute', linked.footer?.text].filter(Boolean).join(' · ') };
   const timestamp = new Date(view.now).toISOString();
@@ -436,6 +451,7 @@ export const buildLiveStatus = (view: LiveView, rules: AlertRules, siteUrl?: str
     ...(top.length > 0
       ? [{ name: 'Top players', value: ranked(top.map((p) => `**${playerName(p.name)}** · ${plural(p.kills, 'kill')}`)), inline: true }]
       : []),
+    ...joinField(serverId),
   ];
   return {
     embeds: [

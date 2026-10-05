@@ -32,6 +32,7 @@ const config: Config = {
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
+  serverId: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0 },
   busyThreshold: 97,

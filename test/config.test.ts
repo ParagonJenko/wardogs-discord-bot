@@ -20,6 +20,7 @@ describe('loadConfig', () => {
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
+      serverId: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000 },
       busyThreshold: 97,
@@ -130,6 +131,13 @@ describe('loadConfig', () => {
     for (const link of ['https://discord.gg/wardogs-UK', 'discord.gg/wardogs-UK/', 'https://discord.com/invite/wardogs-UK', 'wardogs-UK']) {
       expect(loadConfig({ ...required, DISCORD_INVITE: link }).inviteCode).toBe('wardogs-UK');
     }
+  });
+
+  it("keeps the server's ID for Join by ID, trimmed", () => {
+    expect(loadConfig({ ...required, SERVER_ID: ' 2615de90-da95-4950-913a-246b1db49237 ' }).serverId).toBe(
+      '2615de90-da95-4950-913a-246b1db49237',
+    );
+    expect(() => loadConfig({ ...required, SERVER_ID: '2615de90 da95' })).toThrow(/SERVER_ID/);
   });
 
   it('rejects a Discord invite that is not an invite link', () => {

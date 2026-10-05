@@ -24,6 +24,9 @@
     "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",
     // Optional: the community website. Discord posts link to it, and in-game messages point players at it.
     "SITE_URL": "https://gaminginit.com",
+    // Optional: the server's ID for Join by ID in the game's server browser. The alerts, /serverstatus and the live
+    // status show it, with how to join.
+    "SERVER_ID": "2615de90-da95-4950-913a-246b1db49237",
     // In-game messages during a match (10 minutes in, halfway, a team near winning): "on" or "off".
     "MATCH_MESSAGES": "on",
     // The score a team needs to win: halfway is half of it, "near winning" is 90% of it.
