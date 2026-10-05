@@ -66,6 +66,7 @@ const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
     match: {},
     history: [],
     headshots: new Map(),
+    joins: [],
     ...overrides,
   };
 };
@@ -420,5 +421,35 @@ describe('the server list on the staff page', () => {
   it('says nothing about the reserved list it could not read, and has no list while the server is not answering', () => {
     expect(overview({ reserved: null }).online?.players[0]?.reserved).toBeNull();
     expect(overview({ online: null }).online).toBeNull();
+  });
+});
+
+describe('the join log on the staff page', () => {
+  it('lists joins and leaves newest first, with how long those who left were on', () => {
+    const { joins } = buildAdminOverview(
+      sources({
+        joins: [
+          { at: NOW - 50 * 60_000, kind: 'joined', steamId: ASH, name: 'Ash' },
+          { at: NOW - 10 * 60_000, kind: 'left', steamId: ASH, name: 'Ash', joinedAt: NOW - 50 * 60_000 },
+          { at: NOW - 60_000, kind: 'left', steamId: BO, name: 'Bo', joinedAt: null },
+        ],
+      }),
+    );
+    expect(joins).toEqual([
+      { at: NOW - 60_000, kind: 'left', player: { steamId: BO, name: 'Bo' }, from: null, minutes: null },
+      { at: NOW - 10 * 60_000, kind: 'left', player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, from: null, minutes: 40 },
+      { at: NOW - 50 * 60_000, kind: 'joined', player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, from: null, minutes: null },
+    ]);
+  });
+
+  it('keeps the name they had then, and says since when after the bot could not read the server', () => {
+    const [left] = buildAdminOverview(
+      sources({ joins: [{ at: NOW, kind: 'left', steamId: CY, name: 'Cy_old', from: NOW - 30 * 60_000, joinedAt: NOW - 90 * 60_000 }] }),
+    ).joins;
+    expect(left).toEqual({ at: NOW, kind: 'left', player: { steamId: CY, name: 'Cy_old' }, from: NOW - 30 * 60_000, minutes: 60 });
+  });
+
+  it('names a player the server sent no name for as the bot knows them', () => {
+    expect(buildAdminOverview(sources({ joins: [{ at: NOW, kind: 'joined', steamId: DEE, name: '' }] })).joins[0]?.player.name).toBe('Dee');
   });
 });
