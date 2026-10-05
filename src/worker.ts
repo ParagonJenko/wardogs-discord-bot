@@ -59,6 +59,7 @@ import {
   type Choice,
 } from './interactions.ts';
 import { fetchInviteCounts } from './invite.ts';
+import { JOIN_LOG_KEY, parseJoinLog, recordJoins, type JoinLog } from './joinlog.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
@@ -397,9 +398,10 @@ const oneAtATime = () => {
 // 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam account each
 // staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what Steam said about
 // that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan and the rotation
-// put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list) and 'killFeed' (the
-// server's latest kills, for the staff page). Each player's kills by
-// day, for the staff page and the roundups' awards, are in the SQLite database's kill_days table (see killfeed.ts).
+// put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list), 'killFeed' (the
+// server's latest kills, for the staff page) and 'joinLog' (who joined and left the server, for the staff page; see
+// joinlog.ts). Each player's kills by day, for the staff page and the roundups' awards, are in the SQLite database's
+// kill_days table (see killfeed.ts).
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -589,19 +591,28 @@ export class Watcher extends DurableObject<Env> {
     await storage.put('stats', change(parseStats(await storage.get('stats'))));
   }
 
-  // One write for the site's stats, who is online and today's player totals.
+  // One write for the site's stats, who is online, who joined or left, and today's player totals.
   private async recordCheck(observation: Observation, minutes: number, thresholds: Pick<Thresholds, 'live' | 'busy'>): Promise<void> {
     const dayKey = playerDayKey(observation.at);
-    const stored = await this.ctx.storage.get(['stats', dayKey]);
+    const stored = await this.ctx.storage.get(['stats', dayKey, 'online', JOIN_LOG_KEY]);
     const stats = recordObservation(parseStats(stored.get('stats')), observation, minutes, thresholds);
     const online: OnlineSnapshot = { at: observation.at, map: observation.status.map, players: observation.players };
+    const joinLog = parseJoinLog(stored.get(JOIN_LOG_KEY));
+    const joins = recordJoins(
+      joinLog,
+      observation.players,
+      observation.status.players,
+      observation.at,
+      parseOnline(stored.get('online'))?.at ?? null,
+    );
+    const joined: Record<string, JoinLog> = joins === joinLog ? {} : { [JOIN_LOG_KEY]: joins };
     if (observation.phase === 'empty' || observation.players.length === 0) {
-      await this.ctx.storage.put({ stats, online });
+      await this.ctx.storage.put({ stats, online, ...joined });
       return;
     }
     const kind = observation.seeding ? 'seeding' : 'live';
     const day = recordActivity(parsePlayerDay(stored.get(dayKey)), observation.players, kind, minutes);
-    await this.ctx.storage.put({ stats, online, [dayKey]: day });
+    await this.ctx.storage.put({ stats, online, ...joined, [dayKey]: day });
   }
 
   private async recordSeed(seeders: SeedCredit[], at: number, minMinutes: number): Promise<void> {
@@ -1771,6 +1782,7 @@ export class Watcher extends DurableObject<Env> {
         'online',
         'state',
         'stats',
+        JOIN_LOG_KEY,
         STAFF_NAMES_KEY,
         STAFF_PROFILES_KEY,
       ]),
@@ -1799,6 +1811,7 @@ export class Watcher extends DurableObject<Env> {
     const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
     const banBook = parseBanBook(stored.get('bans'));
     const online = this.onlineNow(now, stored.get('online'));
+    const joins = parseJoinLog(stored.get(JOIN_LOG_KEY))?.events ?? [];
     const playerDays = recent.slice(-days).map((d) => d.players);
     const steam = await this.steamSources(playerDays, online, now, days);
     const staffProfiles = parseStaffProfiles(stored.get(STAFF_PROFILES_KEY));
@@ -1806,6 +1819,7 @@ export class Watcher extends DurableObject<Env> {
       ...adminSteamIds(grief, modLogs, serverBans, banBook, reserved?.ids ?? []),
       ...staffSteamIds(staffProfiles),
       ...(online?.players.map((p) => p.steamId) ?? []),
+      ...joins.map((e) => e.steamId),
       ...(steam === null ? [] : riskySteamIds(steamPlayers(playerDays, steam.inGame), steam.checks, now, steam.inGame).slice(0, STEAM_ACCOUNTS_LISTED)),
     ];
     const names = new Map<string, string>();
@@ -1842,6 +1856,7 @@ export class Watcher extends DurableObject<Env> {
       match: parseState(stored.get('state'))?.match?.players ?? {},
       history: recent,
       headshots: this.headshotsToday(now, online?.players.map((p) => p.steamId) ?? []),
+      joins,
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);

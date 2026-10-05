@@ -505,6 +505,12 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
   [Steam account](#risky-steam-accounts)'s risk, today's headshots against what their weapons usually get
   ([Kills and headshots](#kills-and-headshots)), today's griefing flags, VIP and bans. Nothing while the server has not
   answered for 3 minutes.
+- **Who joined and left**: the server's latest 500 joins and leaves, newest first, with how long each player who left
+  had been on. The bot compares who is in game at each check with the check before, so a join or leave shows up to a
+  minute late, and someone on for less than a minute between two checks is missed. When the bot could not read the
+  server for a while, the first check after notes everyone who joined or left meanwhile, with since when. The players
+  on when the bot started keeping the log have no join, so their time on is left out when they leave. Stored as
+  `joinLog`, written only when someone joined or left.
 - **The kill feed, live**: every kill a second or two after the game sends it (see below).
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
   the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice

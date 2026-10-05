@@ -1,5 +1,6 @@
 import { mapName } from './discord.ts';
 import { dayFlags, FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
+import { minutesOn, type JoinEvent } from './joinlog.ts';
 import type { HeadshotDay } from './killfeed.ts';
 import { isBotBan, type BanBook, type ModAction, type ModEntry } from './moderation.ts';
 import { totals, type PlayerDay } from './players.ts';
@@ -12,9 +13,9 @@ import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, type Risk, type SteamCheck, typ
 import type { ReservedListing, VipState } from './vip.ts';
 import { weaponKind, weaponName, type WeaponKind } from './weapons.ts';
 
-// What the staff page shows: who is in game now, possible griefers from the kill feed, the incidents behind it, risky
-// Steam accounts, what staff did, and the bans on the server with their reasons. Only for signed-in staff (see
-// adminauth.ts), so it has Steam IDs.
+// What the staff page shows: who is in game now and who joined or left, possible griefers from the kill feed, the
+// incidents behind it, risky Steam accounts, what staff did, and the bans on the server with their reasons. Only for
+// signed-in staff (see adminauth.ts), so it has Steam IDs.
 
 // The periods the page offers, in UTC days, today included.
 export const ADMIN_PERIODS = [1, 7, 30] as const;
@@ -158,6 +159,11 @@ export type AdminOnlinePlayer = AdminPlayer & {
 // Who is in game, as the bot's last check saw them (`at`), on `map`.
 export type AdminOnline = { at: number; map: string; players: AdminOnlinePlayer[] };
 
+// Someone joining or leaving the server, as a check noticed it (`at`). `from`: the check before, when the bot could not
+// read the server for a while, so it happened between the two. `minutes`: how long someone who left had been on, when
+// the bot saw them join.
+export type AdminJoin = { at: number; kind: 'joined' | 'left'; player: AdminPlayer; from: number | null; minutes: number | null };
+
 // A staff member, by Discord user ID: the name they go by and their Discord username, when the bot knows them.
 export type AdminStaff = Record<string, { name: string; username: string | null }>;
 
@@ -172,6 +178,8 @@ export type AdminOverview = {
   server: ServerSnapshot | null;
   // Null when the server has not answered for 3 minutes.
   online: AdminOnline | null;
+  // The latest joins and leaves, newest first.
+  joins: AdminJoin[];
   // The UTC day the bot first had the kill feed, or null if it never has: then there is no griefing data.
   feedSince: string | null;
   flags: typeof FLAGS;
@@ -224,6 +232,8 @@ export type AdminSources = {
   history: DayRecords[];
   // Today's headshots of those in game who killed someone today, by Steam ID.
   headshots: Map<string, HeadshotDay>;
+  // The join log's joins and leaves, oldest first.
+  joins: JoinEvent[];
 };
 
 // The staff page lists at most this many risky accounts.
@@ -490,6 +500,15 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     days: s.days,
     server: s.server,
     online: onlinePlayers(s, ref, banned),
+    joins: s.joins
+      .map((e): AdminJoin => ({
+        at: e.at,
+        kind: e.kind,
+        player: { ...ref(e.steamId, e.name), name: e.name || ref(e.steamId).name },
+        from: e.from ?? null,
+        minutes: minutesOn(e),
+      }))
+      .reverse(),
     feedSince: s.feedSince,
     flags: FLAGS,
     staff: staffFor(adminStaffIds({ moderation, bans }), s.staffNames, s.modLogs),
