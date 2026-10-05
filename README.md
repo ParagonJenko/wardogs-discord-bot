@@ -272,7 +272,10 @@ command to the Worker's URL; nothing has to stay connected.
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
 Commands reply publicly in the channel, except the staff commands, whose replies only the sender sees. If the game
-server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
+server cannot be reached, the reply says so, and the reason is in the Worker logs. For a public command that message
+is private too: the bot deletes its public "thinking…" reply and sends the error as a follow-up only the sender sees,
+so a failure is not shown to the whole channel. If Discord will not let it do that, the error is edited into the
+public reply instead (logged as `/<command> private failure reply failed`). After adding or renaming
 commands, or changing a fixed list of choices (such as `/switchteam`'s teams), run `npm run register` again.
 
 Staff commands use the RCON password's write access, change the records or show Steam IDs, so they are locked down:
