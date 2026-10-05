@@ -34,8 +34,9 @@ export type BotState = {
   alerts: MonitorState;
   seeding: SeedingTally;
   match: MatchState | null;
-  // A match summary Discord has not accepted yet; posting it is retried on each check.
-  unsentSummary: MatchSummary | null;
+  // A match summary Discord has not accepted yet; posting it is retried on each check. `endedAt` is when the stats
+  // recorded the match as ended, which the post links to; null when they did not (the Node version keeps none).
+  unsentSummary: (MatchSummary & { endedAt: number | null }) | null;
   // Which in-game messages the current match has had.
   messages: MatchMessages | null;
   // When the last in-game seeding message went out.
@@ -72,10 +73,12 @@ type PollerDeps = {
 // lost. `seeded` runs when the server goes live, with everyone who seeded it, and `matchEnded` when a match ends,
 // both before any Discord post. If either fails, the check fails before the state moves on, so the next check reports
 // the same seed or match again. The sink must ignore one it already has (a match's `startedAt` identifies it).
+// `matchEnded` answers with the time the match is recorded as ending, which is `at` unless it already had the match,
+// or null if it cannot say. The match summary links to that time, so it must be the one the website is given.
 export type StatsSink = {
   check: (observation: Observation) => Promise<void>;
   seeded: (seeders: SeedCredit[], at: number) => Promise<void>;
-  matchEnded: (match: MatchState, at: number) => Promise<void>;
+  matchEnded: (match: MatchState, at: number) => Promise<number | null>;
 };
 
 const TOP_SEEDERS = 3;
@@ -125,6 +128,8 @@ const BotStateSchema = z.object({
       peakPlayers: z.number(),
       factionScores: Scores,
       top: z.array(z.object({ name: z.string(), kills: z.number(), deaths: z.number() })),
+      // Missing from state saved before summaries linked to their match.
+      endedAt: z.number().nullable().default(null),
     })
     .nullable()
     .default(null),
@@ -262,7 +267,7 @@ export const createPoller = ({
       : [];
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
     if (credits.length > 0) await stats?.seeded(credits, time);
-    if (finished !== null) await stats?.matchEnded(finished, time);
+    const endedAt = finished === null ? null : ((await stats?.matchEnded(finished, time)) ?? null);
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
@@ -307,7 +312,7 @@ export const createPoller = ({
       messages,
       seedMessageAt,
       joins,
-      unsentSummary: finished === null ? state.unsentSummary : summarise(finished),
+      unsentSummary: finished === null ? state.unsentSummary : { ...summarise(finished), endedAt },
     };
     try {
       const summary = tracked.unsentSummary;

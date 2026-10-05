@@ -377,6 +377,10 @@ type InteractionDeps = {
   // What to offer for an option with autocomplete; the request holds what has been typed so far.
   suggest: (request: CommandRequest) => Promise<Choice[]>;
   editReply: (applicationId: string, token: string, reply: Reply) => Promise<void>;
+  // Together these make a failed public command's message private: the deferred public message is deleted, then the
+  // failure goes out as a follow-up only the sender sees.
+  deleteReply: (applicationId: string, token: string) => Promise<void>;
+  privateFollowUp: (applicationId: string, token: string, reply: Reply) => Promise<void>;
   log: { error: (message: string) => void };
   now: () => number;
   // The only Discord server allowed to use admin commands. Commands are registered globally, so without this an
@@ -507,6 +511,36 @@ export const isOptionOf = (name: CommandName, option: string, subcommand?: strin
   return list.some((o) => o.name === option);
 };
 
+// A deferred public message cannot be made private, and the first follow-up would only replace it, so delete it and
+// send the follow-up after. If the delete fails the failure is edited into the public message instead, so nobody is
+// left looking at "thinking…". A delete can fail and still have happened (its answer lost, or timed out), and then
+// there is nothing to edit, so if the edit fails too the private follow-up is sent after all.
+const replyPrivately = async (
+  deps: InteractionDeps,
+  name: CommandName,
+  applicationId: string,
+  token: string,
+  reply: Reply,
+): Promise<void> => {
+  try {
+    await deps.deleteReply(applicationId, token);
+  } catch (error) {
+    deps.log.error(`/${name} could not delete the public reply: ${errorText(error)}`);
+    try {
+      await deps.editReply(applicationId, token, reply);
+      return;
+    } catch (editError) {
+      deps.log.error(`/${name} could not edit the public reply either: ${errorText(editError)}`);
+    }
+  }
+  try {
+    await deps.privateFollowUp(applicationId, token, reply);
+  } catch (error) {
+    deps.log.error(`/${name} private failure reply failed: ${errorText(error)}`);
+    throw error;
+  }
+};
+
 export const handleInteraction = async (
   body: string,
   signature: string | null,
@@ -582,13 +616,17 @@ export const handleInteraction = async (
   const request = toRequest(name);
   // Discord allows 3 seconds for the first response and RCON can be slower, so defer and edit later.
   const followUp = async (): Promise<void> => {
+    let failed = false;
     const reply: Reply = await deps.runCommand(request).then(
       (result) => ({ ...result, allowed_mentions: { parse: [] } }),
       (error: unknown) => {
         deps.log.error(`/${name} failed: ${errorText(error)}`);
+        failed = true;
         return { content: failureText(name, error), allowed_mentions: { parse: [] } };
       },
     );
+    // Staff replies are already private. A public command's failure should not be shown to the whole channel.
+    if (failed && !admin) return replyPrivately(deps, name, interaction.application_id, token, reply);
     await deps.editReply(interaction.application_id, token, reply);
   };
   const deferred = admin ? { type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } } : { type: DEFERRED_CHANNEL_MESSAGE };
@@ -596,33 +634,68 @@ export const handleInteraction = async (
 };
 
 // The edit races the deferred "thinking…" response: if RCON answers (or fails) quickly, Discord may not have
-// saved that message yet and answers 404. Waiting briefly and trying again fixes it.
+// saved that message yet and answers 404. Waiting briefly and trying again fixes it. Deleting it races the same way.
 const RETRY_DELAYS_MS = [500, 1_500, 3_000];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const webhookUrl = (applicationId: string, token: string): string =>
+  `https://discord.com/api/v10/webhooks/${applicationId}/${token}`;
+
+// Runs the request, and again after each delay for as long as Discord answers 404.
+const retryOn404 = (attempt: () => Promise<Response>, retryDelaysMs: number[]): Promise<Response> =>
+  retryDelaysMs.reduce<Promise<Response>>(async (previous, delay) => {
+    const last = await previous;
+    if (last.status !== 404) return last;
+    await sleep(delay);
+    return attempt();
+  }, attempt());
+
 export const editOriginalReply =
   (fetchFn: typeof fetch = fetch, retryDelaysMs: number[] = RETRY_DELAYS_MS) =>
   async (applicationId: string, token: string, reply: unknown): Promise<void> => {
-    const url = `https://discord.com/api/v10/webhooks/${applicationId}/${token}/messages/@original`;
-    const attempt = (): Promise<Response> =>
-      fetchFn(url, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(reply),
-        signal: AbortSignal.timeout(8_000),
-      });
-
-    const response = await retryDelaysMs.reduce<Promise<Response>>(
-      async (previous, delay) => {
-        const last = await previous;
-        if (last.status !== 404) return last;
-        await sleep(delay);
-        return attempt();
-      },
-      attempt(),
+    const response = await retryOn404(
+      () =>
+        fetchFn(`${webhookUrl(applicationId, token)}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(reply),
+          signal: AbortSignal.timeout(8_000),
+        }),
+      retryDelaysMs,
     );
     if (!response.ok) {
       throw new Error(`Discord rejected the command reply: ${response.status} ${await response.text()}`);
+    }
+  };
+
+export const deleteOriginalReply =
+  (fetchFn: typeof fetch = fetch, retryDelaysMs: number[] = RETRY_DELAYS_MS) =>
+  async (applicationId: string, token: string): Promise<void> => {
+    const response = await retryOn404(
+      () =>
+        fetchFn(`${webhookUrl(applicationId, token)}/messages/@original`, {
+          method: 'DELETE',
+          signal: AbortSignal.timeout(8_000),
+        }),
+      retryDelaysMs,
+    );
+    if (!response.ok) {
+      throw new Error(`Discord would not delete the deferred reply: ${response.status} ${await response.text()}`);
+    }
+  };
+
+// A follow-up message that only the person who ran the command sees.
+export const sendPrivateFollowUp =
+  (fetchFn: typeof fetch = fetch) =>
+  async (applicationId: string, token: string, reply: Reply): Promise<void> => {
+    const response = await fetchFn(webhookUrl(applicationId, token), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...reply, flags: EPHEMERAL }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      throw new Error(`Discord rejected the private follow-up: ${response.status} ${await response.text()}`);
     }
   };

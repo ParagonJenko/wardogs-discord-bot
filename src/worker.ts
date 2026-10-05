@@ -46,12 +46,14 @@ import { griefDayKey, hasGrief, parseGriefDay, recordGrief, type GriefAlert } fr
 import {
   ADMIN_COMMAND_DEFINITIONS,
   checkOptions,
+  deleteOriginalReply,
   editOriginalReply,
   failureText,
   handleInteraction,
   isAdminCommand,
   isCommandName,
   isOptionOf,
+  sendPrivateFollowUp,
   type CommandReply,
   type CommandRequest,
   type Choice,
@@ -607,17 +609,20 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put(dayKey, recordSeed(parsePlayerDay(await this.ctx.storage.get(dayKey)), seeders, minMinutes));
   }
 
-  // The match, the recent matches list and the players' totals are written together, and only once per match.
-  private async recordMatchEnd(match: MatchState, at: number): Promise<void> {
+  // The match, the recent matches list and the players' totals are written together, and only once per match. Gives
+  // back when the match is recorded as ending, which is what the website names the match by, so a match recorded on an
+  // earlier check gives that check's time. Null if what was saved cannot be read.
+  private async recordMatchEnd(match: MatchState, at: number): Promise<number | null> {
     const key = matchRecordKey(match.startedAt);
     const dayKey = playerDayKey(at);
     const stored = await this.ctx.storage.get([key, 'stats', dayKey]);
-    if (stored.has(key)) return;
+    if (stored.has(key)) return parseMatchRecord(stored.get(key))?.endedAt ?? null;
     await this.ctx.storage.put({
       [key]: matchRecord(match, at),
       stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at),
       [dayKey]: recordMatchPlayers(parsePlayerDay(stored.get(dayKey)), match),
     });
+    return at;
   }
 
   // Matches saved before the bot settled a win the last check saw one point short (see settleWin) are put right once:
@@ -2530,6 +2535,8 @@ export default {
         },
         suggest,
         editReply: editOriginalReply(),
+        deleteReply: deleteOriginalReply(),
+        privateFollowUp: sendPrivateFollowUp(),
         log: console,
         now: Date.now,
         adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,

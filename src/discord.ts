@@ -193,11 +193,13 @@ const scoreLines = (scores: FactionScore[]): string =>
     })
     .join('\n');
 
-// A footer pointing at the website, and the title linking to it, when SITE_URL is set.
-const site = (siteUrl: string | undefined): Pick<Embed, 'url' | 'footer'> => {
+// A footer pointing at the website, and the title linking to it, when SITE_URL is set. Given when a match ended, the
+// title links to that match on the website's matches page, which names each match by that time.
+const site = (siteUrl: string | undefined, matchEndedAt?: number | null): Pick<Embed, 'url' | 'footer'> => {
   if (!siteUrl) return {};
   const host = siteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-  return { url: siteUrl, footer: { text: `Live stats and leaderboard: ${host}` } };
+  const url = matchEndedAt == null ? siteUrl : `${siteUrl.replace(/\/$/, '')}/matches#match-${matchEndedAt}`;
+  return { url, footer: { text: `Live stats and leaderboard: ${host}` } };
 };
 
 // How to join from the game, with the server's ID in a code block so it is easy to copy. Nothing without an ID.
@@ -325,7 +327,13 @@ const winnerColour = (scores: FactionScore[]): number => {
   return colourOf(first.colorHex) ?? INFO_COLOR;
 };
 
-export const buildMatchSummary = (summary: MatchSummary, serverName: string, siteUrl?: string): DiscordMessage => {
+// `endedAt` is when the match ended, as the bot's stats record it. With it the title links to the match on the website;
+// without it (a match the stats never held) the title links to the site.
+export const buildMatchSummary = (
+  summary: MatchSummary & { endedAt?: number | null },
+  serverName: string,
+  siteUrl?: string,
+): DiscordMessage => {
   const top = summary.top.map(
     (p) => `**${playerName(p.name)}** · ${plural(p.kills, 'kill')} · ${plural(p.deaths, 'death')} · ${kd(p.kills, p.deaths)} K/D`,
   );
@@ -335,7 +343,7 @@ export const buildMatchSummary = (summary: MatchSummary, serverName: string, sit
     { name: 'Peak', value: plural(summary.peakPlayers, 'player'), inline: true },
     ...(top.length > 0 ? [{ name: 'Top players', value: ranked(top) }] : []),
   ];
-  const linked = site(siteUrl);
+  const linked = site(siteUrl, summary.endedAt);
   const description = headline(summary.factionScores);
   return {
     embeds: [

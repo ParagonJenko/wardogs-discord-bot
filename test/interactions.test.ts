@@ -3,10 +3,12 @@ import {
   ADMIN_COMMAND_DEFINITIONS,
   checkOptions,
   COMMANDS,
+  deleteOriginalReply,
   editOriginalReply,
   failureText,
   handleInteraction,
   isOptionOf,
+  sendPrivateFollowUp,
   type CommandRequest,
 } from '../src/interactions.ts';
 
@@ -40,6 +42,8 @@ const deps = () => ({
   runCommand: vi.fn(async (_request: CommandRequest) => ({ embeds: [embed] })),
   suggest: vi.fn(async (_request: CommandRequest) => [{ name: 'Ozeti · 69 min', value: '1790776000000' }]),
   editReply: vi.fn(async () => undefined),
+  deleteReply: vi.fn(async () => undefined),
+  privateFollowUp: vi.fn(async () => undefined),
   log: { error: vi.fn() },
   now: () => NOW_MS,
   adminGuildId: '777' as string | undefined,
@@ -93,18 +97,86 @@ describe('handleInteraction', () => {
     expect(d.editReply).toHaveBeenCalledWith('111', 'tok', { embeds: [embed], allowed_mentions: { parse: [] } });
   });
 
-  it('replies with a short message, and logs the reason, when the server cannot be reached', async () => {
+  const failureReply = {
+    content: "Couldn't get that right now. Try again in a minute.",
+    allowed_mentions: { parse: [] },
+  };
+
+  it('deletes the public reply and tells only the sender, and logs the reason, when the server cannot be reached', async () => {
     const { body, signature, timestamp } = await signed(statusCommand);
     const d = deps();
     d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
 
     await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
 
-    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', {
-      content: "Couldn't get that right now. Try again in a minute.",
-      allowed_mentions: { parse: [] },
-    });
+    expect(d.deleteReply).toHaveBeenCalledWith('111', 'tok');
+    expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.editReply).not.toHaveBeenCalled();
     expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('timed out'));
+  });
+
+  it.each(['players', 'lastmatch', 'rotation', 'roundup'])('keeps a failed /%s private too', async (name) => {
+    const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name } });
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('storage unavailable'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.deleteReply).toHaveBeenCalledWith('111', 'tok');
+    expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.editReply).not.toHaveBeenCalled();
+  });
+
+  it('leaves a successful public reply as it was, with nothing deleted or sent privately', async () => {
+    const { body, signature, timestamp } = await signed(statusCommand);
+    const d = deps();
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.editReply).toHaveBeenCalledTimes(1);
+    expect(d.deleteReply).not.toHaveBeenCalled();
+    expect(d.privateFollowUp).not.toHaveBeenCalled();
+  });
+
+  it('edits the failure into the public reply if it cannot be deleted, so it never stays on "thinking…"', async () => {
+    const { body, signature, timestamp } = await signed(statusCommand);
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+    d.deleteReply.mockRejectedValueOnce(new Error('Discord would not delete the deferred reply: 500'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.privateFollowUp).not.toHaveBeenCalled();
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('would not delete'));
+  });
+
+  it('sends the private follow-up if a delete that seemed to fail went through, leaving nothing to edit', async () => {
+    const { body, signature, timestamp } = await signed(statusCommand);
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+    d.deleteReply.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+    d.editReply.mockRejectedValueOnce(new Error('Discord rejected the command reply: 404 Unknown Message'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('could not edit the public reply either'));
+  });
+
+  it('cannot edit a reply it has already deleted, so a failed follow-up is logged and thrown', async () => {
+    const { body, signature, timestamp } = await signed(statusCommand);
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+    d.privateFollowUp.mockRejectedValueOnce(new Error('Discord rejected the private follow-up: 500'));
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    await expect(result.followUp?.()).rejects.toThrow(/private follow-up: 500/);
+    expect(d.deleteReply).toHaveBeenCalledTimes(1);
+    expect(d.editReply).not.toHaveBeenCalled();
+    expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('private follow-up: 500'));
   });
 
   it.each(['players', 'lastmatch', 'rotation', 'roundup'])('defers /%s publicly and runs it', async (name) => {
@@ -230,6 +302,8 @@ describe('handleInteraction', () => {
       content: "Couldn't confirm the broadcast was delivered. Check in game before sending it again.",
       allowed_mentions: { parse: [] },
     });
+    expect(d.deleteReply).not.toHaveBeenCalled();
+    expect(d.privateFollowUp).not.toHaveBeenCalled();
   });
 
   it('treats /seeders as an admin command, replying privately', async () => {
@@ -481,6 +555,68 @@ describe('editOriginalReply', () => {
 
     await expect(editOriginalReply(fetchFn, [0, 0, 0])('111', 'tok', {})).rejects.toThrow(/400 .*Invalid Form Body/);
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('deleteOriginalReply', () => {
+  it('deletes the original interaction response', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetchFn = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(null, { status: 204 });
+    };
+
+    await deleteOriginalReply(fetchFn)('111', 'tok');
+
+    expect(calls[0]?.url).toBe('https://discord.com/api/v10/webhooks/111/tok/messages/@original');
+    expect(calls[0]?.init?.method).toBe('DELETE');
+  });
+
+  it('retries when Discord has not saved the deferred reply yet (404)', async () => {
+    const statuses = [404, 404, 204];
+    const fetchFn = vi.fn(async () => new Response(null, { status: statuses.shift() ?? 204 }));
+
+    await deleteOriginalReply(fetchFn, [0, 0, 0])('111', 'tok');
+
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up after the last retry and reports what Discord said', async () => {
+    const fetchFn = vi.fn(async () => new Response('{"message": "Unknown Message", "code": 10008}', { status: 404 }));
+
+    await expect(deleteOriginalReply(fetchFn, [0, 0, 0])('111', 'tok')).rejects.toThrow(/404 .*Unknown Message/);
+    expect(fetchFn).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry other errors', async () => {
+    const fetchFn = vi.fn(async () => new Response('{"message": "Missing Access"}', { status: 403 }));
+
+    await expect(deleteOriginalReply(fetchFn, [0, 0, 0])('111', 'tok')).rejects.toThrow(/403 .*Missing Access/);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sendPrivateFollowUp', () => {
+  it('posts a follow-up that only the sender sees, mentioning nobody', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetchFn = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response('{}', { status: 200 });
+    };
+
+    await sendPrivateFollowUp(fetchFn)('111', 'tok', { content: 'hi', allowed_mentions: { parse: [] } });
+
+    expect(calls[0]?.url).toBe('https://discord.com/api/v10/webhooks/111/tok');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ content: 'hi', flags: 64, allowed_mentions: { parse: [] } });
+  });
+
+  it('reports what Discord said when it refuses', async () => {
+    const fetchFn = vi.fn(async () => new Response('{"message": "Invalid Webhook Token"}', { status: 401 }));
+
+    await expect(sendPrivateFollowUp(fetchFn)('111', 'tok', { content: 'hi', allowed_mentions: { parse: [] } })).rejects.toThrow(
+      /401 .*Invalid Webhook Token/,
+    );
   });
 });
 

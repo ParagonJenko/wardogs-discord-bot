@@ -200,7 +200,9 @@ describe('runCommand', () => {
         userId: null,
       });
 
-    expect((await run(() => ({ ...config, siteUrl: 'https://gaminginit.com' }))).embeds?.[0]?.url).toBe('https://gaminginit.com');
+    expect((await run(() => ({ ...config, siteUrl: 'https://gaminginit.com' }))).embeds?.[0]?.url).toBe(
+      'https://gaminginit.com/matches#match-0',
+    );
     const unconfigured = await run(() => {
       throw new Error('Invalid configuration');
     });

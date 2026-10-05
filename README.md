@@ -14,7 +14,8 @@ It also posts:
   [staff](#staff-steam-accounts).
 - **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
-  length, peak population, and the top 5 players by kills with deaths and K/D.
+  length, peak population, and the top 5 players by kills with deaths and K/D. With `SITE_URL` set (Cloudflare), its
+  title links to that match on the website's matches page.
 - **A [live server status](#live-server-status)** (Cloudflare only): one message in a channel of its own,
   edited every minute with the state, players, map, next map, score and top players.
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
@@ -79,7 +80,8 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    npx wrangler secret put DISCORD_WEBHOOK_URL
    ```
 3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`, and `SITE_URL` (your community
-   website, such as `https://gaminginit.com`): post titles then link to it, and their footer points people there.
+   website, such as `https://gaminginit.com`): post titles then link to it, and their footer points people there. A
+   match summary and `/lastmatch` link to their match on the website's matches page instead.
    Set `SERVER_ID` to the server's ID for Join by ID in the game's server browser, and the alerts, `/serverstatus` and
    the [live server status](#live-server-status) show it under **Join the server**, with how to join.
 4. Deploy:
@@ -220,7 +222,7 @@ The Node/Docker version does not post roundups.
 | --------------- | -------------------- | ------------------------------------------------------------------ |
 | `/serverstatus` | Everyone             | Population, state (empty / seeding / live), map and score          |
 | `/players`      | Everyone             | Who is online, with kills and deaths (top 30)                      |
-| `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended          |
+| `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended; its title links to the match on the website |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/roundup`      | Everyone             | The [roundup](#roundups) of last week (default), last month, or this week or month so far |
 | `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
@@ -272,7 +274,10 @@ command to the Worker's URL; nothing has to stay connected.
    `https://discord.com/oauth2/authorize?client_id=<application id>&scope=applications.commands`
 
 Commands reply publicly in the channel, except the staff commands, whose replies only the sender sees. If the game
-server cannot be reached, the reply says so, and the reason is in the Worker logs. After adding or renaming
+server cannot be reached, the reply says so, and the reason is in the Worker logs. For a public command that message
+is private too: the bot deletes its public "thinking…" reply and sends the error as a follow-up only the sender sees,
+so a failure is not shown to the whole channel. If Discord will not delete the reply, the error is edited into the
+public reply instead (logged as `/<command> could not delete the public reply`). After adding or renaming
 commands, or changing a fixed list of choices (such as `/switchteam`'s teams), run `npm run register` again.
 
 Staff commands use the RCON password's write access, change the records or show Steam IDs, so they are locked down:
@@ -1172,6 +1177,14 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
   The rotation slot moving, or a reading without the map, does not end a match either. Players who left mid-match
   keep their last stats. Length is timed from when the server went live. Matches that never went live are not
   summarised, and neither is the match already running when the bot starts.
+- The summary's title links to `<SITE_URL>/matches#match-<endedAt>` (a trailing slash on `SITE_URL` is fine), where
+  `endedAt` is the time the match was recorded as ending, in milliseconds: the same `endedAt` as in `matches` on
+  `/api/stats`, which the website names each match by. The bot takes it from what it recorded, never from the clock
+  when the post goes out, so a summary retried after a Discord outage, or posted twice after a failed save, still links
+  to the right match. `/lastmatch` links the same way from the match it shows. Without that time the title links to
+  `SITE_URL` alone: the Node/Docker version, which records no matches, and a summary saved before this was added
+  and still waiting to post. The website keeps only the last 10 matches, so the link of an older one finds nothing
+  on the matches page.
 - With three or more factions, the summary names them all: "**Valkyra** won 100, Kharr 67, Haldor 41".
 - If a Discord post fails, the alert is retried on the next check while it is still true. A match summary
   is retried until it posts, or until the next match ends. Matches are recorded before their summary is

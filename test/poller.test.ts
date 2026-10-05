@@ -143,7 +143,7 @@ describe('poller', () => {
     const b = player('b');
     const staff = vi.fn(async () => new Set(['a']));
     const seeded = vi.fn(async (_seeders: SeedCredit[], _at: number) => {});
-    const stats: StatsSink = { check: async () => {}, seeded, matchEnded: async () => {} };
+    const stats: StatsSink = { check: async () => {}, seeded, matchEnded: async () => null };
     const { run, sent } = setup(
       [snapshot([]), snapshot([a]), snapshot([a, b]), snapshot(crowd(20, [a, b]))],
       memoryStore(),
@@ -308,7 +308,7 @@ describe('poller with a grace time for drops', () => {
       now: () => (clock += 60_000),
       log: { info: vi.fn(), error: vi.fn() },
       store: memoryStore(),
-      stats: { check: vi.fn(async () => {}), seeded, matchEnded: vi.fn(async () => {}) },
+      stats: { check: vi.fn(async () => {}), seeded, matchEnded: vi.fn(async () => null) },
     });
     for (let i = timeline.length; i > 0; i--) await tick();
     // Who seeded each time the server went live, and for how long.
@@ -363,7 +363,7 @@ describe('poller with a grace time for drops', () => {
       now: () => (clock += 60_000),
       log: { info: vi.fn(), error: vi.fn() },
       store: memoryStore(),
-      stats: { check: vi.fn(async () => {}), seeded, matchEnded: vi.fn(async () => {}) },
+      stats: { check: vi.fn(async () => {}), seeded, matchEnded: vi.fn(async () => null) },
     });
 
     for (let i = 0; i < 6; i++) await tick();
@@ -377,7 +377,7 @@ describe('poller stats', () => {
   const sink = () => ({
     check: vi.fn(async (_observation: Observation) => {}),
     seeded: vi.fn(async (_seeders: SeedCredit[], _at: number) => {}),
-    matchEnded: vi.fn(async (_match: MatchState, _at: number) => {}),
+    matchEnded: vi.fn(async (_match: MatchState, at: number): Promise<number | null> => at),
   });
 
   it('reports every check that reached the server', async () => {
@@ -484,6 +484,63 @@ describe('poller stats', () => {
 
     expect(stats.matchEnded).toHaveBeenCalledTimes(1);
     expect(stats.matchEnded.mock.calls[0]?.[0]).toMatchObject({ key: 'Kavkazi#0', liveAt: 120_000, players: { a: { kills: 7 } } });
+  });
+
+  describe('match over link', () => {
+    const matchOver = (sent: DiscordMessage[]) => sent.find((m) => m.embeds[0]?.title.startsWith('🏁'))?.embeds[0];
+    const siteUrl = 'https://gaminginit.com/';
+    // Seeding, then live, then a new map: the match ends on the third check, at 180 000 ms.
+    const ended = [snapshot(crowd(5)), snapshot(crowd(22)), snapshot(crowd(22), 'Europe')];
+
+    it('links the summary to the match by when the stats recorded it as ending', async () => {
+      const stats = sink();
+      const { run, sent } = setup(ended, memoryStore(), stats, { siteUrl });
+
+      await run(3);
+
+      expect(stats.matchEnded).toHaveBeenCalledWith(expect.anything(), 180_000);
+      expect(matchOver(sent)?.url).toBe('https://gaminginit.com/matches#match-180000');
+    });
+
+    it('uses the time the stats already had, when they recorded the match on an earlier check', async () => {
+      const stats = sink();
+      stats.matchEnded.mockResolvedValue(150_000);
+      const { run, sent } = setup(ended, memoryStore(), stats, { siteUrl });
+
+      await run(3);
+
+      expect(matchOver(sent)?.url).toBe('https://gaminginit.com/matches#match-150000');
+    });
+
+    it('keeps the match it was recorded as when Discord rejects the summary and a later check posts it', async () => {
+      const stats = sink();
+      const { run, send, sent } = setup([...ended, snapshot(crowd(22), 'Europe')], memoryStore(), stats, { siteUrl });
+      // The live alert goes out, then the summary is rejected once.
+      send.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Discord webhook failed: 500'));
+
+      await run(4);
+
+      expect(stats.matchEnded).toHaveBeenCalledTimes(1);
+      expect(matchOver(sent)?.url).toBe('https://gaminginit.com/matches#match-180000');
+    });
+
+    it('links to the website alone when the stats cannot say when the match ended', async () => {
+      const stats = sink();
+      stats.matchEnded.mockResolvedValue(null);
+      const { run, sent } = setup(ended, memoryStore(), stats, { siteUrl });
+
+      await run(3);
+
+      expect(matchOver(sent)?.url).toBe(siteUrl);
+    });
+
+    it('links to the website alone without stats, as the Node version has none', async () => {
+      const { run, sent } = setup(ended, memoryStore(), undefined, { siteUrl });
+
+      await run(3);
+
+      expect(matchOver(sent)?.url).toBe(siteUrl);
+    });
   });
 
   it('counts seeding whenever the server is seeding: from empty, and building back up after a drop from live', async () => {
@@ -680,6 +737,14 @@ describe('parseState', () => {
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
     expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null, seedMessageAt: null, joins: null });
+  });
+
+  it('reads an unsent summary saved before it linked to its match, with no match to link to', () => {
+    const unsent = { map: 'Kavkazi', durationMs: 60_000, peakPlayers: 22, factionScores: [], top: [] };
+    const saved = { alerts: { phase: 'live', lastAlertAt: {} }, seeding: {}, match: null, unsentSummary: unsent };
+
+    expect(parseState(structuredClone(saved))?.unsentSummary).toEqual({ ...unsent, endedAt: null });
+    expect(parseState({ ...saved, unsentSummary: { ...unsent, endedAt: 180_000 } })?.unsentSummary).toEqual({ ...unsent, endedAt: 180_000 });
   });
 
   it('keeps the side each player in the match is on, and reads state saved before sides were kept', () => {
