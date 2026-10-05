@@ -8,7 +8,8 @@ Watches a WARDOGS server through its RCON API and posts to a Discord channel whe
 | 🟢 Live      | The server reaches `LIVE_THRESHOLD` players                | 20 players  |
 | 🔻 Low pop   | A live server drops below `LOW_POP_THRESHOLD` players      | below 20    |
 
-The alerts ping `DISCORD_ROLE_ID` when it is set, except a low-pop alert at night (see [Behaviour](#behaviour)).
+The alerts ping `DISCORD_ROLE_ID` when it is set, except the seeding and low-pop alerts at night (see
+[Behaviour](#behaviour)).
 
 It also posts:
 
@@ -1169,10 +1170,11 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 - A drop only counts once it has lasted `DROP_GRACE_MINUTES` (default 5). If a live server crashes or restarts and
   fills again within that time, there is no low-pop alert, no seeding alert and no live alert, and nobody gets
   seeding credit for rejoining. A drop that lasts longer gets its low-pop alert then. `0` alerts straight away.
-- A low-pop alert at night is posted without pinging `DISCORD_ROLE_ID`: the server dying down then is everyone going
-  to bed, and a ping would only annoy the seeders. Night is from `QUIET_START_HOUR` up to `QUIET_END_HOUR` (UTC,
-  defaults `22` and `8`: 11pm to 9am in the UK in summer, 10pm to 8am in winter). The same hour for both turns it off.
-  Seeding and live alerts still ping at night.
+- At night the seeding and low-pop alerts are posted without pinging `DISCORD_ROLE_ID`: the server dying down then is
+  everyone going to bed, and a ping would only annoy the seeders. Night is from `QUIET_START_HOUR` up to
+  `QUIET_END_HOUR` in `QUIET_TIME_ZONE`'s own time, so it follows the clocks changing (defaults `21`, `6` and
+  `Europe/London`: 9pm to 6am in the UK, summer and winter). The same hour for both turns it off. A live alert still
+  pings at night, and so does a `/seednow` call.
 - `LOW_POP_THRESHOLD` can be set lower than `LIVE_THRESHOLD` (for example live at 40, warn below 30) to
   give more slack before the warning.
 - Seeding time is counted once per check (every minute) for everyone online while the server is seeding.

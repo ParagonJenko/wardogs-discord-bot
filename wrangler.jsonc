@@ -18,8 +18,8 @@
   // page's Discord sign-in, DISCORD_BOT_TOKEN, optional, so the staff page can name staff it has not seen, and
   // STEAM_API_KEY, optional, which turns on the checks for risky Steam accounts.
   "vars": {
-    // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop (not at
-    // night: see QUIET_START_HOUR).
+    // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop (seeding
+    // and low pop not at night: see QUIET_START_HOUR).
     "DISCORD_ROLE_ID": "1554801355015594025",
     // Optional: an invite link that never expires, for the member counts in /api/stats.
     "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",
@@ -43,11 +43,12 @@
     "ALERT_COOLDOWN_MINUTES": "10",
     // A drop in players only counts once it lasts this long, so a crash or restart that fills again quickly pings nobody.
     "DROP_GRACE_MINUTES": "5",
-    // The night (UTC, 0 to 23), when a low-pop alert goes out without pinging the Seeders role, as the server dying
-    // down then is everyone going to bed. 22 to 8 is 11pm to 9am in the UK in summer, 10pm to 8am in winter. The same
+    // The night (hours 0 to 23 in QUIET_TIME_ZONE), when the seeding and low-pop alerts go out without pinging the
+    // Seeders role. Europe/London follows the clocks changing, so 21 to 6 is 9pm to 6am in summer and winter. The same
     // hour for both turns it off.
-    "QUIET_START_HOUR": "22",
-    "QUIET_END_HOUR": "8",
+    "QUIET_START_HOUR": "21",
+    "QUIET_END_HOUR": "6",
+    "QUIET_TIME_ZONE": "Europe/London",
     // Required for the staff commands: your Discord server's ID (right-click the server icon → Copy Server ID).
     "DISCORD_GUILD_ID": "1552990539455144086",
     // Optional: role IDs (comma-separated) that may use the admin commands as well as Administrators. Staff.
