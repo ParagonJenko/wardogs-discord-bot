@@ -512,8 +512,9 @@ export const isOptionOf = (name: CommandName, option: string, subcommand?: strin
 };
 
 // A deferred public message cannot be made private, and the first follow-up would only replace it, so delete it and
-// send the follow-up after. If that goes wrong the failure is edited into the public message instead, so nobody is
-// left looking at "thinking…". Once the original is deleted there is nothing left to edit, so that failure is thrown.
+// send the follow-up after. If the delete fails the failure is edited into the public message instead, so nobody is
+// left looking at "thinking…". A delete can fail and still have happened (its answer lost, or timed out), and then
+// there is nothing to edit, so if the edit fails too the private follow-up is sent after all.
 const replyPrivately = async (
   deps: InteractionDeps,
   name: CommandName,
@@ -521,15 +522,22 @@ const replyPrivately = async (
   token: string,
   reply: Reply,
 ): Promise<void> => {
-  let deleted = false;
   try {
     await deps.deleteReply(applicationId, token);
-    deleted = true;
+  } catch (error) {
+    deps.log.error(`/${name} could not delete the public reply: ${errorText(error)}`);
+    try {
+      await deps.editReply(applicationId, token, reply);
+      return;
+    } catch (editError) {
+      deps.log.error(`/${name} could not edit the public reply either: ${errorText(editError)}`);
+    }
+  }
+  try {
     await deps.privateFollowUp(applicationId, token, reply);
   } catch (error) {
     deps.log.error(`/${name} private failure reply failed: ${errorText(error)}`);
-    if (deleted) throw error;
-    await deps.editReply(applicationId, token, reply);
+    throw error;
   }
 };
 

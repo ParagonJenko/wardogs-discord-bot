@@ -151,6 +151,20 @@ describe('handleInteraction', () => {
     expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('would not delete'));
   });
 
+  it('sends the private follow-up if a delete that seemed to fail went through, leaving nothing to edit', async () => {
+    const { body, signature, timestamp } = await signed(statusCommand);
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('RCON request timed out after 8000ms'));
+    d.deleteReply.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+    d.editReply.mockRejectedValueOnce(new Error('Discord rejected the command reply: 404 Unknown Message'));
+
+    await (await handleInteraction(body, signature, timestamp, d)).followUp?.();
+
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', failureReply);
+    expect(d.log.error).toHaveBeenCalledWith(expect.stringContaining('could not edit the public reply either'));
+  });
+
   it('cannot edit a reply it has already deleted, so a failed follow-up is logged and thrown', async () => {
     const { body, signature, timestamp } = await signed(statusCommand);
     const d = deps();
