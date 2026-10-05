@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { initialState, step, type MonitorState } from './alerts.ts';
+import { initialState, isQuiet, step, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
@@ -323,18 +323,20 @@ export const createPoller = ({
         log.info(`Sent match summary for ${summary.map}`);
       }
       if (result.alert !== null) {
+        // A server dropping at night is everyone going to bed, so that low-pop alert pings nobody.
+        const quiet = result.alert === 'lowPop' && isQuiet(time, config.quietHours);
         await send(
           buildMessage(result.alert, status, {
             lowPop: config.rules.lowPop,
             live: config.rules.live,
-            roleId: config.roleId,
+            roleId: quiet ? undefined : config.roleId,
             seeders,
             vip: config.vip,
             siteUrl: config.siteUrl,
             serverId: config.serverId,
           }),
         );
-        log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players`);
+        log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players${quiet ? ' (night: no ping)' : ''}`);
       }
     } catch (error) {
       await store.save(tracked);

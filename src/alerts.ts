@@ -23,6 +23,16 @@ export type StepResult = {
   alert: AlertKind | null;
 };
 
+// The hours (UTC) of the night: a live server dropping then is everyone going to bed, so its low-pop alert pings nobody.
+// From `start` up to `end`, running past midnight when `end` is the smaller (22 to 8).
+export type QuietHours = { start: number; end: number };
+
+export const isQuiet = (now: number, quiet: QuietHours | null): boolean => {
+  if (quiet === null) return false;
+  const hour = new Date(now).getUTCHours();
+  return quiet.start < quiet.end ? hour >= quiet.start && hour < quiet.end : hour >= quiet.start || hour < quiet.end;
+};
+
 export const phaseFor = (players: number, rules: AlertRules): Phase => {
   if (players >= rules.live) return 'live';
   if (players >= rules.seeding) return 'seeding';

@@ -22,6 +22,7 @@ const config: Config = {
   serverId: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0 },
+  quietHours: null,
   busyThreshold: 97,
   scoreToWin: 100,
   seedMinutes: 10,
@@ -120,6 +121,30 @@ describe('poller', () => {
     ]);
     expect(sent.map((m) => m.content)).toEqual([`<@&${seeders}>`, `<@&${seeders}>`, undefined, `<@&${seeders}>`]);
     expect(sent.map((m) => m.allowed_mentions.roles)).toEqual([[seeders], [seeders], [], [seeders]]);
+  });
+
+  it('posts the low-pop alert without the ping at night, and still pings for seeding and live', async () => {
+    const seeders = '1554801355015594025';
+    // The checks run just after midnight (UTC).
+    const night = (quietHours: Config['quietHours']) =>
+      setup([snapshot([]), snapshot(crowd(3)), snapshot(crowd(25)), snapshot(crowd(5))], memoryStore(), undefined, {
+        roleId: seeders,
+        quietHours,
+      });
+
+    const quiet = night({ start: 22, end: 8 });
+    await quiet.run(4);
+    expect(titles(quiet.sent)).toEqual([
+      '🌱 UK Wardogs #1 is seeding',
+      '🟢 UK Wardogs #1 is live',
+      '🔻 UK Wardogs #1 dropped below 20 players',
+    ]);
+    expect(quiet.sent.map((m) => m.content)).toEqual([`<@&${seeders}>`, `<@&${seeders}>`, undefined]);
+    expect(quiet.sent.map((m) => m.allowed_mentions.roles)).toEqual([[seeders], [seeders], []]);
+
+    const day = night({ start: 1, end: 8 });
+    await day.run(4);
+    expect(day.sent.map((m) => m.content)).toEqual([`<@&${seeders}>`, `<@&${seeders}>`, `<@&${seeders}>`]);
   });
 
   it('credits the players who seeded longest when the server goes live', async () => {
