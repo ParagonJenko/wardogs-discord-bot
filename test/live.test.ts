@@ -299,6 +299,27 @@ describe('trimLive', () => {
     expect(parseLiveMatch(JSON.parse(JSON.stringify(trimmed)))).toEqual(trimmed);
   });
 
+  it('keeps only the favourite weapon of players who must stay, when they still do not fit', () => {
+    // Ash kills Bo with 700 different weapons, with long tags: both are in the feed, so neither can go.
+    const events = Array.from({ length: 700 }, (_, i) => death(ASH, BO, i, { cause: `Id.Item.${'X'.repeat(180)}_${i}` }));
+    const match = play([...events, death(ASH, BO, 800, { cause: 'Id.Item.AK74M' }), death(ASH, BO, 801, { cause: 'Id.Item.AK74M' })]);
+    const ash = match.players.find((p) => p.steamId === ASH);
+
+    expect(bytes(match)).toBeLessThanOrEqual(LIVE_BYTES);
+    expect(ash?.weapons).toEqual({ 'Id.Item.AK74M': 2 });
+    expect(ash?.kills).toBe(702);
+    expect(stats(match).players[0]).toMatchObject({ name: 'Ash', kills: 702, weapon: 'AK74' });
+  });
+
+  it('keeps only the totals as a last resort, so the batch can always be saved', () => {
+    const match = crowded();
+    const trimmed = trimLive(match, 1_000);
+
+    expect(bytes(trimmed)).toBeLessThanOrEqual(1_000);
+    expect(trimmed).toMatchObject({ players: [], pairs: {}, firstBlood: null, feed: [], kills: match.kills, map: 'Kavkazi' });
+    expect(parseLiveMatch(JSON.parse(JSON.stringify(trimmed)))).toEqual(trimmed);
+  });
+
   it('keeps a long, busy match under the limit storage has for one value', () => {
     const player = (i: number) => String(76561198200000000n + BigInt(i));
     const events = Array.from({ length: 5_000 }, (_, i) =>

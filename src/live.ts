@@ -342,6 +342,10 @@ const leaders = (players: LivePlayer[]) => ({
 const rivalryOf = (pairs: Record<string, number>): [string, number] | null =>
   Object.entries(pairs).reduce<[string, number] | null>((top, pair) => (pair[1] >= RIVALRY_KILLS && (top === null || pair[1] > top[1]) ? pair : top), null);
 
+// The weapon a player has the most kills with. Ties go to the first.
+const favourite = (p: LivePlayer): string | null =>
+  Object.entries(p.weapons).reduce<[string, number] | null>((top, w) => (top === null || w[1] > top[1] ? w : top), null)?.[0] ?? null;
+
 // The order of the players table: most kills first, then fewest deaths.
 const tableOrder = (a: LivePlayer, b: LivePlayer): number => b.kills - a.kills || a.deaths - b.deaths || a.name.localeCompare(b.name);
 
@@ -350,7 +354,9 @@ const bytes = (value: unknown): number => encoder.encode(JSON.stringify(value)).
 
 // The match, made to fit in `maxBytes`. The pairs too few to be a rivalry go first, fewest kills first, then the players
 // with the fewest kills and deaths, with their pairs, who never show: anyone in the feed, first blood, the rivalry, a
-// highlight or the players table stays. A player who goes and comes back starts again from nothing.
+// highlight or the players table stays. A player who goes and comes back starts again from nothing. Should those left
+// still not fit, each keeps only the weapon they have the most kills with, and then, so the batch can always be saved,
+// the match keeps only its totals.
 export const trimLive = (match: LiveMatch, maxBytes = LIVE_BYTES): LiveMatch => {
   let size = bytes(match);
   if (size <= maxBytes) return match;
@@ -401,7 +407,7 @@ export const trimLive = (match: LiveMatch, maxBytes = LIVE_BYTES): LiveMatch => 
   // Everyone a death or a kept pair names was kept, so each has a new place.
   const moved = (index: number): number => places.get(index) ?? index;
   const remap = (death: LiveDeath): LiveDeath => ({ ...death, victim: moved(death.victim), killer: death.killer === null ? null : moved(death.killer) });
-  return {
+  const trimmed: LiveMatch = {
     ...match,
     players: match.players.filter((_, index) => !dropped.has(index)),
     pairs: Object.fromEntries(
@@ -412,6 +418,16 @@ export const trimLive = (match: LiveMatch, maxBytes = LIVE_BYTES): LiveMatch => 
     firstBlood: match.firstBlood === null ? null : remap(match.firstBlood),
     feed: match.feed.map(remap),
   };
+  if (bytes(trimmed) <= maxBytes) return trimmed;
+  const favourites: LiveMatch = {
+    ...trimmed,
+    players: trimmed.players.map((p) => {
+      const weapon = favourite(p);
+      return { ...p, weapons: weapon === null ? {} : { [weapon]: p.weapons[weapon] ?? 0 } };
+    }),
+  };
+  if (bytes(favourites) <= maxBytes) return favourites;
+  return { ...favourites, players: [], pairs: {}, firstBlood: null, feed: [] };
 };
 
 export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
@@ -421,8 +437,6 @@ export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
     return { name: p.name, ...(id === undefined ? {} : { id }), ...(p.faction === null ? {} : { faction: p.faction }) };
   };
   const refOf = (p: LivePlayer): LivePlayerRef => ref(match.players.indexOf(p));
-  const favourite = (p: LivePlayer): string | null =>
-    Object.entries(p.weapons).reduce<[string, number] | null>((top, w) => (top === null || w[1] > top[1] ? w : top), null)?.[0] ?? null;
   const weapons = new Map<string, { name: string; kind: WeaponKind; kills: number }>();
   for (const p of match.players) {
     for (const [cause, kills] of Object.entries(p.weapons)) {

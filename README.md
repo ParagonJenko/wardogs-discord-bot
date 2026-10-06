@@ -972,7 +972,8 @@ kills and other deaths (`otherDeaths`: suicides and falls), and:
   value. Past 90 KB, the bot first forgets pairs of players with fewer than 3 kills of one by the other (only a rivalry
   needs them), then the players with the fewest kills and deaths, who never show on the page. Everyone in the feed,
   first blood, the rivalry, a highlight or the top 10 stays. A player it forgot who kills or dies again starts from
-  nothing, and their kills leave the match's top weapons.
+  nothing, and their kills leave the match's top weapons. If those left still don't fit, each keeps only the weapon
+  they have the most kills with, and as a last resort the match keeps only its totals, so a batch is never refused.
 - **Replies to the game.** The bot replies to each batch once it is saved, and only then updates the open pages.
 
 The Node/Docker version does not have the live match.

@@ -4,7 +4,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import { runCommand, suggestOptions } from './commands.ts';
-import { nextMap, parseBoardRef, parseStagedMap, rotationReadDue, showBoard, type ReadRotation, type StagedMap } from './board.ts';
+import { nextMap, parseBoardRef, parseReadRotation, parseStagedMap, rotationReadDue, showBoard, type ReadRotation, type StagedMap } from './board.ts';
 import {
   ADMIN_DEFAULT_DAYS,
   ADMIN_PERIODS,
@@ -382,7 +382,8 @@ const CATALOG_MS = 10 * 60_000;
 const OFFLINE_AFTER_MS = 3 * 60_000;
 
 // The server's ban list is read at most this often, to see bans made or lifted outside the bot. Each RCON read can make
-// the game server stutter, and those bans are rare.
+// the game server stutter, and those bans are rare. When it was last read is kept in storage ('bansReadAt'), as the
+// Durable Object can sleep between checks.
 const BAN_WATCH_MS = 10 * 60_000;
 
 const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => rest;
@@ -411,14 +412,16 @@ const oneAtATime = () => {
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last reading, to
-// notice bans made or lifted outside the bot), 'staffNames' (staff's names on Discord, by user ID, for the staff page),
-// 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam account each
-// staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what Steam said about
-// that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan and the rotation
-// put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list), 'killFeed' (the
-// server's latest kills, for the staff page) and 'joinLog' (who joined and left the server, for the staff page; see
-// joinlog.ts). Each player's kills by day, for the staff page and the roundups' awards, are in the SQLite database's
-// kill_days table (see killfeed.ts), and each player's times on the server, for their history, in its sessions table.
+// notice bans made or lifted outside the bot), 'bansReadAt' (when that was), 'boardRotation' (the server's rotation
+// for the live status's next map, and when it was read), 'staffNames' (staff's names on Discord, by user ID, for the
+// staff page), 'staffLookupsFailed' (when asking Discord about each of those last failed), 'staffProfiles' (the Steam
+// account each staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what
+// Steam said about that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan
+// and the rotation put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list),
+// 'killFeed' (the server's latest kills, for the staff page) and 'joinLog' (who joined and left the server, for the
+// staff page; see joinlog.ts). Each player's kills by day, for the staff page and the roundups' awards, are in the
+// SQLite database's kill_days table (see killfeed.ts), and each player's times on the server, for their history, in its
+// sessions table.
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -459,10 +462,6 @@ export class Watcher extends DurableObject<Env> {
   private steamRetryAt = 0;
   // What maps can be played with, for the staff page's rotations; it only changes with a game update.
   private rotationCatalog: { at: number; catalog: RotationCatalog } | null = null;
-  // The server's rotation, for the live status's next map (see rotationReadDue). Forgotten when the bot changes it.
-  private boardRotation: ReadRotation | null = null;
-  // When the server's ban list was last read (see BAN_WATCH_MS).
-  private bansWatchedAt = 0;
   // Staff's in-game lines, once read: every check that can send an in-game message needs them. Every write goes through
   // linesAction, so it is never stale.
   private savedLines: SavedLines | null = null;
@@ -850,7 +849,7 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const now = Date.now();
     try {
-      const stored = await storage.get(['board', 'state', 'stats', 'nextMap']);
+      const stored = await storage.get(['board', 'state', 'stats', 'nextMap', 'boardRotation']);
       const server = parseStats(stored.get('stats')).server;
       if (snapshot === null && server !== null && now - server.seenAt < OFFLINE_AFTER_MS) return;
       const match = parseState(stored.get('state'))?.match ?? null;
@@ -861,7 +860,7 @@ export class Watcher extends DurableObject<Env> {
               snapshot.status.map,
               parseStagedMap(stored.get('nextMap')),
               // Without the rotation, the live status just leaves the next map out.
-              await this.serverRotation(config, snapshot, now),
+              await this.serverRotation(config, snapshot, parseReadRotation(stored.get('boardRotation')), now),
               now,
             );
       const message = buildLiveStatus(
@@ -881,13 +880,13 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // The server's rotation for the live status, read again only when rotationReadDue says. Null if it can't be read; a
-  // failed read is not kept, so the next check asks again.
-  private async serverRotation(config: Config, snapshot: Snapshot, now: number): Promise<Rotation | null> {
+  // The server's rotation for the live status: the one `saved`, until rotationReadDue says to read it again. Null if it
+  // can't be read; a failed read is not kept, so the next check asks again.
+  private async serverRotation(config: Config, snapshot: Snapshot, saved: ReadRotation | null, now: number): Promise<Rotation | null> {
     const { map, rotationIndex } = snapshot.status;
-    if (!rotationReadDue(this.boardRotation, map, rotationIndex, now)) return this.boardRotation?.rotation ?? null;
+    if (saved !== null && !rotationReadDue(saved, map, rotationIndex, now)) return saved.rotation;
     const rotation = await fetchRotation(config.rconUrl, config.rconPassword, socketHttp(connect)).catch(() => null);
-    if (rotation !== null) this.boardRotation = { map, index: rotationIndex, at: now, rotation };
+    if (rotation !== null) await this.ctx.storage.put('boardRotation', { map, index: rotationIndex, at: now, rotation } satisfies ReadRotation);
     return rotation;
   }
 
@@ -931,7 +930,7 @@ export class Watcher extends DurableObject<Env> {
         rotation.entries,
       );
       // The live status reads the new rotation at the next check.
-      if (changed) this.boardRotation = null;
+      if (changed) await this.ctx.storage.delete('boardRotation');
       await this.ctx.storage.put('rotations', done);
       console.info(
         changed
@@ -1168,11 +1167,13 @@ export class Watcher extends DurableObject<Env> {
   // It runs one at a time with the bot's own ban changes, which keep the saved list up to date as they make them. Skipped
   // while the server is not answering, and until BAN_WATCH_MS after the last reading; a failure waits as long.
   private async watchBans(config: Config, snapshot: Snapshot | null): Promise<void> {
+    if (snapshot === null) return;
     const now = Date.now();
-    if (snapshot === null || now - this.bansWatchedAt < BAN_WATCH_MS) return;
-    this.bansWatchedAt = now;
     const storage = this.ctx.storage;
     try {
+      const readAt = await storage.get('bansReadAt');
+      if (typeof readAt === 'number' && now - readAt < BAN_WATCH_MS) return;
+      await storage.put('bansReadAt', now);
       const onServer = await fetchBans(config.rconUrl, config.rconPassword, socketHttp(connect));
       const stored = await storage.get(['serverBans', 'bans']);
       const saved = parseServerBans(stored.get('serverBans'));
