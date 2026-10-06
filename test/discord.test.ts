@@ -1078,6 +1078,33 @@ describe('buildPlayerEmbed', () => {
     );
   });
 
+  it('names a teammate the kill feed sent no name for by their Steam ID', () => {
+    const BO = '76561198000000002';
+    const base = { at: NOW, map: '', faction: null, cause: null, distance: null, tags: [] };
+    const grief: PlayerGrief = {
+      teamKills: 1,
+      vehicleTeamKills: 0,
+      teamKilled: 1,
+      suicides: 0,
+      vehicleSuicides: 0,
+      flags: [],
+      victims: [{ steamId: BO, name: BO, kills: 1 }],
+      incidents: [
+        { ...base, kind: 'team-kill', steamId: ID, name: 'Ash', victimSteamId: BO, victimName: '' },
+        { ...base, kind: 'team-kill', steamId: BO, name: '', victimSteamId: ID, victimName: 'Ash' },
+      ],
+    };
+
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, grief } }), 'Team kills · today (UTC)')).toBe(
+      [
+        '**1 team kill** · killed by a teammate 1 time',
+        `Teammates killed: **${BO}**`,
+        `${t(NOW, 'R')} Killed teammate **${BO}**`,
+        `${t(NOW, 'R')} Killed by teammate **${BO}**`,
+      ].join('\n'),
+    );
+  });
+
   it("keeps today's team kills inside Discord's limit for a field, keeping the newest incidents", () => {
     const long = 'Id.Item.' + 'X'.repeat(400);
     const incidents = Array.from({ length: 5 }, (_, i) => ({

@@ -1053,8 +1053,8 @@ const incidentLine = (i: Incident, weapon: (cause: string) => string, steamId?: 
     i.kind === 'vehicle-suicide'
       ? 'Killed themselves in a vehicle'
       : steamId !== undefined && i.victimSteamId === steamId && i.steamId !== steamId
-        ? `Killed by teammate **${playerName(i.name)}**`
-        : `Killed teammate **${playerName(i.victimName ?? 'unknown')}**`;
+        ? `Killed by teammate **${playerName(i.name || i.steamId)}**`
+        : `Killed teammate **${playerName(i.victimName || i.victimSteamId || 'unknown')}**`;
   return `${when(i.at, 'R')} ${what}${how}${far}${i.map ? ` on ${mapName(i.map)}` : ''}`;
 };
 
