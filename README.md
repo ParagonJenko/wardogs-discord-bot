@@ -1068,6 +1068,29 @@ Automatic VIP is Cloudflare only.
 
 ## In-game messages
 
+### Welcome
+
+Each player who joins gets a private message in game (like `/warn`, only they see it) 2 minutes after the bot sees
+them join (`WELCOME_MESSAGE_MINUTES`), with the basic rules and where the Discord and the website are:
+
+> Welcome! Rules: no cheating or exploits, no team killing or griefing, no racism or abuse, and listen to admins. Full
+> rules on our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com
+
+- The bot sees joins at its check each minute, so the welcome arrives 2 to 3 minutes after the player joins.
+- **Not again for 6 hours:** a player who rejoins within 6 hours of their welcome (a map change, a crash) doesn't get
+  it again. Players already on when the bot starts watching (a deploy, a restart) count as welcomed.
+- Someone who leaves before their welcome goes out doesn't get it; they wait again if they come back.
+- The Discord link comes from `DISCORD_INVITE` and the website from `SITE_URL`; either is left out when not set.
+- The rules line is on the [Lines tab](#lines-tab) (Welcome), so staff can change it without a deploy. The default is
+  in `src/lines.ts`.
+- A welcome that fails to send is logged (`Welcome to "<name>" (<Steam ID>) failed: …`) and not tried again. Each one
+  sent is logged as `Sent welcome to "<name>" (<Steam ID>): …`.
+- It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`.
+- Set `WELCOME_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to turn
+  it off.
+
+### Seeding and match messages
+
 While the server seeds, the bot broadcasts a seeding message in game every 5 minutes (`SEEDING_MESSAGE_MINUTES`), and
 30 seconds after someone joins: how many more players it needs to go live, and what seeding earns.
 
@@ -1129,8 +1152,8 @@ is won at a score other than 100. They need `SITE_URL`; without it none are sent
 ### Lines tab
 
 The [staff page](#staff-page) has a tab for the lines the bot says in game, so staff can reword them, add new ones or
-take some out without a deploy. Each list (seeding, 10 minutes in, halfway and 90 points for each faction, level
-scores, any other team) has its own editor:
+take some out without a deploy. Each list (seeding, welcome, 10 minutes in, halfway and 90 points for each faction,
+level scores, any other team) has its own editor:
 
 - Each line shows the whole message as it goes out in game, with what the bot adds before and after it (such as
   "Halfway there!" and the seeding call to action) and its placeholders filled in, and how many of the game's 200
@@ -1219,7 +1242,8 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 ## Security
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). On its own
-the bot only reads the server, sends the [in-game messages](#in-game-messages) (`POST /v1/broadcast`), changes the
+the bot only reads the server, sends the [in-game messages](#in-game-messages) (`POST /v1/broadcast`, and
+`POST /v1/players/…/message` for the welcome), changes the
 reserved list in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`), puts each day's planned
 [map rotation](#map-rotations) there in the same way, and lifts timed bans when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
 [staff command](#staff-commands). Still:

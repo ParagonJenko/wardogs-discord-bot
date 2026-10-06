@@ -6,13 +6,19 @@ import { DEFAULT_LINES, type Lines } from './lines.ts';
 import {
   joinMessageDue,
   JoinWatchSchema,
+  markWelcomed,
   MatchMessagesSchema,
   nextMessage,
   seedingMessage,
   seedingMessageDue,
   watchJoins,
+  watchWelcomes,
+  welcomeMessage,
+  welcomesDue,
+  WelcomeWatchSchema,
   type JoinWatch,
   type MatchMessages,
+  type WelcomeWatch,
 } from './messages.ts';
 import type { SeedCredit } from './players.ts';
 import type { Player, Snapshot } from './rcon.ts';
@@ -43,6 +49,8 @@ export type BotState = {
   seedMessageAt: number | null;
   // Who is in game, and whether a seeding message is waiting for someone who just joined.
   joins: JoinWatch | null;
+  // Who is waiting for their welcome, and who had one lately. Null while welcomes are off.
+  welcomes: WelcomeWatch | null;
 };
 
 export type StateStore = {
@@ -60,6 +68,8 @@ type PollerDeps = {
   stats?: StatsSink;
   // Sends a message to everyone in game.
   broadcast?: (message: string) => Promise<void>;
+  // Sends a private message to one player in game, by Steam ID.
+  messagePlayer?: (steamId: string, text: string) => Promise<void>;
   // Picks which line an in-game message uses.
   random?: () => number;
   // The in-game lines, when staff can change them (see linespage.ts); the bot's own otherwise.
@@ -139,6 +149,8 @@ const BotStateSchema = z.object({
   seedMessageAt: z.number().nullable().default(null),
   // Missing from state saved before seeding messages on joining.
   joins: JoinWatchSchema.nullable().default(null),
+  // Missing from state saved before welcomes.
+  welcomes: WelcomeWatchSchema.nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -153,6 +165,7 @@ const StoredStateSchema = z.union([
       messages: null,
       seedMessageAt: null,
       joins: null,
+      welcomes: null,
     }),
   ),
 ]);
@@ -205,6 +218,7 @@ export const createPoller = ({
   store,
   stats,
   broadcast,
+  messagePlayer,
   random = Math.random,
   lines,
   staff,
@@ -217,6 +231,28 @@ export const createPoller = ({
     } catch (error) {
       log.error(`Stats update failed: ${errorText(error)}`);
     }
+  };
+
+  const welcoming = config.welcomeMessages !== null && messagePlayer !== undefined;
+
+  // Each player's welcome, privately, a couple of minutes after they join. One that fails is not tried again. Gives
+  // back what to remember, or null while welcomes are off.
+  const welcome = async (previous: WelcomeWatch | null, players: Player[], count: number, time: number, wording: Lines) => {
+    const rule = config.welcomeMessages;
+    if (rule === null || messagePlayer === undefined) return null;
+    const watched = watchWelcomes(previous, steamIds(players), count, time);
+    const due = welcomesDue(watched, time, rule, config.pollIntervalMs);
+    for (const steamId of due) {
+      const text = welcomeMessage(rule, random, wording);
+      const who = `${JSON.stringify(players.find((p) => p.steamId === steamId)?.name ?? '')} (${steamId})`;
+      try {
+        await messagePlayer(steamId, text);
+        log.info(`Sent welcome to ${who}: ${text}`);
+      } catch (error) {
+        log.error(`Welcome to ${who} failed: ${errorText(error)}`);
+      }
+    }
+    return markWelcomed(watched, due, time);
   };
 
   const check = async (): Promise<void> => {
@@ -232,7 +268,8 @@ export const createPoller = ({
       const messages =
         config.matchMessages === null ? null : nextMessage(null, match, time, config.matchMessages, config.vip).messages;
       const joins = watchJoins(null, steamIds(players), time, false);
-      await store.save({ alerts, seeding, match, unsentSummary: null, messages, seedMessageAt: null, joins });
+      const welcomes = welcoming ? watchWelcomes(null, steamIds(players), status.players, time) : null;
+      await store.save({ alerts, seeding, match, unsentSummary: null, messages, seedMessageAt: null, joins, welcomes });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
@@ -271,7 +308,7 @@ export const createPoller = ({
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
-    const wording = broadcast === undefined ? DEFAULT_LINES : await readLines(lines, log);
+    const wording = broadcast === undefined && !welcoming ? DEFAULT_LINES : await readLines(lines, log);
     const { messages, send: milestone } =
       config.matchMessages !== null && broadcast !== undefined && status.players > 0
         ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random, wording)
@@ -302,6 +339,8 @@ export const createPoller = ({
       }
     }
 
+    const welcomes = await welcome(state.welcomes, players, status.players, time, wording);
+
     // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
     // Discord is down, and an unsent summary is kept to retry. A newer summary replaces one still waiting; that match
     // is already recorded. While live, the seeding count is kept so a retried live alert can still name the seeders.
@@ -312,6 +351,7 @@ export const createPoller = ({
       messages,
       seedMessageAt,
       joins,
+      welcomes,
       unsentSummary: finished === null ? state.unsentSummary : { ...summarise(finished), endedAt },
     };
     try {
@@ -344,7 +384,16 @@ export const createPoller = ({
       throw error;
     }
     // The alert state is only saved after a successful send, so a failed alert is retried on the next check.
-    await store.save({ alerts: result.state, seeding: tallied ?? {}, match, unsentSummary: null, messages, seedMessageAt, joins });
+    await store.save({
+      alerts: result.state,
+      seeding: tallied ?? {},
+      match,
+      unsentSummary: null,
+      messages,
+      seedMessageAt,
+      joins,
+      welcomes,
+    });
   };
 
   return async (): Promise<void> => {

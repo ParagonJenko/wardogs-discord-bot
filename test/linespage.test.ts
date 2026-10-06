@@ -12,11 +12,20 @@ import {
   type LinesContext,
   type SavedLines,
 } from '../src/linespage.ts';
-import { fillLine, milestones, seedingMessage } from '../src/messages.ts';
+import { fillLine, milestones, seedingMessage, welcomeMessage } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
-const context: LinesContext = { siteHost: 'gaminginit.com', vip, scoreToWin: 100, live: 20, match: true, seeding: true };
+const context: LinesContext = {
+  siteHost: 'gaminginit.com',
+  discord: 'discord.gg/qsJFYGhSJ4',
+  vip,
+  scoreToWin: 100,
+  live: 20,
+  match: true,
+  seeding: true,
+  welcome: true,
+};
 const who = { by: '42', byName: 'Sarge', now: 1_000 };
 
 const save = (saved: SavedLines, list: string, lines: string[]) => editLines(saved, { action: 'save', list, lines }, context, who);
@@ -78,6 +87,15 @@ describe('editLines', () => {
     });
     expect(save({}, 'halfwayLevel', Array.from({ length: MAX_LINES + 1 }, (_, i) => `Line ${i}`))).toEqual({
       problem: `A list can have at most ${MAX_LINES} lines.`,
+    });
+  });
+
+  it('refuses a welcome line too long for the game with the Discord and website after it', () => {
+    const room = 200 - ' Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com'.length;
+
+    expect(save({}, 'welcome', ['x'.repeat(room)])).toHaveProperty('saved');
+    expect(save({}, 'welcome', ['x'.repeat(room + 1)])).toEqual({
+      problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.',
     });
   });
 
@@ -180,6 +198,10 @@ describe('buildLinesPage', () => {
     expect(page.lists.find((l) => l.id === 'tenMinutes')?.off).toBe(
       'The bot is not sending match messages: MATCH_MESSAGES is off, or SITE_URL is not set.',
     );
+    expect(page.lists.find((l) => l.id === 'welcome')?.after).toBe(' Discord: discord.gg/qsJFYGhSJ4');
+    expect(buildLinesPage({}, { ...context, welcome: false }).lists.find((l) => l.id === 'welcome')?.off).toBe(
+      'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
+    );
   });
 
   it('shows each message as the bot sends it', () => {
@@ -214,6 +236,9 @@ describe('buildLinesPage', () => {
       shown('tenMinutes', DEFAULT_LINES.tenMinutes[0] ?? ''),
     );
     expect(seedingMessage(1, 20, { everyMs: 1, siteHost: 'gaminginit.com' }, vip, first)).toBe(shown('seeding', DEFAULT_LINES.seeding[0] ?? ''));
+    expect(welcomeMessage({ afterMs: 1, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' }, first)).toBe(
+      shown('welcome', DEFAULT_LINES.welcome[0] ?? ''),
+    );
   });
 
   it("passes every one of the bot's own lines", () => {

@@ -2,7 +2,18 @@ import { z } from 'zod';
 import { readJsonBody } from './body.ts';
 import type { Config, VipRule } from './config.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import { fillLine, HALFWAY_START, halfwayCall, MAX_LENGTH, morePlayers, nearlyCall, nearlyScore, seedingReward } from './messages.ts';
+import {
+  discordLink,
+  fillLine,
+  HALFWAY_START,
+  halfwayCall,
+  MAX_LENGTH,
+  morePlayers,
+  nearlyCall,
+  nearlyScore,
+  seedingReward,
+  welcomeLinks,
+} from './messages.ts';
 
 // The staff page's Lines tab: staff put their own lines in place of any of the bot's lists (see lines.ts), and can go
 // back to the bot's. Each list staff changed is kept in 'lines', by list id, with who changed it last; every other list
@@ -18,21 +29,26 @@ export const MAX_LINES = 50;
 export type LinesContext = {
   // The website (SITE_URL), or null without one.
   siteHost: string | null;
+  // The Discord invite for the welcome ("discord.gg/abc123"), or null without one (DISCORD_INVITE).
+  discord: string | null;
   vip: VipRule | null;
   scoreToWin: number;
   live: number;
-  // Whether the bot sends the match messages and the seeding messages.
+  // Whether the bot sends the match messages, the seeding messages and the welcomes.
   match: boolean;
   seeding: boolean;
+  welcome: boolean;
 };
 
 export const linesContext = (config: Config): LinesContext => ({
-  siteHost: config.seedingMessages?.siteHost ?? config.matchMessages?.siteHost ?? null,
+  siteHost: config.seedingMessages?.siteHost ?? config.matchMessages?.siteHost ?? config.welcomeMessages?.siteHost ?? null,
+  discord: config.inviteCode ? discordLink(config.inviteCode) : null,
   vip: config.vip,
   scoreToWin: config.scoreToWin,
   live: config.rules.live,
   match: config.matchMessages !== null,
   seeding: config.seedingMessages !== null,
+  welcome: config.welcomeMessages !== null,
 });
 
 // A list's placeholders, each with the value the preview shows (`values`) and the longest it can be when the message
@@ -46,7 +62,7 @@ type ListDefinition = {
   name: string;
   // When it goes out, and what the bot adds to it.
   note: string;
-  kind: 'seeding' | 'match';
+  kind: 'seeding' | 'match' | 'welcome';
   get: (lines: Lines) => string[];
   set: (lines: Lines, list: string[]) => Lines;
   frame: (context: LinesContext) => Frame;
@@ -98,6 +114,16 @@ export const LISTS: ListDefinition[] = [
       before: '',
       after: ` ${seedingReward(context.siteHost, context.vip)}`,
     }),
+  },
+  {
+    id: 'welcome',
+    group: 'Welcome',
+    name: 'Welcome',
+    note: 'A private message to each player a couple of minutes after they join, and not again for 6 hours. Say the basic rules: the Discord and the website go after it.',
+    kind: 'welcome',
+    get: (lines) => lines.welcome,
+    set: (lines, welcome) => ({ ...lines, welcome }),
+    frame: (context) => ({ ...exact({}), before: '', after: welcomeLinks(context.siteHost, context.discord) }),
   },
   {
     id: 'tenMinutes',
@@ -279,6 +305,7 @@ export type LinesPage = {
 const OFF = {
   seeding: 'The bot is not sending seeding messages: SEEDING_MESSAGE_MINUTES is 0.',
   match: 'The bot is not sending match messages: MATCH_MESSAGES is off, or SITE_URL is not set.',
+  welcome: 'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
 };
 
 export const buildLinesPage = (saved: SavedLines, context: LinesContext): LinesPage => {
