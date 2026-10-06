@@ -23,6 +23,7 @@ describe('loadConfig', () => {
       serverId: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000 },
+      quietHours: { start: 21, end: 6, timeZone: 'Europe/London' },
       busyThreshold: 97,
       scoreToWin: 100,
       seedMinutes: 10,
@@ -37,6 +38,17 @@ describe('loadConfig', () => {
   it('starts each day\'s map rotation at ROTATION_HOUR (UTC)', () => {
     expect(loadConfig({ ...required, ROTATION_HOUR: '0' }).rotationHour).toBe(0);
     expect(() => loadConfig({ ...required, ROTATION_HOUR: '24' })).toThrow(/ROTATION_HOUR/);
+  });
+
+  it('reads the night, in its time zone, when the alerts ping nobody, off when it starts and ends at the same hour', () => {
+    expect(loadConfig({ ...required, QUIET_START_HOUR: '0', QUIET_END_HOUR: '6', QUIET_TIME_ZONE: 'UTC' }).quietHours).toEqual({
+      start: 0,
+      end: 6,
+      timeZone: 'UTC',
+    });
+    expect(loadConfig({ ...required, QUIET_START_HOUR: '3', QUIET_END_HOUR: '3' }).quietHours).toBeNull();
+    expect(() => loadConfig({ ...required, QUIET_END_HOUR: '24' })).toThrow(/QUIET_END_HOUR/);
+    expect(() => loadConfig({ ...required, QUIET_TIME_ZONE: 'Middle/Earth' })).toThrow(/QUIET_TIME_ZONE/);
   });
 
   it('posts roundups to their own channel when one is set, at the hour given, or not at all', () => {

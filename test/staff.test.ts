@@ -28,6 +28,7 @@ const config: Config = {
   serverId: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0 },
+  quietHours: null,
   busyThreshold: 97,
   scoreToWin: 100,
   seedMinutes: 10,

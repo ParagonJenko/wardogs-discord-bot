@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AlertRules } from './alerts.ts';
+import type { AlertRules, QuietHours } from './alerts.ts';
 import type { MessageRule, SeedingMessageRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
@@ -33,6 +33,15 @@ const invite = z
   )
   .transform((value) => value.replace(/\/$/, '').split('/').pop() ?? value);
 
+const isTimeZone = (name: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const EnvSchema = z
   .object({
     RCON_URL: rconUrl,
@@ -63,6 +72,15 @@ const EnvSchema = z
     ALERT_COOLDOWN_MINUTES: z.coerce.number().int().min(0).default(10),
     // A drop in players only counts (low-pop alert, seeding re-armed) once it has lasted this long.
     DROP_GRACE_MINUTES: z.coerce.number().int().min(0).default(5),
+    // The night, when the seeding and low-pop alerts go out without pinging the role: from QUIET_START_HOUR up to
+    // QUIET_END_HOUR, in QUIET_TIME_ZONE's own time, so it follows the clocks changing. The same hour for both turns it off.
+    QUIET_START_HOUR: z.coerce.number().int().min(0).max(23).default(21),
+    QUIET_END_HOUR: z.coerce.number().int().min(0).max(23).default(6),
+    QUIET_TIME_ZONE: z
+      .string()
+      .trim()
+      .refine(isTimeZone, 'must be a time zone name like Europe/London or UTC')
+      .default('Europe/London'),
     // Automatic VIP: days with a successful seed needed in a week. 0 turns it off.
     VIP_SEED_DAYS: z.coerce.number().int().min(0).max(7).default(0),
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
@@ -121,6 +139,8 @@ export type Config = {
   serverId: string | undefined;
   pollIntervalMs: number;
   rules: AlertRules;
+  // When the seeding and low-pop alerts ping nobody. Null when QUIET_START_HOUR and QUIET_END_HOUR are the same.
+  quietHours: QuietHours | null;
   // Players from which the server counts as busy, for the website.
   busyThreshold: number;
   // The score a faction needs to win.
@@ -171,6 +191,10 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       cooldownMs: e.ALERT_COOLDOWN_MINUTES * 60_000,
       graceMs: e.DROP_GRACE_MINUTES * 60_000,
     },
+    quietHours:
+      e.QUIET_START_HOUR === e.QUIET_END_HOUR
+        ? null
+        : { start: e.QUIET_START_HOUR, end: e.QUIET_END_HOUR, timeZone: e.QUIET_TIME_ZONE },
     busyThreshold: e.BUSY_THRESHOLD,
     scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,

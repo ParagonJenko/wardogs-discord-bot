@@ -23,6 +23,21 @@ export type StepResult = {
   alert: AlertKind | null;
 };
 
+// The night, in a time zone's own hours, so it follows the clocks changing (21 to 6 in Europe/London is 9pm to 6am in
+// both summer and winter). From `start` up to `end`, running past midnight when `end` is the smaller.
+export type QuietHours = { start: number; end: number; timeZone: string };
+
+// Whether `now` is at night. Pings at night would only wake people up: see the poller.
+export const isQuiet = (now: number, quiet: QuietHours | null): boolean => {
+  if (quiet === null) return false;
+  const hour = Number(
+    new Intl.DateTimeFormat('en-GB', { timeZone: quiet.timeZone, hour: 'numeric', hourCycle: 'h23' })
+      .formatToParts(now)
+      .find((part) => part.type === 'hour')?.value,
+  );
+  return quiet.start < quiet.end ? hour >= quiet.start && hour < quiet.end : hour >= quiet.start || hour < quiet.end;
+};
+
 export const phaseFor = (players: number, rules: AlertRules): Phase => {
   if (players >= rules.live) return 'live';
   if (players >= rules.seeding) return 'seeding';

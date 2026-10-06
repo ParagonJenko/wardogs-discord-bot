@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, step, withSeedCall, type AlertKind, type AlertRules, type MonitorState } from '../src/alerts.ts';
+import { initialState, isQuiet, step, withSeedCall, type AlertKind, type AlertRules, type MonitorState } from '../src/alerts.ts';
 
 const MINUTE = 60_000;
 
@@ -142,5 +142,39 @@ describe('seeding call from staff', () => {
 
     expect(withSeedCall(alerted, 2 * MINUTE)).toBe(alerted);
     expect(withSeedCall(alerted, 6 * MINUTE).lastAlertAt).toEqual({ seeding: 6 * MINUTE, live: MINUTE });
+  });
+});
+
+describe('quiet hours', () => {
+  const utc = (day: number, hour: number, minute = 0): number => Date.UTC(2026, 9, day, hour, minute);
+
+  it('runs past midnight when it ends at a smaller hour', () => {
+    const night = { start: 22, end: 8, timeZone: 'UTC' };
+    expect([21, 22, 23, 0, 7, 8, 12].map((hour) => isQuiet(utc(5, hour, 30), night))).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it('runs within the day when it starts at the smaller hour', () => {
+    const early = { start: 1, end: 6, timeZone: 'UTC' };
+    expect([0, 1, 5, 6].map((hour) => isQuiet(utc(5, hour, 59), early))).toEqual([false, true, true, false]);
+  });
+
+  it("follows the time zone's clocks changing: 9pm to 6am in the UK in summer and in winter", () => {
+    const uk = { start: 21, end: 6, timeZone: 'Europe/London' };
+    // 5 October is BST (UTC+1): 9pm is 20:00 UTC and 6am is 05:00 UTC.
+    expect([19, 20, 4, 5].map((hour) => isQuiet(utc(5, hour, 30), uk))).toEqual([false, true, true, false]);
+    // 26 October is GMT (UTC): 9pm is 21:00 UTC and 6am is 06:00 UTC.
+    expect([20, 21, 5, 6].map((hour) => isQuiet(utc(26, hour, 30), uk))).toEqual([false, true, true, false]);
+  });
+
+  it('is never quiet when there are no quiet hours', () => {
+    expect(isQuiet(utc(5, 3), null)).toBe(false);
   });
 });
