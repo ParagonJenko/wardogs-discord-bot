@@ -11,6 +11,7 @@ import {
   mapName,
   playerName,
 } from './discord.ts';
+import type { PlayerGrief } from './griefing.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
 import { modesFor, planSetup, setupLabels, type SetupCatalog } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
@@ -55,6 +56,7 @@ import {
 } from './rotations.ts';
 import type { SteamLookup } from './steam.ts';
 import { reservedIds, type VipGrant } from './vip.ts';
+import { weaponName } from './weapons.ts';
 
 // Staff commands that act on players, maps and VIP. Players are picked from a list while typing, so the value
 // Discord sends is usually a Steam ID; a name typed in full or in part also works when only one player matches.
@@ -77,6 +79,8 @@ export type PlayerRecord = {
   staffSpot: boolean;
   log: ModEntry[];
   ban: BanRecord | null;
+  // Their team kills and suicides today (UTC), from the kill feed. null when the bot has never had the feed.
+  grief: PlayerGrief | null;
 };
 
 export type BanRequest = Named & { length: string; reason: string; by: string; byName?: string };
@@ -557,6 +561,7 @@ export const runStaffCommand =
           steam,
           days: PROFILE_DAYS,
           now: now(),
+          weapon: weaponName,
         }),
       ],
     };

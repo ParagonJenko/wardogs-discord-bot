@@ -83,7 +83,7 @@ const rcon = (overrides: Record<string, [number, unknown]> = {}) => {
   return { http, sent };
 };
 
-const emptyRecord: PlayerRecord = { name: null, totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null };
+const emptyRecord: PlayerRecord = { name: null, totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null, grief: null };
 
 const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<typeof vi.fn> } => ({
   player: vi.fn(async () => emptyRecord),
@@ -473,6 +473,32 @@ describe('runStaffCommand', () => {
         { name: 'Ban', value: 'Not banned' },
         { name: 'Staff history', value: `1 kick\n<t:${(NOW - 86_400_000) / 1000}:d> **Kick** by <@42>: Teamkilling` },
       ]),
+    );
+  });
+
+  it("/player shows today's team kills, naming the weapons", async () => {
+    const { run, records } = setup();
+    records.player.mockResolvedValueOnce({
+      ...emptyRecord,
+      name: 'Bo',
+      grief: {
+        teamKills: 1,
+        vehicleTeamKills: 0,
+        teamKilled: 0,
+        suicides: 0,
+        vehicleSuicides: 0,
+        flags: [],
+        victims: [{ steamId: ASH, name: 'Ash', kills: 1 }],
+        incidents: [
+          { at: NOW, kind: 'team-kill', map: '', steamId: BO, name: 'Bo', faction: null, victimSteamId: ASH, victimName: 'Ash', cause: 'Id.Item.AK74M', distance: null, tags: [] },
+        ],
+      },
+    });
+
+    const reply = await run('player', { player: BO });
+
+    expect(reply.embeds?.[0]?.fields?.find((f) => f.name === 'Team kills · today (UTC)')?.value).toBe(
+      ['**1 team kill**', 'Teammates killed: **Ash**', `<t:${NOW / 1000}:R> Killed teammate **Ash** with AK74`].join('\n'),
     );
   });
 

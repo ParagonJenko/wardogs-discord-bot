@@ -42,7 +42,7 @@ import {
   mapName,
   postWebhook,
 } from './discord.ts';
-import { griefDayKey, hasGrief, parseGriefDay, recordGrief, type GriefAlert } from './griefing.ts';
+import { griefDayKey, hasGrief, parseGriefDay, playerGrief, recordGrief, type GriefAlert } from './griefing.ts';
 import {
   ADMIN_COMMAND_DEFINITIONS,
   checkOptions,
@@ -2038,9 +2038,11 @@ export class Watcher extends DurableObject<Env> {
 
   // What the bot knows about one player, for /player.
   async playerRecord(steamId: string): Promise<PlayerRecord> {
-    const keys = recentDayKeys(Date.now(), PROFILE_DAYS);
+    const now = Date.now();
+    const keys = recentDayKeys(now, PROFILE_DAYS);
     const key = modLogKey(steamId);
-    const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans', STAFF_PROFILES_KEY]);
+    const griefKey = griefDayKey(now);
+    const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans', STAFF_PROFILES_KEY, griefKey, 'killFeedSince']);
     const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
     const found = totals(keys.map((k) => withoutStaffSeeding(parsePlayerDay(stored.get(k)), staff))).find((p) => p.steamId === steamId);
     const vip = parseVipState(stored.get('vip'));
@@ -2054,6 +2056,7 @@ export class Watcher extends DurableObject<Env> {
       staffSpot: staff.has(steamId),
       log,
       ban,
+      grief: typeof stored.get('killFeedSince') === 'string' ? playerGrief(parseGriefDay(stored.get(griefKey)), steamId) : null,
     };
   }
 

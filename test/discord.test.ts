@@ -20,7 +20,9 @@ import {
   postWebhook,
   type DiscordMessage,
 } from '../src/discord.ts';
+import type { PlayerGrief } from '../src/griefing.ts';
 import type { Roundup } from '../src/roundup.ts';
+import type { PlayerRecord } from '../src/staff.ts';
 import type { SteamCheck } from '../src/steam.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
@@ -917,7 +919,7 @@ describe('buildPlayerEmbed', () => {
   const NOW = Date.UTC(2026, 8, 30, 12);
   const DAY = 86_400_000;
   const ID = '76561198000000001';
-  const record = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null };
+  const record: PlayerRecord = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null, grief: null };
   const profile = { steamId: ID, name: 'Ash_*', record, online: null, reserved: false, serverBan: null, days: 90, now: NOW };
   const field = (embed: ReturnType<typeof buildPlayerEmbed>, name: string) => embed.fields?.find((f) => f.name === name)?.value;
   const t = (at: number, style: string) => `<t:${at / 1000}:${style}>`;
@@ -1029,6 +1031,112 @@ describe('buildPlayerEmbed', () => {
         `${t(NOW - 2 * DAY, 'd')} **Warning** by <@42>: Language`,
       ].join('\n'),
     );
+  });
+
+  it("shows today's team kills only once the bot has the kill feed, with whom, how and who killed them", () => {
+    const BO = '76561198000000002';
+    const CY = '76561198000000003';
+    const base = { at: NOW - 600_000, map: 'Kavkazi', faction: 'Kharr', distance: 12.4, tags: [] };
+    const none: PlayerGrief = { teamKills: 0, vehicleTeamKills: 0, teamKilled: 0, suicides: 0, vehicleSuicides: 0, flags: [], victims: [], incidents: [] };
+    const grief: PlayerGrief = {
+      teamKills: 3,
+      vehicleTeamKills: 1,
+      teamKilled: 1,
+      suicides: 2,
+      vehicleSuicides: 1,
+      flags: ['teamKills', 'sameTeammate'],
+      victims: [
+        { steamId: BO, name: 'Bo_*', kills: 2 },
+        { steamId: CY, name: 'Cy', kills: 1 },
+      ],
+      incidents: [
+        { ...base, kind: 'team-kill', steamId: ID, name: 'Ash', victimSteamId: BO, victimName: 'Bo_*', cause: 'Id.Item.AK74M' },
+        { ...base, kind: 'team-kill', steamId: CY, name: 'Cy', victimSteamId: ID, victimName: 'Ash', cause: 'Id.Item.AK74M', distance: null },
+        { ...base, kind: 'vehicle-suicide', steamId: ID, name: 'Ash', cause: null, distance: null, map: '' },
+      ],
+    };
+    const weapon = (cause: string) => (cause === 'Id.Item.AK74M' ? 'AK74' : cause);
+    const ago = t(NOW - 600_000, 'R');
+
+    const without = buildPlayerEmbed(profile);
+    expect(field(without, 'Team kills · today (UTC)')).toBeUndefined();
+    expect(without.footer?.text).toBe('Staff history only covers what staff did through the bot.');
+
+    const quiet = buildPlayerEmbed({ ...profile, record: { ...record, grief: none } });
+    expect(field(quiet, 'Team kills · today (UTC)')).toBe('No team kills or suicides today.');
+    expect(quiet.footer?.text).toContain('sides from the last check, up to a minute old');
+
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, grief }, weapon }), 'Team kills · today (UTC)')).toBe(
+      [
+        '🚩 Flagged: team kills, same teammate',
+        '**3 team kills** (1 with a vehicle) · killed by a teammate 1 time · 2 suicides (1 in a vehicle)',
+        'Teammates killed: **Bo\\_\\*** ×2, **Cy**',
+        `${ago} Killed teammate **Bo\\_\\*** with AK74 from 12 m on Bakurani`,
+        `${ago} Killed by teammate **Cy** with AK74 on Bakurani`,
+        `${ago} Killed themselves in a vehicle`,
+      ].join('\n'),
+    );
+  });
+
+  it('names a teammate the kill feed sent no name for by their Steam ID', () => {
+    const BO = '76561198000000002';
+    const base = { at: NOW, map: '', faction: null, cause: null, distance: null, tags: [] };
+    const grief: PlayerGrief = {
+      teamKills: 1,
+      vehicleTeamKills: 0,
+      teamKilled: 1,
+      suicides: 0,
+      vehicleSuicides: 0,
+      flags: [],
+      victims: [{ steamId: BO, name: BO, kills: 1 }],
+      incidents: [
+        { ...base, kind: 'team-kill', steamId: ID, name: 'Ash', victimSteamId: BO, victimName: '' },
+        { ...base, kind: 'team-kill', steamId: BO, name: '', victimSteamId: ID, victimName: 'Ash' },
+      ],
+    };
+
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, grief } }), 'Team kills · today (UTC)')).toBe(
+      [
+        '**1 team kill** · killed by a teammate 1 time',
+        `Teammates killed: **${BO}**`,
+        `${t(NOW, 'R')} Killed teammate **${BO}**`,
+        `${t(NOW, 'R')} Killed by teammate **${BO}**`,
+      ].join('\n'),
+    );
+  });
+
+  it("keeps today's team kills inside Discord's limit for a field, keeping the newest incidents", () => {
+    const long = 'Id.Item.' + 'X'.repeat(400);
+    const incidents = Array.from({ length: 5 }, (_, i) => ({
+      at: NOW - (5 - i) * 60_000,
+      kind: 'team-kill' as const,
+      map: 'Kavkazi',
+      steamId: ID,
+      name: 'Ash',
+      faction: 'Kharr',
+      victimSteamId: '76561198000000002',
+      victimName: `Victim${i}`,
+      cause: long,
+      distance: null,
+      tags: [],
+    }));
+    const grief: PlayerGrief = {
+      teamKills: 5,
+      vehicleTeamKills: 0,
+      teamKilled: 0,
+      suicides: 0,
+      vehicleSuicides: 0,
+      flags: ['teamKills'],
+      victims: Array.from({ length: 7 }, (_, i) => ({ steamId: `7656119800000001${i}`, name: `Victim${i}`, kills: 1 })),
+      incidents,
+    };
+
+    const value = field(buildPlayerEmbed({ ...profile, record: { ...record, grief } }), 'Team kills · today (UTC)') ?? '';
+
+    expect(value.length).toBeLessThanOrEqual(1024);
+    expect(value).toContain('**Victim4** and 2 more');
+    expect(value).toContain('Killed teammate **Victim4**');
+    expect(value).not.toContain('Killed teammate **Victim0**');
   });
 
   it('says when a ban was made or lifted outside the bot', () => {
