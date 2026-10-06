@@ -9,6 +9,7 @@ import {
   INCIDENTS_KEPT,
   isSuicide,
   parseGriefDay,
+  playerGrief,
   recordGrief,
   sameSide,
   type GriefDay,
@@ -208,5 +209,41 @@ describe('griefing records', () => {
     expect(rows[0]?.mostKilledTeammate).toEqual({ steamId: BO, name: 'Bo', kills: 3 });
     expect(rows.find((r) => r.steamId === BO)?.teamKilled).toBe(5);
     expect(rows.find((r) => r.steamId === DEE)?.suicides).toBe(1);
+  });
+
+  it("gives one player's day for /player: counts, flags, teammates killed and the incidents by them or on them", () => {
+    const day = recordGrief(
+      emptyGriefDay(),
+      [death(ASH, BO), death(ASH, CY), death(ASH, BO), death(CY, ASH), death(BO, CY), death(ASH, ASH, { cause: HUMVEE })],
+      AT,
+      sideOf,
+    ).day;
+
+    const ash = playerGrief(day, ASH);
+
+    expect(ash).toMatchObject({ teamKills: 3, vehicleTeamKills: 0, teamKilled: 1, suicides: 1, vehicleSuicides: 1 });
+    expect(ash.flags).toEqual(['teamKills', 'sameTeammate']);
+    expect(ash.victims).toEqual([
+      { steamId: BO, name: 'Bo', kills: 2 },
+      { steamId: CY, name: 'Cy', kills: 1 },
+    ]);
+    // Bo killing Cy is neither by Ash nor on Ash.
+    expect(ash.incidents.map((i) => [i.kind, i.name, i.victimName])).toEqual([
+      ['team-kill', 'Ash', 'Bo'],
+      ['team-kill', 'Ash', 'Cy'],
+      ['team-kill', 'Ash', 'Bo'],
+      ['team-kill', 'Cy', 'Ash'],
+      ['vehicle-suicide', 'Ash', undefined],
+    ]);
+    expect(playerGrief(day, DEE)).toEqual({
+      teamKills: 0,
+      vehicleTeamKills: 0,
+      teamKilled: 0,
+      suicides: 0,
+      vehicleSuicides: 0,
+      flags: [],
+      victims: [],
+      incidents: [],
+    });
   });
 });

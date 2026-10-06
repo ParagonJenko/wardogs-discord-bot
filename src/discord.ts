@@ -1,7 +1,7 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
 import { isBotBan, type BanRecord, type ModAction, type ModEntry } from './moderation.ts';
-import type { GriefAlert, Incident } from './griefing.ts';
+import type { Flag, GriefAlert, Incident, PlayerGrief } from './griefing.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, RoleAward, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
@@ -935,6 +935,8 @@ export type PlayerProfile = {
   steam?: SteamLookup;
   days: number;
   now: number;
+  // Names a weapon from the kill feed's cause tag, for their team kills.
+  weapon?: (cause: string) => string;
 };
 
 const ACTION_NAMES: Record<ModAction, string> = {
@@ -1041,6 +1043,60 @@ const steamText = (lookup: SteamCheck | 'failed', now: number): string => {
   return [riskLine(lookup, now), steamFacts(lookup, now).join(' · '), `Checked ${when(lookup.at, 'R')}`].join('\n');
 };
 
+const INCIDENTS_LISTED = 5;
+
+// `steamId`, when given, is whose incidents they are: a team kill on them says who killed them.
+const incidentLine = (i: Incident, weapon: (cause: string) => string, steamId?: string): string => {
+  const how = i.cause === null ? '' : ` with ${escapeMarkdown(weapon(i.cause))}`;
+  const far = i.distance === null ? '' : ` from ${Math.round(i.distance)} m`;
+  const what =
+    i.kind === 'vehicle-suicide'
+      ? 'Killed themselves in a vehicle'
+      : steamId !== undefined && i.victimSteamId === steamId && i.steamId !== steamId
+        ? `Killed by teammate **${playerName(i.name)}**`
+        : `Killed teammate **${playerName(i.victimName ?? 'unknown')}**`;
+  return `${when(i.at, 'R')} ${what}${how}${far}${i.map ? ` on ${mapName(i.map)}` : ''}`;
+};
+
+// The newest lines that fit in `room` characters together, oldest first: a weapon or map the bot has no name for is
+// named from its tag, which can be long.
+const newestThatFit = (lines: string[], room: number): string[] =>
+  lines.reduceRight<string[]>((kept, line) => ([line, ...kept].join('\n').length <= room ? [line, ...kept] : kept), []);
+
+const FLAG_NAMES: Record<Flag, string> = {
+  teamKills: 'team kills',
+  sameTeammate: 'same teammate',
+  vehicleSuicides: 'vehicle suicides',
+  suicides: 'suicides',
+};
+
+const VICTIMS_NAMED = 5;
+
+// For /player: their team kills and suicides today, whom they team killed, and the latest team kills and vehicle
+// suicides by them or team kills on them.
+const griefText = (grief: PlayerGrief, weapon: (cause: string) => string, steamId: string): string => {
+  if (grief.teamKills + grief.teamKilled + grief.suicides === 0) return 'No team kills or suicides today.';
+  const counts = [
+    `**${plural(grief.teamKills, 'team kill')}**${grief.vehicleTeamKills > 0 ? ` (${grief.vehicleTeamKills} with a vehicle)` : ''}`,
+    ...(grief.teamKilled > 0 ? [`killed by a teammate ${plural(grief.teamKilled, 'time')}`] : []),
+    ...(grief.suicides > 0
+      ? [`${plural(grief.suicides, 'suicide')}${grief.vehicleSuicides > 0 ? ` (${grief.vehicleSuicides} in a vehicle)` : ''}`]
+      : []),
+  ];
+  const named = grief.victims.slice(0, VICTIMS_NAMED).map((v) => `**${playerName(v.name)}**${v.kills > 1 ? ` ×${v.kills}` : ''}`);
+  const more = grief.victims.length - named.length;
+  const head = [
+    ...(grief.flags.length > 0 ? [`🚩 Flagged: ${grief.flags.map((f) => FLAG_NAMES[f]).join(', ')}`] : []),
+    counts.join(' · '),
+    ...(named.length > 0 ? [`Teammates killed: ${named.join(', ')}${more > 0 ? ` and ${more} more` : ''}`] : []),
+  ].join('\n');
+  const latest = newestThatFit(
+    grief.incidents.slice(-INCIDENTS_LISTED).map((i) => incidentLine(i, weapon, steamId).slice(0, MAX_FIELD)),
+    MAX_FIELD - head.length - 1,
+  );
+  return [head, ...latest].join('\n');
+};
+
 // For staff: who a player is, their time on the server, their Steam account, VIP, bans and what staff did through the bot.
 export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
   const { steamId, name, record, online, days, steam } = profile;
@@ -1062,12 +1118,19 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
             { name: 'Seeding', value: `${hoursAndMinutes(t.seedingMinutes)} · ${plural(t.seedDays, 'seed day')}`, inline: true },
             { name: 'Matches', value: `${t.matches} · ${plural(t.kills, 'kill')} · ${kd(t.kills, t.deaths)} K/D`, inline: true },
           ]),
+      ...(record.grief === null
+        ? []
+        : [{ name: 'Team kills · today (UTC)', value: griefText(record.grief, profile.weapon ?? ((cause) => cause), steamId) }]),
       ...(steam === undefined || steam === 'off' ? [] : [{ name: 'Steam account', value: steamText(steam, profile.now) }]),
       { name: 'VIP', value: vipText(profile) },
       { name: 'Ban', value: banText(profile) },
       { name: 'Staff history', value: historyText(record) },
     ],
-    footer: { text: 'Staff history only covers what staff did through the bot.' },
+    footer: {
+      text:
+        'Staff history only covers what staff did through the bot.' +
+        (record.grief === null ? '' : ' Team kills are from the kill feed, with sides from the last check, up to a minute old.'),
+    },
   };
 };
 
@@ -1114,15 +1177,6 @@ export const buildModLogMessage = (steamId: string, entry: ModEntry, siteUrl?: s
   };
 };
 
-const INCIDENTS_LISTED = 5;
-
-const incidentLine = (i: Incident, weapon: (cause: string) => string): string => {
-  const how = i.cause === null ? '' : ` with ${escapeMarkdown(weapon(i.cause))}`;
-  const far = i.distance === null ? '' : ` from ${Math.round(i.distance)} m`;
-  const what = i.kind === 'team-kill' ? `Killed teammate **${playerName(i.victimName ?? 'unknown')}**` : 'Killed themselves in a vehicle';
-  return `${when(i.at, 'R')} ${what}${how}${far}${i.map ? ` on ${mapName(i.map)}` : ''}`;
-};
-
 // A player passing a griefing flag's mark today. `weapon` names a cause tag. `steam` is the player's saved Steam check:
 // an account worth a look or high risk is shown, as griefing on one is more telling.
 export const buildGriefAlert = (
@@ -1139,11 +1193,11 @@ export const buildGriefAlert = (
     ...(alert.teamKills > 0 ? [`${plural(alert.teamKills, 'team kill')} today`] : []),
     ...(alert.vehicleSuicides > 0 ? [`${plural(alert.vehicleSuicides, 'vehicle suicide')} today`] : []),
   ];
-  // The newest that fit in one field: a weapon or map the bot has no name for is named from its tag, which can be long.
-  const latest = alert.incidents
-    .slice(-INCIDENTS_LISTED)
-    .map((i) => incidentLine(i, weapon).slice(0, MAX_FIELD))
-    .reduceRight<string[]>((kept, line) => ([line, ...kept].join('\n').length <= MAX_FIELD ? [line, ...kept] : kept), []);
+  // The newest that fit in one field.
+  const latest = newestThatFit(
+    alert.incidents.slice(-INCIDENTS_LISTED).map((i) => incidentLine(i, weapon).slice(0, MAX_FIELD)),
+    MAX_FIELD,
+  );
   return {
     embeds: [
       {

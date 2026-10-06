@@ -234,7 +234,7 @@ The Node/Docker version does not post roundups.
 | `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |
 | `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
 | `/warn`         | Staff only           | Sends a player in game a private message: "Staff warning: …"       |
-| `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), [Steam account](#risky-steam-accounts), VIP, ban and staff history |
+| `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), team kills today, [Steam account](#risky-steam-accounts), VIP, ban and staff history |
 | `/kick`         | Staff only           | Removes a player from the server, with a reason they see; they can rejoin |
 | `/switchteam`   | Staff only           | Moves a player to another team (`team`, or the other one when there are two) and respawns them |
 | `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
@@ -375,9 +375,15 @@ works when it matches exactly one player.
   takes a player off the list, however they got there, and automatic VIP does not give it back for 7 days (`/vip add`
   lifts that). It takes an optional `reason`. Both take effect at the server's next restart, like automatic VIP.
 - **`/player`** shows the Steam ID with a link to the Steam profile, whether they are in game, their playtime,
-  seeding and matches over the last 90 days, what Steam says about their account (see
+  seeding and matches over the last 90 days, their team kills today, what Steam says about their account (see
   [Risky Steam accounts](#risky-steam-accounts)), VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
   unbans, team moves and VIP changes, with who did each.
+- **Team kills today** in `/player` is for checking a report like "X is team killing" without leaving Discord. From the
+  [kill feed](#weapon-stats), over the UTC day so far: their team kills (and how many with a vehicle), times a
+  teammate killed them, suicides (and how many in a vehicle), any [griefing flag](#staff-page) the day earned, the
+  teammates they killed and how often, and their latest 5 team kills and vehicle suicides, and team kills on them, with
+  when, the weapon, the distance and the map. Sides come from the bot's last check, up to a minute old, as on the
+  staff page. Left out until the bot has had the kill feed, and in the Node/Docker version.
 
 The staff history covers what staff do through the bot, from the deploy with these commands on, and bans made or lifted
 outside the bot, from the deploy with the [moderation log](#moderation-log) on. Each action is

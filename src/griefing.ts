@@ -285,3 +285,27 @@ export const griefRows = (days: GriefDay[]): GriefRow[] => {
         a.name.localeCompare(b.name),
     );
 };
+
+// One player's day, for /player: their counts (all 0 when they have none), the flags it earned, the teammates they
+// killed, most killed first, and the day's kept incidents by them or team kills on them, oldest first.
+export type PlayerGrief = Omit<GriefTotals, 'name' | 'victims'> & {
+  flags: Flag[];
+  victims: { steamId: string; name: string; kills: number }[];
+  incidents: Incident[];
+};
+
+export const playerGrief = (day: GriefDay, steamId: string): PlayerGrief => {
+  const t = day.players[steamId] ?? blank('');
+  return {
+    teamKills: t.teamKills,
+    vehicleTeamKills: t.vehicleTeamKills,
+    teamKilled: t.teamKilled,
+    suicides: t.suicides,
+    vehicleSuicides: t.vehicleSuicides,
+    flags: dayFlags(t),
+    victims: Object.entries(t.victims)
+      .map(([id, kills]) => ({ steamId: id, name: day.players[id]?.name || id, kills }))
+      .sort((a, b) => b.kills - a.kills || a.name.localeCompare(b.name)),
+    incidents: day.incidents.filter((i) => i.steamId === steamId || i.victimSteamId === steamId),
+  };
+};
