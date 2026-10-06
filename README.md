@@ -137,11 +137,12 @@ The next check posts the message, and every check after that edits it.
 - **Server stops answering:** the message stays as it was for 3 minutes (a slow reply or a quick restart), then
   shows the server as offline.
 - **Next map:** the rotation's next map, or the map staff set with `/setnextmap` or `/changemap` while this match
-  is on.
+  is on. The bot reads the rotation again when the map changes, when it puts a rotation on the server itself, and at
+  least every 15 minutes, so a rotation changed in game shows within 15 minutes.
 - **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
 
-It costs one more RCON request (the rotation) and one Discord edit a minute. The Node/Docker version does not
-have it.
+It costs one Discord edit a minute, and one more RCON request (the rotation) for each map and at least every 15
+minutes. The Node/Docker version does not have it.
 
 ## Roundups
 
@@ -484,10 +485,11 @@ To set it up:
 
 - Staff are mentioned by name (`@Sarge`), which never pings them. Posts link to the [staff page](#staff-page) when
   `SITE_URL` is set.
-- **Bans outside the bot.** Each check (every minute) reads the server's ban list (`GET /v1/bans`) and compares it with
-  the last one. A ban that appeared or went that the bot did not make is posted, and goes in the player's staff history
-  (`/player`) too. The first check after the deploy only saves the list, so the bans already there are not posted. It
-  costs one more RCON request a minute.
+- **Bans outside the bot.** Every 10 minutes, a check reads the server's ban list (`GET /v1/bans`) and compares it
+  with the last one. A ban that appeared or went that the bot did not make is posted, up to 10 minutes after it was
+  made, and goes in the player's staff history (`/player`) too. The first reading after the deploy only saves the
+  list, so the bans already there are not posted. It costs one RCON request every 10 minutes: each request can make
+  the game server stutter, and bans outside the bot are rare.
 - **Kicks outside the bot** cannot be seen: the game's RCON does not report them, and its kill feed only has deaths.
 - **Possible griefing** posts can be turned off with `GRIEF_ALERTS` `"off"` in the `vars` block of `wrangler.jsonc`.
   They are a reason to look, not proof: sides come from the bot's last check (see [Staff page](#staff-page)).
@@ -966,6 +968,12 @@ kills and other deaths (`otherDeaths`: suicides and falls), and:
   request. While a page cannot connect, it loads `/api/live` every 15 seconds instead. At most 500 pages can be
   connected at once.
 - **`/removematch`** does not change it.
+- **Long, busy matches.** The match is saved with each kill feed batch, and storage takes at most 128 KiB in one
+  value. Past 90 KB, the bot first forgets pairs of players with fewer than 3 kills of one by the other (only a rivalry
+  needs them), then the players with the fewest kills and deaths, who never show on the page. Everyone in the feed,
+  first blood, the rivalry, a highlight or the top 10 stays. A player it forgot who kills or dies again starts from
+  nothing, and their kills leave the match's top weapons.
+- **Replies to the game.** The bot replies to each batch once it is saved, and only then updates the open pages.
 
 The Node/Docker version does not have the live match.
 
@@ -986,7 +994,7 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Each UTC day's griefing      | From the kill feed, for the [staff page](#staff-page): each player's team kills (and whom), times team killed, suicides and vehicle suicides, and the day's latest 300 team kills and vehicle suicides |
 | The latest kills             | From the kill feed, for the staff page's [Kills tab](#kills-and-headshots): the server's latest 250 kills, with the Steam IDs and names of killer and victim |
 | Each player's kills, each UTC day | From the kill feed, for the Kills tab, in the Durable Object's SQLite database: their kills and headshots, by weapon too, and each kill (their latest 1,000) with whom, with what, how far, headshot, team kill and map. Kept 30 days |
-| The server's ban list        | As at the last check, to notice bans made or lifted outside the bot ([moderation log](#moderation-log)) |
+| The server's ban list        | As at the last reading (every 10 minutes), to notice bans made or lifted outside the bot ([moderation log](#moderation-log)) |
 | Each player's Steam account  | From Steam, for [risky accounts](#risky-steam-accounts): their VAC, game, community and trading bans, whether the profile is public and set up, when the account was made, and when the bot checked |
 
 - A match counts the same way as the match summary: only matches that went live, and not the one already running

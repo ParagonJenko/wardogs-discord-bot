@@ -73,3 +73,13 @@ export const nextMap = (currentMap: string, staged: StagedMap | null, rotation: 
   if (!rotation.enabled) return currentMap || null;
   return rotation.entries.find((e) => e.status === 'next')?.map ?? null;
 };
+
+// The rotation the live status read last, with the map and the rotation's place the server was on then.
+export type ReadRotation = { map: string; index: number | null; at: number; rotation: Rotation };
+
+// Each RCON read can make the game server stutter, so the live status only reads the rotation again when the map or
+// the rotation's place changes, and at least this often, as staff can change the rotation in game.
+export const ROTATION_READ_MS = 15 * 60_000;
+
+export const rotationReadDue = (read: ReadRotation | null, map: string, index: number | null, now: number): boolean =>
+  read === null || read.map !== map || read.index !== index || now - read.at >= ROTATION_READ_MS;

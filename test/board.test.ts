@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { nextMap, parseBoardRef, parseStagedMap, showBoard } from '../src/board.ts';
+import { nextMap, parseBoardRef, parseStagedMap, ROTATION_READ_MS, rotationReadDue, showBoard } from '../src/board.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import type { Rotation } from '../src/rcon.ts';
 
@@ -115,5 +115,23 @@ describe('nextMap', () => {
   it('is the same map when the rotation is off, and unknown without the rotation', () => {
     expect(nextMap('Europe', null, { ...rotation, enabled: false }, NOW)).toBe('Europe');
     expect(nextMap('Europe', null, null, NOW)).toBeNull();
+  });
+});
+
+describe('rotationReadDue', () => {
+  const NOW = 10 * 60 * 60_000;
+  const read = { map: 'Europe', index: 0, at: NOW - 60_000, rotation: { enabled: true, mode: 'ordered', entries: [] } };
+
+  it('reads the rotation the first time, and again when the map or its place in the rotation changes', () => {
+    expect(rotationReadDue(null, 'Europe', 0, NOW)).toBe(true);
+    expect(rotationReadDue(read, 'Europe', 0, NOW)).toBe(false);
+    expect(rotationReadDue(read, 'Kavkazi', 0, NOW)).toBe(true);
+    expect(rotationReadDue(read, 'Europe', 1, NOW)).toBe(true);
+    expect(rotationReadDue(read, 'Europe', null, NOW)).toBe(true);
+  });
+
+  it('reads it again after a while, as staff can change it in game', () => {
+    expect(rotationReadDue(read, 'Europe', 0, read.at + ROTATION_READ_MS - 1)).toBe(false);
+    expect(rotationReadDue(read, 'Europe', 0, read.at + ROTATION_READ_MS)).toBe(true);
   });
 });
