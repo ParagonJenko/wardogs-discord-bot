@@ -29,6 +29,7 @@ const config: Config = {
   vip: null,
   matchMessages: null,
   seedingMessages: null,
+  welcomeMessages: null,
   roundups: null,
   rotationHour: 5,
 };
@@ -305,6 +306,7 @@ describe('poller', () => {
       messages: null,
       seedMessageAt: null,
       joins: null,
+      welcomes: null,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -743,6 +745,117 @@ describe('poller stats', () => {
   });
 });
 
+describe('welcomes', () => {
+  const welcome = { afterMs: 2 * 60_000, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => player(id)) as [Player, Player, Player, Player];
+  const rules = DEFAULT_LINES.welcome[0] ?? '';
+  const text = `${rules} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`;
+
+  // A minute a check; records the minute, the player and the message of each welcome.
+  const welcomePoller = (snapshots: Snapshot[], overrides: Partial<Config> = {}, lines?: () => Promise<Lines>) => {
+    const queue = [...snapshots];
+    let clock = 0;
+    const sent: [minute: number, steamId: string, text: string][] = [];
+    const messagePlayer = vi.fn(async (steamId: string, message: string) => {
+      sent.push([clock / 60_000, steamId, message]);
+    });
+    const log = { info: vi.fn(), error: vi.fn() };
+    const store = memoryStore();
+    const tick = createPoller({
+      config: { ...config, welcomeMessages: welcome, ...overrides },
+      fetchSnapshot: async () => queue.shift() ?? snapshot([]),
+      send: vi.fn(async () => {}),
+      now: () => (clock += 60_000),
+      log,
+      store,
+      messagePlayer,
+      random: () => 0,
+      ...(lines === undefined ? {} : { lines }),
+    });
+    const run = async (times: number) => {
+      for (let i = 0; i < times; i++) await tick();
+    };
+    return { run, sent, messagePlayer, log, store };
+  };
+
+  it('sends each player who joins the rules, the Discord and the website, privately, 2 minutes after the bot sees them', async () => {
+    // a and b are on when the bot starts; c joins by minute 2, d by minute 3.
+    const { run, sent, log } = welcomePoller([
+      snapshot([a, b]),
+      snapshot([a, b, c]),
+      snapshot([a, b, c, d]),
+      ...Array.from({ length: 4 }, () => snapshot([a, b, c, d])),
+    ]);
+
+    await run(7);
+
+    expect(sent).toEqual([
+      [4, 'c', text],
+      [5, 'd', text],
+    ]);
+    expect(log.info).toHaveBeenCalledWith(`Sent welcome to "Pc" (c): ${text}`);
+  });
+
+  it("does not welcome players already on when the bot's first reading lists nobody but the server says it has players", async () => {
+    const unlisted = { ...snapshot([a, b]), players: [] };
+    const { run, sent, store } = welcomePoller([unlisted, ...Array.from({ length: 4 }, () => snapshot([a, b]))]);
+
+    await run(5);
+
+    expect(sent).toEqual([]);
+    expect((await store.load())?.welcomes).toEqual({ online: ['a', 'b'], waiting: {}, welcomed: { a: 120_000, b: 120_000 } });
+  });
+
+  it('does not welcome anyone again when they reconnect after a map change', async () => {
+    const { run, sent } = welcomePoller([
+      snapshot([a]),
+      snapshot([a, b]),
+      snapshot([a, b]),
+      snapshot([a, b]),
+      // The map changes: everyone drops out, and comes back.
+      snapshot([]),
+      snapshot([a]),
+      ...Array.from({ length: 4 }, () => snapshot([a, b])),
+    ]);
+
+    await run(10);
+
+    expect(sent).toEqual([[4, 'b', text]]);
+  });
+
+  it("says staff's welcome lines", async () => {
+    const { run, sent } = welcomePoller([snapshot([]), snapshot([a]), snapshot([a]), snapshot([a])], {}, async () => ({
+      ...DEFAULT_LINES,
+      welcome: ['Hi! Be nice.'],
+    }));
+
+    await run(4);
+
+    expect(sent).toEqual([[4, 'a', 'Hi! Be nice. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com']]);
+  });
+
+  it('logs a failed welcome and does not send it again', async () => {
+    const { run, messagePlayer, log } = welcomePoller([snapshot([]), ...Array.from({ length: 5 }, () => snapshot([a]))]);
+    messagePlayer.mockRejectedValue(new Error('RCON request failed: POST /v1/players/a/message 404 (player_not_found)'));
+
+    await run(6);
+
+    expect(messagePlayer).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith('Welcome to "Pa" (a) failed: RCON request failed: POST /v1/players/a/message 404 (player_not_found)');
+  });
+
+  it('sends none, and keeps no record, when welcomes are off', async () => {
+    const { run, messagePlayer, store } = welcomePoller([snapshot([]), ...Array.from({ length: 4 }, () => snapshot([a]))], {
+      welcomeMessages: null,
+    });
+
+    await run(5);
+
+    expect(messagePlayer).not.toHaveBeenCalled();
+    expect((await store.load())?.welcomes).toBeNull();
+  });
+});
+
 describe('parseState', () => {
   it('upgrades state saved by the first release', () => {
     expect(parseState({ phase: 'live', lastAlertAt: { live: 5 } })).toEqual({
@@ -753,6 +866,7 @@ describe('parseState', () => {
       messages: null,
       seedMessageAt: null,
       joins: null,
+      welcomes: null,
     });
   });
 
@@ -761,7 +875,14 @@ describe('parseState', () => {
 
     const saved = { alerts: { phase: 'seeding', lastAlertAt: {} }, seeding: { a: { name: 'Pa', checks: 2 } }, match: null };
 
-    expect(parseState(saved)).toEqual({ ...saved, unsentSummary: null, messages: null, seedMessageAt: null, joins: null });
+    expect(parseState(saved)).toEqual({
+      ...saved,
+      unsentSummary: null,
+      messages: null,
+      seedMessageAt: null,
+      joins: null,
+      welcomes: null,
+    });
   });
 
   it('reads an unsent summary saved before it linked to its match, with no match to link to', () => {

@@ -1,7 +1,7 @@
 import { loadConfig } from './config.ts';
 import { postWebhook } from './discord.ts';
 import { createJoinCheck, createPoller, JOIN_CHECK_MS, memoryStore } from './poller.ts';
-import { fetchHttp, fetchPlayers, fetchSnapshot, sendBroadcast } from './rcon.ts';
+import { fetchHttp, fetchPlayers, fetchSnapshot, messagePlayer, sendBroadcast } from './rcon.ts';
 
 const config = loadConfig(process.env);
 
@@ -19,6 +19,7 @@ const poll = createPoller({
   fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, fetchHttp()),
   send: (message) => postWebhook(config.webhookUrl, message),
   broadcast,
+  messagePlayer: (steamId, text) => messagePlayer(config.rconUrl, config.rconPassword, steamId, text, fetchHttp()),
   now: Date.now,
   log,
   store,

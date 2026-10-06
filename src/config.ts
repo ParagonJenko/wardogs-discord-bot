@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AlertRules, QuietHours } from './alerts.ts';
-import type { MessageRule, SeedingMessageRule } from './messages.ts';
+import { discordLink, type MessageRule, type SeedingMessageRule, type WelcomeRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
 // Just the listener's address; the bot adds /v1/status itself. Pasted values often carry quotes, stray
@@ -93,6 +93,9 @@ const EnvSchema = z
     // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
     // after someone joins. 0 turns both off.
     SEEDING_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(5),
+    // A private message to each player this many minutes after they join, with the basic rules, the Discord
+    // (DISCORD_INVITE) and the website (SITE_URL). 0 turns it off.
+    WELCOME_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(2),
     // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
     ROUNDUPS: z.enum(['on', 'off']).default('on'),
     // The hour (UTC) on Mondays, and on the 1st of the month, when the roundups go out.
@@ -152,6 +155,8 @@ export type Config = {
   matchMessages: MessageRule | null;
   // Null when SEEDING_MESSAGE_MINUTES is 0.
   seedingMessages: SeedingMessageRule | null;
+  // Null when WELCOME_MESSAGE_MINUTES is 0.
+  welcomeMessages: WelcomeRule | null;
   // When the roundups go out (an hour, UTC) and where. Null when ROUNDUPS is off.
   roundups: RoundupRule | null;
   // The hour (UTC) each day's map rotation starts.
@@ -209,6 +214,14 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     seedingMessages:
       e.SEEDING_MESSAGE_MINUTES > 0
         ? { everyMs: e.SEEDING_MESSAGE_MINUTES * 60_000, siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null }
+        : null,
+    welcomeMessages:
+      e.WELCOME_MESSAGE_MINUTES > 0
+        ? {
+            afterMs: e.WELCOME_MESSAGE_MINUTES * 60_000,
+            siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null,
+            discord: e.DISCORD_INVITE ? discordLink(e.DISCORD_INVITE) : null,
+          }
         : null,
     roundups:
       e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,

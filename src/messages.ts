@@ -7,12 +7,17 @@ import type { MatchState } from './tracking.ts';
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
 // seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (with a line about the team
 // in front), and when the first team is close to winning. Each goes out once per match. While the server seeds, a
-// seeding message goes out every few minutes too, and 30 seconds after someone joins.
+// seeding message goes out every few minutes too, and 30 seconds after someone joins. And each player who joins gets
+// a welcome of their own, a private message with the basic rules, the Discord and the website.
 
 export type MessageRule = { siteHost: string; scoreToWin: number };
 
 // The seeding message goes out every `everyMs`, and points at the website when there is one.
 export type SeedingMessageRule = { everyMs: number; siteHost: string | null };
+
+// The welcome goes to each player `afterMs` after they join, with the Discord invite ("discord.gg/abc123") and the
+// website when there are.
+export type WelcomeRule = { afterMs: number; siteHost: string | null; discord: string | null };
 
 // Which match the sent messages belong to (its start time) and which were sent.
 export type MatchMessages = { match: number; sent: string[] };
@@ -165,3 +170,70 @@ export const watchJoins = (previous: JoinWatch | null, steamIds: string[], now: 
 
 export const joinMessageDue = (watch: JoinWatch, now: number): boolean =>
   watch.lastJoinAt !== null && now - watch.lastJoinAt >= JOIN_WAIT_MS;
+
+// A player who joins again this soon after their welcome, as everyone does after a map change or a crash, is not
+// welcomed again.
+export const WELCOME_AGAIN_MS = 6 * 60 * 60_000;
+
+// A Discord invite code as players type it in: "discord.gg/abc123".
+export const discordLink = (inviteCode: string): string => `discord.gg/${inviteCode}`;
+
+// What the bot puts after the welcome line: " Discord: discord.gg/abc123 | Website: gaminginit.com", or whichever of
+// the two there is.
+export const welcomeLinks = (siteHost: string | null, discord: string | null): string => {
+  const links = [...(discord ? [`Discord: ${discord}`] : []), ...(siteHost ? [`Website: ${siteHost}`] : [])];
+  return links.length === 0 ? '' : ` ${links.join(' | ')}`;
+};
+
+export const welcomeMessage = (rule: WelcomeRule, random: () => number = Math.random, lines: Lines = DEFAULT_LINES): string =>
+  fit(`${pickLine(lines.welcome, {}, random)}${welcomeLinks(rule.siteHost, rule.discord)}`);
+
+// Who was in game at the last reading (Steam IDs); who joined and is still waiting for their welcome, with when the bot
+// first saw them; and who was welcomed in the last WELCOME_AGAIN_MS, or was on when the bot started watching, with when.
+export type WelcomeWatch = { online: string[]; waiting: Record<string, number>; welcomed: Record<string, number> };
+
+export const WelcomeWatchSchema = z.object({
+  online: z.array(z.string()),
+  waiting: z.record(z.string(), z.number()),
+  welcomed: z.record(z.string(), z.number()),
+});
+
+// Notes who joined since the last reading, of the `count` players the server says it has. Someone who leaves before
+// their welcome goes out is dropped, and waits again if they come back. Those on at the first reading did not just
+// join, and count as welcomed, so they are not welcomed when they reconnect after the next map change either. A reading
+// that lists nobody while the server says it has players is not trusted, so a bad reading never has everyone join again;
+// before the first reading it trusts, it gives back null.
+export const watchWelcomes = (
+  previous: WelcomeWatch | null,
+  steamIds: string[],
+  count: number,
+  now: number,
+): WelcomeWatch | null => {
+  if (steamIds.length === 0 && count > 0) return previous;
+  if (previous === null) return { online: steamIds, waiting: {}, welcomed: Object.fromEntries(steamIds.map((id) => [id, now])) };
+  const known = new Set(previous.online);
+  const welcomed = Object.fromEntries(Object.entries(previous.welcomed).filter(([, at]) => now - at < WELCOME_AGAIN_MS));
+  const waiting: Record<string, number> = {};
+  for (const id of steamIds) {
+    const since = previous.waiting[id] ?? (known.has(id) || Object.hasOwn(welcomed, id) ? undefined : now);
+    if (since !== undefined) waiting[id] = since;
+  }
+  return { online: steamIds, waiting, welcomed };
+};
+
+// Who is due their welcome now. Checks land a little early or late, so one within half a check of the time counts.
+export const welcomesDue = (watch: WelcomeWatch, now: number, rule: WelcomeRule, checkMs: number): string[] =>
+  Object.entries(watch.waiting)
+    .filter(([, since]) => now - since >= rule.afterMs - checkMs / 2)
+    .map(([id]) => id);
+
+// After the welcomes to `steamIds` went out (or failed: they are not tried again).
+export const markWelcomed = (watch: WelcomeWatch, steamIds: string[], now: number): WelcomeWatch => {
+  if (steamIds.length === 0) return watch;
+  const sent = new Set(steamIds);
+  return {
+    online: watch.online,
+    waiting: Object.fromEntries(Object.entries(watch.waiting).filter(([id]) => !sent.has(id))),
+    welcomed: { ...watch.welcomed, ...Object.fromEntries(steamIds.map((id) => [id, now])) },
+  };
+};

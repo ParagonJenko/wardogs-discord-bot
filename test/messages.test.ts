@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import * as lines from '../src/lines.ts';
-import { joinMessageDue, milestones, nextMessage, seedingMessage, seedingMessageDue, watchJoins, type MatchMessages } from '../src/messages.ts';
+import {
+  joinMessageDue,
+  markWelcomed,
+  MAX_LENGTH,
+  milestones,
+  nextMessage,
+  seedingMessage,
+  seedingMessageDue,
+  watchJoins,
+  watchWelcomes,
+  WELCOME_AGAIN_MS,
+  welcomeMessage,
+  welcomesDue,
+  type MatchMessages,
+  type WelcomeWatch,
+} from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const MINUTE = 60_000;
@@ -215,6 +230,100 @@ describe('watchJoins', () => {
     expect(joinMessageDue({ online: [], lastJoinAt: null }, 60_000)).toBe(false);
     expect(joinMessageDue({ online: [], lastJoinAt: 10_000 }, 39_999)).toBe(false);
     expect(joinMessageDue({ online: [], lastJoinAt: 10_000 }, 40_000)).toBe(true);
+  });
+});
+
+describe('welcomeMessage', () => {
+  const both = { afterMs: 2 * MINUTE, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
+  const rules = lines.WELCOME[0] ?? '';
+
+  it('says the basic rules, then the Discord and the website', () => {
+    expect(welcomeMessage(both)).toBe(
+      'Welcome! Rules: no cheating or exploits, no team killing or griefing, no racism or abuse, and listen to admins. ' +
+        'Full rules on our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com',
+    );
+  });
+
+  it('leaves out a link it does not have', () => {
+    expect(welcomeMessage({ ...both, discord: null })).toBe(`${rules} Website: gaminginit.com`);
+    expect(welcomeMessage({ ...both, siteHost: null })).toBe(`${rules} Discord: discord.gg/qsJFYGhSJ4`);
+    expect(welcomeMessage({ ...both, siteHost: null, discord: null })).toBe(rules);
+  });
+
+  it('fits every line in the game with both links, without cutting it', () => {
+    lines.WELCOME.forEach((line, i) => {
+      const text = welcomeMessage(both, () => i / lines.WELCOME.length);
+      expect(text.startsWith(line)).toBe(true);
+      expect(text.length).toBeLessThanOrEqual(MAX_LENGTH);
+    });
+  });
+});
+
+describe('watchWelcomes', () => {
+  const rule = { afterMs: 2 * MINUTE, siteHost: null, discord: null };
+
+  // A reading the bot trusts, which always gives back what to remember.
+  const read = (previous: WelcomeWatch | null, steamIds: string[], count: number, now: number): WelcomeWatch => {
+    const watch = watchWelcomes(previous, steamIds, count, now);
+    if (watch === null) throw new Error('Expected a reading the bot trusts');
+    return watch;
+  };
+
+  it('welcomes nobody on the first reading: they were already on', () => {
+    const watch = read(null, ['a', 'b'], 2, 0);
+
+    expect(watch).toEqual({ online: ['a', 'b'], waiting: {}, welcomed: { a: 0, b: 0 } });
+    expect(welcomesDue(watch, 10 * MINUTE, rule, MINUTE)).toEqual([]);
+  });
+
+  it('is due 2 minutes after the bot first sees a player join, allowing for checks that land a little early', () => {
+    const watch = read(read(null, ['a'], 1, 0), ['a', 'b', 'c'], 3, MINUTE);
+
+    expect(watch.waiting).toEqual({ b: MINUTE, c: MINUTE });
+    expect(welcomesDue(watch, 2 * MINUTE, rule, MINUTE)).toEqual([]);
+    expect(welcomesDue(watch, 3 * MINUTE - 5_000, rule, MINUTE)).toEqual(['b', 'c']);
+  });
+
+  it('drops a player who leaves before their welcome, and waits again when they come back', () => {
+    let watch = read(read(null, ['a'], 1, 0), ['a', 'b'], 2, MINUTE);
+    watch = read(watch, ['a'], 1, 2 * MINUTE);
+
+    expect(watch.waiting).toEqual({});
+
+    watch = read(watch, ['a', 'b'], 2, 3 * MINUTE);
+
+    expect(watch.waiting).toEqual({ b: 3 * MINUTE });
+  });
+
+  it('does not welcome a player again for 6 hours, as when everyone reconnects after a map change', () => {
+    let watch = read(read(null, [], 0, 0), ['b'], 1, MINUTE);
+    watch = markWelcomed(watch, ['b'], 3 * MINUTE);
+
+    expect(watch).toEqual({ online: ['b'], waiting: {}, welcomed: { b: 3 * MINUTE } });
+
+    watch = read(read(watch, [], 0, 4 * MINUTE), ['b'], 1, 5 * MINUTE);
+
+    expect(watch.waiting).toEqual({});
+
+    // Forgotten 6 hours after their welcome, so the next time they join they get one.
+    watch = read(read(watch, [], 0, 3 * MINUTE + WELCOME_AGAIN_MS), ['b'], 1, 4 * MINUTE + WELCOME_AGAIN_MS);
+
+    expect(watch).toEqual({ online: ['b'], waiting: { b: 4 * MINUTE + WELCOME_AGAIN_MS }, welcomed: {} });
+  });
+
+  it('does not trust a reading that lists nobody while the server says it has players', () => {
+    const watch = watchWelcomes(null, ['a'], 1, 0);
+
+    expect(watchWelcomes(watch, [], 1, MINUTE)).toBe(watch);
+  });
+
+  it('waits for a reading it trusts before noting who was already on, so nobody on then is welcomed', () => {
+    expect(watchWelcomes(null, [], 3, 0)).toBeNull();
+    expect(watchWelcomes(null, ['a', 'b', 'c'], 3, MINUTE)).toEqual({
+      online: ['a', 'b', 'c'],
+      waiting: {},
+      welcomed: { a: MINUTE, b: MINUTE, c: MINUTE },
+    });
   });
 });
 

@@ -21,7 +21,7 @@
     // The Seeders role, which members pick in the role menu. Pinged on every alert: seeding, live and low pop (seeding
     // and low pop not at night: see QUIET_START_HOUR).
     "DISCORD_ROLE_ID": "1554801355015594025",
-    // Optional: an invite link that never expires, for the member counts in /api/stats.
+    // Optional: an invite link that never expires, for the member counts in /api/stats and the welcome message.
     "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",
     // Optional: the community website. Discord posts link to it, and in-game messages point players at it.
     "SITE_URL": "https://gaminginit.com",
@@ -35,6 +35,10 @@
     // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
     // after someone joins (below 20 players). "0" turns both off.
     "SEEDING_MESSAGE_MINUTES": "5",
+    // A private message to each player this many minutes after they join, with the basic rules, the Discord
+    // (DISCORD_INVITE) and the website (SITE_URL). Not again for 6 hours, so a map change doesn't send it to everyone.
+    // "0" turns it off.
+    "WELCOME_MESSAGE_MINUTES": "2",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",

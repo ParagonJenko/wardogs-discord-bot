@@ -35,6 +35,7 @@ const config: Config = {
   vip: null,
   matchMessages: null,
   seedingMessages: null,
+  welcomeMessages: null,
   roundups: null,
   rotationHour: 5,
 };

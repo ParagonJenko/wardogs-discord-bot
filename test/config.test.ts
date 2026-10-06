@@ -30,6 +30,7 @@ describe('loadConfig', () => {
       vip: null,
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
+      welcomeMessages: { afterMs: 120_000, siteHost: null, discord: null },
       roundups: { hour: 17, webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123' },
       rotationHour: 5,
     });
@@ -102,6 +103,15 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...required, SEEDING_MESSAGE_MINUTES: '10' }).seedingMessages).toEqual({ everyMs: 600_000, siteHost: null });
     expect(loadConfig({ ...required, SEEDING_MESSAGE_MINUTES: '0' }).seedingMessages).toBeNull();
     expect(() => loadConfig({ ...required, SEEDING_MESSAGE_MINUTES: '-1' })).toThrow(/SEEDING_MESSAGE_MINUTES/);
+  });
+
+  it('welcomes each player 2 minutes after they join by default, with the Discord and website when set, unless set to 0', () => {
+    expect(
+      loadConfig({ ...required, SITE_URL: 'https://gaminginit.com/', DISCORD_INVITE: 'https://discord.gg/qsJFYGhSJ4' }).welcomeMessages,
+    ).toEqual({ afterMs: 120_000, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' });
+    expect(loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '5' }).welcomeMessages).toEqual({ afterMs: 300_000, siteHost: null, discord: null });
+    expect(loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '0' }).welcomeMessages).toBeNull();
+    expect(() => loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '-1' })).toThrow(/WELCOME_MESSAGE_MINUTES/);
   });
 
   it('turns on automatic VIP when VIP_SEED_DAYS is set', () => {

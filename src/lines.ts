@@ -6,6 +6,12 @@
 // Placeholders: {team} is the faction's name, {score} its points and {site} the website (SITE_URL, such as
 // gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players".
 
+// A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
+// The bot puts the Discord and the website after the line.
+export const WELCOME = [
+  'Welcome! Rules: no cheating or exploits, no team killing or griefing, no racism or abuse, and listen to admins. Full rules on our Discord.',
+];
+
 // Every few minutes while the server seeds. The bot puts what seeding earns after the line. The ones that say why to
 // play here mention the leaderboards and player pages, which need the website (SITE_URL) and the bot on Cloudflare.
 export const SEEDING = [
@@ -127,6 +133,7 @@ export const NEARLY_OTHER = ['{team} has {score} points!'];
 
 // Every list, as the bot says them: these, or the ones staff put in their place.
 export type Lines = {
+  welcome: string[];
   seeding: string[];
   tenMinutes: string[];
   // By faction (see factionKey).
@@ -138,6 +145,7 @@ export type Lines = {
 };
 
 export const DEFAULT_LINES: Lines = {
+  welcome: WELCOME,
   seeding: SEEDING,
   tenMinutes: TEN_MINUTES,
   halfway: HALFWAY,
