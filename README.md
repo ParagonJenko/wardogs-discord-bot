@@ -155,7 +155,7 @@ every month a roundup of the month before. Each one celebrates:
 | 🏆 Team of the week     | The side with the best win rate, from 3 matches up. None when the top two are level     |
 | ⚔️ Teams                | Every side's wins, losses, draws and win rate, best first                               |
 | 🔫 Most kills           | The top 3 by kills                                                                     |
-| 🎯 Best K/D             | The top 3 by K/D, from 3 matches up, like the website's leaderboard                    |
+| 🎯 Best K/D             | The top 3 by K/D, from 2 hours played in a week or 9 to 10 in a month (the website's leaderboard needs 10 over 30 days) |
 | 💥 Most kills in a match | Each player's best match, top 3, with the map                                         |
 | 🏅 Most wins            | Matches won on the winning side, out of the matches they played                         |
 | ⭐ Most MVPs            | Times top of a match's scoreboard (most kills, then fewest deaths; players level share it) |
@@ -771,7 +771,7 @@ The Node/Docker version does not check Steam accounts.
 | `matches`      | The last 10 match summaries, newest first                                              |
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
-| `leaderboard`  | Top 10 by kills, K/D (3+ matches), time played and seeding, over the last 30 days (UTC)  |
+| `leaderboard`  | Top 10 by kills, K/D (10+ hours played, `kdMinHours`), time played and seeding, over the last 30 days (UTC)  |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
 | `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`), nor [staff](#staff-steam-accounts). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |

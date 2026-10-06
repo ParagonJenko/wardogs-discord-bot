@@ -25,7 +25,7 @@ const HOUR_MS = 60 * 60_000;
 
 // Each board's top this many.
 export const AWARDS_SHOWN = 3;
-// As on the leaderboard's K/D board: a team needs this many matches to be the best team.
+// A team needs this many matches to be the best team.
 export const TEAM_MIN_MATCHES = 3;
 // A rookie is first seen in the period, by records going back at least this many days before it.
 export const ROOKIE_LOOKBACK_DAYS = 28;
@@ -52,6 +52,10 @@ export const periodFor = (choice: RoundupChoice, now: number): Period =>
     : choice === 'this-month'
       ? currentPeriod('month', now)
       : lastPeriod(choice, now);
+
+// How many days the whole week or month has, including those still to come of one going on now.
+const fullLength = (period: Period): number =>
+  Math.round((startOf(period.kind, period.start + (period.kind === 'week' ? 7 : 32) * DAY_MS) - period.start) / DAY_MS);
 
 // The UTC days a period covers, oldest first.
 export const periodDays = (period: Period): string[] =>
@@ -107,7 +111,8 @@ export type Roundup = {
   // The best team, when one is clearly ahead of the rest.
   bestTeam: TeamStanding | null;
   teamMinMatches: number;
-  kdMinMatches: number;
+  // Time played the K/D board needs: the leaderboard's share for the whole week or month, even one still going.
+  kdMinHours: number;
   kills: (RoundupPlayer & { kills: number })[];
   kd: (RoundupPlayer & { kd: number })[];
   playtime: (RoundupPlayer & { minutes: number })[];
@@ -332,7 +337,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
   const fromBoard = <T extends object>(rows: RankedPlayer[], pick: (p: RankedPlayer) => T) =>
     rows.map((p) => named(p.steamId, p.name, pick(p)));
 
-  const board = leaderboard(inPeriod.map((d) => d.players), covered.size, AWARDS_SHOWN);
+  const board = leaderboard(inPeriod.map((d) => d.players), fullLength(period), AWARDS_SHOWN);
 
   // Matches are oldest first, so each player keeps the name from their latest match.
   const wins = new Map<string, { name: string; wins: number; played: number }>();
@@ -419,7 +424,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
     teams,
     bestTeam: best(teams),
     teamMinMatches: TEAM_MIN_MATCHES,
-    kdMinMatches: board.kdMinMatches,
+    kdMinHours: board.kdMinHours,
     kills: fromBoard(board.kills, (p) => ({ kills: p.kills })),
     kd: fromBoard(board.kd, (p) => ({ kd: p.kills / Math.max(p.deaths, 1) })),
     playtime: fromBoard(board.playtime, (p) => ({ minutes: p.seedingMinutes + p.liveMinutes })),

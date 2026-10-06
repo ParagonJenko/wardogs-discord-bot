@@ -229,42 +229,53 @@ export const rankSeeders = (days: PlayerDay[], count: number): RankedPlayer[] =>
 export type BoardKey = 'kills' | 'kd' | 'playtime' | 'seeding';
 
 // Rows keep their Steam IDs until the stats go out, when publicStats swaps them for public ids.
-export type Leaderboard<Row = RankedPlayer> = { days: number; kdMinMatches: number } & Record<BoardKey, Row[]>;
+export type Leaderboard<Row = RankedPlayer> = { days: number; kdMinHours: number } & Record<BoardKey, Row[]>;
 
-const KD_MIN_MATCHES = 3;
+// The K/D board only lists players with this much time played over 30 days, so one big match is not the best K/D. A
+// shorter period needs its share, to the nearest hour: 2 hours for a week, 9 or 10 for a calendar month.
+const KD_MIN_HOURS = 10;
+const KD_MIN_HOURS_DAYS = 30;
+
+export const kdMinHours = (days: number): number => Math.max(1, Math.round((days * KD_MIN_HOURS) / KD_MIN_HOURS_DAYS));
 
 const ratio = (p: PlayerTotals): number => p.kills / Math.max(p.deaths, 1);
 const played = (p: PlayerTotals): number => p.seedingMinutes + p.liveMinutes;
 
 // Who each board lists, and in what order. Player pages rank players by the same rules.
-const BOARDS: Record<BoardKey, { keep: (p: PlayerTotals) => boolean; order: (a: PlayerTotals, b: PlayerTotals) => number }> = {
+const BOARDS: Record<
+  BoardKey,
+  { keep: (p: PlayerTotals, kdHours: number) => boolean; order: (a: PlayerTotals, b: PlayerTotals) => number }
+> = {
   kills: { keep: (p) => p.kills > 0, order: (a, b) => b.kills - a.kills || a.deaths - b.deaths },
-  kd: { keep: (p) => p.kills > 0 && p.matches >= KD_MIN_MATCHES, order: (a, b) => ratio(b) - ratio(a) || b.kills - a.kills },
+  kd: { keep: (p, kdHours) => p.kills > 0 && played(p) >= kdHours * 60, order: (a, b) => ratio(b) - ratio(a) || b.kills - a.kills },
   playtime: { keep: (p) => played(p) > 0, order: (a, b) => played(b) - played(a) },
   seeding: { keep: (p) => p.seedingMinutes > 0, order: (a, b) => b.seedDays - a.seedDays || b.seedingMinutes - a.seedingMinutes },
 };
 
-const board = (players: RankedPlayer[], key: BoardKey): RankedPlayer[] =>
-  players.filter(BOARDS[key].keep).sort(BOARDS[key].order);
+const board = (players: RankedPlayer[], key: BoardKey, kdHours: number): RankedPlayer[] =>
+  players.filter((p) => BOARDS[key].keep(p, kdHours)).sort(BOARDS[key].order);
 
+// `period` is how many days the board covers, which sets the time a player needs for the K/D board.
 export const leaderboard = (days: PlayerDay[], period: number, count: number): Leaderboard => {
   const players = totals(days);
-  const top = (key: BoardKey) => board(players, key).slice(0, count);
-  return { days: period, kdMinMatches: KD_MIN_MATCHES, kills: top('kills'), kd: top('kd'), playtime: top('playtime'), seeding: top('seeding') };
+  const kdHours = kdMinHours(period);
+  const top = (key: BoardKey) => board(players, key, kdHours).slice(0, count);
+  return { days: period, kdMinHours: kdHours, kills: top('kills'), kd: top('kd'), playtime: top('playtime'), seeding: top('seeding') };
 };
 
 // A player's place on each board over `period` days (1 is the top), or null when the board leaves them out, and how
 // many players played in that time.
-export type Ranks = { days: number; kdMinMatches: number; players: number } & Record<BoardKey, number | null>;
+export type Ranks = { days: number; kdMinHours: number; players: number } & Record<BoardKey, number | null>;
 
 export const ranks = (players: RankedPlayer[], steamId: string, period: number): Ranks => {
+  const kdHours = kdMinHours(period);
   const place = (key: BoardKey): number | null => {
-    const index = board(players, key).findIndex((p) => p.steamId === steamId);
+    const index = board(players, key, kdHours).findIndex((p) => p.steamId === steamId);
     return index === -1 ? null : index + 1;
   };
   return {
     days: period,
-    kdMinMatches: KD_MIN_MATCHES,
+    kdMinHours: kdHours,
     players: players.length,
     kills: place('kills'),
     kd: place('kd'),

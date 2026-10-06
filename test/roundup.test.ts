@@ -290,6 +290,14 @@ describe('buildRoundup', () => {
     expect(buildRoundup({ period: WEEK, days: [days[0]!, day('2026-09-30', {})], matches, idOf })).toBeNull();
   });
 
+  it('needs the K/D time for the whole week or month, even one still going', () => {
+    // Cy played 1 h 40 min, under a week's 2 hours, so is off the K/D board.
+    expect(roundup).toMatchObject({ kdMinHours: 2, kd: [{ name: 'Ash2' }, { name: 'Bo' }] });
+    expect(buildRoundup({ period: currentPeriod('week', at('2026-09-29', 21)), days, matches, idOf })?.kdMinHours).toBe(2);
+    expect(buildRoundup({ period: lastPeriod('month', at('2026-10-02')), days, matches, idOf })?.kdMinHours).toBe(10);
+    expect(buildRoundup({ period: currentPeriod('month', at('2026-10-04', 12)), days, matches, idOf })?.kdMinHours).toBe(10);
+  });
+
   it('counts a week still going up to now', () => {
     const now = at('2026-09-29', 21);
     const soFar = buildRoundup({ period: currentPeriod('week', now), days, matches, idOf });
