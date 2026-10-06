@@ -796,6 +796,16 @@ describe('welcomes', () => {
     expect(log.info).toHaveBeenCalledWith(`Sent welcome to "Pc" (c): ${text}`);
   });
 
+  it("does not welcome players already on when the bot's first reading lists nobody but the server says it has players", async () => {
+    const unlisted = { ...snapshot([a, b]), players: [] };
+    const { run, sent, store } = welcomePoller([unlisted, ...Array.from({ length: 4 }, () => snapshot([a, b]))]);
+
+    await run(5);
+
+    expect(sent).toEqual([]);
+    expect((await store.load())?.welcomes).toEqual({ online: ['a', 'b'], waiting: {}, welcomed: { a: 120_000, b: 120_000 } });
+  });
+
   it('does not welcome anyone again when they reconnect after a map change', async () => {
     const { run, sent } = welcomePoller([
       snapshot([a]),

@@ -201,10 +201,16 @@ export const WelcomeWatchSchema = z.object({
 // Notes who joined since the last reading, of the `count` players the server says it has. Someone who leaves before
 // their welcome goes out is dropped, and waits again if they come back. Those on at the first reading did not just
 // join, and count as welcomed, so they are not welcomed when they reconnect after the next map change either. A reading
-// that lists nobody while the server says it has players is not trusted, so a bad reading never has everyone join again.
-export const watchWelcomes = (previous: WelcomeWatch | null, steamIds: string[], count: number, now: number): WelcomeWatch => {
-  if (previous === null) return { online: steamIds, waiting: {}, welcomed: Object.fromEntries(steamIds.map((id) => [id, now])) };
+// that lists nobody while the server says it has players is not trusted, so a bad reading never has everyone join again;
+// before the first reading it trusts, it gives back null.
+export const watchWelcomes = (
+  previous: WelcomeWatch | null,
+  steamIds: string[],
+  count: number,
+  now: number,
+): WelcomeWatch | null => {
   if (steamIds.length === 0 && count > 0) return previous;
+  if (previous === null) return { online: steamIds, waiting: {}, welcomed: Object.fromEntries(steamIds.map((id) => [id, now])) };
   const known = new Set(previous.online);
   const welcomed = Object.fromEntries(Object.entries(previous.welcomed).filter(([, at]) => now - at < WELCOME_AGAIN_MS));
   const waiting: Record<string, number> = {};

@@ -14,6 +14,7 @@ import {
   welcomeMessage,
   welcomesDue,
   type MatchMessages,
+  type WelcomeWatch,
 } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
@@ -261,15 +262,22 @@ describe('welcomeMessage', () => {
 describe('watchWelcomes', () => {
   const rule = { afterMs: 2 * MINUTE, siteHost: null, discord: null };
 
+  // A reading the bot trusts, which always gives back what to remember.
+  const read = (previous: WelcomeWatch | null, steamIds: string[], count: number, now: number): WelcomeWatch => {
+    const watch = watchWelcomes(previous, steamIds, count, now);
+    if (watch === null) throw new Error('Expected a reading the bot trusts');
+    return watch;
+  };
+
   it('welcomes nobody on the first reading: they were already on', () => {
-    const watch = watchWelcomes(null, ['a', 'b'], 2, 0);
+    const watch = read(null, ['a', 'b'], 2, 0);
 
     expect(watch).toEqual({ online: ['a', 'b'], waiting: {}, welcomed: { a: 0, b: 0 } });
     expect(welcomesDue(watch, 10 * MINUTE, rule, MINUTE)).toEqual([]);
   });
 
   it('is due 2 minutes after the bot first sees a player join, allowing for checks that land a little early', () => {
-    const watch = watchWelcomes(watchWelcomes(null, ['a'], 1, 0), ['a', 'b', 'c'], 3, MINUTE);
+    const watch = read(read(null, ['a'], 1, 0), ['a', 'b', 'c'], 3, MINUTE);
 
     expect(watch.waiting).toEqual({ b: MINUTE, c: MINUTE });
     expect(welcomesDue(watch, 2 * MINUTE, rule, MINUTE)).toEqual([]);
@@ -277,28 +285,28 @@ describe('watchWelcomes', () => {
   });
 
   it('drops a player who leaves before their welcome, and waits again when they come back', () => {
-    let watch = watchWelcomes(watchWelcomes(null, ['a'], 1, 0), ['a', 'b'], 2, MINUTE);
-    watch = watchWelcomes(watch, ['a'], 1, 2 * MINUTE);
+    let watch = read(read(null, ['a'], 1, 0), ['a', 'b'], 2, MINUTE);
+    watch = read(watch, ['a'], 1, 2 * MINUTE);
 
     expect(watch.waiting).toEqual({});
 
-    watch = watchWelcomes(watch, ['a', 'b'], 2, 3 * MINUTE);
+    watch = read(watch, ['a', 'b'], 2, 3 * MINUTE);
 
     expect(watch.waiting).toEqual({ b: 3 * MINUTE });
   });
 
   it('does not welcome a player again for 6 hours, as when everyone reconnects after a map change', () => {
-    let watch = watchWelcomes(watchWelcomes(null, [], 0, 0), ['b'], 1, MINUTE);
+    let watch = read(read(null, [], 0, 0), ['b'], 1, MINUTE);
     watch = markWelcomed(watch, ['b'], 3 * MINUTE);
 
     expect(watch).toEqual({ online: ['b'], waiting: {}, welcomed: { b: 3 * MINUTE } });
 
-    watch = watchWelcomes(watchWelcomes(watch, [], 0, 4 * MINUTE), ['b'], 1, 5 * MINUTE);
+    watch = read(read(watch, [], 0, 4 * MINUTE), ['b'], 1, 5 * MINUTE);
 
     expect(watch.waiting).toEqual({});
 
     // Forgotten 6 hours after their welcome, so the next time they join they get one.
-    watch = watchWelcomes(watchWelcomes(watch, [], 0, 3 * MINUTE + WELCOME_AGAIN_MS), ['b'], 1, 4 * MINUTE + WELCOME_AGAIN_MS);
+    watch = read(read(watch, [], 0, 3 * MINUTE + WELCOME_AGAIN_MS), ['b'], 1, 4 * MINUTE + WELCOME_AGAIN_MS);
 
     expect(watch).toEqual({ online: ['b'], waiting: { b: 4 * MINUTE + WELCOME_AGAIN_MS }, welcomed: {} });
   });
@@ -307,6 +315,15 @@ describe('watchWelcomes', () => {
     const watch = watchWelcomes(null, ['a'], 1, 0);
 
     expect(watchWelcomes(watch, [], 1, MINUTE)).toBe(watch);
+  });
+
+  it('waits for a reading it trusts before noting who was already on, so nobody on then is welcomed', () => {
+    expect(watchWelcomes(null, [], 3, 0)).toBeNull();
+    expect(watchWelcomes(null, ['a', 'b', 'c'], 3, MINUTE)).toEqual({
+      online: ['a', 'b', 'c'],
+      waiting: {},
+      welcomed: { a: MINUTE, b: MINUTE, c: MINUTE },
+    });
   });
 });
 

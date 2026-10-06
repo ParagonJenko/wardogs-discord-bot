@@ -49,7 +49,8 @@ export type BotState = {
   seedMessageAt: number | null;
   // Who is in game, and whether a seeding message is waiting for someone who just joined.
   joins: JoinWatch | null;
-  // Who is waiting for their welcome, and who had one lately. Null while welcomes are off.
+  // Who is waiting for their welcome, and who had one lately. Null while welcomes are off, and until a reading the bot
+  // trusts.
   welcomes: WelcomeWatch | null;
 };
 
@@ -236,11 +237,12 @@ export const createPoller = ({
   const welcoming = config.welcomeMessages !== null && messagePlayer !== undefined;
 
   // Each player's welcome, privately, a couple of minutes after they join. One that fails is not tried again. Gives
-  // back what to remember, or null while welcomes are off.
+  // back what to remember: null while welcomes are off, and until a reading the bot trusts.
   const welcome = async (previous: WelcomeWatch | null, players: Player[], count: number, time: number, wording: Lines) => {
     const rule = config.welcomeMessages;
     if (rule === null || messagePlayer === undefined) return null;
     const watched = watchWelcomes(previous, steamIds(players), count, time);
+    if (watched === null) return null;
     const due = welcomesDue(watched, time, rule, config.pollIntervalMs);
     for (const steamId of due) {
       const text = welcomeMessage(rule, random, wording);
