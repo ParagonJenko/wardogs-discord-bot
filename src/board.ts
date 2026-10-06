@@ -73,3 +73,39 @@ export const nextMap = (currentMap: string, staged: StagedMap | null, rotation: 
   if (!rotation.enabled) return currentMap || null;
   return rotation.entries.find((e) => e.status === 'next')?.map ?? null;
 };
+
+// The rotation the live status read last, with the map and the rotation's place the server was on then. Kept in
+// storage ('boardRotation'), as the Durable Object can sleep between checks.
+export type ReadRotation = { map: string; index: number | null; at: number; rotation: Rotation };
+
+const ReadRotationSchema = z.object({
+  map: z.string(),
+  index: z.number().int().nullable(),
+  at: z.number(),
+  rotation: z.object({
+    enabled: z.boolean(),
+    mode: z.string(),
+    entries: z.array(
+      z.object({
+        map: z.string(),
+        status: z.string().nullable(),
+        experiences: z.array(z.string()).optional(),
+        lighting: z.string().optional(),
+        zoneAlternator: z.string().optional(),
+      }),
+    ),
+  }),
+});
+
+// Null when nothing was saved yet, or it is unrecognisable: the rotation is then read again.
+export const parseReadRotation = (raw: unknown): ReadRotation | null => {
+  const parsed = ReadRotationSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+};
+
+// Each RCON read can make the game server stutter, so the live status only reads the rotation again when the map or
+// the rotation's place changes, and at least this often, as staff can change the rotation in game.
+export const ROTATION_READ_MS = 15 * 60_000;
+
+export const rotationReadDue = (read: ReadRotation | null, map: string, index: number | null, now: number): boolean =>
+  read === null || read.map !== map || read.index !== index || now - read.at >= ROTATION_READ_MS;

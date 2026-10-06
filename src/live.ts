@@ -19,6 +19,9 @@ export const ON_FIRE = 5;
 export const RIVALRY_KILLS = 3;
 const LIVE_PLAYERS_SHOWN = 10;
 const LIVE_WEAPONS_SHOWN = 5;
+// The live match is saved with each batch's other records, and storage takes at most 128 KiB in one value: a match that
+// grew past it would stop every batch being saved until it ended. Over this many bytes, it is trimmed (see trimLive).
+export const LIVE_BYTES = 90_000;
 // Kills this far apart are not the same match, however the clock reads.
 const QUIET_MS = 20 * 60_000;
 // The batches come in clock order, but a clock this little behind the last one is not a new match.
@@ -258,7 +261,7 @@ export const recordLive = (
     if (e.map !== '') live.map = e.map;
     if (e.matchId !== '') live.matchId = e.matchId;
   }
-  return m;
+  return m === null ? null : trimLive(m);
 };
 
 // Everyone a live match names, so their public ids can be worked out first.
@@ -326,6 +329,107 @@ const tenths = (metres: number): number => Math.round(metres * 10) / 10;
 const best = (players: LivePlayer[], value: (p: LivePlayer) => number, least: number): LivePlayer | null =>
   players.reduce<LivePlayer | null>((top, p) => (value(p) >= least && (top === null || value(p) > value(top)) ? p : top), null);
 
+// The players the highlights name, apart from first blood and the rivalry.
+const leaders = (players: LivePlayer[]) => ({
+  longest: best(players, (p) => (handHeld(p.longestCause) ? (p.longest ?? -1) : -1), 0),
+  multi: best(players, (p) => p.bestChain, 2),
+  streak: best(players, (p) => p.bestStreak, 3),
+  headshots: best(players, (p) => p.headshots, 1),
+  onFire: players.filter((p) => p.streak >= ON_FIRE).sort((a, b) => b.streak - a.streak),
+});
+
+// The pair the rivalry names: the most kills of one player by another, at least RIVALRY_KILLS. Ties go to the first.
+const rivalryOf = (pairs: Record<string, number>): [string, number] | null =>
+  Object.entries(pairs).reduce<[string, number] | null>((top, pair) => (pair[1] >= RIVALRY_KILLS && (top === null || pair[1] > top[1]) ? pair : top), null);
+
+// The weapon a player has the most kills with. Ties go to the first.
+const favourite = (p: LivePlayer): string | null =>
+  Object.entries(p.weapons).reduce<[string, number] | null>((top, w) => (top === null || w[1] > top[1] ? w : top), null)?.[0] ?? null;
+
+// The order of the players table: most kills first, then fewest deaths.
+const tableOrder = (a: LivePlayer, b: LivePlayer): number => b.kills - a.kills || a.deaths - b.deaths || a.name.localeCompare(b.name);
+
+const encoder = new TextEncoder();
+const bytes = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
+
+// The match, made to fit in `maxBytes`. The pairs too few to be a rivalry go first, fewest kills first, then the players
+// with the fewest kills and deaths, with their pairs, who never show: anyone in the feed, first blood, the rivalry, a
+// highlight or the players table stays. A player who goes and comes back starts again from nothing. Should those left
+// still not fit, each keeps only the weapon they have the most kills with, and then, so the batch can always be saved,
+// the match keeps only its totals.
+export const trimLive = (match: LiveMatch, maxBytes = LIVE_BYTES): LiveMatch => {
+  let size = bytes(match);
+  if (size <= maxBytes) return match;
+  let pairs = match.pairs;
+  for (let least = 1; least < RIVALRY_KILLS && size > maxBytes; least++) {
+    pairs = Object.fromEntries(Object.entries(pairs).filter(([, kills]) => kills > least));
+    size = bytes({ ...match, pairs });
+  }
+  if (size <= maxBytes) return { ...match, pairs };
+
+  const kept = new Set<number>();
+  for (const death of match.firstBlood === null ? match.feed : [...match.feed, match.firstBlood]) {
+    kept.add(death.victim);
+    if (death.killer !== null) kept.add(death.killer);
+  }
+  for (const index of rivalryOf(pairs)?.[0].split(':') ?? []) kept.add(Number(index));
+  const { longest, multi, streak, headshots, onFire } = leaders(match.players);
+  const table = [...match.players].sort(tableOrder).slice(0, LIVE_PLAYERS_SHOWN);
+  for (const p of [longest, multi, streak, headshots, ...onFire.slice(0, 3), ...table]) {
+    if (p !== null) kept.add(match.players.indexOf(p));
+  }
+  const pairsOf = new Map<number, string[]>();
+  for (const key of Object.keys(pairs)) {
+    for (const index of key.split(':').map(Number)) pairsOf.set(index, [...(pairsOf.get(index) ?? []), key]);
+  }
+  const dropped = new Set<number>();
+  const droppedPairs = new Set<string>();
+  const quietest = match.players
+    .map((p, index) => ({ p, index }))
+    .filter(({ index }) => !kept.has(index))
+    .sort((a, b) => a.p.kills + a.p.teamKills - (b.p.kills + b.p.teamKills) || a.p.deaths - b.p.deaths);
+  for (const { p, index } of quietest) {
+    if (size <= maxBytes) break;
+    dropped.add(index);
+    size -= bytes(p) + 1;
+    for (const key of pairsOf.get(index) ?? []) {
+      if (droppedPairs.has(key)) continue;
+      droppedPairs.add(key);
+      // "<key>":<kills> and its comma.
+      size -= bytes({ [key]: pairs[key] }) - 1;
+    }
+  }
+
+  const places = new Map<number, number>();
+  match.players.forEach((_, index) => {
+    if (!dropped.has(index)) places.set(index, places.size);
+  });
+  // Everyone a death or a kept pair names was kept, so each has a new place.
+  const moved = (index: number): number => places.get(index) ?? index;
+  const remap = (death: LiveDeath): LiveDeath => ({ ...death, victim: moved(death.victim), killer: death.killer === null ? null : moved(death.killer) });
+  const trimmed: LiveMatch = {
+    ...match,
+    players: match.players.filter((_, index) => !dropped.has(index)),
+    pairs: Object.fromEntries(
+      Object.entries(pairs)
+        .filter(([key]) => !droppedPairs.has(key))
+        .map(([key, kills]) => [key.split(':').map((index) => moved(Number(index))).join(':'), kills]),
+    ),
+    firstBlood: match.firstBlood === null ? null : remap(match.firstBlood),
+    feed: match.feed.map(remap),
+  };
+  if (bytes(trimmed) <= maxBytes) return trimmed;
+  const favourites: LiveMatch = {
+    ...trimmed,
+    players: trimmed.players.map((p) => {
+      const weapon = favourite(p);
+      return { ...p, weapons: weapon === null ? {} : { [weapon]: p.weapons[weapon] ?? 0 } };
+    }),
+  };
+  if (bytes(favourites) <= maxBytes) return favourites;
+  return { ...favourites, players: [], pairs: {}, firstBlood: null, feed: [] };
+};
+
 export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
   const ref = (index: number): LivePlayerRef => {
     const p = match.players[index]!;
@@ -333,8 +437,6 @@ export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
     return { name: p.name, ...(id === undefined ? {} : { id }), ...(p.faction === null ? {} : { faction: p.faction }) };
   };
   const refOf = (p: LivePlayer): LivePlayerRef => ref(match.players.indexOf(p));
-  const favourite = (p: LivePlayer): string | null =>
-    Object.entries(p.weapons).reduce<[string, number] | null>((top, w) => (top === null || w[1] > top[1] ? w : top), null)?.[0] ?? null;
   const weapons = new Map<string, { name: string; kind: WeaponKind; kills: number }>();
   for (const p of match.players) {
     for (const [cause, kills] of Object.entries(p.weapons)) {
@@ -343,14 +445,8 @@ export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
       weapons.set(name, { ...known, kills: known.kills + kills });
     }
   }
-  const longest = best(match.players, (p) => (handHeld(p.longestCause) ? (p.longest ?? -1) : -1), 0);
-  const multi = best(match.players, (p) => p.bestChain, 2);
-  const streak = best(match.players, (p) => p.bestStreak, 3);
-  const headshots = best(match.players, (p) => p.headshots, 1);
-  const rivalry = Object.entries(match.pairs).reduce<[string, number] | null>(
-    (top, pair) => (pair[1] >= RIVALRY_KILLS && (top === null || pair[1] > top[1]) ? pair : top),
-    null,
-  );
+  const { longest, multi, streak, headshots, onFire } = leaders(match.players);
+  const rivalry = rivalryOf(match.pairs);
   const first = match.firstBlood;
   const firstKiller = first?.killer ?? null;
   return {
@@ -377,7 +473,7 @@ export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
     })),
     players: [...match.players]
       .filter((p) => p.kills + p.deaths + p.teamKills > 0)
-      .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.name.localeCompare(b.name))
+      .sort(tableOrder)
       .slice(0, LIVE_PLAYERS_SHOWN)
       .map((p) => {
         const weapon = favourite(p);
@@ -403,11 +499,7 @@ export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
           ? null
           : { player: refOf(longest), weapon: longest.longestCause === null ? null : weaponName(longest.longestCause), distance: tenths(longest.longest) },
       bestStreak: streak === null ? null : { player: refOf(streak), streak: streak.bestStreak },
-      onFire: match.players
-        .filter((p) => p.streak >= ON_FIRE)
-        .sort((a, b) => b.streak - a.streak)
-        .slice(0, 3)
-        .map((p) => ({ player: refOf(p), streak: p.streak })),
+      onFire: onFire.slice(0, 3).map((p) => ({ player: refOf(p), streak: p.streak })),
       bestMultiKill: multi === null ? null : { player: refOf(multi), kills: multi.bestChain },
       mostHeadshots: headshots === null ? null : { player: refOf(headshots), headshots: headshots.headshots },
       rivalry:

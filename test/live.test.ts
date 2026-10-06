@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   isCurrent,
+  LIVE_BYTES,
   LIVE_FEED_KEPT,
   liveStats,
   liveSteamIds,
   ON_FIRE,
   parseLiveMatch,
   recordLive,
+  RIVALRY_KILLS,
+  trimLive,
   type LiveMatch,
 } from '../src/live.ts';
 import type { FeedEvent } from '../src/weapons.ts';
@@ -246,5 +249,87 @@ describe('isCurrent', () => {
   it('stays up a while after the server empties', () => {
     expect(isCurrent(match, null, NOW + 5 * 60_000)).toBe(true);
     expect(isCurrent(match, null, NOW + 11 * 60_000)).toBe(false);
+  });
+});
+
+describe('trimLive', () => {
+  const bytes = (match: LiveMatch) => new TextEncoder().encode(JSON.stringify(match)).length;
+  const crowdMember = (i: number) => String(76561198100000000n + BigInt(i));
+  // Ash kills 100 other players once each, then Cy kills Ash twice and Bo kills Dee RIVALRY_KILLS times: the crowd Ash
+  // killed first are only in pairs of one, and out of the feed.
+  const crowded = (): LiveMatch =>
+    play([
+      ...Array.from({ length: 100 }, (_, i) => death(ASH, crowdMember(i), i, { victimName: `Crowd ${i}` })),
+      death(CY, ASH, 200),
+      death(CY, ASH, 210),
+      ...Array.from({ length: RIVALRY_KILLS }, (_, i) => death(BO, DEE, 300 + i * 20)),
+    ]);
+  const pair = (match: LiveMatch, killer: string, victim: string): string =>
+    `${match.players.findIndex((p) => p.steamId === killer)}:${match.players.findIndex((p) => p.steamId === victim)}`;
+
+  it('leaves a match that fits as it is', () => {
+    const match = crowded();
+
+    expect(trimLive(match)).toBe(match);
+  });
+
+  it('drops the pairs too few to be a rivalry first, fewest kills first', () => {
+    const match = crowded();
+    const trimmed = trimLive(match, bytes(match) - 1);
+
+    expect(trimmed.pairs).toEqual({ [pair(match, CY, ASH)]: 2, [pair(match, BO, DEE)]: RIVALRY_KILLS });
+    expect(trimmed.players).toEqual(match.players);
+    expect(stats(trimmed)).toEqual(stats(match));
+  });
+
+  it('then drops the players who never show, and the page shows the same', () => {
+    const match = crowded();
+    const max = bytes(match) - 4_000;
+    const trimmed = trimLive(match, max);
+
+    expect(bytes(trimmed)).toBeLessThanOrEqual(max);
+    expect(trimmed.players.length).toBeLessThan(match.players.length);
+    // The deaths, first blood and rivalry name the same players in their new places.
+    expect(stats(trimmed)).toEqual(stats(match));
+    expect(stats(trimmed).highlights.rivalry).toMatchObject({ killer: { name: 'Bo' }, victim: { name: 'Dee' }, kills: RIVALRY_KILLS });
+    expect(trimmed.pairs).toEqual({ [pair(trimmed, BO, DEE)]: RIVALRY_KILLS });
+    // The quietest go first, in the order they joined: Crowd 2 is out of the feed and the table, Crowd 99 in the feed.
+    expect(liveSteamIds(trimmed)).not.toContain(crowdMember(2));
+    expect(liveSteamIds(trimmed)).toContain(crowdMember(99));
+    expect(parseLiveMatch(JSON.parse(JSON.stringify(trimmed)))).toEqual(trimmed);
+  });
+
+  it('keeps only the favourite weapon of players who must stay, when they still do not fit', () => {
+    // Ash kills Bo with 700 different weapons, with long tags: both are in the feed, so neither can go.
+    const events = Array.from({ length: 700 }, (_, i) => death(ASH, BO, i, { cause: `Id.Item.${'X'.repeat(180)}_${i}` }));
+    const match = play([...events, death(ASH, BO, 800, { cause: 'Id.Item.AK74M' }), death(ASH, BO, 801, { cause: 'Id.Item.AK74M' })]);
+    const ash = match.players.find((p) => p.steamId === ASH);
+
+    expect(bytes(match)).toBeLessThanOrEqual(LIVE_BYTES);
+    expect(ash?.weapons).toEqual({ 'Id.Item.AK74M': 2 });
+    expect(ash?.kills).toBe(702);
+    expect(stats(match).players[0]).toMatchObject({ name: 'Ash', kills: 702, weapon: 'AK74' });
+  });
+
+  it('keeps only the totals as a last resort, so the batch can always be saved', () => {
+    const match = crowded();
+    const trimmed = trimLive(match, 1_000);
+
+    expect(bytes(trimmed)).toBeLessThanOrEqual(1_000);
+    expect(trimmed).toMatchObject({ players: [], pairs: {}, firstBlood: null, feed: [], kills: match.kills, map: 'Kavkazi' });
+    expect(parseLiveMatch(JSON.parse(JSON.stringify(trimmed)))).toEqual(trimmed);
+  });
+
+  it('keeps a long, busy match under the limit storage has for one value', () => {
+    const player = (i: number) => String(76561198200000000n + BigInt(i));
+    const events = Array.from({ length: 5_000 }, (_, i) =>
+      death(player((i * 7) % 400), player((i * 13 + 1) % 400), i, { killerName: `Long player name ${(i * 7) % 400}`, victimName: `Long player name ${(i * 13 + 1) % 400}` }),
+    );
+    const match = play(events);
+
+    expect(bytes(match)).toBeLessThanOrEqual(LIVE_BYTES);
+    expect(match.kills).toBe(5_000);
+    expect(match.feed).toHaveLength(LIVE_FEED_KEPT);
+    expect(stats(match).players).toHaveLength(10);
   });
 });
