@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { readJsonBody } from './body.ts';
 import { dayOf } from './stats.ts';
 
 // "Checked, they're fine": a staff member looked at a player the staff page says is worth a look and found nothing to
@@ -54,16 +55,10 @@ const CheckActionSchema = z.discriminatedUnion('action', [
 // Far bigger than any real request.
 const CHECK_BODY_BYTES = 1_024;
 
+// Read in chunks and dropped once it is too big, so a body sent without a length can't fill the Worker's memory first.
 export const readCheckAction = async (request: Request): Promise<CheckAction | null> => {
-  if (Number(request.headers.get('content-length') ?? 0) > CHECK_BODY_BYTES) return null;
-  const body = await request.arrayBuffer();
-  if (body.byteLength > CHECK_BODY_BYTES) return null;
-  try {
-    const parsed = CheckActionSchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  const parsed = CheckActionSchema.safeParse(await readJsonBody(request, CHECK_BODY_BYTES));
+  return parsed.success ? parsed.data : null;
 };
 
 // Today's checks with `action` applied by `user`, to store. A check from an earlier day is dropped.

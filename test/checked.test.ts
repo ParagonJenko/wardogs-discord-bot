@@ -59,5 +59,17 @@ describe('checked, they are fine', () => {
     await expect(readCheckAction(request({ action: 'check', steamId: VEX, reasons: [], teamKills: -1, vehicleSuicides: 0 }))).resolves.toBeNull();
     await expect(readCheckAction(request('check'))).resolves.toBeNull();
     await expect(readCheckAction(request({ action: 'uncheck', steamId: VEX, pad: 'x'.repeat(2_000) }))).resolves.toBeNull();
+    // Too big, with no length given: dropped as it is read, never buffered whole.
+    const chunked = new Request('https://bot.example/api/admin/check', {
+      method: 'POST',
+      body: new ReadableStream({
+        start(controller) {
+          for (let i = 0; i < 4; i += 1) controller.enqueue(new TextEncoder().encode('x'.repeat(512)));
+          controller.close();
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit);
+    await expect(readCheckAction(chunked)).resolves.toBeNull();
   });
 });
