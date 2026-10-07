@@ -6,6 +6,7 @@ import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, RoleAward, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
 import { WEEKDAYS as ROTATION_DAYS } from './rotations.ts';
+import { PRIVATE_NAME } from './privacy.ts';
 import type { RecentMatch } from './stats.ts';
 import { assess, RISK_LABELS, steamFacts, type Risk, type SteamAlert, type SteamCheck, type SteamLookup } from './steam.ts';
 import { topPlayers, type MatchState, type MatchSummary } from './tracking.ts';
@@ -1108,7 +1109,11 @@ export const buildPlayerEmbed = (profile: PlayerProfile): Embed => {
     : '⚫ Not in game';
   return {
     title: `👤 ${name === null ? 'Unknown player' : playerName(name)}`,
-    description: [`\`${steamId}\` · [Steam profile](https://steamcommunity.com/profiles/${steamId})`, here].join('\n'),
+    description: [
+      `\`${steamId}\` · [Steam profile](https://steamcommunity.com/profiles/${steamId})`,
+      here,
+      ...(record.privateProfile ? [`🔒 Private profile: the public sees them as ${escapeMarkdown(PRIVATE_NAME)}`] : []),
+    ].join('\n'),
     color: isBanned(profile) ? COLORS.lowPop : INFO_COLOR,
     fields: [
       ...(t === null

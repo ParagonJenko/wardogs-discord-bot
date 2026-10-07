@@ -244,6 +244,7 @@ The Node/Docker version does not post roundups.
 | `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
 | `/vip remove`   | Staff only           | Takes a player off the reserved list, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
+| `/private …`    | Staff only           | [Private profiles](#private-profiles): `add` makes a player's profile private, `remove` makes it public again, `list` shows them |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
 
@@ -326,8 +327,8 @@ commands to. Alerts, top seeders and match summaries work in both.
 
 For players, staff start typing and pick from the list, which shows each player's name, team and Steam ID. Teams
 in the lists staff pick from have a dot in their colour, to spot at a glance: 🔵 Lonestar, 🟢 Manticore, 🔴 Valkyra.
-`/warn`, `/kick` and `/switchteam` list the players in game. `/player`, `/ban` and `/vip add` also list players seen
-in the last 30 days and players with VIP or a ban from the bot, and take any Steam ID. A name typed without picking
+`/warn`, `/kick` and `/switchteam` list the players in game. `/player`, `/ban`, `/vip add` and `/private add` also list
+players seen in the last 30 days and players with VIP or a ban from the bot, and take any Steam ID. A name typed without picking
 works when it matches exactly one player.
 
 - **`/warn`** sends a private message in game, starting "Staff warning:", up to 140 characters.
@@ -377,7 +378,7 @@ works when it matches exactly one player.
 - **`/player`** shows the Steam ID with a link to the Steam profile, whether they are in game, their playtime,
   seeding and matches over the last 90 days, their team kills today, what Steam says about their account (see
   [Risky Steam accounts](#risky-steam-accounts)), VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
-  unbans, team moves and VIP changes, with who did each.
+  unbans, team moves and VIP changes, with who did each. It says when their [profile is private](#private-profiles).
 - **Team kills today** in `/player` is for checking a report like "X is team killing" without leaving Discord. From the
   [kill feed](#weapon-stats), over the UTC day so far: their team kills (and how many with a vehicle), times a
   teammate killed them, suicides (and how many in a vehicle), any [griefing flag](#staff-page) the day earned, the
@@ -391,6 +392,35 @@ also logged in the Worker logs with the staff member's Discord user ID. If a rep
 confirmed, check in game before trying again: it may have gone through.
 
 There is no chat log command: the game's RCON API has no way to read chat.
+
+## Private profiles
+
+A player who does not want to be named in public can have a private profile (Cloudflare only). Staff make it private
+with `/private add`, in Discord or from the staff page's tools. From then on, everywhere the public sees, they go by
+**[private profile]**, with no link to a player page:
+
+- **The website** (`/api/stats`, `/api/live` and its socket): the leaderboard, the current and recent matches, who has
+  VIP from seeding, the weapons' longest kills, and the [live match](#live-match): the kill feed, the scoreboard and
+  the highlights. They are left off the players list (`/api/players`), and their player page answers 404, as for an
+  id nobody has, so a private profile cannot be told from nobody.
+- **The bot's public Discord posts and commands**: the match summary, the live alert's top seeders, the reserved slots
+  for seeders, the [live server status](#live-server-status), the [roundups](#roundups), `/players`, `/lastmatch` and
+  `/roundup`.
+
+Their numbers still count, under that name, so nobody else's place on a board changes. Staff still see them as they
+are: on the staff page, in the staff commands (`/player` says their profile is private), and in the moderation log.
+
+- **`/private add`** takes any player: pick from the list, or type a name or Steam ID. **`/private remove`** lists
+  the private profiles and makes one public again. **`/private list`** shows them, the latest first, with who made
+  each private and when.
+- The public pages reuse an answer for up to 30 seconds, and browsers for 30 more, so a change shows within a minute.
+  The live page shows it at its next update.
+- Not changed: what players see in game, such as the scoreboard, and Discord posts sent
+  before. Matches recorded before Steam IDs were kept have names only, so they still show the name they had.
+- Kept by Steam ID in the Durable Object (`privateProfiles`). Each change is logged in the Worker logs with the staff
+  member's Discord user ID (`/private add by Discord user …`).
+- New commands need `npm run register` once (see [Slash commands](#slash-commands)). The staff page lists them as
+  soon as the bot is deployed.
 
 ## Map rotations
 
@@ -780,6 +810,7 @@ The Node/Docker version does not check Steam accounts.
 Times are Unix milliseconds. It never includes Steam IDs, the RCON address or the password. Each player on the
 leaderboard and in the current and recent matches has their name, their totals and an `id` for their
 [player page](#player-pages). Each player in `seederVip` has their `name`, `id` and `until`. Matches recorded before ids were added have names only.
+A [private profile](#private-profiles) has `[private profile]` for its name, and no `id`.
 
 `weapons` has:
 
@@ -839,8 +870,8 @@ Two more public endpoints let a website show every player's stats, not only the 
 
 | Endpoint                 | What                                                                                   |
 | ------------------------ | -------------------------------------------------------------------------------------- |
-| `GET /api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now |
-| `GET /api/player?id=<id>` | One player's page, or 404 for an id nobody seen in the last 90 days has              |
+| `GET /api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now. Not [private profiles](#private-profiles) |
+| `GET /api/player?id=<id>` | One player's page, or 404 for an id nobody seen in the last 90 days has, or a private profile's |
 
 A player page has:
 

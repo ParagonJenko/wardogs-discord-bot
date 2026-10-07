@@ -53,6 +53,7 @@ const setup = (
   stats?: StatsSink,
   overrides: Partial<Config> = {},
   staff?: () => Promise<ReadonlySet<string>>,
+  privateProfiles?: () => Promise<ReadonlySet<string>>,
 ) => {
   const queue = [...snapshots];
   const sent: DiscordMessage[] = [];
@@ -74,6 +75,7 @@ const setup = (
     store,
     stats,
     staff,
+    privateProfiles,
   });
   const run = async (times: number) => {
     for (let i = 0; i < times; i++) await tick();
@@ -186,6 +188,19 @@ describe('poller', () => {
     expect(seeded.mock.calls[0]?.[0].map((s) => s.steamId)).toEqual(['a', 'b']);
   });
 
+  it('names a private profile [private profile] among the top seeders', async () => {
+    const a = player('a');
+    const b = player('b');
+    const hidden = vi.fn(async () => new Set(['a']));
+    const { run, sent } = setup([snapshot([]), snapshot([a]), snapshot([a, b]), snapshot(crowd(20, [a, b]))], memoryStore(), undefined, {}, undefined, hidden);
+
+    await run(4);
+
+    expect(field(sent[1], 'Top seeders')).toBe('🥇 \\[private profile\\] · 2 min\n🥈 Pb · 1 min');
+    // Only asked when a post may name players.
+    expect(hidden).toHaveBeenCalledTimes(1);
+  });
+
   it('does not credit players who only joined on the check that went live', async () => {
     const a = player('a');
     const { run, sent } = setup([snapshot([]), snapshot([a]), snapshot(crowd(20, [a]))]);
@@ -233,6 +248,22 @@ describe('poller', () => {
 
     expect(titles(sent)).toEqual(['🟢 UK Wardogs #1 is live', '🏁 Match over · 🟧 Bakurani']);
     expect(field(sent[1], 'Top players')).toMatch(/^🥇 \*\*Pa\*\* · 9 kills/);
+  });
+
+  it('names a private profile [private profile] in the match summary', async () => {
+    const { run, sent } = setup(
+      [snapshot(crowd(5)), snapshot(crowd(22, [player('a', 3)])), snapshot(crowd(22, [player('a', 9)])), snapshot(crowd(22), 'Europe')],
+      memoryStore(),
+      undefined,
+      {},
+      undefined,
+      async () => new Set(['a']),
+    );
+
+    await run(4);
+
+    expect(field(sent[1], 'Top players')).toMatch(/^🥇 \*\*\\\[private profile\\\]\*\* · 9 kills/);
+    expect(JSON.stringify(sent)).not.toMatch(/Pa\b/);
   });
 
   it('does not summarise the match that was already live when the bot started', async () => {

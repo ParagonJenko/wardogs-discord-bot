@@ -642,6 +642,7 @@ describe('COMMANDS', () => {
       'changemap',
       'vip',
       'rotations',
+      'private',
     ]);
     for (const command of COMMANDS.slice(5)) {
       expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
@@ -818,6 +819,13 @@ describe('staff commands from the staff page', () => {
     expect(checkOptions('seeders', { days: true })).toEqual({ problem: 'days must be a whole number.' });
     expect(checkOptions('setnextmap', { map: 'Europe', hardcore: 1 })).toEqual({ problem: 'hardcore must be true or false.' });
     expect(checkOptions('vip', { subcommand: 1, steam_id: '76561198000000001' })).toEqual({ problem: 'Pick add or remove.' });
+  });
+
+  it('takes /private list with no options, and a player for /private add', () => {
+    expect(checkOptions('private', { subcommand: 'list' })).toEqual({ options: { subcommand: 'list' } });
+    expect(checkOptions('private', { subcommand: 'list', steam_id: '76561198000000001' })).toEqual({ problem: '/private has no option called steam_id.' });
+    expect(checkOptions('private', { subcommand: 'add' })).toEqual({ problem: '/private needs steam_id.' });
+    expect(checkOptions('private', {})).toEqual({ problem: 'Pick add or remove or list.' });
   });
 
   it('takes a subcommand for /vip, and checks its options', () => {

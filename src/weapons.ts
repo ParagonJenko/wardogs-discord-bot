@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { dayOf, type IdOf } from './stats.ts';
+import { publicPlayer, type PublicIdOf } from './privacy.ts';
+import { dayOf } from './stats.ts';
 
 // Weapon stats from the game's kill feed. With `Url` and `Token` set under [WDServerFeed] in ServerSettings.ini, the
 // game POSTs its kills to Url + /api/ingest/events, a batch of one to ten about every two seconds, with the token as a
@@ -489,13 +490,13 @@ export const weaponHolders = (days: WeaponDay[]): string[] => [
   ...new Set(days.flatMap((d) => Object.values(d).flatMap((w) => (w.longest === null ? [] : [w.longest.steamId])))),
 ];
 
-const holder = (longest: LongestKill, idOf: IdOf): { distance: number; name: string; id?: string } => {
-  const id = idOf(longest.steamId);
-  return { distance: metres(longest.distance), name: longest.name, ...(id === undefined ? {} : { id }) };
-};
+const holder = (longest: LongestKill, idOf: PublicIdOf): { distance: number; name: string; id?: string } => ({
+  distance: metres(longest.distance),
+  ...publicPlayer(longest.steamId, longest.name, idOf),
+});
 
 // The days' weapons, the top `count` by kills. `days` holds just the days the board covers.
-export const weaponBoard = (days: WeaponDay[], period: number, since: string, count: number, idOf: IdOf): WeaponBoard => {
+export const weaponBoard = (days: WeaponDay[], period: number, since: string, count: number, idOf: PublicIdOf): WeaponBoard => {
   const weapons = new Map<string, WeaponTotals & { kind: WeaponKind }>();
   for (const day of days) {
     for (const [cause, t] of Object.entries(day)) {

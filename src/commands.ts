@@ -19,6 +19,7 @@ import {
   type CommandReply,
   type CommandRequest,
 } from './interactions.ts';
+import { publicNames } from './privacy.ts';
 import { fetchPlayers, fetchRotation, fetchStatus, sendBroadcast, type HttpClient } from './rcon.ts';
 import { ROUNDUP_CHOICES, type Roundup, type RoundupChoice } from './roundup.ts';
 import { isStaffCommand, runStaffCommand, suggestStaff, type StaffRecords } from './staff.ts';
@@ -29,6 +30,8 @@ type CommandDeps = {
   config: () => Config;
   http: HttpClient;
   lastMatch: () => Promise<RecentMatch | null>;
+  // The Steam IDs of private profiles: the public commands name them PRIVATE_NAME (see privacy.ts).
+  privateProfiles: () => Promise<ReadonlySet<string>>;
   // The best players and team of a week or month; null when nobody played in it.
   roundup: (choice: RoundupChoice) => Promise<Roundup | null>;
   seeders: (days: number) => Promise<SeederRow[]>;
@@ -84,13 +87,15 @@ const dayCount = (value: string | undefined): number => {
 };
 
 export const runCommand =
-  ({ config, http, lastMatch, roundup, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
+  ({ config, http, lastMatch, privateProfiles, roundup, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
   async (request: CommandRequest): Promise<CommandReply> => {
     const { name, options, userId } = request;
     if (isStaffCommand(name)) return runStaffCommand({ config, http, records, now, log })(name, request);
     if (name === 'lastmatch') {
-      const match = await lastMatch();
-      return match ? { embeds: [buildLastMatchEmbed(match, websiteOf(config))] } : { content: 'No finished matches recorded yet.' };
+      const [match, hidden] = await Promise.all([lastMatch(), privateProfiles()]);
+      return match
+        ? { embeds: [buildLastMatchEmbed({ ...match, top: publicNames(match.top, hidden) }, websiteOf(config))] }
+        : { content: 'No finished matches recorded yet.' };
     }
     if (name === 'roundup') {
       const choice = ROUNDUP_CHOICES.find((c) => c === options['period']) ?? 'week';
@@ -116,7 +121,10 @@ export const runCommand =
     if (name === 'serverstatus') {
       return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl, serverId)] };
     }
-    if (name === 'players') return { embeds: [buildPlayersEmbed(await fetchPlayers(rconUrl, rconPassword, http))] };
+    if (name === 'players') {
+      const [players, hidden] = await Promise.all([fetchPlayers(rconUrl, rconPassword, http), privateProfiles()]);
+      return { embeds: [buildPlayersEmbed(publicNames(players, hidden))] };
+    }
     if (name === 'rotation') return { embeds: [buildRotationEmbed(await fetchRotation(rconUrl, rconPassword, http))] };
     if (name === 'seednow') {
       const note = (options['message'] ?? '').trim();

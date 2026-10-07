@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { factionKey } from './discord.ts';
 import type { KillDaySummary } from './killfeed.ts';
 import { leaderboard, totals, type MatchRecord, type PlayerDay, type RankedPlayer } from './players.ts';
+import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import type { FactionScore } from './rcon.ts';
 import { dayOf } from './stats.ts';
 import { byKills } from './tracking.ts';
@@ -169,9 +170,6 @@ export type FeedAwards = {
   sidearm: Kills | null;
 };
 
-// Looks up a player's public id by Steam ID (see profiles.ts).
-export type IdOf = (steamId: string) => string | undefined;
-
 // The kill feed's records for the awards (see killfeed.ts).
 export type FeedSources = {
   // The first UTC day the kill records have.
@@ -186,7 +184,8 @@ export type RoundupSources = {
   days: { day: string; players: PlayerDay }[];
   // Match records, in any order. Matches count in the period they ended in.
   matches: MatchRecord[];
-  idOf: IdOf;
+  // Each player's public id, or null for a private profile (see privacy.ts).
+  idOf: PublicIdOf;
   // Left out without the kill feed.
   feed?: FeedSources;
 };
@@ -330,10 +329,10 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
     .filter((m) => m.endedAt >= period.start && m.endedAt < period.end)
     .sort((a, b) => a.endedAt - b.endedAt);
 
-  const named = <T extends object>(steamId: string, name: string, row: T): RoundupPlayer & T => {
-    const id = idOf(steamId);
-    return { name, ...(id === undefined ? {} : { id }), ...row };
-  };
+  const named = <T extends object>(steamId: string, name: string, row: T): RoundupPlayer & T => ({
+    ...publicPlayer(steamId, name, idOf),
+    ...row,
+  });
   const fromBoard = <T extends object>(rows: RankedPlayer[], pick: (p: RankedPlayer) => T) =>
     rows.map((p) => named(p.steamId, p.name, pick(p)));
 

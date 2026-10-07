@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
+import type { PrivateProfiles } from '../src/privacy.ts';
 import type { HttpClient } from '../src/rcon.ts';
 import { editRotations, parseRotationBook, rotationDay, type RotationBook, type RotationEdit, type RotationEditResult } from '../src/rotations.ts';
 import type { SteamLookup } from '../src/steam.ts';
@@ -83,7 +84,7 @@ const rcon = (overrides: Record<string, [number, unknown]> = {}) => {
   return { http, sent };
 };
 
-const emptyRecord: PlayerRecord = { name: null, totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null, grief: null };
+const emptyRecord: PlayerRecord = { name: null, totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, privateProfile: false, log: [], ban: null, grief: null };
 
 const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<typeof vi.fn> } => ({
   player: vi.fn(async () => emptyRecord),
@@ -97,6 +98,9 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   steam: vi.fn(async (): Promise<SteamLookup> => 'off'),
   rotations: vi.fn(async () => parseRotationBook(undefined)),
   editRotations: vi.fn(async () => ({ problem: 'Not in this test.' })),
+  privateProfiles: vi.fn(async (): Promise<PrivateProfiles> => ({})),
+  makePrivate: vi.fn(async () => true),
+  makePublic: vi.fn(async () => true),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -551,6 +555,69 @@ describe('runStaffCommand', () => {
         { name: 'Ban', value: "Couldn't read the ban list" },
       ]),
     );
+  });
+});
+
+describe('/private', () => {
+  it('makes a profile private and public again, through the records, and logs who did it', async () => {
+    const { run, records, log } = setup();
+
+    await expect(run('private', { subcommand: 'add', steam_id: ASH })).resolves.toEqual({
+      content:
+        "🔒 **Ash**'s profile is private. Within a minute the website and the bot's public Discord posts show them as " +
+        '[private profile], with no player page. Staff still see them as they are.',
+    });
+    await expect(run('private', { subcommand: 'remove', steam_id: OLD })).resolves.toEqual({
+      content: "🔓 **Oldtimer**'s profile is public again. The website and Discord show their name within a minute.",
+    });
+    expect(records.makePrivate).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash' }, '42', undefined);
+    expect(records.makePublic).toHaveBeenCalledWith(OLD);
+    expect(log.info.mock.calls).toEqual([
+      [`/private add by Discord user 42: "Ash" (${ASH})`],
+      [`/private remove by Discord user 42: "Oldtimer" (${OLD})`],
+    ]);
+  });
+
+  it('says when there is nothing to change', async () => {
+    const { run, records } = setup();
+    records.makePrivate.mockResolvedValue(false);
+    records.makePublic.mockResolvedValue(false);
+
+    await expect(run('private', { subcommand: 'add', steam_id: ASH })).resolves.toEqual({ content: "**Ash**'s profile is already private." });
+    await expect(run('private', { subcommand: 'remove', steam_id: ASH })).resolves.toEqual({ content: "**Ash**'s profile isn't private." });
+    await expect(run('private', { subcommand: 'add', steam_id: 'nobody' })).resolves.toEqual({
+      content: 'No player matches "nobody". Pick one from the list, or use their Steam ID.',
+    });
+  });
+
+  it('lists the private profiles, the latest first, with who made them private and when', async () => {
+    const { run, records } = setup();
+    records.privateProfiles.mockResolvedValue({
+      [ASH]: { name: 'Ash_', at: NOW - 86_400_000, by: '42' },
+      [BO]: { name: 'Bo', at: NOW, by: 'unknown' },
+    });
+
+    await expect(run('private', { subcommand: 'list' })).resolves.toEqual({
+      content: [
+        '🔒 2 private profiles, the latest first:',
+        `**Bo** · \`${BO}\` <t:${NOW / 1000}:R>`,
+        `**Ash\\_** · \`${ASH}\` · by <@42> <t:${(NOW - 86_400_000) / 1000}:R>`,
+      ].join('\n'),
+    });
+    records.privateProfiles.mockResolvedValue({});
+    await expect(run('private', { subcommand: 'list' })).resolves.toEqual({ content: 'No private profiles. /private add makes one private.' });
+  });
+
+  it('offers players for /private add, and the private profiles for /private remove', async () => {
+    const { suggest, records } = setup();
+    records.privateProfiles.mockResolvedValue({ [OLD]: { name: 'Oldtimer', at: NOW, by: '42' } });
+
+    await expect(suggest({ name: 'private', options: { subcommand: 'add', steam_id: 'old' }, focused: 'steam_id' })).resolves.toEqual([
+      { name: `Oldtimer · ${OLD}`, value: OLD },
+    ]);
+    await expect(suggest({ name: 'private', options: { subcommand: 'remove', steam_id: '' }, focused: 'steam_id' })).resolves.toEqual([
+      { name: `Oldtimer · ${OLD}`, value: OLD },
+    ]);
   });
 });
 

@@ -242,4 +242,12 @@ describe('directory', () => {
       ],
     });
   });
+
+  it('leaves out private profiles', () => {
+    const days = daysOf(1, { 0: { [ASH]: row('Ash', { liveMinutes: 30 }), [BO]: row('Bo', { liveMinutes: 10 }) } });
+
+    expect(directory(days, (steamId) => (steamId === ASH ? null : ids[steamId]), new Set([ASH]), NOON).players).toEqual([
+      { id: 'b2b2b2b2b2b2', name: 'Bo', minutes: 10, lastSeen: '2026-09-30', online: false },
+    ]);
+  });
 });

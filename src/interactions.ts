@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
+import { PRIVATE_NAME } from './privacy.ts';
 import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
 import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, VIP_NOTE_MAX_LENGTH, VIP_REASONS, WARNING_MAX_LENGTH } from './staff.ts';
@@ -313,6 +314,26 @@ export const COMMANDS = [
         description: 'Delete a saved rotation; the days it was planned for go back to Default',
         options: [rotation('Pick the rotation')],
       },
+    ],
+  },
+  {
+    name: 'private',
+    description: 'Private profiles: hidden by name on the website and in public Discord posts (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      {
+        type: SUBCOMMAND,
+        name: 'add',
+        description: `Make a player's profile private: shown as ${PRIVATE_NAME}, with no player page`,
+        options: [steamId('Pick the player, or type a name or Steam ID')],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'remove',
+        description: "Make a player's profile public again",
+        options: [steamId('Pick from the private profiles, or type a Steam ID')],
+      },
+      { type: SUBCOMMAND, name: 'list', description: 'Who has a private profile' },
     ],
   },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];

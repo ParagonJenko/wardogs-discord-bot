@@ -209,6 +209,17 @@ import {
   type StaffNames,
 } from './staffnames.ts';
 import {
+  makePrivate,
+  makePublic,
+  parsePrivateProfiles,
+  PRIVATE_PROFILES_KEY,
+  privateSteamIds,
+  publicIdOf,
+  publicNames,
+  publicNamesBySteamId,
+  type PrivateProfiles,
+} from './privacy.ts';
+import {
   linkSteam,
   parseStaffProfiles,
   readProfileAction,
@@ -493,6 +504,11 @@ export class Watcher extends DurableObject<Env> {
     return staffSteamIds(parseStaffProfiles(await this.ctx.storage.get(STAFF_PROFILES_KEY)));
   }
 
+  // The players whose profiles are private (see privacy.ts): the public never sees their names.
+  private async privateSteam(): Promise<Set<string>> {
+    return privateSteamIds(parsePrivateProfiles(await this.ctx.storage.get(PRIVATE_PROFILES_KEY)));
+  }
+
   // Adds to a player's log, and changes their ban (null lifts it), the VIP state or the bot's copy of the server's ban
   // list (`serverBan`: the ban the bot just put on the server, or null for one it lifted) in the same write. The bot's
   // own bans go on that copy as it makes them, so the next check does not take them for bans made outside the bot.
@@ -752,6 +768,7 @@ export class Watcher extends DurableObject<Env> {
       store: this.stateStore(),
       lines: () => this.lines(),
       staff: () => this.staffSteam(),
+      privateProfiles: () => this.privateSteam(),
       stats: {
         check: (observation) =>
           this.recordCheck(observation, minutesPerCheck, { live: config.rules.live, busy: config.busyThreshold }),
@@ -814,13 +831,14 @@ export class Watcher extends DurableObject<Env> {
   // period.
   private async roundupFor(period: Period, now: number): Promise<Roundup | null> {
     const covered = periodDays(period);
-    const [days, matches] = await Promise.all([this.recentDays(now), this.matchRecords(now)]);
+    const [days, matches, hidden] = await Promise.all([this.recentDays(now), this.matchRecords(now), this.privateSteam()]);
     const feed = this.roundupFeed(covered);
     const ids = await this.idsFor([
       ...days.flatMap((d) => (covered.includes(d.day) ? Object.keys(d.players) : [])),
       ...(feed?.kills.map((d) => d.steamId) ?? []),
     ]);
-    return buildRoundup({ period, days, matches, idOf: (steamId) => ids.get(steamId), ...(feed === null ? {} : { feed }) });
+    const idOf = publicIdOf(hidden, (steamId) => ids.get(steamId));
+    return buildRoundup({ period, days, matches, idOf, ...(feed === null ? {} : { feed }) });
   }
 
   // The kill feed's records over a period's days. Null before the first kill, or if the database cannot be read, so
@@ -851,10 +869,12 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const now = Date.now();
     try {
-      const stored = await storage.get(['board', 'state', 'stats', 'nextMap', 'boardRotation']);
+      const stored = await storage.get(['board', 'state', 'stats', 'nextMap', 'boardRotation', PRIVATE_PROFILES_KEY]);
       const server = parseStats(stored.get('stats')).server;
       if (snapshot === null && server !== null && now - server.seenAt < OFFLINE_AFTER_MS) return;
-      const match = parseState(stored.get('state'))?.match ?? null;
+      const hidden = privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY)));
+      const tracked = parseState(stored.get('state'))?.match ?? null;
+      const match = tracked === null ? null : { ...tracked, players: publicNamesBySteamId(tracked.players, hidden) };
       const next =
         snapshot === null
           ? null
@@ -1387,9 +1407,10 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const now = Date.now();
     const keys = rule === null ? [] : recentDayKeys(now, rule.windowDays);
-    const stored = await storage.get(['vip', STAFF_PROFILES_KEY]);
+    const stored = await storage.get(['vip', STAFF_PROFILES_KEY, PRIVATE_PROFILES_KEY]);
     const state = parseVipState(stored.get('vip'));
     const staff = staffBySteam(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const hidden = privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY)));
     const idle = Object.keys(state.granted).length === 0 && staff.size === 0 && Object.keys(state.staffSpots).length === 0;
     if (rule === null && idle) return;
     if (!vipDue(state, now) && !staffSpotsDue(state, staff.keys())) return;
@@ -1408,7 +1429,8 @@ export class Watcher extends DurableObject<Env> {
       await storage.put('vip', next.state);
       // Posted once, after the list is saved: a failed post is logged, not retried, so nobody is announced twice.
       if (rule !== null && (next.added.length > 0 || next.renewed.length > 0)) {
-        await postWebhook(config.webhookUrl, buildVipMessage(next.added, next.renewed, rule, config.siteUrl)).catch((error: unknown) =>
+        const message = buildVipMessage(publicNames(next.added, hidden), publicNames(next.renewed, hidden), rule, config.siteUrl);
+        await postWebhook(config.webhookUrl, message).catch((error: unknown) =>
           console.error(`VIP announcement failed: ${errorText(error)}`),
         );
       }
@@ -1592,7 +1614,7 @@ export class Watcher extends DurableObject<Env> {
   // The live page: the server and its match from the last check, and the kill feed's match while it is the one on now.
   async live(): Promise<LiveSnapshot> {
     const now = Date.now();
-    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince']);
+    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince', PRIVATE_PROFILES_KEY]);
     const stats = parseStats(stored.get('stats'));
     const server = stats.server !== null && now - stats.server.seenAt < OFFLINE_AFTER_MS ? stats.server : null;
     const onServer = server === null ? null : stats.currentMatch;
@@ -1602,7 +1624,7 @@ export class Watcher extends DurableObject<Env> {
       ...liveSteamIds(match),
       ...(onServer?.top.flatMap((p) => (p.steamId === undefined ? [] : [p.steamId])) ?? []),
     ]);
-    const idOf = (steamId: string) => ids.get(steamId);
+    const idOf = publicIdOf(privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))), (steamId) => ids.get(steamId));
     return {
       generatedAt: now,
       feed: typeof stored.get('killFeedSince') === 'string',
@@ -1700,7 +1722,7 @@ export class Watcher extends DurableObject<Env> {
     const config = loadConfig(stringVars(this.env));
     const now = Date.now();
     const [stored, days, weaponDays, records] = await Promise.all([
-      this.ctx.storage.get(['stats', 'killFeedSince', 'vip', STAFF_PROFILES_KEY]),
+      this.ctx.storage.get(['stats', 'killFeedSince', 'vip', STAFF_PROFILES_KEY, PRIVATE_PROFILES_KEY]),
       this.recentDays(now),
       this.recentWeaponDays(now, LEADERBOARD_DAYS),
       this.matchRecords(now),
@@ -1715,7 +1737,7 @@ export class Watcher extends DurableObject<Env> {
       ...weaponHolders(weaponDays),
       ...(seeders ?? []).map((p) => p.steamId),
     ]);
-    const idOf = (steamId: string) => ids.get(steamId);
+    const idOf = publicIdOf(privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))), (steamId) => ids.get(steamId));
     const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
     const extras = { leaderboard: board, vip: config.vip, seederVip: seeders, weapons, teams: teamBoard(records, LEADERBOARD_DAYS, now) };
@@ -1788,19 +1810,21 @@ export class Watcher extends DurableObject<Env> {
   // Everyone seen in the last PROFILE_DAYS days, to find a player page in.
   async players(): Promise<PlayerDirectory> {
     const now = Date.now();
-    const [days, stored] = await Promise.all([this.recentDays(now), this.ctx.storage.get('online')]);
+    const [days, stored] = await Promise.all([this.recentDays(now), this.ctx.storage.get(['online', PRIVATE_PROFILES_KEY])]);
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
-    const online = new Set(this.onlineNow(now, stored)?.players.map((p) => p.steamId));
-    return directory(days, (steamId) => ids.get(steamId), online, now);
+    const online = new Set(this.onlineNow(now, stored.get('online'))?.players.map((p) => p.steamId));
+    const idOf = publicIdOf(privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))), (steamId) => ids.get(steamId));
+    return directory(days, idOf, online, now);
   }
 
-  // One player's page, by public id. Null when nobody seen in the last PROFILE_DAYS days has that id.
+  // One player's page, by public id. Null when nobody seen in the last PROFILE_DAYS days has that id, or their profile
+  // is private, so a private profile cannot be told from nobody.
   async profile(id: string): Promise<PlayerProfile | null> {
     const now = Date.now();
-    const days = await this.recentDays(now);
+    const [days, hidden] = await Promise.all([this.recentDays(now), this.privateSteam()]);
     const ids = await this.idsFor(days.flatMap((d) => Object.keys(d.players)));
     const steamId = [...ids].find(([, known]) => known === id)?.[0];
-    if (steamId === undefined) return null;
+    if (steamId === undefined || hidden.has(steamId)) return null;
     const [matches, stored, staff] = await Promise.all([
       this.matchRecords(now),
       this.ctx.storage.get(['state', 'vip', 'online', 'killFeedSince', playerWeaponsKey(steamId)]),
@@ -2042,7 +2066,7 @@ export class Watcher extends DurableObject<Env> {
     const keys = recentDayKeys(now, PROFILE_DAYS);
     const key = modLogKey(steamId);
     const griefKey = griefDayKey(now);
-    const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans', STAFF_PROFILES_KEY, griefKey, 'killFeedSince']);
+    const stored = await this.ctx.storage.get([...keys, key, 'vip', 'bans', STAFF_PROFILES_KEY, PRIVATE_PROFILES_KEY, griefKey, 'killFeedSince']);
     const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
     const found = totals(keys.map((k) => withoutStaffSeeding(parsePlayerDay(stored.get(k)), staff))).find((p) => p.steamId === steamId);
     const vip = parseVipState(stored.get('vip'));
@@ -2054,6 +2078,7 @@ export class Watcher extends DurableObject<Env> {
       vip: vip.granted[steamId] ?? null,
       vipBlockedUntil: vip.revoked[steamId] ?? null,
       staffSpot: staff.has(steamId),
+      privateProfile: parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))[steamId] !== undefined,
       log,
       ban,
       grief: typeof stored.get('killFeedSince') === 'string' ? playerGrief(parseGriefDay(stored.get(griefKey)), steamId) : null,
@@ -2190,6 +2215,25 @@ export class Watcher extends DurableObject<Env> {
     if (fromMap === '') return;
     const staged: StagedMap = { map, fromMap, at: Date.now() };
     await this.ctx.storage.put('nextMap', staged);
+  }
+
+  // The private profiles (see privacy.ts), for /private.
+  async privateProfiles(): Promise<PrivateProfiles> {
+    return parsePrivateProfiles(await this.ctx.storage.get(PRIVATE_PROFILES_KEY));
+  }
+
+  // Makes a player's profile private, or public again. False when it already was. The public pages show it once their
+  // cache runs out, within a minute.
+  async setProfilePrivate(player: Named, by: string, byName?: string): Promise<boolean> {
+    const next = makePrivate(await this.privateProfiles(), player, by, byName, Date.now());
+    if (next !== null) await this.ctx.storage.put(PRIVATE_PROFILES_KEY, next);
+    return next !== null;
+  }
+
+  async setProfilePublic(steamId: string): Promise<boolean> {
+    const next = makePublic(await this.privateProfiles(), steamId);
+    if (next !== null) await this.ctx.storage.put(PRIVATE_PROFILES_KEY, next);
+    return next !== null;
   }
 
   // Posts a /seednow call. Its time is saved first, so the automatic seeding alert holds back even when the post times
@@ -2344,12 +2388,16 @@ const commandTools = (
     steam: (steamId) => watcher().steamLookup(steamId),
     rotations: () => watcher().rotationBook(),
     editRotations: (edit, by, byName) => watcher().editRotations(edit, by, byName),
+    privateProfiles: () => watcher().privateProfiles(),
+    makePrivate: (player, by, byName) => watcher().setProfilePrivate(player, by, byName),
+    makePublic: (steamId) => watcher().setProfilePublic(steamId),
   };
   return {
     run: runCommand({
       config: () => loadConfig(vars),
       http: socketHttp(connect),
       lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
+      privateProfiles: async () => privateSteamIds(await watcher().privateProfiles()),
       roundup: (choice) => watcher().roundup(choice),
       seeders: (days) => watcher().seeders(days),
       removeMatch: (endedAt) => watcher().removeMatch(endedAt),
