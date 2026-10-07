@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  kdMinHours,
   leaderboard,
   matchRecord,
   matchRecordKey,
@@ -176,14 +177,15 @@ describe('totals and rankings', () => {
   });
 
   it('builds the leaderboard, keeping Steam IDs for publicStats to swap for public ids', () => {
-    const board = leaderboard([monday, tuesday], 30, 2);
+    const earlier: PlayerDay = { a: row('Ash', { liveMinutes: 600 }), c: row('Cy', { liveMinutes: 600 }) };
+    const board = leaderboard([earlier, monday, tuesday], 30, 2);
 
-    expect(board).toMatchObject({ days: 30, kdMinMatches: 3 });
+    expect(board).toMatchObject({ days: 30, kdMinHours: 10 });
     expect(board.kills.map((p) => [p.name, p.kills])).toEqual([
       ['Cy', 30],
       ['Ash2', 23],
     ]);
-    // Both played 3 matches: Ash2 23/6 = 3.83 beats Cy 30/12 = 2.5.
+    // Both played 10 hours: Ash2 23/6 = 3.83 beats Cy 30/12 = 2.5.
     expect(board.kd.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
     expect(board.playtime.map((p) => p.name)).toEqual(['Ash2', 'Cy']);
     expect(board.seeding.map((p) => p.name)).toEqual(['Ash2', 'Bo']);
@@ -208,25 +210,40 @@ describe('totals and rankings', () => {
     expect(withoutStaffSeeding(monday, new Set(['z']))).toBe(monday);
   });
 
-  it('leaves players with too few matches off the K/D board', () => {
-    const lucky: PlayerDay = { d: row('Dee', { matches: 1, kills: 9, deaths: 0 }) };
+  it('leaves players with less than 10 hours played over 30 days off the K/D board, however many matches', () => {
+    const days: PlayerDay[] = [
+      {
+        // One evening on the mortar, seen in 3 matches.
+        d: row('Dee', { liveMinutes: 90, matches: 3, kills: 49, deaths: 2 }),
+        // Seeding counts as time played.
+        e: row('Eve', { seedingMinutes: 60, liveMinutes: 540, matches: 8, kills: 30, deaths: 10 }),
+        f: row('Fin', { liveMinutes: 599, matches: 9, kills: 90, deaths: 10 }),
+      },
+    ];
 
-    expect(leaderboard([monday, tuesday, lucky], 30, 10).kd.map((p) => p.name)).not.toContain('Dee');
+    expect(leaderboard(days, 30, 10).kd.map((p) => p.name)).toEqual(['Eve']);
+  });
+
+  it('needs a share of the 10 hours over a shorter period, to the nearest hour and at least 1', () => {
+    expect([30, 31, 28, 7, 2, 1].map(kdMinHours)).toEqual([10, 10, 9, 2, 1, 1]);
+    const days: PlayerDay[] = [{ d: row('Dee', { liveMinutes: 120, matches: 3, kills: 49, deaths: 2 }) }];
+    expect(leaderboard(days, 7, 10)).toMatchObject({ days: 7, kdMinHours: 2, kd: [{ name: 'Dee' }] });
+    expect(leaderboard(days, 30, 10).kd).toEqual([]);
   });
 });
 
 describe('ranks', () => {
   const days: PlayerDay[] = [
     {
-      a: row('Ash', { liveMinutes: 100, matches: 3, kills: 30, deaths: 10, seedingMinutes: 5 }),
-      b: row('Bo', { liveMinutes: 300, matches: 4, kills: 10, deaths: 1 }),
+      a: row('Ash', { liveMinutes: 600, matches: 3, kills: 30, deaths: 10, seedingMinutes: 5 }),
+      b: row('Bo', { liveMinutes: 700, matches: 4, kills: 10, deaths: 1 }),
       c: row('Cy', { liveMinutes: 10, matches: 1, kills: 50, deaths: 1, seedingMinutes: 40, seedDays: 1 }),
     },
   ];
 
   it('places a player on each board by the leaderboard’s own rules', () => {
-    // K/D needs 3 matches, so Cy's 50 is left off it.
-    expect(ranks(totals(days), 'a', 30)).toEqual({ days: 30, kdMinMatches: 3, players: 3, kills: 2, kd: 2, playtime: 2, seeding: 2 });
+    // K/D needs 10 hours played, so Cy's 50 is left off it.
+    expect(ranks(totals(days), 'a', 30)).toEqual({ days: 30, kdMinHours: 10, players: 3, kills: 2, kd: 2, playtime: 2, seeding: 2 });
     expect(ranks(totals(days), 'c', 30)).toMatchObject({ kills: 1, kd: null, seeding: 1 });
   });
 
