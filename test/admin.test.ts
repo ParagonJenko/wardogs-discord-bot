@@ -76,7 +76,7 @@ describe('buildAdminOverview', () => {
     const overview = buildAdminOverview(sources({ serverBans: [{ steamId: ASH, reason: 'TK', bannedBy: null }] }));
 
     expect(overview).toMatchObject({ generatedAt: NOW, days: 7, feedSince: '2026-09-20', flags: FLAGS });
-    expect(overview.totals).toEqual({ teamKills: 3, vehicleTeamKills: 0, suicides: 0, vehicleSuicides: 0, flaggedPlayers: 1 });
+    expect(overview.totals).toEqual({ teamKills: 3, vehicleTeamKills: 0, crashTeamKills: 0, suicides: 0, vehicleSuicides: 0, flaggedPlayers: 1 });
     expect(overview.players).toEqual([
       {
         steamId: ASH,
@@ -84,6 +84,7 @@ describe('buildAdminOverview', () => {
         id: 'a00000000001',
         teamKills: 3,
         vehicleTeamKills: 0,
+        crashTeamKills: 0,
         teamKilled: 0,
         suicides: 0,
         vehicleSuicides: 0,

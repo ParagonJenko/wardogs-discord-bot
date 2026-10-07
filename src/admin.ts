@@ -30,6 +30,8 @@ export type AdminPlayer = { steamId: string; name: string; id?: string };
 export type AdminGriefRow = AdminPlayer & {
   teamKills: number;
   vehicleTeamKills: number;
+  // Of those, the ones in a helicopter crash, which count towards no flag.
+  crashTeamKills: number;
   teamKilled: number;
   suicides: number;
   vehicleSuicides: number;
@@ -183,7 +185,14 @@ export type AdminOverview = {
   // The UTC day the bot first had the kill feed, or null if it never has: then there is no griefing data.
   feedSince: string | null;
   flags: typeof FLAGS;
-  totals: { teamKills: number; vehicleTeamKills: number; suicides: number; vehicleSuicides: number; flaggedPlayers: number };
+  totals: {
+    teamKills: number;
+    vehicleTeamKills: number;
+    crashTeamKills: number;
+    suicides: number;
+    vehicleSuicides: number;
+    flaggedPlayers: number;
+  };
   players: AdminGriefRow[];
   // Newest first.
   incidents: AdminIncident[];
@@ -369,6 +378,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
       ...ref(r.steamId, r.name),
       teamKills: r.teamKills,
       vehicleTeamKills: r.vehicleTeamKills,
+      crashTeamKills: r.crashTeamKills,
       teamKilled: r.teamKilled,
       suicides: r.suicides,
       vehicleSuicides: r.vehicleSuicides,
@@ -494,7 +504,8 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
       accounts,
     };
   })();
-  const sum = (key: 'teamKills' | 'vehicleTeamKills' | 'suicides' | 'vehicleSuicides'): number => rows.reduce((n, r) => n + r[key], 0);
+  const sum = (key: 'teamKills' | 'vehicleTeamKills' | 'crashTeamKills' | 'suicides' | 'vehicleSuicides'): number =>
+    rows.reduce((n, r) => n + r[key], 0);
   return {
     generatedAt: s.now,
     days: s.days,
@@ -532,6 +543,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     totals: {
       teamKills: sum('teamKills'),
       vehicleTeamKills: sum('vehicleTeamKills'),
+      crashTeamKills: sum('crashTeamKills'),
       suicides: sum('suicides'),
       vehicleSuicides: sum('vehicleSuicides'),
       flaggedPlayers: rows.filter((r) => r.flags.length > 0).length,

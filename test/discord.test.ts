@@ -1045,10 +1045,21 @@ describe('buildPlayerEmbed', () => {
     const BO = '76561198000000002';
     const CY = '76561198000000003';
     const base = { at: NOW - 600_000, map: 'Kavkazi', faction: 'Kharr', distance: 12.4, tags: [] };
-    const none: PlayerGrief = { teamKills: 0, vehicleTeamKills: 0, teamKilled: 0, suicides: 0, vehicleSuicides: 0, flags: [], victims: [], incidents: [] };
+    const none: PlayerGrief = {
+      teamKills: 0,
+      vehicleTeamKills: 0,
+      crashTeamKills: 0,
+      teamKilled: 0,
+      suicides: 0,
+      vehicleSuicides: 0,
+      flags: [],
+      victims: [],
+      incidents: [],
+    };
     const grief: PlayerGrief = {
       teamKills: 3,
       vehicleTeamKills: 1,
+      crashTeamKills: 0,
       teamKilled: 1,
       suicides: 2,
       vehicleSuicides: 1,
@@ -1086,12 +1097,31 @@ describe('buildPlayerEmbed', () => {
     );
   });
 
+  it('says how many of the team kills were with a vehicle and in a helicopter crash', () => {
+    const grief: PlayerGrief = {
+      teamKills: 5,
+      vehicleTeamKills: 4,
+      crashTeamKills: 3,
+      teamKilled: 0,
+      suicides: 1,
+      vehicleSuicides: 1,
+      flags: [],
+      victims: [],
+      incidents: [],
+    };
+
+    expect(field(buildPlayerEmbed({ ...profile, record: { ...record, grief } }), 'Team kills · today (UTC)')).toBe(
+      '**5 team kills** (4 with a vehicle, 3 in a helicopter crash) · 1 suicide (1 in a vehicle)',
+    );
+  });
+
   it('names a teammate the kill feed sent no name for by their Steam ID', () => {
     const BO = '76561198000000002';
     const base = { at: NOW, map: '', faction: null, cause: null, distance: null, tags: [] };
     const grief: PlayerGrief = {
       teamKills: 1,
       vehicleTeamKills: 0,
+      crashTeamKills: 0,
       teamKilled: 1,
       suicides: 0,
       vehicleSuicides: 0,
@@ -1131,6 +1161,7 @@ describe('buildPlayerEmbed', () => {
     const grief: PlayerGrief = {
       teamKills: 5,
       vehicleTeamKills: 0,
+      crashTeamKills: 0,
       teamKilled: 0,
       suicides: 0,
       vehicleSuicides: 0,
@@ -1234,6 +1265,7 @@ describe('buildGriefAlert', () => {
         steamId: ASH,
         name: 'Ash',
         teamKills: 3,
+        crashTeamKills: 0,
         vehicleSuicides: 0,
         sameTeammate: { steamId: BO, name: 'Bo', kills: 2 },
         incidents: [
@@ -1265,6 +1297,17 @@ describe('buildGriefAlert', () => {
     });
   });
 
+  it('says how many of the team kills were in a helicopter crash', () => {
+    const message = buildGriefAlert(
+      { steamId: ASH, name: 'Ash', teamKills: 7, crashTeamKills: 4, vehicleSuicides: 0, sameTeammate: null, incidents: [] },
+      () => 'w',
+    );
+
+    expect(message.embeds[0]?.description).toBe(
+      `\`${ASH}\` · [Steam profile](https://steamcommunity.com/profiles/${ASH})\n7 team kills today (4 in a helicopter crash)`,
+    );
+  });
+
   it("lists only the newest incidents that fit in Discord's limit for a field, when weapons and maps have long tags", () => {
     const incident = (at: number) => ({
       at,
@@ -1279,7 +1322,10 @@ describe('buildGriefAlert', () => {
     });
     const incidents = [1, 2, 3, 4, 5].map((n) => incident(NOW + n * 1000));
 
-    const message = buildGriefAlert({ steamId: ASH, name: 'Ash', teamKills: 0, vehicleSuicides: 6, sameTeammate: null, incidents }, () => 'w'.repeat(200));
+    const message = buildGriefAlert(
+      { steamId: ASH, name: 'Ash', teamKills: 0, crashTeamKills: 0, vehicleSuicides: 6, sameTeammate: null, incidents },
+      () => 'w'.repeat(200),
+    );
     const value = message.embeds[0]?.fields?.[0]?.value ?? '';
 
     expect(value.length).toBeLessThanOrEqual(1024);
@@ -1291,7 +1337,7 @@ describe('buildGriefAlert', () => {
   it("shows the player's Steam account when it is risky, and nothing about it when it is not", () => {
     const DAY = 86_400_000;
     const incident = { at: NOW, kind: 'vehicle-suicide' as const, map: '', steamId: ASH, name: 'Ash', faction: null, cause: null, distance: null, tags: [] };
-    const alert = { steamId: ASH, name: 'Ash', teamKills: 0, vehicleSuicides: 2, sameTeammate: null, incidents: [incident] };
+    const alert = { steamId: ASH, name: 'Ash', teamKills: 0, crashTeamKills: 0, vehicleSuicides: 2, sameTeammate: null, incidents: [incident] };
     const check: SteamCheck = {
       at: NOW - DAY,
       found: true,
