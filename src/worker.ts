@@ -246,6 +246,7 @@ import {
 import {
   banKickReason,
   PROFILE_DAYS,
+  rulesNote,
   type BanRequest,
   type BanResult,
   type Named,
@@ -333,8 +334,27 @@ import {
   weaponHolders,
   weaponName,
   type FeedEvent,
+  type FeedKill,
   type WeaponDay,
 } from './weapons.ts';
+import {
+  buildRulesPage,
+  callDetail,
+  editRules,
+  judgeKills,
+  kickText,
+  parseRuleBreaks,
+  parseRules,
+  readRulesAction,
+  RULE_BREAKS_KEY,
+  RULES_KEY,
+  warningText,
+  type RulesAction,
+  type RulesActionResult,
+  type RulesContext,
+  type RulesPage,
+  type WeaponRule,
+} from './weaponrules.ts';
 import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveSnapshot } from './live.ts';
 import {
   adminFeed,
@@ -447,11 +467,12 @@ const oneAtATime = () => {
 // account each staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what
 // Steam said about that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan
 // and the rotation put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list),
-// 'killFeed' (the server's latest kills, for the staff page), 'joinLog' (who joined and left the server, for the
-// staff page; see joinlog.ts), 'headshotsAlerted' (who had a headshot alert today), and for the alert review (see
-// review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's kills by day, for
-// the staff page and the roundups' awards, are in the SQLite database's kill_days table (see killfeed.ts), and each
-// player's times on the server, for their history, in its sessions table.
+// 'weaponRules' (the weapons staff don't allow, and what the bot does about them; see weaponrules.ts), 'ruleBreaks'
+// (today's kills with them), 'killFeed' (the server's latest kills, for the staff page), 'joinLog' (who joined and left
+// the server, for the staff page; see joinlog.ts), 'headshotsAlerted' (who had a headshot alert today), and for the
+// alert review (see review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's
+// kills by day, for the staff page and the roundups' awards, are in the SQLite database's kill_days table (see
+// killfeed.ts), and each player's times on the server, for their history, in its sessions table.
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -495,6 +516,12 @@ export class Watcher extends DurableObject<Env> {
   // Staff's in-game lines, once read: every check that can send an in-game message needs them. Every write goes through
   // linesAction, so it is never stale.
   private savedLines: SavedLines | null = null;
+  // The weapon rules, once read: every kill feed batch is checked against them. Every write goes through rulesAction, so
+  // it is never stale.
+  private savedRules: WeaponRule[] | null = null;
+  // Kill feed batches are checked against the weapon rules one at a time, so two batches close together never count
+  // one offence twice.
+  private enforcing = oneAtATime();
   // Past days of the staff page's kills, like dayCache: only today's and yesterday's are read each time.
   private killDayCache = new Map<string, KillDaySummary[]>();
   // Whether the kill_days table is known to be there, and the UTC day its old rows were last deleted.
@@ -1149,6 +1176,68 @@ export class Watcher extends DurableObject<Env> {
     return buildLinesPage(edited.saved, context);
   }
 
+  private async ruleBook(): Promise<WeaponRule[]> {
+    this.savedRules ??= parseRules(await this.ctx.storage.get(RULES_KEY));
+    return this.savedRules;
+  }
+
+  private rulesContext(): RulesContext {
+    const vars = stringVars(this.env);
+    return { rulesNote: rulesNote(loadConfig(vars).siteUrl), feed: (vars['KILL_FEED_TOKEN']?.trim() ?? '') !== '' };
+  }
+
+  // The staff page's Weapon rules tab, with what the bot did about each rule today.
+  async rulesPage(): Promise<RulesPage> {
+    return buildRulesPage(await this.ruleBook(), parseRuleBreaks(await this.ctx.storage.get(RULE_BREAKS_KEY), Date.now()), this.rulesContext());
+  }
+
+  // A change from the Weapon rules tab, and the tab as it is after it. As with the lines, the copy in memory changes
+  // before the write.
+  async rulesAction(action: RulesAction, by: string, byName: string): Promise<RulesActionResult> {
+    const context = this.rulesContext();
+    const edited = editRules(await this.ruleBook(), action, context, { by, byName, now: Date.now(), newId: () => crypto.randomUUID().slice(0, 8) });
+    if ('problem' in edited) return edited;
+    this.savedRules = edited.rules;
+    try {
+      await this.ctx.storage.put(RULES_KEY, edited.rules);
+    } catch (error) {
+      this.savedRules = null;
+      throw error;
+    }
+    return this.rulesPage();
+  }
+
+  // A batch's kills against the weapon rules (see weaponrules.ts): the bot warns or kicks whoever broke one, as staff set
+  // it, and it goes in their history and the moderation log like a staff member's /warn or /kick. In the background,
+  // once the game has its reply, so a slow server never holds up the feed. One that fails is logged, not tried again:
+  // the offence still counts.
+  private enforceRules(kills: FeedKill[], now: number): void {
+    this.ctx.waitUntil(
+      this.enforcing(async () => {
+        const rules = await this.ruleBook();
+        if (rules.every((r) => r.mode === 'off')) return;
+        const judged = judgeKills(parseRuleBreaks(await this.ctx.storage.get(RULE_BREAKS_KEY), now), rules, kills, now);
+        if (judged === null) return;
+        await this.ctx.storage.put(RULE_BREAKS_KEY, judged.breaks);
+        const { config, http } = this.rcon();
+        const context = { rulesNote: rulesNote(config.siteUrl) };
+        for (const call of judged.calls) {
+          const detail = callDetail(call);
+          const player = `${JSON.stringify(call.name)} (${call.steamId})`;
+          try {
+            if (call.act === 'kick') await kickPlayer(config.rconUrl, config.rconPassword, call.steamId, kickText(call.rule, context), http);
+            else await messagePlayer(config.rconUrl, config.rconPassword, call.steamId, warningText(call.rule, call.offence, context), http);
+            console.info(`Weapon rule: ${call.act === 'kick' ? 'kicked' : 'warned'} ${player}. ${detail}`);
+            const reason = call.act === 'kick' ? call.rule.kick : call.rule.warning;
+            await this.record(call.steamId, { action: call.act, at: now, by: 'bot', name: call.name, reason, detail });
+          } catch (error) {
+            console.error(`Weapon rule ${call.act} for ${player} failed: ${errorText(error)}. ${detail}`);
+          }
+        }
+      }).catch((error: unknown) => console.error(`Weapon rules failed: ${errorText(error)}`)),
+    );
+  }
+
   // Lifts timed bans whose time is up, if the ban on the server is still the bot's. One that fails is tried again at
   // the next check.
   private async expireBans(config: Config): Promise<void> {
@@ -1561,6 +1650,7 @@ export class Watcher extends DurableObject<Env> {
     if (staffKills.length > 0) this.recordKillDays(day, now, staffKills);
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
+    if (kills.length > 0) this.enforceRules(kills, now);
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the live pages are not part of it: they are updated once it has gone.
     this.ctx.waitUntil(this.broadcastLive());
@@ -2669,6 +2759,22 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page lines failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the lines right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // The Weapon rules tab: the weapons staff don't allow and what the bot does about them, and a change to them.
+  if (route === 'GET /api/admin/rules' || route === 'POST /api/admin/rules') {
+    try {
+      if (route === 'GET /api/admin/rules') return Response.json(await watcher().rulesPage(), { headers });
+      const action = await readRulesAction(request);
+      if (action === null) return Response.json({ error: 'Not a weapon rules request' }, { status: 400, headers });
+      const what = action.action === 'save' ? ` ${JSON.stringify(action.name)} (${action.mode}, ${action.weapons.length} weapons)` : ` ${JSON.stringify(action.id)}`;
+      console.info(`Staff page: weapon rule ${action.action}${what} by ${JSON.stringify(session.name)} (Discord user ${session.userId})`);
+      const result = await watcher().rulesAction(action, session.userId, session.name);
+      if ('problem' in result) return Response.json({ error: result.problem }, { status: 400, headers });
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff page weapon rules failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't reach the weapon rules right now. If it was a change, check before trying again." }, { status: 503, headers });
     }
   }
   // A staff member links their Steam account, so the bot never counts them as a seeder, or unlinks one.
