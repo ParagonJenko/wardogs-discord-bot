@@ -858,8 +858,9 @@ The Humvee and Kodiak rules are for their guns only: running someone over with o
   "<rule>", "name": "…", "weapons": ["<tag>", …], "mode": "off" | "warn" | "warn-kick" | "kick", "warnings": 1,
   "warning": "…", "kick": "…"}`, or `{"action": "remove", "id": "<rule>"}`). Each change is logged as
   `Staff page: weapon rule <action> …`. The rules are kept as `weaponRules`, and today's offences as `ruleBreaks`.
-- **Costs.** A batch with no kill against a rule that is on costs nothing more. One with an offence is a storage write
-  and an RCON request for each warning or kick.
+- **Costs.** A batch with no kill against a rule that is on costs nothing more. One with an offence is a storage read
+  and write, an RCON request for each warning or kick, and one more write to count those that went out. The tab's
+  counts are of warnings and kicks that went out; one that failed still counts as an offence.
 - It needs the [kill feed](#weapon-stats), and the RCON password's write access (`POST /v1/players/<Steam ID>/message`
   and `/kick`), like `/warn` and `/kick`.
 

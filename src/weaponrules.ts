@@ -220,8 +220,8 @@ export const editRules = (
 
 export const RULE_BREAKS_KEY = 'ruleBreaks';
 
-// Today's offences (UTC): by Steam ID and rule, how many and when the bot last acted on one; and by rule, what the bot
-// did. A new day starts from nothing, so a warning from yesterday never leads to a kick today.
+// Today's offences (UTC): by Steam ID and rule, how many and when the bot last acted on one; and by rule, the warnings
+// and kicks that went out. A new day starts from nothing, so a warning from yesterday never leads to a kick today.
 export type RuleBreaks = {
   day: string;
   players: Record<string, Record<string, { offences: number; at: number }>>;
@@ -256,11 +256,20 @@ export type RuleCall = {
   weapon: string;
 };
 
+// The rule that is on for each tag, in lower case.
+const rulesByTag = (rules: WeaponRule[]): Map<string, WeaponRule> =>
+  new Map(rules.filter((r) => r.mode !== 'off').flatMap((r) => r.weapons.map((tag): [string, WeaponRule] => [tag.toLowerCase(), r])));
+
+// The kills with a weapon a rule that is on covers, so a batch without any reads nothing.
+export const ruleKills = (rules: WeaponRule[], kills: FeedKill[]): FeedKill[] => {
+  const ruleOf = rulesByTag(rules);
+  return kills.filter((k) => ruleOf.has(k.cause.toLowerCase()));
+};
+
 // A batch's kills against the rules that are on. Null when none is a new offence, so nothing is saved. Kicks come first,
-// and a player being kicked gets no warning with it.
+// and a player being kicked gets no warning with it. What went out is counted once it has (see countSent).
 export const judgeKills = (breaks: RuleBreaks, rules: WeaponRule[], kills: FeedKill[], now: number): { breaks: RuleBreaks; calls: RuleCall[] } | null => {
-  const on = rules.filter((r) => r.mode !== 'off');
-  const ruleOf = new Map(on.flatMap((r) => r.weapons.map((tag): [string, WeaponRule] => [tag.toLowerCase(), r])));
+  const ruleOf = rulesByTag(rules);
   const broken = new Map<string, { steamId: string; rule: WeaponRule; kills: FeedKill[] }>();
   for (const kill of kills) {
     const rule = ruleOf.get(kill.cause.toLowerCase());
@@ -272,7 +281,6 @@ export const judgeKills = (breaks: RuleBreaks, rules: WeaponRule[], kills: FeedK
   }
   if (broken.size === 0) return null;
   const players = Object.fromEntries(Object.entries(breaks.players).map(([steamId, theirs]) => [steamId, { ...theirs }]));
-  const done = { ...breaks.done };
   const calls: RuleCall[] = [];
   for (const { steamId, rule, kills: theirs } of broken.values()) {
     const record = (players[steamId] ??= {});
@@ -281,8 +289,6 @@ export const judgeKills = (breaks: RuleBreaks, rules: WeaponRule[], kills: FeedK
     const offence = before.offences + 1;
     record[rule.id] = { offences: offence, at: now };
     const act = rule.mode === 'warn' || (rule.mode === 'warn-kick' && offence <= rule.warnings) ? 'warn' : 'kick';
-    const tally = done[rule.id] ?? { warned: 0, kicked: 0 };
-    done[rule.id] = act === 'warn' ? { ...tally, warned: tally.warned + 1 } : { ...tally, kicked: tally.kicked + 1 };
     const latest = theirs[theirs.length - 1];
     calls.push({
       steamId,
@@ -297,7 +303,17 @@ export const judgeKills = (breaks: RuleBreaks, rules: WeaponRule[], kills: FeedK
   if (calls.length === 0) return null;
   const kicked = new Set(calls.filter((c) => c.act === 'kick').map((c) => c.steamId));
   const ordered = [...calls.filter((c) => c.act === 'kick'), ...calls.filter((c) => c.act === 'warn' && !kicked.has(c.steamId))];
-  return { breaks: { day: breaks.day, players, done }, calls: ordered };
+  return { breaks: { ...breaks, players }, calls: ordered };
+};
+
+// Adds the warnings and kicks that went out to the day's totals.
+export const countSent = (breaks: RuleBreaks, sent: RuleCall[]): RuleBreaks => {
+  const done = { ...breaks.done };
+  for (const call of sent) {
+    const tally = done[call.rule.id] ?? { warned: 0, kicked: 0 };
+    done[call.rule.id] = call.act === 'warn' ? { ...tally, warned: tally.warned + 1 } : { ...tally, kicked: tally.kicked + 1 };
+  }
+  return { ...breaks, done };
 };
 
 // What goes in the player's history and the moderation log.

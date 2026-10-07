@@ -340,16 +340,19 @@ import {
 import {
   buildRulesPage,
   callDetail,
+  countSent,
   editRules,
   judgeKills,
   kickText,
   parseRuleBreaks,
   parseRules,
   readRulesAction,
+  ruleKills,
   RULE_BREAKS_KEY,
   RULES_KEY,
   warningText,
   type RulesAction,
+  type RuleCall,
   type RulesActionResult,
   type RulesContext,
   type RulesPage,
@@ -1210,17 +1213,19 @@ export class Watcher extends DurableObject<Env> {
   // A batch's kills against the weapon rules (see weaponrules.ts): the bot warns or kicks whoever broke one, as staff set
   // it, and it goes in their history and the moderation log like a staff member's /warn or /kick. In the background,
   // once the game has its reply, so a slow server never holds up the feed. One that fails is logged, not tried again:
-  // the offence still counts.
+  // the offence still counts, but the tab's totals only count what went out.
   private enforceRules(kills: FeedKill[], now: number): void {
     this.ctx.waitUntil(
       this.enforcing(async () => {
         const rules = await this.ruleBook();
-        if (rules.every((r) => r.mode === 'off')) return;
-        const judged = judgeKills(parseRuleBreaks(await this.ctx.storage.get(RULE_BREAKS_KEY), now), rules, kills, now);
+        const broken = ruleKills(rules, kills);
+        if (broken.length === 0) return;
+        const judged = judgeKills(parseRuleBreaks(await this.ctx.storage.get(RULE_BREAKS_KEY), now), rules, broken, now);
         if (judged === null) return;
         await this.ctx.storage.put(RULE_BREAKS_KEY, judged.breaks);
         const { config, http } = this.rcon();
         const context = { rulesNote: rulesNote(config.siteUrl) };
+        const sent: RuleCall[] = [];
         for (const call of judged.calls) {
           const detail = callDetail(call);
           const player = `${JSON.stringify(call.name)} (${call.steamId})`;
@@ -1228,12 +1233,15 @@ export class Watcher extends DurableObject<Env> {
             if (call.act === 'kick') await kickPlayer(config.rconUrl, config.rconPassword, call.steamId, kickText(call.rule, context), http);
             else await messagePlayer(config.rconUrl, config.rconPassword, call.steamId, warningText(call.rule, call.offence, context), http);
             console.info(`Weapon rule: ${call.act === 'kick' ? 'kicked' : 'warned'} ${player}. ${detail}`);
+            sent.push(call);
             const reason = call.act === 'kick' ? call.rule.kick : call.rule.warning;
             await this.record(call.steamId, { action: call.act, at: now, by: 'bot', name: call.name, reason, detail });
           } catch (error) {
             console.error(`Weapon rule ${call.act} for ${player} failed: ${errorText(error)}. ${detail}`);
           }
         }
+        // Batches are judged one at a time, so nothing else wrote the offences meanwhile.
+        if (sent.length > 0) await this.ctx.storage.put(RULE_BREAKS_KEY, countSent(judged.breaks, sent));
       }).catch((error: unknown) => console.error(`Weapon rules failed: ${errorText(error)}`)),
     );
   }

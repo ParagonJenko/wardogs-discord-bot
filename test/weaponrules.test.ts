@@ -3,6 +3,7 @@ import { MAX_LENGTH } from '../src/messages.ts';
 import {
   buildRulesPage,
   callDetail,
+  countSent,
   editRules,
   judgeKills,
   kickText,
@@ -13,6 +14,7 @@ import {
   parseRules,
   PRESET_RULES,
   readRulesAction,
+  ruleKills,
   SAME_OFFENCE_MS,
   warningText,
   type RuleBreaks,
@@ -174,7 +176,14 @@ describe('judgeKills', () => {
   const rules = [preset('humvee-gunner', { mode: 'warn' }), preset('kodiak-gunner', { mode: 'kick' }), preset('mgl')];
 
   it('does nothing for kills with weapons no rule that is on covers', () => {
-    expect(judgeKills(today(), rules, [kill(ASH, 'Id.Item.M4'), kill(ASH, MGL)], AT)).toBeNull();
+    const none = [kill(ASH, 'Id.Item.M4'), kill(ASH, MGL)];
+    expect(ruleKills(rules, none)).toEqual([]);
+    expect(judgeKills(today(), rules, none, AT)).toBeNull();
+  });
+
+  it('picks out the kills with a weapon a rule that is on covers, in any case', () => {
+    const humvee = kill(ASH, HUMVEE_M249.toLowerCase());
+    expect(ruleKills(rules, [kill(ASH, 'Id.Item.M4'), humvee, kill(ASH, MGL)])).toEqual([humvee]);
   });
 
   it('warns once for a burst of kills, and counts it as one offence', () => {
@@ -182,11 +191,8 @@ describe('judgeKills', () => {
     expect(judged?.calls).toEqual([
       { steamId: ASH, name: 'Ash', rule: rules[0], act: 'warn', offence: 1, kills: 2, weapon: 'Humvee minigun' },
     ]);
-    expect(judged?.breaks).toEqual({
-      day: '2026-10-07',
-      players: { [ASH]: { 'humvee-gunner': { offences: 1, at: AT } } },
-      done: { 'humvee-gunner': { warned: 1, kicked: 0 } },
-    });
+    // What went out is counted once it has.
+    expect(judged?.breaks).toEqual({ day: '2026-10-07', players: { [ASH]: { 'humvee-gunner': { offences: 1, at: AT } } }, done: {} });
   });
 
   it(`takes kills within ${SAME_OFFENCE_MS / 1000} seconds of acting as the same offence`, () => {
@@ -201,7 +207,7 @@ describe('judgeKills', () => {
     const acts: string[] = [];
     for (let i = 0; i < 4; i++) {
       const judged = judgeKills(breaks, strict, [kill(ASH, MGL)], AT + i * SAME_OFFENCE_MS)!;
-      breaks = judged.breaks;
+      breaks = countSent(judged.breaks, judged.calls);
       acts.push(`${judged.calls[0]?.act} ${judged.calls[0]?.offence}`);
     }
     expect(acts).toEqual(['warn 1', 'warn 2', 'kick 3', 'kick 4']);
@@ -214,8 +220,20 @@ describe('judgeKills', () => {
       ['Ash', 'kick', 'kodiak-gunner'],
       ['Bo', 'warn', 'humvee-gunner'],
     ]);
-    // Ash's Humvee kill still counts.
+    // Ash's Humvee kill still counts as an offence, but no warning went out for it.
     expect(judged?.breaks.players[ASH]).toEqual({ 'humvee-gunner': { offences: 1, at: AT }, 'kodiak-gunner': { offences: 1, at: AT } });
+    expect(countSent(judged!.breaks, judged!.calls).done).toEqual({
+      'kodiak-gunner': { warned: 0, kicked: 1 },
+      'humvee-gunner': { warned: 1, kicked: 0 },
+    });
+  });
+
+  it('counts only the warnings and kicks that went out', () => {
+    const judged = judgeKills(today(), rules, [kill(ASH, HUMVEE_M249), kill(BO, HUMVEE_M249)], AT)!;
+    // Bo's warning failed.
+    const counted = countSent(judged.breaks, judged.calls.filter((c) => c.steamId === ASH));
+    expect(counted.done).toEqual({ 'humvee-gunner': { warned: 1, kicked: 0 } });
+    expect(Object.keys(counted.players)).toEqual([ASH, BO]);
   });
 
   it('starts each UTC day from nothing', () => {
@@ -237,7 +255,7 @@ describe('callDetail', () => {
 describe('buildRulesPage', () => {
   it("has every weapon the bot names, each rule with today's warnings and kicks, and what goes after the messages", () => {
     const judged = judgeKills(today(), [preset('mgl', { mode: 'kick' })], [kill(ASH, MGL)], AT)!;
-    const page = buildRulesPage(PRESET_RULES, judged.breaks, context);
+    const page = buildRulesPage(PRESET_RULES, countSent(judged.breaks, judged.calls), context);
     expect(page.weapons).toEqual(namedWeapons());
     expect(page.weapons.find((w) => w.name === 'M113 APC')?.tags).toHaveLength(3);
     expect(page.rules.map((r) => [r.id, r.today])).toEqual([
