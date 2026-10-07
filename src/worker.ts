@@ -70,6 +70,7 @@ import {
   pruneSessions,
   recordJoins,
   SESSION_DAYS_KEPT,
+  SESSIONS_PRUNED_KEY,
   writeSessions,
   type AdminSession,
   type JoinEvent,
@@ -373,7 +374,8 @@ import {
   KILL_DAYS_KEPT,
   KILL_DAYS_STORED,
   KILL_FEED_KEY,
-  killDaySummaries,
+  KILL_LISTS_CLEARED_KEY,
+  loadKillDays,
   parseKillFeed,
   playerKillDays,
   pruneKillDays,
@@ -383,6 +385,7 @@ import {
   socketSession,
   STAFF_SOCKET_PROTOCOL,
   toStaffKills,
+  withKillDays,
   writeKillDays,
   type AdminKills,
   type AdminPlayerKills,
@@ -526,9 +529,11 @@ export class Watcher extends DurableObject<Env> {
   // Kill feed batches are checked against the weapon rules one at a time, so two batches close together never count
   // one offence twice.
   private enforcing = oneAtATime();
-  // Past days of the staff page's kills, like dayCache: only today's and yesterday's are read each time.
+  // The staff page's kill days, by UTC day, read once: recordKillDays keeps each day read in step with what it writes,
+  // so the checks each minute read none.
   private killDayCache = new Map<string, KillDaySummary[]>();
-  // Whether the kill_days table is known to be there, and the UTC day its old rows were last deleted.
+  // Whether the kill_days table is known to be there, and the UTC day its old rows were last deleted (noted in storage
+  // too, see recordKillDays).
   private killTable = false;
   private killsPrunedOn: string | null = null;
   // The same for the sessions table.
@@ -749,15 +754,21 @@ export class Watcher extends DurableObject<Env> {
     return sql;
   }
 
-  // A row for each player who left, for their history, and once a day the ones no longer kept go. A failure is only
-  // logged, as the join log is saved already.
+  // A row for each player who left, for their history, and once a day the ones no longer kept go. The prune reads
+  // every row, and the object is put to sleep whenever it is idle for a few seconds, so the day is noted in storage too,
+  // not just in memory. A failure is only logged, as the join log is saved already.
   private recordSessions(added: JoinEvent[], now: number): void {
     try {
       const sql = this.sessionSql();
       const day = dayOf(now);
+      const kv = this.ctx.storage.kv;
+      const prune = this.sessionsPrunedOn !== day && kv.get(SESSIONS_PRUNED_KEY) !== day;
       this.ctx.storage.transactionSync(() => {
         writeSessions(sql, added);
-        if (this.sessionsPrunedOn !== day) pruneSessions(sql, Date.parse(dayOf(now - (SESSION_DAYS_KEPT - 1) * DAY_MS)));
+        if (prune) {
+          pruneSessions(sql, Date.parse(dayOf(now - (SESSION_DAYS_KEPT - 1) * DAY_MS)));
+          kv.put(SESSIONS_PRUNED_KEY, day);
+        }
       });
       this.sessionsPrunedOn = day;
     } catch (error) {
@@ -917,7 +928,7 @@ export class Watcher extends DurableObject<Env> {
   private async roundupFor(period: Period, now: number): Promise<Roundup | null> {
     const covered = periodDays(period);
     const [days, matches, hidden] = await Promise.all([this.recentDays(now), this.matchRecords(now), this.privateSteam()]);
-    const feed = this.roundupFeed(covered);
+    const feed = this.roundupFeed(covered, now);
     const ids = await this.idsFor([
       ...days.flatMap((d) => (covered.includes(d.day) ? Object.keys(d.players) : [])),
       ...(feed?.kills.map((d) => d.steamId) ?? []),
@@ -928,12 +939,12 @@ export class Watcher extends DurableObject<Env> {
 
   // The kill feed's records over a period's days. Null before the first kill, or if the database cannot be read, so
   // the roundup goes out without its awards.
-  private roundupFeed(covered: string[]): FeedSources | null {
+  private roundupFeed(covered: string[], now: number): FeedSources | null {
     try {
       const sql = this.killSql();
       const since = firstKillDay(sql);
       if (since === null) return null;
-      return { since, kills: killDaySummaries(sql, covered[0] ?? '', covered[covered.length - 1] ?? '') };
+      return { since, kills: [...this.killSummaries(sql, covered, now).values()].flat() };
     } catch (error) {
       console.error(`Roundup awards failed: ${errorText(error)}`);
       return null;
@@ -1677,22 +1688,31 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // A batch's kills for the staff page: each killer's day, in one transaction, and once a day the days no longer kept
-  // go. A failure is only logged, as the batch's other records are saved already.
+  // go, and the kills of those past KILL_DAYS_KEPT. The day is noted in storage too (see recordSessions), with the day
+  // the kills were cleared to, so a prune reads only the rows of the days since the last. A failure is only logged, as
+  // the batch's other records are saved already.
   private recordKillDays(day: string, now: number, kills: StaffKill[]): void {
     try {
       const sql = this.killSql();
       const killers = [...new Set(kills.map((k) => k.killer))];
-      this.ctx.storage.transactionSync(() => {
+      const kv = this.ctx.storage.kv;
+      const listedFrom = dayOf(now - (KILL_DAYS_KEPT - 1) * DAY_MS);
+      const cleared = this.killsPrunedOn === day ? listedFrom : kv.get(KILL_LISTS_CLEARED_KEY);
+      const written = this.ctx.storage.transactionSync(() => {
         const known = readKillDays(sql, day, killers);
-        writeKillDays(
-          sql,
-          killers.map((steamId) => recordKillDay(known.get(steamId) ?? null, steamId, day, kills.filter((k) => k.killer === steamId))),
+        const days = killers.map((steamId) =>
+          recordKillDay(known.get(steamId) ?? null, steamId, day, kills.filter((k) => k.killer === steamId)),
         );
-        if (this.killsPrunedOn !== day) {
-          pruneKillDays(sql, dayOf(now - (KILL_DAYS_STORED - 1) * DAY_MS), dayOf(now - (KILL_DAYS_KEPT - 1) * DAY_MS));
+        writeKillDays(sql, days);
+        if (cleared !== listedFrom) {
+          pruneKillDays(sql, dayOf(now - (KILL_DAYS_STORED - 1) * DAY_MS), listedFrom, typeof cleared === 'string' ? cleared : '');
+          kv.put(KILL_LISTS_CLEARED_KEY, listedFrom);
         }
+        return days;
       });
       this.killsPrunedOn = day;
+      const cached = this.killDayCache.get(day);
+      if (cached !== undefined) this.killDayCache.set(day, withKillDays(cached, written));
     } catch (error) {
       console.error(`Staff page kill records failed: ${errorText(error)}`);
     }
@@ -1701,16 +1721,21 @@ export class Watcher extends DurableObject<Env> {
   // Everyone's kill days over the KILL_DAYS_KEPT UTC days to `now`, oldest first.
   private keptKillDays(sql: Sql, now: number): KillDaySummary[] {
     const days = Array.from({ length: KILL_DAYS_KEPT }, (_, i) => dayOf(now - (KILL_DAYS_KEPT - 1 - i) * DAY_MS));
-    const past = days.slice(0, -2);
-    const missing = past.filter((day) => !this.killDayCache.has(day));
-    for (const day of this.killDayCache.keys()) if (!past.includes(day)) this.killDayCache.delete(day);
-    if (missing.length > 0) {
-      const read = new Map(missing.map((day): [string, KillDaySummary[]] => [day, []]));
-      for (const d of killDaySummaries(sql, missing[0] ?? '', missing[missing.length - 1] ?? '')) read.get(d.day)?.push(d);
-      for (const [day, list] of read) this.killDayCache.set(day, list);
-    }
-    const fresh = killDaySummaries(sql, days[days.length - 2] ?? '', days[days.length - 1] ?? '');
-    return [...past.flatMap((day) => this.killDayCache.get(day) ?? []), ...fresh];
+    for (const day of this.killDayCache.keys()) if (!days.includes(day)) this.killDayCache.delete(day);
+    const missing = days.filter((day) => !this.killDayCache.has(day));
+    if (missing.length > 0) for (const [day, list] of this.killSummaries(sql, missing, now)) this.killDayCache.set(day, list);
+    return days.flatMap((day) => this.killDayCache.get(day) ?? []);
+  }
+
+  // The kill days of `days`, by day, from the summaries saved for the days that are done (see loadKillDays).
+  private killSummaries(sql: Sql, days: string[], now: number): Map<string, KillDaySummary[]> {
+    return loadKillDays(sql, days, now, (write) => {
+      try {
+        this.ctx.storage.transactionSync(write);
+      } catch (error) {
+        console.error(`Saving kill summaries failed: ${errorText(error)}`);
+      }
+    });
   }
 
   // The staff page's Kill feed tab: the server's latest kills, and who gets the most headshots over the last `days` UTC

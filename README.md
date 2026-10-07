@@ -698,6 +698,13 @@ The records start with the first kill after this is deployed, and keep each kill
 headshots, team kills and the longest kill by weapon) stay 62 days, for the [roundups' awards](#roundups). They are keyed by Steam ID, so
 only signed-in staff see them.
 
+Storage is charged by the row read (the free plan allows 5 million a day), and each player's day is a row: a busy
+server has well over a thousand a day. The headshot checks need everyone's days over 30 days, so the Durable Object
+reads them once and keeps them in step with each batch it writes, and the check each minute reads none. A day's counts
+are also saved a few hundred players to a row (`kill_day_summaries`) once it is over, so when the object wakes up
+again it reads about 200 rows and today's, not 30 days of players. Old days are deleted, and old kills cleared, once a
+day; the day is noted in storage, so waking up again does not read every old row again.
+
 ### Checked, they're fine
 
 A player the staff page says is worth a look (banned, flagged for griefing or headshots today, or a risky Steam account)
