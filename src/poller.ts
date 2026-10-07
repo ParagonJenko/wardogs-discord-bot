@@ -120,6 +120,7 @@ const AlertsSchema = z.object({
   lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop', 'back']), z.number()),
   lowSince: z.number().optional(),
   seedingSince: z.number().optional(),
+  afterCrash: z.boolean().optional(),
 });
 
 const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() }));

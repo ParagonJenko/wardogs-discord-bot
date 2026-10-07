@@ -245,6 +245,23 @@ describe('back after a crash', () => {
     expect(fired(run(99, [15, 15, 15, 15, 15, 15], held))).toEqual([[6, 'lowPop']]);
   });
 
+  it('still sends the back alert when the crash is over before the hold, such as 18 back of 20', () => {
+    // The crash is over once 18 of its 20 are back, at minute 9: still below live, still seeding.
+    expect(fired(run(20, [0, 0, 0, 0, 0, 10, 12, 15, 18, 18, 18], held, (m) => m >= 4 && m < 9))).toEqual([[11, 'back']]);
+  });
+
+  it('skips the back alert when staff called a seed with /seednow within its cooldown', () => {
+    let state = withSeedCall({ phase: 'live', lastAlertAt: {} }, 4 * MINUTE);
+    const alerts: (AlertKind | null)[] = [];
+    [0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3].forEach((players, i) => {
+      const result = step(state, players, (i + 1) * MINUTE, held, i + 1 >= 4);
+      alerts.push(result.alert);
+      state = result.state;
+    });
+
+    expect(fired(alerts)).toEqual([]);
+  });
+
   it('sends only the live alert when it refills within the hold', () => {
     expect(fired(run(99, [0, 0, 0, 0, 0, 2, 30], held, crashedFrom(4)))).toEqual([[7, 'live']]);
   });
