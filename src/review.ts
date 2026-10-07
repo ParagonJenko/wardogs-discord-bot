@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AlertRules, QuietHours } from './alerts.ts';
-import { dayFlags, FLAGS, type Flag, type GriefDay } from './griefing.ts';
+import { dayFlags, FLAGS, vehicleDeath, type Flag, type GriefDay, type VehicleDeath } from './griefing.ts';
 import { flaggedDay, HEADSHOT_FLAG, headshotOdds, tally, type KillDaySummary } from './killfeed.ts';
 import {
   BACK_SHARE,
@@ -124,6 +124,35 @@ export type ReviewSources = {
 
 const minutes = (ms: number): number => Math.round(ms / 60_000);
 
+// Team kills and suicides with a vehicle, by how, from each day's kept incidents (its latest INCIDENTS_KEPT), with how
+// many of the day's team kills and vehicle suicides those cover. And the run-over team kills of each player's day,
+// the kind a driver can do on purpose.
+const vehicleDeaths = (days: GriefDay[]) => {
+  const ways = (): Record<VehicleDeath, number> => ({ helicopter: 0, runOver: 0, explosion: 0, other: 0 });
+  const teamKills = ways();
+  const suicides = ways();
+  const runOvers: number[] = [];
+  let kept = 0;
+  let all = 0;
+  for (const day of days) {
+    all += Object.values(day.players).reduce((n, t) => n + t.teamKills + t.vehicleSuicides, 0);
+    kept += day.incidents.length;
+    const byPlayer = new Map<string, number>();
+    for (const incident of day.incidents) {
+      const how = vehicleDeath(incident);
+      if (how === null) continue;
+      if (incident.kind === 'vehicle-suicide') {
+        suicides[how] += 1;
+        continue;
+      }
+      teamKills[how] += 1;
+      if (how === 'runOver') byPlayer.set(incident.steamId, (byPlayer.get(incident.steamId) ?? 0) + 1);
+    }
+    runOvers.push(...byPlayer.values());
+  }
+  return { teamKills, suicides, runOverTeamKills: histogram(runOvers, 5), incidents: { kept, of: all } };
+};
+
 export const buildReview = (s: ReviewSources) => {
   const from = dayOf(s.now - (s.days - 1) * 86_400_000);
   const alertDays = Object.entries(s.alertLog)
@@ -232,6 +261,8 @@ export const buildReview = (s: ReviewSources) => {
       flaggedPlayers: flaggedBy.size,
       // How many players had 1, 2, 3… flagged days.
       playersByFlaggedDays: histogram([...flaggedBy.values()], 5),
+      // Team kills and suicides with a vehicle by how, and the run-over team kills of each player's day that had one.
+      vehicles: vehicleDeaths(s.grief),
     },
     headshots: {
       serverShare: server.all.kills === 0 ? null : Math.round((server.all.headshots / server.all.kills) * 1000) / 1000,

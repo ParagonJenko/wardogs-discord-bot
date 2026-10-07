@@ -114,14 +114,25 @@ export const isSuicide = (e: FeedEvent): boolean =>
 
 // A death a vehicle made: run over, blown up, or by the vehicle itself rather than a gun on it. Emplacements such as
 // mortars are vehicles to the game, but not ones anyone drives, so they never count, whatever the tags say.
-export const byVehicle = (e: FeedEvent): boolean => {
+export const byVehicle = (e: Pick<FeedEvent, 'cause' | 'tags'>): boolean => {
   if (e.cause !== null && weaponKind(e.cause) === 'emplacement') return false;
   return e.tags.includes('VehicleExplosion') || e.tags.includes('RoadKill') || (e.cause !== null && weaponKind(e.cause) === 'vehicle');
 };
 
 // A death a helicopter itself made, rather than its guns: crashing it with people aboard, or landing on them.
 const AIRCRAFT = /^Vehicle\.Variant\.Air\./i;
-export const byAircraft = (e: FeedEvent): boolean => e.cause !== null && AIRCRAFT.test(e.cause);
+export const byAircraft = (e: Pick<FeedEvent, 'cause'>): boolean => e.cause !== null && AIRCRAFT.test(e.cause);
+
+// How a vehicle killed: a helicopter itself (mostly a crash), running someone over, the vehicle blowing up with them in
+// it or next to it, or the vehicle some other way. Null for a death no vehicle made, such as by a vehicle's gun.
+export type VehicleDeath = 'helicopter' | 'runOver' | 'explosion' | 'other';
+
+export const vehicleDeath = (e: Pick<FeedEvent, 'cause' | 'tags'>): VehicleDeath | null => {
+  if (!byVehicle(e)) return null;
+  if (byAircraft(e)) return 'helicopter';
+  if (e.tags.includes('RoadKill')) return 'runOver';
+  return e.tags.includes('VehicleExplosion') ? 'explosion' : 'other';
+};
 
 // Whether two players are on the same side, as the bot last saw them. Unknown sides are never the same.
 export const sameSide = (a: string | null, b: string | null): boolean => a !== null && b !== null && factionKey(a) === factionKey(b);

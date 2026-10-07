@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   byAircraft,
   byVehicle,
+  vehicleDeath,
   dayFlags,
   emptyGriefDay,
   griefDayKey,
@@ -65,6 +66,15 @@ describe('telling deaths apart', () => {
     // The mortar's barrel.
     expect(byVehicle(death(ASH, ASH, { cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel', tags: ['VehicleExplosion'] }))).toBe(false);
     expect(byVehicle(death(ASH, BO))).toBe(false);
+  });
+
+  it('tells how a vehicle killed: a helicopter, running someone over, blowing up, or otherwise', () => {
+    expect(vehicleDeath(death(ASH, BO, { cause: LITTLEBIRD, tags: ['VehicleExplosion'] }))).toBe('helicopter');
+    expect(vehicleDeath(death(ASH, BO, { cause: HUMVEE, tags: ['RoadKill'] }))).toBe('runOver');
+    expect(vehicleDeath(death(ASH, BO, { cause: HUMVEE, tags: ['VehicleExplosion'] }))).toBe('explosion');
+    expect(vehicleDeath(death(ASH, BO, { cause: HUMVEE }))).toBe('other');
+    expect(vehicleDeath(death(ASH, BO, { cause: 'Id.Vehicle.WeaponExtension.WHL_05.RingTurret' }))).toBeNull();
+    expect(vehicleDeath(death(ASH, BO))).toBeNull();
   });
 
   it('knows a death a helicopter made itself, not with its guns', () => {

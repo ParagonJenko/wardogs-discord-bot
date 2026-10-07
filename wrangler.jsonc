@@ -61,7 +61,7 @@
     // For the staff page's Discord sign-in: the application's ID (Developer Portal → General Information). Not a secret.
     // Keep it here: a value set in the Cloudflare dashboard is replaced by this file at every deploy.
     "DISCORD_APPLICATION_ID": "1554816090452795484",
-    // Posts to the moderation log when a player passes a griefing flag (3 team kills, 2 vehicle suicides): "on" or "off".
+    // Posts to the moderation log when a player passes a griefing flag (4 team kills, 4 vehicle suicides): "on" or "off".
     "GRIEF_ALERTS": "on",
     // Posts to the moderation log when a player with one of the riskiest Steam accounts (7 points or more) is in game
     // (needs STEAM_API_KEY): "on" or "off".

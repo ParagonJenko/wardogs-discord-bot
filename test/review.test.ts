@@ -24,6 +24,7 @@ const ASH = '76561198000000001';
 const BO = '76561198000000002';
 const CY = '76561198000000003';
 const AK = 'Id.Item.AK74M';
+const HUMVEE = 'Vehicle.Variant.Land.Wheeled.Humvee.Default';
 
 describe('alert log', () => {
   it('counts posts by UTC day and kind, keeping the last 60 days', () => {
@@ -146,7 +147,17 @@ describe('buildReview', () => {
     outage: null,
     grief: [
       recordGrief(emptyGriefDay(), [kill(ASH, BO), kill(ASH, BO), kill(ASH, BO), kill(ASH, BO), kill(BO, ASH)], NOW - DAY, sides).day,
-      recordGrief(emptyGriefDay(), [kill(BO, ASH, { cause: 'Vehicle.Variant.Air.Rotary.Littlebird.Default', tags: ['VehicleExplosion'] })], NOW, sides).day,
+      recordGrief(
+        emptyGriefDay(),
+        [
+          kill(BO, ASH, { cause: 'Vehicle.Variant.Air.Rotary.Littlebird.Default', tags: ['VehicleExplosion'] }),
+          kill(BO, ASH, { cause: HUMVEE, tags: ['RoadKill'] }),
+          kill(BO, ASH, { cause: HUMVEE, tags: ['RoadKill'] }),
+          kill(ASH, ASH, { cause: HUMVEE, tags: ['VehicleExplosion'] }),
+        ],
+        NOW,
+        sides,
+      ).day,
     ],
     kept: [...crowd('2026-10-06'), ...crowd('2026-10-07'), summary(ASH, '2026-10-07', 12, 10), summary(BO, '2026-10-07', 4, 1)],
     steam: [steam({}), steam({ vacBans: 1, lastBanAt: NOW - 10 * DAY, createdAt: NOW - 10 * DAY })],
@@ -179,13 +190,23 @@ describe('buildReview', () => {
   it('spreads the players’ griefing days out against the flags, crashes left out', () => {
     expect(review.grief).toMatchObject({
       playerDays: 4,
-      // Ash's four on Bo, Bo's one on Ash, and Bo's helicopter crash the next day, which does not count.
-      teamKills: { '0': 2, '1': 1, '4': 1 },
+      // Ash's four on Bo, Bo's one on Ash, and the next day Bo's helicopter crash, which does not count, and two run-overs.
+      teamKills: { '0': 1, '1': 1, '2': 1, '4': 1 },
       crashTeamKills: 1,
-      sameTeammate: { '0': 2, '1': 1, '4': 1 },
+      sameTeammate: { '0': 1, '1': 1, '2': 1, '4': 1 },
       flaggedDays: { teamKills: 1, sameTeammate: 1, vehicleSuicides: 0, suicides: 0 },
       flaggedPlayers: 1,
       playersByFlaggedDays: { '1': 1 },
+    });
+  });
+
+  it('splits the team kills and suicides with a vehicle by how', () => {
+    expect(review.grief.vehicles).toEqual({
+      teamKills: { helicopter: 1, runOver: 2, explosion: 0, other: 0 },
+      suicides: { helicopter: 0, runOver: 0, explosion: 1, other: 0 },
+      runOverTeamKills: { '2': 1 },
+      // Ash's four and Bo's one the first day; Bo's three and Ash's vehicle suicide the next.
+      incidents: { kept: 9, of: 9 },
     });
   });
 
