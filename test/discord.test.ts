@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { banReason } from '../src/moderation.ts';
 import {
   buildGriefAlert,
+  buildHeadshotAlert,
   buildLastMatchEmbed,
   buildModLogMessage,
+  buildOutageAlert,
   buildPlayerEmbed,
   buildMatchSummary,
   buildMessage,
@@ -17,9 +19,11 @@ import {
   buildStatusEmbed,
   buildVipMessage,
   factionDot,
+  luckOdds,
   postWebhook,
   type DiscordMessage,
 } from '../src/discord.ts';
+import type { Outage } from '../src/outages.ts';
 import type { PlayerGrief } from '../src/griefing.ts';
 import type { Roundup } from '../src/roundup.ts';
 import type { PlayerRecord } from '../src/staff.ts';
@@ -66,6 +70,21 @@ describe('buildMessage', () => {
     const message = buildMessage('seeding', { ...server, map: 'Europe' }, { lowPop: 20, live: 20 });
 
     expect(embedOf(message)).toMatchObject({ title: '🌱 UK Wardogs #1 is seeding', description: '**Jump in and help get it live!**', color: 0xf1c40f });
+    expect(embedOf(message)?.fields).toEqual([
+      { name: 'Players', value: '🟨⬛⬛⬛⬛⬛⬛⬛⬛⬛ **7**/64' },
+      { name: 'Map', value: '🟦 Ozeti', inline: true },
+      { name: 'To go live', value: '**13** more', inline: true },
+    ]);
+  });
+
+  it('says the server is back after a crash, with how many more it needs, like seeding', () => {
+    const message = buildMessage('back', { ...server, map: 'Europe' }, { lowPop: 20, live: 20, vip });
+
+    expect(embedOf(message)).toMatchObject({
+      title: '🔁 UK Wardogs #1 is back up',
+      description: '**It crashed and is back up. Rejoin and help fill it!**',
+      color: 0xf1c40f,
+    });
     expect(embedOf(message)?.fields).toEqual([
       { name: 'Players', value: '🟨⬛⬛⬛⬛⬛⬛⬛⬛⬛ **7**/64' },
       { name: 'Map', value: '🟦 Ozeti', inline: true },
@@ -275,7 +294,7 @@ describe('buildMatchSummary', () => {
 });
 
 describe('buildStatusEmbed', () => {
-  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 };
+  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0, seedHoldMs: 0 };
   const status = {
     name: 'UK Wardogs #1',
     players: 24,
@@ -325,7 +344,7 @@ describe('buildStatusEmbed', () => {
 });
 
 describe('buildLiveStatus', () => {
-  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 };
+  const rules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0, seedHoldMs: 0 };
   const NOW = Date.UTC(2026, 9, 1, 20, 0);
   const status = {
     name: 'UK Wardogs #1',
@@ -487,7 +506,7 @@ describe('faction emojis', () => {
       'gaminginit #1',
     );
 
-    expect(buildStatusEmbed(status, { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0 }).fields?.find((f) => f.name === 'Score')?.value).toBe(
+    expect(buildStatusEmbed(status, { seeding: 1, live: 20, lowPop: 20, cooldownMs: 0, graceMs: 0, seedHoldMs: 0 }).fields?.find((f) => f.name === 'Score')?.value).toBe(
       '🐻 **Valkyra 52**\n🦂 MANTICORE 40\n🤠 Lonestar 20',
     );
     expect(embedOf(summary)?.description).toBe('🏆 🐻 **Valkyra** won');
@@ -1439,5 +1458,147 @@ describe('buildSteamAlerts', () => {
     expect(messages.map((m) => m.embeds.length)).toEqual([10, 2]);
     expect(messages[0]?.embeds[0]?.url).toBeUndefined();
     expect(buildSteamAlerts([], NOW)).toEqual([]);
+  });
+});
+
+describe('buildOutageAlert', () => {
+  const MINUTE = 60_000;
+  const AT = Date.UTC(2026, 9, 6, 14, 6);
+  const t = (at: number) => `<t:${at / 1000}:R>`;
+  const crash: Outage = {
+    kind: 'crash',
+    at: AT,
+    before: 99,
+    map: 'Kavkazi',
+    lowest: 0,
+    unreachableSince: null,
+    unreachableMs: 0,
+    confirmedAt: AT + 3 * MINUTE,
+  };
+
+  it('says the server crashed, with the players before and now, without pinging anyone', () => {
+    const message = buildOutageAlert({ type: 'down', at: AT + 3 * MINUTE, outage: crash, players: 3, map: 'Kavkazi' }, 'https://gaminginit.com');
+
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(embedOf(message)).toMatchObject({
+      title: '🔴 Server crashed',
+      url: 'https://gaminginit.com/admin',
+      description: `**99 → 0** players on Bakurani, ${t(AT)}.\n**3** now.`,
+      footer: { text: "From the bot's checks, every minute. It posts again when 90 players are back." },
+      timestamp: new Date(AT).toISOString(),
+    });
+  });
+
+  it('says how many dropped at once, and that it was at a map change', () => {
+    const drop = { ...crash, lowest: 22 };
+    const message = buildOutageAlert({ type: 'down', at: AT + 3 * MINUTE, outage: drop, players: 40, map: 'Europe' });
+
+    expect(embedOf(message)?.title).toBe('📉 77 players dropped at once');
+    expect(embedOf(message)?.description).toBe(`**99 → 22** players on Bakurani at a map change (now Ozeti), ${t(AT)}.\n**40** now.`);
+  });
+
+  it("says when the bot can't reach the server, and that it may still be running", () => {
+    const lost: Outage = { ...crash, kind: 'unreachable', lowest: null, unreachableSince: AT + MINUTE, confirmedAt: AT + 5 * MINUTE };
+    const message = buildOutageAlert({ type: 'down', at: AT + 5 * MINUTE, outage: lost, players: null, map: null });
+
+    expect(embedOf(message)).toMatchObject({
+      title: "🔴 Can't reach the server",
+      description:
+        'The bot has not reached it for **5 min**. It had **99** players on Bakurani.\n' +
+        "It may still be running with RCON down: check the host's panel before restarting it.",
+    });
+  });
+
+  it('says when the players are back, how long it took, and how long the server could not be reached', () => {
+    const over = { ...crash, unreachableMs: 31 * MINUTE };
+    const message = buildOutageAlert({ type: 'back', at: AT + 70 * MINUTE, outage: over, players: 94, map: 'Kavkazi', refilled: true });
+
+    expect(embedOf(message)).toMatchObject({
+      title: '🟢 Server back to 94 players',
+      description: '**1 h 10 min** after it crashed.\n99 before · lowest 0 · unreachable for 31 min',
+      color: 0x2ecc71,
+    });
+  });
+
+  it('says when the players never came back, and that the bot stopped watching', () => {
+    const message = buildOutageAlert({ type: 'back', at: AT + 180 * MINUTE, outage: crash, players: 12, map: 'Kavkazi', refilled: false });
+
+    expect(embedOf(message)).toMatchObject({
+      title: '⚪ Server not back to 90 players',
+      description: '**3 h** after it crashed, it has **12**. The bot has stopped watching this one.\n99 before · lowest 0',
+    });
+  });
+
+  it('leaves out the lowest reading once the bot is back in touch with a server that kept its players', () => {
+    const lost: Outage = { ...crash, kind: 'unreachable', lowest: 100, unreachableMs: 53 * MINUTE };
+    const message = buildOutageAlert({ type: 'back', at: AT + 54 * MINUTE, outage: lost, players: 100, map: 'Kavkazi', refilled: true });
+
+    expect(embedOf(message)?.description).toBe('**54 min** after the bot lost it.\n99 before · unreachable for 53 min');
+  });
+});
+
+describe('buildHeadshotAlert', () => {
+  const NOW = Date.UTC(2026, 9, 7, 18);
+  const ASH = '76561198000000001';
+  const alert = {
+    steamId: ASH,
+    name: 'Ash_*',
+    kills: 40,
+    headshots: 31,
+    expected: 9.2,
+    chance: 4.3e-7,
+    flaggedDays: 1,
+    weapon: 'M4',
+  };
+
+  it("says today's headshots, what is usual and the chance by luck, in orange on a first flagged day", () => {
+    const message = buildHeadshotAlert(alert, NOW, 'https://gaminginit.com');
+
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(embedOf(message)).toMatchObject({
+      title: '🎯 Unlikely headshots · Ash\\_\\*',
+      url: 'https://gaminginit.com/admin',
+      description: [
+        `\`${ASH}\` · [Steam profile](https://steamcommunity.com/profiles/${ASH})`,
+        '**31 headshots in 40 kills** today · about 9 usual for their weapons',
+        'Chance by luck: **1 in 2.3 million** · most kills with M4',
+        'Their first flagged day in the last 30',
+      ].join('\n'),
+      color: 0xe67e22,
+      fields: [],
+    });
+  });
+
+  it('is red when they were flagged before, or their Steam account is risky, and shows the account', () => {
+    const DAY = 86_400_000;
+    const steam: SteamCheck = {
+      at: NOW - DAY,
+      found: true,
+      vacBans: 1,
+      gameBans: 0,
+      lastBanAt: NOW - 10 * DAY,
+      communityBanned: false,
+      tradeBan: 'none',
+      public: true,
+      setUp: true,
+      createdAt: NOW - 9 * 365 * DAY,
+    };
+
+    const again = buildHeadshotAlert({ ...alert, flaggedDays: 3 }, NOW);
+    expect(embedOf(again)).toMatchObject({ title: '🎯 Unlikely headshots again · Ash\\_\\*', color: 0xe74c3c });
+    expect(embedOf(again)?.description).toContain('Flagged on **3 days** in the last 30');
+
+    const risky = buildHeadshotAlert(alert, NOW, undefined, steam);
+    expect(embedOf(risky)?.color).toBe(0xe74c3c);
+    expect(embedOf(risky)?.fields?.map((f) => f.name)).toEqual(['Steam account']);
+  });
+});
+
+describe('luckOdds', () => {
+  it('words a chance as the staff page does', () => {
+    expect(luckOdds(1 / 4_812)).toBe('1 in 4,800');
+    expect(luckOdds(4.3e-7)).toBe('1 in 2.3 million');
+    expect(luckOdds(1e-12)).toBe('under 1 in a billion');
+    expect(luckOdds(0)).toBe('under 1 in a billion');
   });
 });

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { initialState, isQuiet, step, type MonitorState } from './alerts.ts';
+import { initialState, isQuiet, step, type AlertKind, type MonitorState } from './alerts.ts';
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
@@ -20,6 +20,16 @@ import {
   type MatchMessages,
   type WelcomeWatch,
 } from './messages.ts';
+import {
+  crashed,
+  observeFailure,
+  observeReading,
+  OutageSchema,
+  ReadingSchema,
+  type Outage,
+  type OutageEvent,
+  type Reading,
+} from './outages.ts';
 import type { SeedCredit } from './players.ts';
 import { publicNames, publicNamesBySteamId } from './privacy.ts';
 import type { Player, Snapshot } from './rcon.ts';
@@ -53,6 +63,9 @@ export type BotState = {
   // Who is waiting for their welcome, and who had one lately. Null while welcomes are off, and until a reading the bot
   // trusts.
   welcomes: WelcomeWatch | null;
+  // The last check that reached the server, and the outage going on, if any (see outages.ts).
+  last: Reading | null;
+  outage: Outage | null;
 };
 
 export type StateStore = {
@@ -81,6 +94,8 @@ type PollerDeps = {
   // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
   // players: the live alert's top seeders and the match summary.
   privateProfiles?: () => Promise<ReadonlySet<string>>;
+  // An outage confirmed or over, for the moderation log. Told once: one that fails is logged, not retried.
+  outage?: (event: OutageEvent) => Promise<void>;
 };
 
 // Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
@@ -90,18 +105,21 @@ type PollerDeps = {
 // the same seed or match again. The sink must ignore one it already has (a match's `startedAt` identifies it).
 // `matchEnded` answers with the time the match is recorded as ending, which is `at` unless it already had the match,
 // or null if it cannot say. The match summary links to that time, so it must be the one the website is given.
+// `alerted` runs after each alert Discord took, for the review's counts (see review.ts).
 export type StatsSink = {
   check: (observation: Observation) => Promise<void>;
   seeded: (seeders: SeedCredit[], at: number) => Promise<void>;
   matchEnded: (match: MatchState, at: number) => Promise<number | null>;
+  alerted?: (kind: AlertKind, at: number) => Promise<void>;
 };
 
 const TOP_SEEDERS = 3;
 
 const AlertsSchema = z.object({
   phase: z.enum(['empty', 'seeding', 'live']),
-  lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop']), z.number()),
+  lastAlertAt: z.partialRecord(z.enum(['seeding', 'live', 'lowPop', 'back']), z.number()),
   lowSince: z.number().optional(),
+  seedingSince: z.number().optional(),
 });
 
 const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() }));
@@ -156,6 +174,9 @@ const BotStateSchema = z.object({
   joins: JoinWatchSchema.nullable().default(null),
   // Missing from state saved before welcomes.
   welcomes: WelcomeWatchSchema.nullable().default(null),
+  // Missing from state saved before outages.
+  last: ReadingSchema.nullable().default(null),
+  outage: OutageSchema.nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -171,6 +192,8 @@ const StoredStateSchema = z.union([
       seedMessageAt: null,
       joins: null,
       welcomes: null,
+      last: null,
+      outage: null,
     }),
   ),
 ]);
@@ -228,6 +251,7 @@ export const createPoller = ({
   lines,
   staff,
   privateProfiles,
+  outage: tellOutage,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
@@ -262,10 +286,42 @@ export const createPoller = ({
     return markWelcomed(watched, due, time);
   };
 
+  // An outage confirmed or over goes to staff once it is saved, so a check that fails after it never tells them twice.
+  const tell = async (event: OutageEvent | null): Promise<void> => {
+    if (event === null || tellOutage === undefined) return;
+    try {
+      await tellOutage(event);
+    } catch (error) {
+      log.error(`Outage post failed: ${errorText(error)}`);
+    }
+  };
+
+  // A check that could not reach the server: an outage once it has lasted long enough.
+  const unreachable = async (): Promise<void> => {
+    const state = await store.load();
+    if (state === null) return;
+    const { outage, event } = observeFailure(state.outage, state.last, now());
+    if (outage === state.outage) return;
+    await store.save({ ...state, outage });
+    await tell(event);
+  };
+
   const check = async (): Promise<void> => {
-    const { status, players } = await fetchSnapshot();
+    let snapshot: Snapshot;
+    try {
+      snapshot = await fetchSnapshot();
+    } catch (error) {
+      try {
+        await unreachable();
+      } catch (failure) {
+        log.error(`Outage check failed: ${errorText(failure)}`);
+      }
+      throw error;
+    }
+    const { status, players } = snapshot;
     const state = await store.load();
     const time = now();
+    const reading: Reading = { at: time, players: status.players, map: status.map };
 
     if (state === null) {
       const alerts = initialState(status.players, config.rules);
@@ -276,13 +332,29 @@ export const createPoller = ({
         config.matchMessages === null ? null : nextMessage(null, match, time, config.matchMessages, config.vip).messages;
       const joins = watchJoins(null, steamIds(players), time, false);
       const welcomes = welcoming ? watchWelcomes(null, steamIds(players), status.players, time) : null;
-      await store.save({ alerts, seeding, match, unsentSummary: null, messages, seedMessageAt: null, joins, welcomes });
+      await store.save({
+        alerts,
+        seeding,
+        match,
+        unsentSummary: null,
+        messages,
+        seedMessageAt: null,
+        joins,
+        welcomes,
+        last: reading,
+        outage: null,
+      });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
       return;
     }
 
-    const result = step(state.alerts, status.players, time, config.rules);
+    const { outage, event: outageEvent } = observeReading(state.outage, state.last, reading, config.rules.live);
+    if (outageEvent !== null) {
+      await store.save({ ...state, last: reading, outage });
+      await tell(outageEvent);
+    }
+    const result = step(state.alerts, status.players, time, config.rules, crashed(outage));
     const before = state.alerts.phase;
     const after = result.state.phase;
     const { match, finished: ended } = observeMatch(state.match, status, players, after === 'live', time);
@@ -365,6 +437,8 @@ export const createPoller = ({
       joins,
       welcomes,
       unsentSummary: finished === null ? state.unsentSummary : { ...summarise(finished), endedAt },
+      last: reading,
+      outage,
     };
     try {
       const summary = tracked.unsentSummary;
@@ -390,6 +464,8 @@ export const createPoller = ({
           }),
         );
         log.info(`Sent ${result.alert} alert at ${status.players}/${status.maxPlayers} players${quiet ? ' (night: no ping)' : ''}`);
+        const kind = result.alert;
+        await report(async (sink) => sink.alerted?.(kind, time));
       }
     } catch (error) {
       await store.save(tracked);
@@ -405,6 +481,8 @@ export const createPoller = ({
       seedMessageAt,
       joins,
       welcomes,
+      last: reading,
+      outage,
     });
   };
 

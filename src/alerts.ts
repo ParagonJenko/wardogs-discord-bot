@@ -1,5 +1,6 @@
 export type Phase = 'empty' | 'seeding' | 'live';
-export type AlertKind = 'seeding' | 'live' | 'lowPop';
+// `back`: the server is back after a crash (see outages.ts), in place of the low-pop and seeding alerts.
+export type AlertKind = 'seeding' | 'live' | 'lowPop' | 'back';
 
 export type AlertRules = {
   seeding: number;
@@ -9,6 +10,9 @@ export type AlertRules = {
   // How long a drop must last before it counts. A server that crashes or restarts and fills again within this time
   // keeps its phase, so a blip pings nobody.
   graceMs: number;
+  // How long an empty server must keep its first players before the seeding alert goes out, so someone looking in for a
+  // minute pings nobody. Seeding itself, and its credit, start at once.
+  seedHoldMs: number;
 };
 
 export type MonitorState = {
@@ -16,6 +20,8 @@ export type MonitorState = {
   lastAlertAt: Partial<Record<AlertKind, number>>;
   // When the player count first fell below what keeps the current phase, while that drop is still within the grace time.
   lowSince?: number;
+  // When the server started seeding, while its alert waits out seedHoldMs.
+  seedingSince?: number;
 };
 
 export type StepResult = {
@@ -69,20 +75,34 @@ export const initialState = (players: number, rules: AlertRules): MonitorState =
 
 const RANK: Record<Phase, number> = { empty: 0, seeding: 1, live: 2 };
 
-export const step = (state: MonitorState, players: number, now: number, rules: AlertRules): StepResult => {
+// `crashed`: the server crashed and is not back yet (see outages.ts). Then a drop from live pings nobody, and seeding
+// again after it, from live or from empty, gets the back alert in place of the seeding alert, once it has kept its
+// players for seedHoldMs.
+export const step = (state: MonitorState, players: number, now: number, rules: AlertRules, crashed = false): StepResult => {
   const phase = nextPhase(state.phase, players, rules);
   // A drop waits out the grace time first: if the players come back in time, it never happened.
   if (RANK[phase] < RANK[state.phase]) {
     const lowSince = state.lowSince ?? now;
     if (now - lowSince < rules.graceMs) return { state: { ...state, lowSince }, alert: null };
   }
-  const { lowSince: _over, ...settled } = state;
-  const candidate = transitionAlert(state.phase, phase);
+  const { lowSince: _over, seedingSince: waiting, ...settled } = state;
+  const startsSeed = phase === 'seeding' && (state.phase === 'empty' || (state.phase === 'live' && crashed));
+  const seedingSince = phase !== 'seeding' ? undefined : startsSeed ? now : waiting;
+  const transition = transitionAlert(state.phase, phase);
+  // The seeding alert waits for the hold, below. After a crash the low-pop alert is not sent: the back alert says it.
+  const straightAway = transition === 'live' || (transition === 'lowPop' && !crashed) ? transition : null;
+  const held = seedingSince !== undefined && now - seedingSince >= rules.seedHoldMs;
+  const candidate: AlertKind | null = straightAway ?? (held ? (crashed ? 'back' : 'seeding') : null);
+  // A held alert's cooldown runs from when the seed started, so a /seednow call still covers players who join within
+  // its cooldown however long the hold.
+  const from = candidate === 'seeding' || candidate === 'back' ? (seedingSince ?? now) : now;
   const lastSent = candidate === null ? undefined : state.lastAlertAt[candidate];
-  const coolingDown = lastSent !== undefined && now - lastSent < rules.cooldownMs;
+  const coolingDown = lastSent !== undefined && from - lastSent < rules.cooldownMs;
+  // Sent or skipped, a held alert is done with.
+  const pending = held ? undefined : seedingSince;
 
   if (candidate === null || coolingDown) {
-    return { state: { ...settled, phase }, alert: null };
+    return { state: { ...settled, phase, ...(pending === undefined ? {} : { seedingSince: pending }) }, alert: null };
   }
   return {
     state: { phase, lastAlertAt: { ...settled.lastAlertAt, [candidate]: now } },

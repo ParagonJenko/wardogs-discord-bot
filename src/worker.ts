@@ -34,11 +34,14 @@ import {
 } from './adminauth.ts';
 import {
   buildGriefAlert,
+  buildHeadshotAlert,
   buildLiveStatus,
   buildModLogMessage,
+  buildOutageAlert,
   buildRoundupMessage,
   buildSteamAlerts,
   buildVipMessage,
+  luckOdds,
   mapName,
   postWebhook,
 } from './discord.ts';
@@ -127,7 +130,18 @@ import {
   type LinesPage,
   type SavedLines,
 } from './linespage.ts';
+import type { OutageEvent } from './outages.ts';
 import { createJoinCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
+import {
+  ALERT_LOG_KEY,
+  buildReview,
+  countAlert,
+  logOutage,
+  OUTAGE_LOG_KEY,
+  parseAlertLog,
+  parseOutageLog,
+  type Review,
+} from './review.ts';
 import {
   buildProfile,
   directory,
@@ -324,10 +338,13 @@ import {
 import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveSnapshot } from './live.ts';
 import {
   adminFeed,
+  alertedOn,
   buildAdminKills,
   buildPlayerKills,
   createKillDays,
   firstKillDay,
+  headshotAlertsDue,
+  HEADSHOTS_ALERTED_KEY,
   headshotsOn,
   KILL_DAYS_KEPT,
   KILL_DAYS_STORED,
@@ -413,8 +430,8 @@ const oneAtATime = () => {
 };
 
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
-// Storage keys: 'state' (alerts and the match in progress), 'stats' (public, for /api/stats), the private player
-// records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
+// Storage keys: 'state' (alerts, the match in progress and any outage), 'stats' (public, for /api/stats), the private
+// player records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
 // 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
 // status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
@@ -430,10 +447,11 @@ const oneAtATime = () => {
 // account each staff member linked, by Discord user ID, so staff never count as seeders), 'steam:<Steam ID>' (what
 // Steam said about that player's account, for risky accounts), 'rotations' (the saved map rotations, the week's plan
 // and the rotation put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list),
-// 'killFeed' (the server's latest kills, for the staff page) and 'joinLog' (who joined and left the server, for the
-// staff page; see joinlog.ts). Each player's kills by day, for the staff page and the roundups' awards, are in the
-// SQLite database's kill_days table (see killfeed.ts), and each player's times on the server, for their history, in its
-// sessions table.
+// 'killFeed' (the server's latest kills, for the staff page), 'joinLog' (who joined and left the server, for the
+// staff page; see joinlog.ts), 'headshotsAlerted' (who had a headshot alert today), and for the alert review (see
+// review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's kills by day, for
+// the staff page and the roundups' awards, are in the SQLite database's kill_days table (see killfeed.ts), and each
+// player's times on the server, for their history, in its sessions table.
 export class Watcher extends DurableObject<Env> {
   // Live pages keep their WebSocket open with a ping now and then, answered without waking the object.
   constructor(ctx: DurableObjectState, env: Env) {
@@ -536,13 +554,46 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Where the moderation log goes. A configuration problem only stops the posts: what they report is saved already.
-  private posting(): Pick<Config, 'modLogWebhookUrl' | 'griefAlerts' | 'steamAlerts' | 'siteUrl'> {
+  private posting(): Pick<Config, 'modLogWebhookUrl' | 'griefAlerts' | 'steamAlerts' | 'headshotAlerts' | 'outageAlerts' | 'siteUrl'> {
     try {
       return loadConfig(stringVars(this.env));
     } catch (error) {
       console.error(`Moderation log: ${errorText(error)}`);
-      return { modLogWebhookUrl: undefined, griefAlerts: false, steamAlerts: false, siteUrl: undefined };
+      return {
+        modLogWebhookUrl: undefined,
+        griefAlerts: false,
+        steamAlerts: false,
+        headshotAlerts: false,
+        outageAlerts: false,
+        siteUrl: undefined,
+      };
     }
+  }
+
+  // Counts posts for the review (see review.ts), one at a time so no count is lost. A failure only loses the count.
+  private counting = oneAtATime();
+  private countAlert(kind: string, at: number, count = 1): Promise<void> {
+    return this.counting(async () => {
+      const log = parseAlertLog(await this.ctx.storage.get(ALERT_LOG_KEY));
+      await this.ctx.storage.put(ALERT_LOG_KEY, countAlert(log, kind, at, count));
+    }).catch((error: unknown) => console.error(`Counting a ${kind} alert failed: ${errorText(error)}`));
+  }
+
+  // An outage confirmed or over (see outages.ts): logged for the review, and posted to the moderation log channel when
+  // OUTAGE_ALERTS is on, in the background, so a slow Discord never holds up the check.
+  private async tellOutage(event: OutageEvent): Promise<void> {
+    const { outage } = event;
+    const log = parseOutageLog(await this.ctx.storage.get(OUTAGE_LOG_KEY));
+    await this.ctx.storage.put(OUTAGE_LOG_KEY, logOutage(log, event));
+    const what = event.type === 'down' ? 'confirmed' : event.refilled ? 'over' : 'not over after the wait, no longer watched';
+    console.info(`Outage ${what}: ${outage.kind} from ${new Date(outage.at).toISOString()}, ${outage.before} players before`);
+    const { modLogWebhookUrl, outageAlerts, siteUrl } = this.posting();
+    if (modLogWebhookUrl === undefined || !outageAlerts) return;
+    this.ctx.waitUntil(
+      postWebhook(modLogWebhookUrl, buildOutageAlert(event, siteUrl))
+        .then(() => this.countAlert(event.type === 'down' ? 'down' : 'up', event.at))
+        .catch((error: unknown) => console.error(`Outage alert failed: ${errorText(error)}`)),
+    );
   }
 
   // Posted in the background, so a slow Discord never holds up a ban or the VIP update queued behind it. A post that
@@ -574,9 +625,9 @@ export class Watcher extends DurableObject<Env> {
         const steam = await this.savedSteam(alerts.map((a) => a.steamId));
         await Promise.all(
           alerts.map((alert) =>
-            postWebhook(modLogWebhookUrl, buildGriefAlert(alert, weaponName, siteUrl, steam.get(alert.steamId) ?? null)).catch((error: unknown) =>
-              console.error(`Griefing alert failed (${alert.steamId}): ${errorText(error)}`),
-            ),
+            postWebhook(modLogWebhookUrl, buildGriefAlert(alert, weaponName, siteUrl, steam.get(alert.steamId) ?? null))
+              .then(() => this.countAlert('grief', Date.now()))
+              .catch((error: unknown) => console.error(`Griefing alert failed (${alert.steamId}): ${errorText(error)}`)),
           ),
         );
       })(),
@@ -769,11 +820,13 @@ export class Watcher extends DurableObject<Env> {
       lines: () => this.lines(),
       staff: () => this.staffSteam(),
       privateProfiles: () => this.privateSteam(),
+      outage: (event) => this.tellOutage(event),
       stats: {
         check: (observation) =>
           this.recordCheck(observation, minutesPerCheck, { live: config.rules.live, busy: config.busyThreshold }),
         seeded: (seeders, at) => this.recordSeed(seeders, at, config.seedMinutes),
         matchEnded: (match, at) => this.recordMatchEnd(match, at),
+        alerted: (kind, at) => this.countAlert(kind, at),
       },
     });
     await this.alerting(poll);
@@ -785,6 +838,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.updateVip(config));
     await this.serial(() => this.updateRotation(config, seen.snapshot));
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
+    await this.checkHeadshots(seen.snapshot);
 
     const { inviteCode } = config;
     if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
@@ -1354,7 +1408,9 @@ export class Watcher extends DurableObject<Env> {
       this.ctx.waitUntil(
         (async () => {
           for (const message of messages) {
-            await postWebhook(modLogWebhookUrl, message).catch((error: unknown) => console.error(`Risky Steam account alert failed: ${errorText(error)}`));
+            await postWebhook(modLogWebhookUrl, message)
+              .then(() => this.countAlert('steam', now, message.embeds.length))
+              .catch((error: unknown) => console.error(`Risky Steam account alert failed: ${errorText(error)}`));
           }
         })(),
       );
@@ -1584,6 +1640,79 @@ export class Watcher extends DurableObject<Env> {
       console.error(`Staff page: today's headshots could not be read: ${errorText(error)}`);
       return new Map();
     }
+  }
+
+  // Days of unlikely headshots (see killfeed.ts) of players in game, to the moderation log channel when HEADSHOT_ALERTS
+  // is on: each player once a UTC day, with their Steam account when it is risky. Marked as posted before posting, so a
+  // post that fails is logged, not retried. A failure never stops the rest of the check.
+  private async checkHeadshots(snapshot: Snapshot | null): Promise<void> {
+    const { modLogWebhookUrl, headshotAlerts, siteUrl } = this.posting();
+    if (modLogWebhookUrl === undefined || !headshotAlerts || snapshot === null || snapshot.players.length === 0) return;
+    const now = Date.now();
+    const day = dayOf(now);
+    try {
+      const alerted = alertedOn(await this.ctx.storage.get(HEADSHOTS_ALERTED_KEY), day);
+      const names = new Map(snapshot.players.map((p) => [p.steamId, p.name]));
+      const due = headshotAlertsDue(this.keptKillDays(this.killSql(), now), day, names.keys(), alerted).map((a) => ({
+        ...a,
+        name: names.get(a.steamId) || a.name,
+      }));
+      if (due.length === 0) return;
+      await this.ctx.storage.put(HEADSHOTS_ALERTED_KEY, { day, steamIds: [...alerted, ...due.map((a) => a.steamId)] });
+      for (const a of due) {
+        console.info(
+          `Unlikely headshots: ${JSON.stringify(a.name)} (${a.steamId}): ${a.headshots} in ${a.kills} kills, ${luckOdds(a.chance)}, ` +
+            `flagged on ${a.flaggedDays} days`,
+        );
+      }
+      const steam = await this.savedSteam(due.map((a) => a.steamId));
+      this.ctx.waitUntil(
+        (async () => {
+          for (const alert of due) {
+            await postWebhook(modLogWebhookUrl, buildHeadshotAlert(alert, now, siteUrl, steam.get(alert.steamId) ?? null))
+              .then(() => this.countAlert('headshot', now))
+              .catch((error: unknown) => console.error(`Headshot alert failed (${alert.steamId}): ${errorText(error)}`));
+          }
+        })(),
+      );
+    } catch (error) {
+      console.error(`Headshot alerts failed: ${errorText(error)}`);
+    }
+  }
+
+  // The alert review (see review.ts) over the last `days` UTC days.
+  async review(days: number): Promise<Review> {
+    const now = Date.now();
+    const config = loadConfig(stringVars(this.env));
+    const griefKeys = Array.from({ length: days }, (_, i) => griefDayKey(now - (days - 1 - i) * DAY_MS));
+    const [stored, recent] = await Promise.all([
+      this.ctx.storage.get([...griefKeys, ALERT_LOG_KEY, OUTAGE_LOG_KEY, 'state']),
+      this.recentDays(now),
+    ]);
+    const seen = steamPlayers(
+      recent.slice(-days).map((d) => d.players),
+      [],
+    );
+    const checks = this.steamApiKey() === null ? null : await this.loadSteam(seen);
+    return buildReview({
+      now,
+      days,
+      rules: config.rules,
+      quietHours: config.quietHours,
+      posts: {
+        modLog: config.modLogWebhookUrl !== undefined,
+        grief: config.griefAlerts,
+        steam: config.steamAlerts,
+        headshot: config.headshotAlerts,
+        outage: config.outageAlerts,
+      },
+      alertLog: parseAlertLog(stored.get(ALERT_LOG_KEY)),
+      outageLog: parseOutageLog(stored.get(OUTAGE_LOG_KEY)),
+      outage: parseState(stored.get('state'))?.outage ?? null,
+      grief: griefKeys.map((key) => parseGriefDay(stored.get(key))),
+      kept: this.keptKillDays(this.killSql(), now),
+      steam: checks === null ? null : seen.flatMap((steamId) => checks.get(steamId) ?? []),
+    });
   }
 
   // One player's kills and times on the server over the last `days` UTC days, for the History tab.
@@ -2579,6 +2708,32 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   }
 };
 
+// The alert review's longest period, and its usual one.
+const REVIEW_PERIOD_DAYS = 30;
+
+// GET /api/review (see review.ts), for whoever tunes the alerts' marks: only with the REVIEW_TOKEN secret as the
+// bearer; without the secret, the route is not there. ?days= picks the period, 1 to 30 UTC days.
+const reviewApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
+  const token = vars['REVIEW_TOKEN']?.trim() ?? '';
+  if (token === '') return new Response('Not found', { status: 404 });
+  const headers = { 'cache-control': 'no-store' };
+  if (token.length < MIN_FEED_TOKEN) {
+    console.error(`Alert review refused: REVIEW_TOKEN must be at least ${MIN_FEED_TOKEN} characters`);
+    return Response.json({ error: 'REVIEW_TOKEN is too short' }, { status: 500, headers });
+  }
+  if (!(await feedAuthorized(request.headers.get('authorization'), token))) {
+    return Response.json({ error: 'Unknown review token' }, { status: 401, headers });
+  }
+  const asked = Number(new URL(request.url).searchParams.get('days') ?? REVIEW_PERIOD_DAYS);
+  const days = Number.isInteger(asked) ? Math.min(Math.max(asked, 1), REVIEW_PERIOD_DAYS) : REVIEW_PERIOD_DAYS;
+  try {
+    return Response.json(await watcher().review(days), { headers });
+  } catch (error) {
+    console.error(`Alert review failed: ${errorText(error)}`);
+    return Response.json({ error: 'The review is unavailable' }, { status: 503, headers });
+  }
+};
+
 // A refused kill feed post is logged at most this often, so a wrong token does not fill the logs every two seconds.
 const REFUSAL_LOG_MS = 10 * 60_000;
 let refusalLoggedAt = 0;
@@ -2634,6 +2789,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/auth/login') return staffLogin(request, stringVars(env));
     if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env), watcher);
     if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
+    if (request.method === 'GET' && url.pathname === '/api/review') return reviewApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.
     if (request.method === 'GET' && url.pathname === '/api/live/socket') return watcher().fetch(request);
     if (request.method === 'GET' && url.pathname.startsWith('/api/')) {

@@ -614,6 +614,64 @@ export const headshotsOn = (kept: KillDaySummary[], day: string, steamIds: Itera
   );
 };
 
+// A player in game whose day passed the headshot flag, for the moderation log channel: today's kills, headshots and
+// chance by luck, and their flagged days over the days kept, today's included. `chance` is never null: a day is only
+// flagged once there is one.
+export type HeadshotAlert = {
+  steamId: string;
+  name: string;
+  kills: number;
+  headshots: number;
+  expected: number | null;
+  chance: number;
+  flaggedDays: number;
+  weapon: string | null;
+};
+
+// Who had a headshot alert on which UTC day ('headshotsAlerted'), so each player gets one a day.
+export const HEADSHOTS_ALERTED_KEY = 'headshotsAlerted';
+const HeadshotsAlertedSchema = z.object({ day: z.string(), steamIds: z.array(z.string()) });
+
+export const alertedOn = (raw: unknown, day: string): Set<string> => {
+  const parsed = HeadshotsAlertedSchema.safeParse(raw);
+  return new Set(parsed.success && parsed.data.day === day ? parsed.data.steamIds : []);
+};
+
+// Those of `inGame` flagged on `day` and not in `alerted` yet.
+export const headshotAlertsDue = (
+  kept: KillDaySummary[],
+  day: string,
+  inGame: Iterable<string>,
+  alerted: ReadonlySet<string>,
+): HeadshotAlert[] => {
+  const today = headshotsOn(kept, day, inGame);
+  const due = new Set([...today].flatMap(([steamId, d]) => (d.flagged && !alerted.has(steamId) ? [steamId] : [])));
+  if (due.size === 0) return [];
+  const rows = new Map(headshotRows(kept.filter((d) => due.has(d.steamId)), kept).map((r) => [r.steamId, r]));
+  return [...due].flatMap((steamId): HeadshotAlert[] => {
+    const d = today.get(steamId);
+    if (d === undefined || d.chance === null) return [];
+    const row = rows.get(steamId);
+    const own = kept.filter((k) => k.steamId === steamId && k.day === day);
+    // Today's weapon with the most kills.
+    const named = new Map<string, number>();
+    for (const [cause, w] of Object.entries(merged(own))) named.set(weaponName(cause), (named.get(weaponName(cause)) ?? 0) + w.kills);
+    const top = [...named].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))[0];
+    return [
+      {
+        steamId,
+        name: own.findLast((k) => k.name !== '')?.name ?? row?.name ?? steamId,
+        kills: d.kills,
+        headshots: d.headshots,
+        expected: d.expected,
+        chance: d.chance,
+        flaggedDays: Math.max(row?.flaggedDays ?? 1, 1),
+        weapon: top?.[0] ?? null,
+      },
+    ];
+  });
+};
+
 // The staff page's live kill feed is a WebSocket (GET /api/admin/live). Browsers can't send a header with one, so the
 // page sends its session as the second subprotocol: ['wardogs-staff', <session>]. The socket sends the latest kills
 // when it opens, then each batch's kills as they come in, newest first.

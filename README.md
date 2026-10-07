@@ -4,11 +4,12 @@ Watches a WARDOGS server through its RCON API and posts to a Discord channel whe
 
 | Alert        | When                                                       | Default     |
 | ------------ | ---------------------------------------------------------- | ----------- |
-| 🌱 Seeding   | An empty server reaches `SEEDING_THRESHOLD` players        | 1 player    |
+| 🌱 Seeding   | An empty server reaches `SEEDING_THRESHOLD` players, and keeps players for `SEEDING_ALERT_MINUTES` | 1 player, 5 minutes |
 | 🟢 Live      | The server reaches `LIVE_THRESHOLD` players                | 20 players  |
 | 🔻 Low pop   | A live server drops below `LOW_POP_THRESHOLD` players      | below 20    |
+| 🔁 Back up   | The server is back after a crash and has kept players for `SEEDING_ALERT_MINUTES`, in place of the low-pop and seeding alerts | |
 
-The alerts ping `DISCORD_ROLE_ID` when it is set, except the seeding and low-pop alerts at night (see
+The alerts ping `DISCORD_ROLE_ID` when it is set, except the seeding, low-pop and back-up alerts at night (see
 [Behaviour](#behaviour)).
 
 It also posts:
@@ -25,8 +26,11 @@ It also posts:
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, the highlights, and awards: the best assaulter,
   support player, machine gunner, marksman, demolitions and vehicle crew, and shout-outs.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban, team
-  move and VIP added or removed with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, and players
-  in game with one of the [riskiest Steam accounts](#risky-steam-accounts).
+  move and VIP added or removed with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, players
+  in game with one of the [riskiest Steam accounts](#risky-steam-accounts) or a day of unlikely headshots, and the server crashing
+  or not answering, and when it is back.
+- **An [alert review](#alert-review)** (Cloudflare only): what each alert posted, every outage, and how players' days
+  spread out against each mark, with no names or Steam IDs, for whoever tunes the alerts.
 
 It also keeps **[map rotations](#map-rotations)** (Cloudflare only): staff save rotations by name, such as "Rotation 1"
 and "Weekend", pick which one plays on each day of the week, and swap between them with one command.
@@ -510,6 +514,10 @@ A staff-only Discord channel where the bot posts, as they happen:
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
 | 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. Teammates killed in a helicopter crash don't count (see [Possible griefers](#staff-page)). With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
 | 🕵️ Risky Steam account   | A player in game has one of the riskiest Steam accounts (7 points or more), such as a new account with a VAC ban, or VAC and game bans with one recent. Once, and again if it gets riskier. Needs `STEAM_API_KEY`: see [Risky Steam accounts](#risky-steam-accounts) |
+| 🎯 Unlikely headshots    | A player in game has a flagged day of headshots (see [Kills and headshots](#kills-and-headshots)): today's headshots and kills, what is usual for their weapons, the chance by luck and their weapon with the most kills. Once a UTC day for each player. Red, and "again", when they were flagged on another day in the last 30, and red with their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
+| 🔴 Server crashed / 📉 players dropped at once | A live server lost more than three quarters of its players from one check to the next, and 3 minutes later still has under half of them. With the players before and now, and whether it was at a map change |
+| 🔴 Can't reach the server | The bot could not reach a server that had players for 5 minutes. It may still be running with only RCON down |
+| 🟢 Server back / ⚪ not back | After either of those: when 90% of the players are back, with how long it took, the fewest players and how long the bot could not reach it; or 3 hours on, when they never came back |
 
 To set it up:
 
@@ -531,6 +539,11 @@ To set it up:
 - **Possible griefing** posts can be turned off with `GRIEF_ALERTS` `"off"` in the `vars` block of `wrangler.jsonc`.
   They are a reason to look, not proof: sides come from the bot's last check (see [Staff page](#staff-page)).
 - **Risky Steam account** posts can be turned off with `STEAM_ALERTS` `"off"`. They are a reason to look, not proof too.
+- **Unlikely headshots** posts can be turned off with `HEADSHOT_ALERTS` `"off"`. The bot judges everyone in game at each
+  check, so a post goes out up to a minute after the kill that flags the day. A reason to look, not proof.
+- **Outage** posts can be turned off with `OUTAGE_ALERTS` `"off"`. A map change that empties the server for a minute or
+  two is never posted: the players are back to half before the 3 minutes are up. The [alert review](#alert-review)
+  keeps every outage either way.
 - A post that fails is logged (`Moderation log post failed`) and not retried: the staff history has it either way.
 - **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_MODLOG_WEBHOOK_URL`). The staff history and
   the staff page still record everything.
@@ -791,6 +804,33 @@ The next check asks Steam about everyone in game. Each account gets points for w
 - **Turning it off:** delete the secret (`npx wrangler secret delete STEAM_API_KEY`).
 
 The Node/Docker version does not check Steam accounts.
+
+## Alert review
+
+`GET <worker url>/api/review` gives what you need to judge whether the alerts' marks are right, over the last 30 UTC
+days (`?days=` for 1 to 30). It has no names and no Steam IDs, but it says how often players get flagged, so it is only
+there with a token:
+
+1. Make a long random token, such as `openssl rand -hex 32`, and store it as a secret:
+   ```bash
+   npx wrangler secret put REVIEW_TOKEN
+   ```
+2. Read it with the token as a bearer:
+   ```bash
+   curl -H "Authorization: Bearer $REVIEW_TOKEN" https://wardogs-discord-bot.<you>.workers.dev/api/review
+   ```
+
+Without the secret the address is not there (404), and a wrong token gets 401. The token must be at least 16
+characters. To let Claude Code on the web read it, add the token to the environment's secrets as `REVIEW_TOKEN`.
+
+| Field        | What                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| `thresholds` | Every mark the alerts use: population (seeding, live, low pop, cooldown, drop grace, the seeding alert's wait, quiet hours), outages, griefing flags, the headshot flag, Steam risk points, and which moderation log posts are on |
+| `alerts`     | What was posted: `totals` and `byDay`, by kind: `seeding`, `live`, `lowPop`, `back`, and in the moderation log `grief`, `steam`, `headshot`, `down` and `up`. Counted from this update on, for 60 days |
+| `outages`    | The outage going on `now`, if any, and the `log` of outages confirmed in the period: kind, when, players before, the fewest, how long unreachable, and when they ended and whether the players came back. The last 100 are kept |
+| `grief`      | Each player's day with a team kill, team death or suicide: how many had 0, 1, 2… team kills (not counting helicopter crashes), the most kills of one teammate, vehicle suicides and suicides; the days each flag was earned; and how many players were flagged on 1, 2… days |
+| `headshots`  | The server's share of headshots; players' days by kills (`killsPerDay`) and, for days with enough kills to judge, by chance by luck; flagged days, and how many players were flagged on 1, 2… days |
+| `steam`      | The checked Steam accounts of everyone on the server in the period, by risk and by points, and how many are at the alert mark. `null` without `STEAM_API_KEY` |
 
 ## Website stats
 
@@ -1245,7 +1285,7 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 - A drop only counts once it has lasted `DROP_GRACE_MINUTES` (default 5). If a live server crashes or restarts and
   fills again within that time, there is no low-pop alert, no seeding alert and no live alert, and nobody gets
   seeding credit for rejoining. A drop that lasts longer gets its low-pop alert then. `0` alerts straight away.
-- At night the seeding and low-pop alerts are posted without pinging `DISCORD_ROLE_ID`: the server dying down then is
+- At night the seeding, low-pop and back-up alerts are posted without pinging `DISCORD_ROLE_ID`: the server dying down then is
   everyone going to bed, and a ping would only annoy the seeders. Night is from `QUIET_START_HOUR` up to
   `QUIET_END_HOUR` in `QUIET_TIME_ZONE`'s own time, so it follows the clocks changing (defaults `21`, `6` and
   `Europe/London`: 9pm to 6am in the UK, summer and winter). The same hour for both turns it off. A live alert still
@@ -1280,7 +1320,18 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 - If a Discord post fails, the alert is retried on the next check while it is still true. A match summary
   is retried until it posts, or until the next match ends. Matches are recorded before their summary is
   posted, so a Discord outage does not lose them. If RCON is unreachable (for example during the game's
-  daily restart), the check is skipped and logged; no alert is sent for the outage itself.
+  daily restart), the check is skipped and logged. A server that had players and stays unreachable for 5 minutes is
+  posted to the [moderation log](#moderation-log); one nobody was on is not.
+- The seeding alert waits until the server has kept players for `SEEDING_ALERT_MINUTES` (default 5), so someone who
+  joins an empty server and leaves a minute later pings nobody. Seeding itself starts with the first player, so their
+  time still counts towards [automatic VIP](#automatic-vip). If the server goes live first, only the live alert goes
+  out. A `/seednow` call covers the alert when the first player joins within its cooldown, however long the wait. `0`
+  sends it straight away.
+- **Crashes.** When a live server crashes (it loses more than three quarters of its players at once, and has under
+  half of them 3 minutes later), there is no low-pop alert and no seeding alert. Once players have been back on for
+  `SEEDING_ALERT_MINUTES`, the 🔁 back-up alert pings `DISCORD_ROLE_ID` once, then the live alert as usual. Staff hear
+  about the crash in the [moderation log](#moderation-log). This needs `DROP_GRACE_MINUTES` of 3 or more, as it is by
+  default: with less, the low-pop alert goes out before the crash is confirmed.
 
 ## Security
 

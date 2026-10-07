@@ -3,18 +3,23 @@ import { initialState, isQuiet, step, withSeedCall, type AlertKind, type AlertRu
 
 const MINUTE = 60_000;
 
-const rules: AlertRules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 10 * MINUTE, graceMs: 0 };
+const rules: AlertRules = { seeding: 1, live: 20, lowPop: 20, cooldownMs: 10 * MINUTE, graceMs: 0, seedHoldMs: 0 };
 
-// Feeds a sequence of player counts (one per minute) and returns the alerts that fired.
-const run = (start: number, counts: number[], r: AlertRules = rules): (AlertKind | null)[] => {
+// Feeds a sequence of player counts (one per minute) and returns the alerts that fired. `crashed` says, for each
+// minute, whether the server crashed and is not back.
+const run = (start: number, counts: number[], r: AlertRules = rules, crashed: (minute: number) => boolean = () => false): (AlertKind | null)[] => {
   const alerts: (AlertKind | null)[] = [];
   counts.reduce<MonitorState>((state, players, i) => {
-    const result = step(state, players, (i + 1) * MINUTE, r);
+    const result = step(state, players, (i + 1) * MINUTE, r, crashed(i + 1));
     alerts.push(result.alert);
     return result.state;
   }, initialState(start, r));
   return alerts;
 };
+
+// The minutes that fired, from 1.
+const fired = (alerts: (AlertKind | null)[]): [number, AlertKind][] =>
+  alerts.flatMap((alert, i): [number, AlertKind][] => (alert === null ? [] : [[i + 1, alert]]));
 
 describe('seeding alert', () => {
   it('fires when an empty server gets its first player', () => {
@@ -176,5 +181,71 @@ describe('quiet hours', () => {
 
   it('is never quiet when there are no quiet hours', () => {
     expect(isQuiet(utc(5, 3), null)).toBe(false);
+  });
+});
+
+describe('seeding alert hold', () => {
+  const held = { ...rules, graceMs: 5 * MINUTE, seedHoldMs: 5 * MINUTE };
+
+  it('pings once someone has stayed 5 minutes, not for players who look in and leave, as on 7 October from 10:43', () => {
+    // One player for 2 minutes, empty for 8; one for a minute, empty for 11; then players who stay.
+    const counts = [1, 1, ...Array<number>(7).fill(0), 1, ...Array<number>(11).fill(0), 1, 2, 2, 2, 2, 2, 2, 4, 5];
+
+    expect(fired(run(0, counts, held))).toEqual([[27, 'seeding']]);
+  });
+
+  it('starts seeding at once, so seeding time still counts from the first player', () => {
+    const first = step(initialState(0, held), 1, MINUTE, held);
+
+    expect(first).toEqual({ state: { phase: 'seeding', lastAlertAt: {}, seedingSince: MINUTE }, alert: null });
+  });
+
+  it('sends only the live alert when the server fills before the hold is over', () => {
+    expect(fired(run(0, [1, 5, 20, 25], held))).toEqual([[3, 'live']]);
+  });
+
+  it('keeps the hold through a player leaving for a moment', () => {
+    expect(fired(run(0, [1, 1, 0, 1, 1, 1, 1], held))).toEqual([[6, 'seeding']]);
+  });
+
+  it('times the cooldown from the first player, so a seeding call covers players who join in its cooldown', () => {
+    const called = withSeedCall(initialState(0, held), 0);
+    let state = called;
+    const alerts: (AlertKind | null)[] = [];
+    for (let minute = 9; minute <= 20; minute++) {
+      const result = step(state, 1, minute * MINUTE, held);
+      alerts.push(result.alert);
+      state = result.state;
+    }
+
+    // Seeding from 9 minutes, inside the call's 10-minute cooldown: skipped, not sent at 14.
+    expect(alerts.every((a) => a === null)).toBe(true);
+  });
+});
+
+describe('back after a crash', () => {
+  const held = { ...rules, graceMs: 5 * MINUTE, seedHoldMs: 5 * MINUTE };
+  // Confirmed 3 minutes after the drop at minute 1, and not over yet.
+  const crashedFrom = (minute: number) => (m: number) => m >= minute;
+
+  it('sends the back alert, not the low-pop alert, once players have stayed 5 minutes', () => {
+    // Live with 99, a crash, a few rejoining.
+    const counts = [0, 0, 1, 3, 3, 4, 4, 5, 6, 8, 10, 12];
+
+    expect(fired(run(99, counts, held, crashedFrom(4)))).toEqual([[11, 'back']]);
+  });
+
+  it('sends the back alert when it comes back after emptying', () => {
+    const counts = [...Array<number>(10).fill(0), 2, 3, 4, 5, 5, 6];
+
+    expect(fired(run(99, counts, held, crashedFrom(4)))).toEqual([[16, 'back']]);
+  });
+
+  it('still sends the low-pop alert when players leave without a crash', () => {
+    expect(fired(run(99, [15, 15, 15, 15, 15, 15], held))).toEqual([[6, 'lowPop']]);
+  });
+
+  it('sends only the live alert when it refills within the hold', () => {
+    expect(fired(run(99, [0, 0, 0, 0, 0, 2, 30], held, crashedFrom(4)))).toEqual([[7, 'live']]);
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import { DEFAULT_LINES, type Lines } from '../src/lines.ts';
+import type { OutageEvent } from '../src/outages.ts';
 import { createJoinCheck, createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
 import type { SeedCredit } from '../src/players.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
@@ -16,12 +17,14 @@ const config: Config = {
   modLogWebhookUrl: undefined,
   griefAlerts: true,
   steamAlerts: true,
+  headshotAlerts: true,
+  outageAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
   serverId: undefined,
   pollIntervalMs: 60_000,
-  rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0 },
+  rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0, seedHoldMs: 0 },
   quietHours: null,
   busyThreshold: 97,
   scoreToWin: 100,
@@ -338,6 +341,8 @@ describe('poller', () => {
       seedMessageAt: null,
       joins: null,
       welcomes: null,
+      last: null,
+      outage: null,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -887,6 +892,90 @@ describe('welcomes', () => {
   });
 });
 
+describe('outages', () => {
+  const MINUTE = 60_000;
+
+  const watch = (checks: (Snapshot | Error)[]) => {
+    const queue = [...checks];
+    const told: OutageEvent[] = [];
+    const sent: DiscordMessage[] = [];
+    const alerted: string[] = [];
+    let clock = 0;
+    const tick = createPoller({
+      config: { ...config, roleId: '42', rules: { ...config.rules, graceMs: 5 * MINUTE, seedHoldMs: 5 * MINUTE } },
+      fetchSnapshot: async () => {
+        const next = queue.shift() ?? snapshot([]);
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      send: async (message) => {
+        sent.push(message);
+      },
+      now: () => (clock += MINUTE),
+      log: { info: vi.fn(), error: vi.fn() },
+      store: memoryStore(),
+      outage: async (event) => {
+        told.push(event);
+      },
+      stats: {
+        check: async () => undefined,
+        seeded: async () => undefined,
+        matchEnded: async () => null,
+        alerted: async (kind) => {
+          alerted.push(kind);
+        },
+      },
+    });
+    const run = async () => {
+      for (let i = 0; i < checks.length; i++) await tick();
+    };
+    return { run, told, sent, alerted };
+  };
+
+  it('tells staff about a crash and its end, and pings everyone once when it is back, in place of low pop and seeding', async () => {
+    const down = new Error('timed out');
+    const { run, told, sent, alerted } = watch([
+      snapshot(crowd(30)),
+      snapshot(crowd(30)),
+      // Minute 3: the crash.
+      snapshot([]),
+      snapshot([]),
+      snapshot(crowd(1)),
+      snapshot(crowd(2)),
+      down,
+      down,
+      // Minute 9: back for good, filling up.
+      ...[3, 4, 5, 5, 6, 6].map((n) => snapshot(crowd(n))),
+      snapshot(crowd(28)),
+    ]);
+
+    await run();
+
+    expect(told.map((e) => [e.type, e.at / MINUTE])).toEqual([
+      ['down', 6],
+      ['back', 15],
+    ]);
+    expect(told[0]).toMatchObject({ players: 2, outage: { kind: 'crash', at: 3 * MINUTE, before: 30, lowest: 0 } });
+    expect(told[1]).toMatchObject({ players: 28, refilled: true, outage: { unreachableMs: 2 * MINUTE } });
+    expect(titles(sent)).toEqual(['🔁 UK Wardogs #1 is back up', '🟢 UK Wardogs #1 is live']);
+    expect(sent.map((m) => m.content)).toEqual(['<@&42>', '<@&42>']);
+    expect(alerted).toEqual(['back', 'live']);
+  });
+
+  it('tells staff when the server cannot be reached, without a post to everyone', async () => {
+    const down = new Error('timed out');
+    const { run, told, sent } = watch([snapshot(crowd(60)), ...Array<Error>(6).fill(down), snapshot(crowd(60))]);
+
+    await run();
+
+    expect(told.map((e) => [e.type, e.outage.kind, e.at / MINUTE])).toEqual([
+      ['down', 'unreachable', 6],
+      ['back', 'unreachable', 8],
+    ]);
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('parseState', () => {
   it('upgrades state saved by the first release', () => {
     expect(parseState({ phase: 'live', lastAlertAt: { live: 5 } })).toEqual({
@@ -898,6 +987,8 @@ describe('parseState', () => {
       seedMessageAt: null,
       joins: null,
       welcomes: null,
+      last: null,
+      outage: null,
     });
   });
 
@@ -913,6 +1004,8 @@ describe('parseState', () => {
       seedMessageAt: null,
       joins: null,
       welcomes: null,
+      last: null,
+      outage: null,
     });
   });
 
