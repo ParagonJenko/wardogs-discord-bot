@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  byAircraft,
   byVehicle,
   dayFlags,
   emptyGriefDay,
@@ -44,6 +45,7 @@ const death = (killer: string | null, victim: string, overrides: Partial<FeedEve
 });
 
 const HUMVEE = 'Vehicle.Variant.Land.Wheeled.Humvee.Default';
+const LITTLEBIRD = 'Vehicle.Variant.Air.Rotary.Littlebird.Default';
 
 describe('telling deaths apart', () => {
   it('knows a suicide by its tag or by a player killing themselves', () => {
@@ -65,6 +67,14 @@ describe('telling deaths apart', () => {
     expect(byVehicle(death(ASH, BO))).toBe(false);
   });
 
+  it('knows a death a helicopter made itself, not with its guns', () => {
+    expect(byAircraft(death(ASH, BO, { cause: LITTLEBIRD, tags: ['VehicleExplosion'], distance: null }))).toBe(true);
+    expect(byAircraft(death(ASH, BO, { cause: 'Vehicle.Variant.Air.Rotary.Havoc.Default', tags: ['RoadKill'] }))).toBe(true);
+    expect(byAircraft(death(ASH, BO, { cause: 'Id.Vehicle.WeaponExtension.ROT_03.MountedMachineGun' }))).toBe(false);
+    expect(byAircraft(death(ASH, BO, { cause: HUMVEE, tags: ['VehicleExplosion'] }))).toBe(false);
+    expect(byAircraft(death(ASH, ASH, { cause: null, tags: ['VehicleExplosion'] }))).toBe(false);
+  });
+
   it('only counts players on the same side when both sides are known, however the server spells them', () => {
     expect(sameSide('Valkyra', 'VALKYRA')).toBe(true);
     expect(sameSide('Valkyra', 'Kharr')).toBe(false);
@@ -81,6 +91,7 @@ describe('recordGrief', () => {
       name: 'Ash',
       teamKills: 3,
       vehicleTeamKills: 0,
+      crashTeamKills: 0,
       teamKilled: 0,
       suicides: 0,
       vehicleSuicides: 0,
@@ -164,6 +175,43 @@ describe('recordGrief', () => {
     expect(recordGrief(emptyGriefDay(), crash(2), AT, sideOf).alerts).toEqual([expect.objectContaining({ steamId: BO, vehicleSuicides: 2 })]);
   });
 
+  it('counts teammates killed in a helicopter crash, but towards no flag', () => {
+    const crash = (victim: string) => death(ASH, victim, { cause: LITTLEBIRD, tags: ['VehicleExplosion'], distance: null });
+
+    const first = recordGrief(emptyGriefDay(), [crash(BO), crash(CY), crash(BO), crash(ASH)], AT, sideOf);
+
+    expect(first.day.players[ASH]).toMatchObject({
+      teamKills: 3,
+      vehicleTeamKills: 3,
+      crashTeamKills: 3,
+      suicides: 1,
+      vehicleSuicides: 1,
+      victims: {},
+    });
+    expect(first.day.players[BO]?.teamKilled).toBe(2);
+    expect(first.day.incidents.map((i) => [i.kind, i.victimName ?? null, i.cause])).toEqual([
+      ['team-kill', 'Bo', LITTLEBIRD],
+      ['team-kill', 'Cy', LITTLEBIRD],
+      ['team-kill', 'Bo', LITTLEBIRD],
+      ['vehicle-suicide', null, LITTLEBIRD],
+    ]);
+    expect(first.alerts).toEqual([]);
+    expect(dayFlags(first.day.players[ASH]!)).toEqual([]);
+
+    // Other team kills still flag from 3, crashes left out.
+    const two = recordGrief(first.day, [death(ASH, BO), death(ASH, CY)], AT, sideOf);
+    expect(two.alerts).toEqual([]);
+    const three = recordGrief(two.day, [death(ASH, BO)], AT, sideOf);
+    expect(three.alerts).toEqual([
+      expect.objectContaining({ teamKills: 6, crashTeamKills: 3, sameTeammate: { steamId: BO, name: 'Bo', kills: 2 } }),
+    ]);
+    expect(dayFlags(three.day.players[ASH]!)).toEqual(['teamKills', 'sameTeammate']);
+
+    // A second crash the same day is a second vehicle suicide, which still flags.
+    const again = recordGrief(first.day, [crash(BO), crash(ASH)], AT, sideOf);
+    expect(again.alerts).toEqual([expect.objectContaining({ steamId: ASH, teamKills: 4, crashTeamKills: 4, vehicleSuicides: 2, sameTeammate: null })]);
+  });
+
   it('says whether a batch has anything to record, so most batches write nothing more', () => {
     expect(hasGrief([death(ASH, DEE), death(DEE, ASH)], sideOf)).toBe(false);
     expect(hasGrief([death(ASH, DEE), death(ASH, BO)], sideOf)).toBe(true);
@@ -174,18 +222,23 @@ describe('recordGrief', () => {
 describe('griefing records', () => {
   it('reads what was saved, and an empty day from anything else', () => {
     const { day } = recordGrief(emptyGriefDay(), [death(ASH, BO)], AT, sideOf);
+    const { crashTeamKills, ...older } = day.players[ASH]!;
 
     expect(griefDayKey(AT)).toBe('grief:2026-10-03');
     expect(parseGriefDay(structuredClone(day))).toEqual(day);
+    // Saved before crashes were kept apart.
+    expect(crashTeamKills).toBe(0);
+    expect(parseGriefDay({ ...day, players: { ...day.players, [ASH]: older } })).toEqual(day);
     expect(parseGriefDay(undefined)).toEqual(emptyGriefDay());
     expect(parseGriefDay({ players: { [ASH]: { name: 'Ash' } }, incidents: [] })).toEqual(emptyGriefDay());
   });
 
   it("flags a player's day from 3 team kills, the same teammate twice, 2 vehicle suicides or 10 suicides", () => {
-    const base = { name: 'Ash', teamKills: 0, vehicleTeamKills: 0, teamKilled: 0, suicides: 0, vehicleSuicides: 0, victims: {} };
+    const base = { name: 'Ash', teamKills: 0, vehicleTeamKills: 0, crashTeamKills: 0, teamKilled: 0, suicides: 0, vehicleSuicides: 0, victims: {} };
 
     expect(dayFlags(base)).toEqual([]);
     expect(dayFlags({ ...base, teamKills: 3, victims: { [BO]: 1, [CY]: 1, [DEE]: 1 } })).toEqual(['teamKills']);
+    expect(dayFlags({ ...base, teamKills: 5, vehicleTeamKills: 3, crashTeamKills: 3, victims: { [BO]: 1, [CY]: 1 } })).toEqual([]);
     expect(dayFlags({ ...base, teamKills: 2, victims: { [BO]: 2 } })).toEqual(['sameTeammate']);
     expect(dayFlags({ ...base, suicides: 2, vehicleSuicides: 2 })).toEqual(['vehicleSuicides']);
     expect(dayFlags({ ...base, suicides: 10 })).toEqual(['suicides']);
@@ -238,6 +291,7 @@ describe('griefing records', () => {
     expect(playerGrief(day, DEE)).toEqual({
       teamKills: 0,
       vehicleTeamKills: 0,
+      crashTeamKills: 0,
       teamKilled: 0,
       suicides: 0,
       vehicleSuicides: 0,

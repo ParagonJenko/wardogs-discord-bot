@@ -380,7 +380,8 @@ works when it matches exactly one player.
   [Risky Steam accounts](#risky-steam-accounts)), VIP, ban, and the staff history: the last 5 warnings, kicks, bans,
   unbans, team moves and VIP changes, with who did each. It says when their [profile is private](#private-profiles).
 - **Team kills today** in `/player` is for checking a report like "X is team killing" without leaving Discord. From the
-  [kill feed](#weapon-stats), over the UTC day so far: their team kills (and how many with a vehicle), times a
+  [kill feed](#weapon-stats), over the UTC day so far: their team kills (and how many with a vehicle, and in a
+  helicopter crash), times a
   teammate killed them, suicides (and how many in a vehicle), any [griefing flag](#staff-page) the day earned, the
   teammates they killed and how often, and their latest 5 team kills and vehicle suicides, and team kills on them, with
   when, the weapon, the distance and the map. Sides come from the bot's last check, up to a minute old, as on the
@@ -507,7 +508,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | 🎖️ VIP added / removed  | Staff use `/vip add` or `/vip remove`. With the player, their Steam ID, the reason (Friend, Regular, Seeder, Paid or Other, and any note), how long and who did it. Not automatic VIP from seeding, which is announced in the alerts channel |
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
-| 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
+| 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. Teammates killed in a helicopter crash don't count (see [Possible griefers](#staff-page)). With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
 | 🕵️ Risky Steam account   | A player in game has one of the riskiest Steam accounts (7 points or more), such as a new account with a VAC ban, or VAC and game bans with one recent. Once, and again if it gets riskier. Needs `STEAM_API_KEY`: see [Risky Steam accounts](#risky-steam-accounts) |
 
 To set it up:
@@ -557,7 +558,9 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
   the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
   or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
-  suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
+  suicides. Teammates killed in a helicopter crash are counted and listed, but don't count towards the team kill or
+  same-teammate flags: pilots crash by accident, and one crash can kill a full load. A pilot who crashes twice in a day
+  is still flagged for vehicle suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
   and whether they are banned.
 - **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
 - **[Kills and headshots](#kills-and-headshots)**: who gets far more headshots than the server's players get with the
@@ -723,6 +726,9 @@ What the griefing figures can and cannot tell:
 - **Suicides** are deaths the game tags as a suicide, or a player killing themselves. A suicide with a vehicle (the game
   blames the vehicle, or says it blew up or ran someone over) is a vehicle suicide. `/switchteam` kills the player so
   they respawn, which the game may count as a suicide.
+- **Helicopter crashes.** A teammate killed by a helicopter itself (the game blames the helicopter, not its guns), mostly
+  in a crash, is a team kill by whoever flew it, and counted apart as one in a helicopter crash. Those count towards no
+  flag and no 🚩 post. Shooting a teammate with a helicopter's guns is a team kill like any other.
 - **Vehicles destroyed** without anyone dying in them are not in the feed, so they are not counted.
 - Each day keeps its latest 300 incidents; the counts are always complete.
 - They start from the deploy with this feature. Like the other records, they are kept for good.
@@ -1029,7 +1035,7 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 | Each UTC day's weapons       | From the [kill feed](#weapon-stats): each weapon's kills, headshots, distances and longest kill, with the Steam ID and name of who made it |
 | Each player's weapons        | From the kill feed: their kills, headshots and longest kill with each weapon, on each of their last 90 UTC days |
 | The live match               | From the kill feed: the match on now, for the [live page](#live-match). Its last 40 deaths, and each player's totals and streaks |
-| Each UTC day's griefing      | From the kill feed, for the [staff page](#staff-page): each player's team kills (and whom), times team killed, suicides and vehicle suicides, and the day's latest 300 team kills and vehicle suicides |
+| Each UTC day's griefing      | From the kill feed, for the [staff page](#staff-page): each player's team kills (and whom, other than in a helicopter crash), times team killed, suicides and vehicle suicides, and the day's latest 300 team kills and vehicle suicides |
 | The latest kills             | From the kill feed, for the staff page's [Kills tab](#kills-and-headshots): the server's latest 250 kills, with the Steam IDs and names of killer and victim |
 | Each player's kills, each UTC day | From the kill feed, for the Kills tab, in the Durable Object's SQLite database: their kills and headshots, by weapon too, and each kill (their latest 1,000) with whom, with what, how far, headshot, team kill and map. Kept 30 days |
 | The server's ban list        | As at the last reading (every 10 minutes), to notice bans made or lifted outside the bot ([moderation log](#moderation-log)) |

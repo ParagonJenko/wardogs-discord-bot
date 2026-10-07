@@ -488,6 +488,7 @@ describe('runStaffCommand', () => {
       grief: {
         teamKills: 1,
         vehicleTeamKills: 0,
+        crashTeamKills: 0,
         teamKilled: 0,
         suicides: 0,
         vehicleSuicides: 0,

@@ -6,16 +6,21 @@ import { isKill, weaponKind, type FeedEvent } from './weapons.ts';
 // Possible griefing, from the game's kill feed, for the staff page and the moderation log channel: team kills (killing
 // someone on your own side), whom each player team killed, and suicides, with those in a vehicle (crashing it, or
 // blowing it up with yourself in it) apart. Kept for each UTC day ('grief:<date>'), like the other player records, and
-// keyed by Steam ID, so it is private: only signed-in staff see it.
+// keyed by Steam ID, so it is private: only signed-in staff see it. Teammates killed in a helicopter crash are counted
+// but never flagged: pilots crash by accident, and one crash can kill a full load. A pilot who keeps crashing is still
+// flagged for vehicle suicides.
 
 export const griefDayKey = (at: number): string => `grief:${dayOf(at)}`;
 
-// A player's day. `victims` is the teammates they killed, by Steam ID, and how many times each.
+// A player's day. `victims` is the teammates they killed other than in a crash, by Steam ID, and how many times each.
 export type GriefTotals = {
   name: string;
   teamKills: number;
   // Team kills with a vehicle: running a teammate over, or crashing or blowing up a vehicle with teammates in it.
   vehicleTeamKills: number;
+  // Of those, the ones by a helicopter itself rather than its guns: crashing it with teammates aboard, or landing on
+  // them. They count towards no flag.
+  crashTeamKills: number;
   // Times a teammate killed them.
   teamKilled: number;
   suicides: number;
@@ -47,9 +52,9 @@ export const INCIDENTS_KEPT = 300;
 
 // From when a player's day counts as worth a look. Each is a flag on the staff page.
 export const FLAGS = {
-  // Team kills in a day.
+  // Team kills in a day, not counting crashes.
   teamKills: 3,
-  // Times they killed the same teammate in a day.
+  // Times they killed the same teammate in a day, not counting crashes.
   sameTeammate: 2,
   // Suicides in a vehicle in a day.
   vehicleSuicides: 2,
@@ -68,6 +73,8 @@ const GriefDaySchema = z.object({
       name: z.string(),
       teamKills: count,
       vehicleTeamKills: count,
+      // Not in days saved before it was kept apart.
+      crashTeamKills: count.default(0),
       teamKilled: count,
       suicides: count,
       vehicleSuicides: count,
@@ -109,15 +116,21 @@ export const byVehicle = (e: FeedEvent): boolean => {
   return e.tags.includes('VehicleExplosion') || e.tags.includes('RoadKill') || (e.cause !== null && weaponKind(e.cause) === 'vehicle');
 };
 
+// A death a helicopter itself made, rather than its guns: crashing it with people aboard, or landing on them.
+const AIRCRAFT = /^Vehicle\.Variant\.Air\./i;
+export const byAircraft = (e: FeedEvent): boolean => e.cause !== null && AIRCRAFT.test(e.cause);
+
 // Whether two players are on the same side, as the bot last saw them. Unknown sides are never the same.
 export const sameSide = (a: string | null, b: string | null): boolean => a !== null && b !== null && factionKey(a) === factionKey(b);
 
 // A player passing a flag's mark in a batch, for the moderation log channel: team kills at 3, 6, 9…, vehicle suicides
-// at 2, 4, 6…, and the second time they kill the same teammate in a day.
+// at 2, 4, 6…, and the second time they kill the same teammate in a day. Crashes count towards none of them.
 export type GriefAlert = {
   steamId: string;
   name: string;
+  // All of them, crashes included.
   teamKills: number;
+  crashTeamKills: number;
   vehicleSuicides: number;
   // The teammate they just killed for the second time that day.
   sameTeammate: { steamId: string; name: string; kills: number } | null;
@@ -129,6 +142,7 @@ const blank = (name: string): GriefTotals => ({
   name,
   teamKills: 0,
   vehicleTeamKills: 0,
+  crashTeamKills: 0,
   teamKilled: 0,
   suicides: 0,
   vehicleSuicides: 0,
@@ -136,6 +150,9 @@ const blank = (name: string): GriefTotals => ({
 });
 
 const passed = (before: number, after: number, mark: number): boolean => Math.floor(after / mark) > Math.floor(before / mark);
+
+// The team kills that count towards the flag: not crashes.
+const flaggedTeamKills = (t: GriefTotals): number => t.teamKills - t.crashTeamKills;
 
 // Adds a batch's deaths to the day. `factionOf` is the side the bot last saw a player on, as the feed does not say.
 export const recordGrief = (
@@ -182,7 +199,8 @@ export const recordGrief = (
     const victim = player(e.victimSteamId, e.victimName);
     killer.teamKills += 1;
     killer.vehicleTeamKills += byVehicle(e) ? 1 : 0;
-    killer.victims[e.victimSteamId] = (killer.victims[e.victimSteamId] ?? 0) + 1;
+    if (byAircraft(e)) killer.crashTeamKills += 1;
+    else killer.victims[e.victimSteamId] = (killer.victims[e.victimSteamId] ?? 0) + 1;
     victim.teamKilled += 1;
     added.push({
       at,
@@ -202,7 +220,7 @@ export const recordGrief = (
   const alerts = [...before].flatMap(([steamId, old]): GriefAlert[] => {
     const now = players[steamId];
     if (now === undefined) return [];
-    const teamKills = passed(old.teamKills, now.teamKills, FLAGS.teamKills);
+    const teamKills = passed(flaggedTeamKills(old), flaggedTeamKills(now), FLAGS.teamKills);
     const vehicleSuicides = passed(old.vehicleSuicides, now.vehicleSuicides, FLAGS.vehicleSuicides);
     const again = Object.entries(now.victims).find(
       ([victim, kills]) => kills >= FLAGS.sameTeammate && (old.victims[victim] ?? 0) < FLAGS.sameTeammate,
@@ -213,6 +231,7 @@ export const recordGrief = (
         steamId,
         name: now.name,
         teamKills: now.teamKills,
+        crashTeamKills: now.crashTeamKills,
         vehicleSuicides: now.vehicleSuicides,
         sameTeammate: again === undefined ? null : { steamId: again[0], name: players[again[0]]?.name ?? again[0], kills: again[1] },
         incidents: added.filter((i) => i.steamId === steamId),
@@ -228,7 +247,7 @@ export const hasGrief = (events: FeedEvent[], factionOf: (steamId: string) => st
 
 // The flags a player's day earned.
 export const dayFlags = (t: GriefTotals): Flag[] => [
-  ...(t.teamKills >= FLAGS.teamKills ? (['teamKills'] as const) : []),
+  ...(flaggedTeamKills(t) >= FLAGS.teamKills ? (['teamKills'] as const) : []),
   ...(Object.values(t.victims).some((n) => n >= FLAGS.sameTeammate) ? (['sameTeammate'] as const) : []),
   ...(t.vehicleSuicides >= FLAGS.vehicleSuicides ? (['vehicleSuicides'] as const) : []),
   ...(t.suicides >= FLAGS.suicides ? (['suicides'] as const) : []),
@@ -255,6 +274,7 @@ export const griefRows = (days: GriefDay[]): GriefRow[] => {
       row.name = t.name || row.name;
       row.teamKills += t.teamKills;
       row.vehicleTeamKills += t.vehicleTeamKills;
+      row.crashTeamKills += t.crashTeamKills;
       row.teamKilled += t.teamKilled;
       row.suicides += t.suicides;
       row.vehicleSuicides += t.vehicleSuicides;
@@ -287,7 +307,7 @@ export const griefRows = (days: GriefDay[]): GriefRow[] => {
 };
 
 // One player's day, for /player: their counts (all 0 when they have none), the flags it earned, the teammates they
-// killed, most killed first, and the day's kept incidents by them or team kills on them, oldest first.
+// killed other than in a crash, most killed first, and the day's kept incidents by them or team kills on them, oldest first.
 export type PlayerGrief = Omit<GriefTotals, 'name' | 'victims'> & {
   flags: Flag[];
   victims: { steamId: string; name: string; kills: number }[];
@@ -299,6 +319,7 @@ export const playerGrief = (day: GriefDay, steamId: string): PlayerGrief => {
   return {
     teamKills: t.teamKills,
     vehicleTeamKills: t.vehicleTeamKills,
+    crashTeamKills: t.crashTeamKills,
     teamKilled: t.teamKilled,
     suicides: t.suicides,
     vehicleSuicides: t.vehicleSuicides,

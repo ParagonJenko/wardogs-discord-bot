@@ -1073,12 +1073,21 @@ const FLAG_NAMES: Record<Flag, string> = {
 
 const VICTIMS_NAMED = 5;
 
+// "(2 with a vehicle, 1 in a helicopter crash)" after a count of team kills, or nothing when none were either.
+const teamKillDetail = (vehicle: number, crash: number): string => {
+  const parts = [
+    ...(vehicle > 0 ? [`${vehicle} with a vehicle`] : []),
+    ...(crash > 0 ? [`${crash} in a helicopter crash`] : []),
+  ];
+  return parts.length > 0 ? ` (${parts.join(', ')})` : '';
+};
+
 // For /player: their team kills and suicides today, whom they team killed, and the latest team kills and vehicle
 // suicides by them or team kills on them.
 const griefText = (grief: PlayerGrief, weapon: (cause: string) => string, steamId: string): string => {
   if (grief.teamKills + grief.teamKilled + grief.suicides === 0) return 'No team kills or suicides today.';
   const counts = [
-    `**${plural(grief.teamKills, 'team kill')}**${grief.vehicleTeamKills > 0 ? ` (${grief.vehicleTeamKills} with a vehicle)` : ''}`,
+    `**${plural(grief.teamKills, 'team kill')}**${teamKillDetail(grief.vehicleTeamKills, grief.crashTeamKills)}`,
     ...(grief.teamKilled > 0 ? [`killed by a teammate ${plural(grief.teamKilled, 'time')}`] : []),
     ...(grief.suicides > 0
       ? [`${plural(grief.suicides, 'suicide')}${grief.vehicleSuicides > 0 ? ` (${grief.vehicleSuicides} in a vehicle)` : ''}`]
@@ -1195,7 +1204,7 @@ export const buildGriefAlert = (
     ...(alert.sameTeammate === null
       ? []
       : [`Killed teammate **${playerName(alert.sameTeammate.name)}** ${plural(alert.sameTeammate.kills, 'time')} today`]),
-    ...(alert.teamKills > 0 ? [`${plural(alert.teamKills, 'team kill')} today`] : []),
+    ...(alert.teamKills > 0 ? [`${plural(alert.teamKills, 'team kill')} today${teamKillDetail(0, alert.crashTeamKills)}`] : []),
     ...(alert.vehicleSuicides > 0 ? [`${plural(alert.vehicleSuicides, 'vehicle suicide')} today`] : []),
   ];
   // The newest that fit in one field.
