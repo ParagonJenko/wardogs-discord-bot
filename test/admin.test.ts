@@ -411,6 +411,7 @@ describe('the server list on the staff page', () => {
       headshotsToday: { kills: 12, headshots: 11, expected: 3.1, chance: 0.0000002, flagged: true },
       banned: false,
       reserved: false,
+      checked: null,
     });
     expect(list?.players[0]).toMatchObject({
       kills: 2,
@@ -422,6 +423,16 @@ describe('the server list on the staff page', () => {
       reserved: true,
     });
     expect(list?.players[2]).toMatchObject({ faction: null, kills: null, minutesToday: 0, firstSeen: null });
+  });
+
+  it('says who checked a player today, and names them', () => {
+    const sarge = '340568148044414976';
+    const check = { by: sarge, byName: 'Sarge', at: NOW - 60_000, reasons: ['griefing' as const, 'steam' as const], teamKills: 4, vehicleSuicides: 0 };
+    const page = overview({ checked: { [ASH]: check }, staffNames: { [sarge]: { name: 'Sarge', username: 'sarge_gi', at: NOW } } });
+
+    expect(page.online?.players.find((p) => p.steamId === ASH)?.checked).toEqual(check);
+    expect(page.online?.players.find((p) => p.steamId === DEE)?.checked).toBeNull();
+    expect(page.staff[sarge]).toEqual({ name: 'Sarge', username: 'sarge_gi' });
   });
 
   it('says nothing about the reserved list it could not read, and has no list while the server is not answering', () => {

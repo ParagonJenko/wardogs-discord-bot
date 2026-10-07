@@ -233,6 +233,7 @@ import {
   publicNamesBySteamId,
   type PrivateProfiles,
 } from './privacy.ts';
+import { applyCheck, CHECKED_KEY, checkedToday, readCheckAction, type CheckAction, type Check } from './checked.ts';
 import {
   linkSteam,
   parseStaffProfiles,
@@ -472,8 +473,8 @@ const oneAtATime = () => {
 // and the rotation put on the server today), 'lines' (the in-game lines staff put in place of the bot's own, by list),
 // 'weaponRules' (the weapons staff don't allow, and what the bot does about them; see weaponrules.ts), 'ruleBreaks'
 // (today's kills with them), 'killFeed' (the server's latest kills, for the staff page), 'joinLog' (who joined and left
-// the server, for the staff page; see joinlog.ts), 'headshotsAlerted' (who had a headshot alert today), and for the
-// alert review (see review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's
+// the server, for the staff page; see joinlog.ts), 'headshotsAlerted' (who had a headshot alert today), 'checked' (the players staff
+// checked today and found nothing to act on; see checked.ts), and for the alert review (see review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's
 // kills by day, for the staff page and the roundups' awards, are in the SQLite database's kill_days table (see
 // killfeed.ts), and each player's times on the server, for their history, in its sessions table.
 export class Watcher extends DurableObject<Env> {
@@ -2109,6 +2110,7 @@ export class Watcher extends DurableObject<Env> {
         JOIN_LOG_KEY,
         STAFF_NAMES_KEY,
         STAFF_PROFILES_KEY,
+        CHECKED_KEY,
       ]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
@@ -2181,6 +2183,7 @@ export class Watcher extends DurableObject<Env> {
       history: recent,
       headshots: this.headshotsToday(now, online?.players.map((p) => p.steamId) ?? []),
       joins,
+      checked: checkedToday(stored.get(CHECKED_KEY), now),
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);
@@ -2250,6 +2253,15 @@ export class Watcher extends DurableObject<Env> {
     if (steamId === null) return { steamId, player: null };
     const seen = (await this.recentDays(Date.now())).findLast((d) => d.players[steamId] !== undefined);
     return { steamId, player: seen?.players[steamId]?.name ?? null };
+  }
+
+  // "Checked, they're fine" on a player, or taking it back, for the rest of the UTC day (see checked.ts). The check as it
+  // is now, or null after taking it back.
+  async checkPlayer(action: CheckAction, user: { id: string; name: string }): Promise<{ checked: Check | null }> {
+    const now = Date.now();
+    const next = applyCheck(await this.ctx.storage.get(CHECKED_KEY), action, user, now);
+    await this.ctx.storage.put(CHECKED_KEY, next);
+    return { checked: next.players[action.steamId] ?? null };
   }
 
   // A staff member's name, as seen when they sign in to the staff page or use a staff command. Only written when it
@@ -2795,6 +2807,20 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
       return Response.json(result, { headers });
     } catch (error) {
       console.error(`Staff profile change failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
+    }
+  }
+  // "Checked, they're fine" on a player worth a look, or taking it back.
+  if (route === 'POST /api/admin/check') {
+    const action = await readCheckAction(request);
+    if (action === null) return Response.json({ error: 'Not a check request' }, { status: 400, headers });
+    try {
+      const result = await watcher().checkPlayer(action, { id: session.userId, name: session.name });
+      const what = action.action === 'check' ? `checked ${action.steamId} (${action.reasons.join(', ') || 'no flags'})` : `took back the check on ${action.steamId}`;
+      console.info(`Staff page: ${JSON.stringify(session.name)} (Discord user ${session.userId}) ${what}`);
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff page check failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
     }
   }

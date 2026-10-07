@@ -1,3 +1,4 @@
+import type { Check } from './checked.ts';
 import { mapName } from './discord.ts';
 import { dayFlags, FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
 import { minutesOn, type JoinEvent } from './joinlog.ts';
@@ -156,6 +157,9 @@ export type AdminOnlinePlayer = AdminPlayer & {
   banned: boolean;
   // On the reserved list, from the bot or by hand. Null when ServerSettings.ini could not be read.
   reserved: boolean | null;
+  // A staff member checked them today and found nothing to act on, with what they were flagged for then (see
+  // checked.ts). Null when nobody has.
+  checked: Check | null;
 };
 
 // Who is in game, as the bot's last check saw them (`at`), on `map`.
@@ -243,6 +247,8 @@ export type AdminSources = {
   headshots: Map<string, HeadshotDay>;
   // The join log's joins and leaves, oldest first.
   joins: JoinEvent[];
+  // Today's "Checked, they're fine", by Steam ID (see checked.ts).
+  checked?: Record<string, Check>;
 };
 
 // The staff page lists at most this many risky accounts.
@@ -307,6 +313,7 @@ const onlinePlayers = (
         headshotsToday: s.headshots.get(p.steamId) ?? null,
         banned: banned.has(p.steamId),
         reserved: reserved === null ? null : reserved.has(p.steamId),
+        checked: s.checked?.[p.steamId] ?? null,
       };
     })
     // Players with no team yet go last.
@@ -331,9 +338,14 @@ export const adminSteamIds = (
   ]),
 ];
 
-// The Discord user IDs the page names: who did each thing in the log, and who made each of the bot's bans.
-export const adminStaffIds = (overview: Pick<AdminOverview, 'moderation' | 'bans'>): string[] => [
-  ...new Set([...overview.moderation.map((e) => e.by), ...(overview.bans ?? []).flatMap((b) => (b.bot === null ? [] : [b.bot.by]))]),
+// The Discord user IDs the page names: who did each thing in the log, who made each of the bot's bans, and who checked
+// each player in game.
+export const adminStaffIds = (overview: Pick<AdminOverview, 'moderation' | 'bans'> & { online?: AdminOnline | null }): string[] => [
+  ...new Set([
+    ...overview.moderation.map((e) => e.by),
+    ...(overview.bans ?? []).flatMap((b) => (b.bot === null ? [] : [b.bot.by])),
+    ...(overview.online?.players ?? []).flatMap((p) => (p.checked === null ? [] : [p.checked.by])),
+  ]),
 ].filter((id) => DISCORD_ID.test(id));
 
 // Names for those IDs: from the staff directory, or else the name the staff member had in their latest log entry.
@@ -506,11 +518,12 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
   })();
   const sum = (key: 'teamKills' | 'vehicleTeamKills' | 'crashTeamKills' | 'suicides' | 'vehicleSuicides'): number =>
     rows.reduce((n, r) => n + r[key], 0);
+  const inGameNow = onlinePlayers(s, ref, banned);
   return {
     generatedAt: s.now,
     days: s.days,
     server: s.server,
-    online: onlinePlayers(s, ref, banned),
+    online: inGameNow,
     joins: s.joins
       .map((e): AdminJoin => ({
         at: e.at,
@@ -522,7 +535,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
       .reverse(),
     feedSince: s.feedSince,
     flags: FLAGS,
-    staff: staffFor(adminStaffIds({ moderation, bans }), s.staffNames, s.modLogs),
+    staff: staffFor(adminStaffIds({ moderation, bans, online: inGameNow }), s.staffNames, s.modLogs),
     reserved:
       s.reserved === null
         ? null

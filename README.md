@@ -554,14 +554,15 @@ The Node/Docker version does not have the moderation log.
 
 ## Staff page
 
-The website has a page for staff (gaminginit's `/admin`), in tabs for watching the server live, reviewing what the bot
-flagged, and any player's history. Staff sign in with Discord, and the page shows:
+The website has two pages for staff: Moderation (gaminginit's `/admin`), in tabs for watching the server live,
+reviewing what the bot flagged, and any player's history; and Server settings (`/server-settings`), for the rotations,
+lines, weapon rules and admin tools. Staff sign in with Discord, and the pages show:
 
 - **Who is in game now**, from the bot's last check (every minute): each player's team, kills and deaths this match,
   time on the server today, whether they are new (first seen today, in 90 days), their
   [Steam account](#risky-steam-accounts)'s risk, today's headshots against what their weapons usually get
-  ([Kills and headshots](#kills-and-headshots)), today's griefing flags, VIP and bans. Nothing while the server has not
-  answered for 3 minutes.
+  ([Kills and headshots](#kills-and-headshots)), today's griefing flags, VIP and bans, and whether a staff member
+  [checked them](#checked-theyre-fine) today. Nothing while the server has not answered for 3 minutes.
 - **Who joined and left**: the server's latest 500 joins and leaves, newest first, with how long each player who left
   had been on. The bot compares who is in game at each check with the check before, so a join or leave shows up to a
   minute late, and someone on for less than a minute between two checks is missed. When the bot could not read the
@@ -696,6 +697,23 @@ How headshots are judged:
 The records start with the first kill after this is deployed, and keep each kill for 30 days. The counts (kills,
 headshots, team kills and the longest kill by weapon) stay 62 days, for the [roundups' awards](#roundups). They are keyed by Steam ID, so
 only signed-in staff see them.
+
+### Checked, they're fine
+
+A player the staff page says is worth a look (banned, flagged for griefing or headshots today, or a risky Steam account)
+stays at the top of its server list until someone looks. A staff member who checks them and finds nothing to act on
+clicks **Checked, they're fine**, and the page moves them down to everyone else for all staff, saying who checked them
+and when:
+
+- It lasts until the end of the UTC day, like the flags. Only today's checks are kept (`checked`).
+- Each check keeps what the player was flagged for then: the reasons, their team kills and vehicle suicides today. The
+  page puts them back at the top when more comes up, such as another team kill or a new flag, saying they were checked
+  before.
+- Anyone can take a check back.
+- The page sends `POST /api/admin/check` (`{"action": "check", "steamId": "…", "reasons": ["griefing", "steam"],
+  "teamKills": 4, "vehicleSuicides": 0}`, or `{"action": "uncheck", "steamId": "…"}`), and the overview gives each
+  player in game `checked` (who, when, and what they were flagged for), or `null`. Each is logged
+  (`Staff page: "<name>" (Discord user <ID>) checked <Steam ID> (griefing, steam)`).
 
 ### Staff Steam accounts
 
