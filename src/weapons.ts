@@ -257,6 +257,11 @@ const BY_TAG = new Map(Object.entries(NAMES).map(([cause, name]) => [cause.toLow
 // Whether the bot has a name for a tag, rather than making one from the tag.
 export const isNamed = (cause: string): boolean => BY_TAG.has(cause.toLowerCase());
 
+const TAG_SPELLING = new Map(Object.keys(NAMES).map((cause) => [cause.toLowerCase(), cause]));
+
+// A tag the bot has a name for, as NAMES spells it, or null for any other.
+export const namedTag = (cause: string): string | null => TAG_SPELLING.get(cause.toLowerCase()) ?? null;
+
 // `WEPN_099` → `WEPN 099`, `MountedMachineGuns` → `Mounted machine guns`. A code name keeps its capitals.
 const words = (part: string): string =>
   part
@@ -289,6 +294,24 @@ export const weaponName = (cause: string): string => {
   if (weaponKind(cause) === 'buildable') return words(parts.at(-1) ?? cause);
   // Id.Item.Mosin, Id.Item.Defibrillator.Standard
   return parts.slice(2).map(words).join(' ') || words(cause);
+};
+
+// A weapon the bot has a name for, with every tag of that name.
+export type NamedWeapon = { name: string; kind: WeaponKind; tags: string[] };
+
+// Every weapon the bot has a name for, for staff to pick from: by kind (hand-held first), then name.
+export const namedWeapons = (): NamedWeapon[] => {
+  const byName = new Map<string, NamedWeapon>();
+  for (const tag of Object.keys(NAMES)) {
+    const name = weaponName(tag);
+    const known = byName.get(name);
+    byName.set(name, {
+      name,
+      kind: known === undefined ? weaponKind(tag) : mergedKind(known.kind, weaponKind(tag)),
+      tags: [...(known?.tags ?? []), tag],
+    });
+  }
+  return [...byName.values()].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || a.name.localeCompare(b.name));
 };
 
 // What a weapon is for, for the roundups' awards: assault (assault rifles, SMGs, shotguns), machine guns, marksman

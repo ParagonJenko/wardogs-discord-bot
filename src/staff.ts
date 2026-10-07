@@ -155,7 +155,7 @@ export const WARNING_MAX_LENGTH = 140;
 const WARNING_PREFIX = 'Staff warning: ';
 
 // Where players find the server rules, added to what staff send them: the rules are in the Discord.
-const rulesNote = (siteUrl: string | undefined): string => {
+export const rulesNote = (siteUrl: string | undefined): string => {
   const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
   return host ? `Rules: our Discord at ${host}` : 'Rules are in our Discord';
 };

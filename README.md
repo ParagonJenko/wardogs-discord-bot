@@ -54,7 +54,8 @@ kill feed for [weapon stats](#weapon-stats): the weapons people use most, and ea
 [automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week. And it runs the website's
 [staff page](#staff-page): staff sign in with Discord to see possible griefers (team kills, suicides in vehicles),
 [risky Steam accounts](#risky-steam-accounts) (VAC and game bans, new and hidden accounts), the moderation log and the bans
-on the server.
+on the server. And it enforces [weapon rules](#weapon-rules): staff pick weapons the server doesn't allow, such as the
+Humvee's gun, and the bot warns or kicks whoever kills with one.
 
 Alerts and summaries go through a Discord webhook. Every 60 seconds the bot reads `GET /v1/status` and
 `GET /v1/players` from the server's RCON listener.
@@ -509,6 +510,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | Post                    | When                                                                                      |
 | ----------------------- | ----------------------------------------------------------------------------------------- |
 | ⚠️ Warning, 👢 Kick, 🔨 Ban, ✅ Unban, 🔀 Team move | Staff use `/warn`, `/kick`, `/ban`, `/unban` or `/switchteam`. With the player, their Steam ID, the reason, the length of a ban and who did it |
+| ⚠️ Warning, 👢 Kick by the bot | A player kills with a weapon a [weapon rule](#weapon-rules) doesn't allow. With the rule, the weapon and which warning it was |
 | 🎖️ VIP added / removed  | Staff use `/vip add` or `/vip remove`. With the player, their Steam ID, the reason (Friend, Regular, Seeder, Paid or Other, and any note), how long and who did it. Not automatic VIP from seeding, which is announced in the alerts channel |
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
@@ -596,6 +598,7 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
   [map rotations](#map-rotations), and remove a wrongly recorded match. See below.
 - **[Rotations](#rotations-tab)**: the week, what is on the server, and a drag and drop editor for the saved rotations.
 - **[Lines](#lines-tab)**: the lines the bot says in game, to reword, add or take out.
+- **[Weapon rules](#weapon-rules)**: weapons the server doesn't allow, and whether the bot warns or kicks for them.
 - **[Staff Steam accounts](#staff-steam-accounts)**: who has linked theirs, so the bot never counts them as seeders.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
@@ -805,6 +808,63 @@ The next check asks Steam about everyone in game. Each account gets points for w
 - **Turning it off:** delete the secret (`npx wrangler secret delete STEAM_API_KEY`).
 
 The Node/Docker version does not check Steam accounts.
+
+## Weapon rules
+
+Some servers don't allow some weapons, such as the guns on the Humvee and the Kodiak, or the MGL. The bot sees every
+kill in the [kill feed](#weapon-stats) a second or two after it happens, so it can enforce that: staff pick the weapons
+on the staff page's **Weapon rules** tab, and what the bot does when someone kills with one.
+
+Each rule has a name, its weapons, and one of:
+
+| Mode               | What the bot does                                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------- |
+| Off                | Nothing                                                                                   |
+| Warn               | Sends the player the rule's warning in game, privately, like `/warn`                      |
+| Warn, then kick    | Warns them for their first 1 to 5 offences of the day (staff pick how many), then kicks them for each one after |
+| Kick               | Kicks them with the rule's kick reason, like `/kick`. They can rejoin                     |
+
+It starts with three rules, all off, with their messages ready:
+
+| Rule           | Weapons                          | Warning                                                          |
+| -------------- | -------------------------------- | ---------------------------------------------------------------- |
+| Humvee gunner  | Humvee M249, Humvee minigun      | No kills from the Humvee gun. It is not allowed on this server.  |
+| Kodiak gunner  | Kodiak M249                      | No kills from the Kodiak gun. It is not allowed on this server.  |
+| MGL            | MGL-40                           | The MGL is not allowed on this server. Switch weapon.            |
+
+The Humvee and Kodiak rules are for their guns only: running someone over with one is not a gunner kill.
+
+- **Messages.** A warning goes out as `Warning: <the warning> | Rules: our Discord at <SITE_URL>`. With warn, then
+  kick, it says which it is (`Warning 1 of 2:`), and the last one says `Last warning:`. A kick's reason is
+  `<the kick reason> | Rules: our Discord at <SITE_URL>`. The tab checks each message fits the game's 200 characters
+  with what the bot adds.
+- **One offence, not one per kill.** Kills with a rule's weapons within 30 seconds of the bot warning or kicking for
+  that rule are the same offence (`SAME_OFFENCE_MS` in `src/weaponrules.ts`): one burst from a gun gets one warning,
+  and so do kills before the player could read it.
+- **Counted per rule, per UTC day.** A new day starts from nothing, so yesterday's warnings never lead to a kick today.
+  A kicked player who rejoins and does it again is kicked again.
+- **A kick comes alone.** When one batch of kills breaks two rules and one of them kicks, the player gets the kick and
+  not the warning. The warning's offence still counts.
+- **On the record.** Every warning and kick goes in the player's history (`/player`) and the
+  [moderation log](#moderation-log) as done by the bot, with the rule, the weapon and which warning it was, and in the
+  Worker logs (`Weapon rule: warned "<name>" (<Steam ID>). …`). One that fails, such as a kick for a player who has
+  just left, is logged (`Weapon rule kick for … failed: …`) and not tried again; the offence still counts.
+- **Any weapon the bot has a name for** can be in a rule; each weapon in one rule only. Up to 20 rules of up to 20
+  weapons. A weapon the bot has no name for yet (see [Weapons to name](#kills-and-headshots)) can't be picked until it
+  is added to `NAMES` in `src/weapons.ts`.
+- **Everyone.** Rules apply to every player, staff too, and while the server seeds.
+- **The tab.** It shows each rule with how many warnings and kicks the bot gave for it today, and who changed it last.
+  The page reads `GET /api/admin/rules` and sends changes to `POST /api/admin/rules` (`{"action": "save", "id": null |
+  "<rule>", "name": "…", "weapons": ["<tag>", …], "mode": "off" | "warn" | "warn-kick" | "kick", "warnings": 1,
+  "warning": "…", "kick": "…"}`, or `{"action": "remove", "id": "<rule>"}`). Each change is logged as
+  `Staff page: weapon rule <action> …`. The rules are kept as `weaponRules`, and today's offences as `ruleBreaks`.
+- **Costs.** A batch with no kill against a rule that is on costs nothing more. One with an offence is a storage read
+  and write, an RCON request for each warning or kick, and one more write to count those that went out. The tab's
+  counts are of warnings and kicks that went out; one that failed still counts as an offence.
+- It needs the [kill feed](#weapon-stats), and the RCON password's write access (`POST /v1/players/<Steam ID>/message`
+  and `/kick`), like `/warn` and `/kick`.
+
+The Node/Docker version does not have weapon rules: they need the kill feed.
 
 ## Alert review
 
