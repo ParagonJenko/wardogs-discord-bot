@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   byAircraft,
   byVehicle,
+  vehicleDeath,
   dayFlags,
   emptyGriefDay,
   griefDayKey,
@@ -65,6 +66,15 @@ describe('telling deaths apart', () => {
     // The mortar's barrel.
     expect(byVehicle(death(ASH, ASH, { cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel', tags: ['VehicleExplosion'] }))).toBe(false);
     expect(byVehicle(death(ASH, BO))).toBe(false);
+  });
+
+  it('tells how a vehicle killed: a helicopter, running someone over, blowing up, or otherwise', () => {
+    expect(vehicleDeath(death(ASH, BO, { cause: LITTLEBIRD, tags: ['VehicleExplosion'] }))).toBe('helicopter');
+    expect(vehicleDeath(death(ASH, BO, { cause: HUMVEE, tags: ['RoadKill'] }))).toBe('runOver');
+    expect(vehicleDeath(death(ASH, BO, { cause: HUMVEE, tags: ['VehicleExplosion'] }))).toBe('explosion');
+    expect(vehicleDeath(death(ASH, BO, { cause: HUMVEE }))).toBe('other');
+    expect(vehicleDeath(death(ASH, BO, { cause: 'Id.Vehicle.WeaponExtension.WHL_05.RingTurret' }))).toBeNull();
+    expect(vehicleDeath(death(ASH, BO))).toBeNull();
   });
 
   it('knows a death a helicopter made itself, not with its guns', () => {
@@ -154,25 +164,25 @@ describe('recordGrief', () => {
     expect(day.players[ASH]?.name).toBe('Ash2');
   });
 
-  it('alerts when a player reaches 3, 6… team kills, 2, 4… vehicle suicides, or kills the same teammate twice', () => {
-    const two = recordGrief(emptyGriefDay(), [death(ASH, BO), death(ASH, CY)], AT, sideOf);
-    expect(two.alerts).toEqual([]);
+  it('alerts when a player reaches 4, 8… team kills, 4, 8… vehicle suicides, or kills the same teammate a third time', () => {
+    const three = recordGrief(emptyGriefDay(), [death(ASH, BO), death(ASH, CY), death(ASH, BO)], AT, sideOf);
+    expect(three.alerts).toEqual([]);
 
-    const three = recordGrief(two.day, [death(ASH, BO)], AT, sideOf);
-    expect(three.alerts).toEqual([
-      expect.objectContaining({ steamId: ASH, name: 'Ash', teamKills: 3, sameTeammate: { steamId: BO, name: 'Bo', kills: 2 } }),
+    const four = recordGrief(three.day, [death(ASH, BO)], AT, sideOf);
+    expect(four.alerts).toEqual([
+      expect.objectContaining({ steamId: ASH, name: 'Ash', teamKills: 4, sameTeammate: { steamId: BO, name: 'Bo', kills: 3 } }),
     ]);
-    expect(three.alerts[0]?.incidents).toHaveLength(1);
+    expect(four.alerts[0]?.incidents).toHaveLength(1);
 
-    const four = recordGrief(three.day, [death(ASH, CY)], AT, sideOf);
-    expect(four.alerts).toEqual([expect.objectContaining({ steamId: ASH, sameTeammate: { steamId: CY, name: 'Cy', kills: 2 } })]);
+    const six = recordGrief(four.day, [death(ASH, CY), death(ASH, CY)], AT, sideOf);
+    expect(six.alerts).toEqual([expect.objectContaining({ steamId: ASH, teamKills: 6, sameTeammate: { steamId: CY, name: 'Cy', kills: 3 } })]);
 
-    const five = recordGrief(four.day, [death(ASH, DEE)], AT, sideOf);
-    expect(five.alerts).toEqual([]);
+    const other = recordGrief(six.day, [death(ASH, DEE)], AT, sideOf);
+    expect(other.alerts).toEqual([]);
 
     const crash = (n: number) => Array.from({ length: n }, () => death(BO, BO, { cause: HUMVEE, tags: ['VehicleExplosion'] }));
-    expect(recordGrief(emptyGriefDay(), crash(1), AT, sideOf).alerts).toEqual([]);
-    expect(recordGrief(emptyGriefDay(), crash(2), AT, sideOf).alerts).toEqual([expect.objectContaining({ steamId: BO, vehicleSuicides: 2 })]);
+    expect(recordGrief(emptyGriefDay(), crash(3), AT, sideOf).alerts).toEqual([]);
+    expect(recordGrief(emptyGriefDay(), crash(4), AT, sideOf).alerts).toEqual([expect.objectContaining({ steamId: BO, vehicleSuicides: 4 })]);
   });
 
   it('counts teammates killed in a helicopter crash, but towards no flag', () => {
@@ -198,18 +208,18 @@ describe('recordGrief', () => {
     expect(first.alerts).toEqual([]);
     expect(dayFlags(first.day.players[ASH]!)).toEqual([]);
 
-    // Other team kills still flag from 3, crashes left out.
-    const two = recordGrief(first.day, [death(ASH, BO), death(ASH, CY)], AT, sideOf);
-    expect(two.alerts).toEqual([]);
-    const three = recordGrief(two.day, [death(ASH, BO)], AT, sideOf);
-    expect(three.alerts).toEqual([
-      expect.objectContaining({ teamKills: 6, crashTeamKills: 3, sameTeammate: { steamId: BO, name: 'Bo', kills: 2 } }),
+    // Other team kills still flag from 4, crashes left out.
+    const three = recordGrief(first.day, [death(ASH, BO), death(ASH, CY), death(ASH, BO)], AT, sideOf);
+    expect(three.alerts).toEqual([]);
+    const four = recordGrief(three.day, [death(ASH, BO)], AT, sideOf);
+    expect(four.alerts).toEqual([
+      expect.objectContaining({ teamKills: 7, crashTeamKills: 3, sameTeammate: { steamId: BO, name: 'Bo', kills: 3 } }),
     ]);
-    expect(dayFlags(three.day.players[ASH]!)).toEqual(['teamKills', 'sameTeammate']);
+    expect(dayFlags(four.day.players[ASH]!)).toEqual(['teamKills', 'sameTeammate']);
 
-    // A second crash the same day is a second vehicle suicide, which still flags.
-    const again = recordGrief(first.day, [crash(BO), crash(ASH)], AT, sideOf);
-    expect(again.alerts).toEqual([expect.objectContaining({ steamId: ASH, teamKills: 4, crashTeamKills: 4, vehicleSuicides: 2, sameTeammate: null })]);
+    // A pilot who keeps crashing still flags for vehicle suicides: the fourth crash of the day.
+    const again = recordGrief(first.day, [crash(BO), crash(ASH), crash(BO), crash(ASH), crash(BO), crash(ASH)], AT, sideOf);
+    expect(again.alerts).toEqual([expect.objectContaining({ steamId: ASH, teamKills: 6, crashTeamKills: 6, vehicleSuicides: 4, sameTeammate: null })]);
   });
 
   it('says whether a batch has anything to record, so most batches write nothing more', () => {
@@ -233,57 +243,60 @@ describe('griefing records', () => {
     expect(parseGriefDay({ players: { [ASH]: { name: 'Ash' } }, incidents: [] })).toEqual(emptyGriefDay());
   });
 
-  it("flags a player's day from 3 team kills, the same teammate twice, 2 vehicle suicides or 10 suicides", () => {
+  it("flags a player's day from 4 team kills, the same teammate 3 times, 4 vehicle suicides or 10 suicides", () => {
     const base = { name: 'Ash', teamKills: 0, vehicleTeamKills: 0, crashTeamKills: 0, teamKilled: 0, suicides: 0, vehicleSuicides: 0, victims: {} };
 
     expect(dayFlags(base)).toEqual([]);
-    expect(dayFlags({ ...base, teamKills: 3, victims: { [BO]: 1, [CY]: 1, [DEE]: 1 } })).toEqual(['teamKills']);
-    expect(dayFlags({ ...base, teamKills: 5, vehicleTeamKills: 3, crashTeamKills: 3, victims: { [BO]: 1, [CY]: 1 } })).toEqual([]);
-    expect(dayFlags({ ...base, teamKills: 2, victims: { [BO]: 2 } })).toEqual(['sameTeammate']);
-    expect(dayFlags({ ...base, suicides: 2, vehicleSuicides: 2 })).toEqual(['vehicleSuicides']);
+    expect(dayFlags({ ...base, teamKills: 3, victims: { [BO]: 1, [CY]: 1, [DEE]: 1 } })).toEqual([]);
+    expect(dayFlags({ ...base, teamKills: 4, victims: { [BO]: 2, [CY]: 2 } })).toEqual(['teamKills']);
+    expect(dayFlags({ ...base, teamKills: 6, vehicleTeamKills: 3, crashTeamKills: 3, victims: { [BO]: 2, [CY]: 1 } })).toEqual([]);
+    expect(dayFlags({ ...base, teamKills: 3, victims: { [BO]: 3 } })).toEqual(['sameTeammate']);
+    expect(dayFlags({ ...base, suicides: 3, vehicleSuicides: 3 })).toEqual([]);
+    expect(dayFlags({ ...base, suicides: 4, vehicleSuicides: 4 })).toEqual(['vehicleSuicides']);
     expect(dayFlags({ ...base, suicides: 10 })).toEqual(['suicides']);
   });
 
   it('adds up the days, most flagged days first, then most team kills, with the teammate each killed most', () => {
     const days: GriefDay[] = [
-      recordGrief(emptyGriefDay(), [death(ASH, BO), death(ASH, BO), death(CY, BO)], AT, sideOf).day,
-      recordGrief(emptyGriefDay(), [death(ASH, CY), death(CY, BO), death(CY, ASH), death(CY, BO)], AT, sideOf).day,
+      recordGrief(emptyGriefDay(), [death(ASH, BO), death(ASH, BO), death(ASH, BO), death(CY, BO)], AT, sideOf).day,
+      recordGrief(emptyGriefDay(), [death(ASH, CY), death(CY, BO), death(CY, ASH), death(CY, BO), death(CY, BO)], AT, sideOf).day,
       recordGrief(emptyGriefDay(), [death(DEE, DEE, { tags: ['Suicide'] })], AT, sideOf).day,
     ];
 
     const rows = griefRows(days);
 
     expect(rows.map((r) => [r.name, r.teamKills, r.flaggedDays, r.flags])).toEqual([
-      ['Cy', 4, 1, ['teamKills', 'sameTeammate']],
-      ['Ash', 3, 1, ['sameTeammate']],
+      ['Cy', 5, 1, ['teamKills', 'sameTeammate']],
+      ['Ash', 4, 1, ['sameTeammate']],
       ['Dee', 0, 0, []],
       ['Bo', 0, 0, []],
     ]);
-    expect(rows[0]?.mostKilledTeammate).toEqual({ steamId: BO, name: 'Bo', kills: 3 });
-    expect(rows.find((r) => r.steamId === BO)?.teamKilled).toBe(5);
+    expect(rows[0]?.mostKilledTeammate).toEqual({ steamId: BO, name: 'Bo', kills: 4 });
+    expect(rows.find((r) => r.steamId === BO)?.teamKilled).toBe(7);
     expect(rows.find((r) => r.steamId === DEE)?.suicides).toBe(1);
   });
 
   it("gives one player's day for /player: counts, flags, teammates killed and the incidents by them or on them", () => {
     const day = recordGrief(
       emptyGriefDay(),
-      [death(ASH, BO), death(ASH, CY), death(ASH, BO), death(CY, ASH), death(BO, CY), death(ASH, ASH, { cause: HUMVEE })],
+      [death(ASH, BO), death(ASH, CY), death(ASH, BO), death(ASH, BO), death(CY, ASH), death(BO, CY), death(ASH, ASH, { cause: HUMVEE })],
       AT,
       sideOf,
     ).day;
 
     const ash = playerGrief(day, ASH);
 
-    expect(ash).toMatchObject({ teamKills: 3, vehicleTeamKills: 0, teamKilled: 1, suicides: 1, vehicleSuicides: 1 });
+    expect(ash).toMatchObject({ teamKills: 4, vehicleTeamKills: 0, teamKilled: 1, suicides: 1, vehicleSuicides: 1 });
     expect(ash.flags).toEqual(['teamKills', 'sameTeammate']);
     expect(ash.victims).toEqual([
-      { steamId: BO, name: 'Bo', kills: 2 },
+      { steamId: BO, name: 'Bo', kills: 3 },
       { steamId: CY, name: 'Cy', kills: 1 },
     ]);
     // Bo killing Cy is neither by Ash nor on Ash.
     expect(ash.incidents.map((i) => [i.kind, i.name, i.victimName])).toEqual([
       ['team-kill', 'Ash', 'Bo'],
       ['team-kill', 'Ash', 'Cy'],
+      ['team-kill', 'Ash', 'Bo'],
       ['team-kill', 'Ash', 'Bo'],
       ['team-kill', 'Cy', 'Ash'],
       ['vehicle-suicide', 'Ash', undefined],

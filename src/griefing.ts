@@ -50,14 +50,17 @@ export type GriefDay = { players: Record<string, GriefTotals>; incidents: Incide
 // A day keeps its latest incidents, up to this many, so its record stays small. The counts are always complete.
 export const INCIDENTS_KEPT = 300;
 
-// From when a player's day counts as worth a look. Each is a flag on the staff page.
+// From when a player's day counts as worth a look. Each is a flag on the staff page. Set from the alert review (see
+// review.ts) of the kill feed's first days, 4 to 6 October 2026: at 3 team kills, the same teammate twice and 2
+// vehicle suicides, a full day earned 38 flags. Team kills fall away evenly from 1 to 7 a day, nobody killed the same
+// teammate more than twice, and more than 1 in 4 players who appear here had a vehicle suicide.
 export const FLAGS = {
   // Team kills in a day, not counting crashes.
-  teamKills: 3,
+  teamKills: 4,
   // Times they killed the same teammate in a day, not counting crashes.
-  sameTeammate: 2,
+  sameTeammate: 3,
   // Suicides in a vehicle in a day.
-  vehicleSuicides: 2,
+  vehicleSuicides: 4,
   // Suicides of any kind in a day.
   suicides: 10,
 } as const;
@@ -111,20 +114,31 @@ export const isSuicide = (e: FeedEvent): boolean =>
 
 // A death a vehicle made: run over, blown up, or by the vehicle itself rather than a gun on it. Emplacements such as
 // mortars are vehicles to the game, but not ones anyone drives, so they never count, whatever the tags say.
-export const byVehicle = (e: FeedEvent): boolean => {
+export const byVehicle = (e: Pick<FeedEvent, 'cause' | 'tags'>): boolean => {
   if (e.cause !== null && weaponKind(e.cause) === 'emplacement') return false;
   return e.tags.includes('VehicleExplosion') || e.tags.includes('RoadKill') || (e.cause !== null && weaponKind(e.cause) === 'vehicle');
 };
 
 // A death a helicopter itself made, rather than its guns: crashing it with people aboard, or landing on them.
 const AIRCRAFT = /^Vehicle\.Variant\.Air\./i;
-export const byAircraft = (e: FeedEvent): boolean => e.cause !== null && AIRCRAFT.test(e.cause);
+export const byAircraft = (e: Pick<FeedEvent, 'cause'>): boolean => e.cause !== null && AIRCRAFT.test(e.cause);
+
+// How a vehicle killed: a helicopter itself (mostly a crash), running someone over, the vehicle blowing up with them in
+// it or next to it, or the vehicle some other way. Null for a death no vehicle made, such as by a vehicle's gun.
+export type VehicleDeath = 'helicopter' | 'runOver' | 'explosion' | 'other';
+
+export const vehicleDeath = (e: Pick<FeedEvent, 'cause' | 'tags'>): VehicleDeath | null => {
+  if (!byVehicle(e)) return null;
+  if (byAircraft(e)) return 'helicopter';
+  if (e.tags.includes('RoadKill')) return 'runOver';
+  return e.tags.includes('VehicleExplosion') ? 'explosion' : 'other';
+};
 
 // Whether two players are on the same side, as the bot last saw them. Unknown sides are never the same.
 export const sameSide = (a: string | null, b: string | null): boolean => a !== null && b !== null && factionKey(a) === factionKey(b);
 
-// A player passing a flag's mark in a batch, for the moderation log channel: team kills at 3, 6, 9…, vehicle suicides
-// at 2, 4, 6…, and the second time they kill the same teammate in a day. Crashes count towards none of them.
+// A player passing a flag's mark in a batch, for the moderation log channel: team kills at 4, 8, 12…, vehicle suicides
+// at 4, 8, 12…, and the third time they kill the same teammate in a day. Crashes count towards none of them.
 export type GriefAlert = {
   steamId: string;
   name: string;
@@ -132,7 +146,7 @@ export type GriefAlert = {
   teamKills: number;
   crashTeamKills: number;
   vehicleSuicides: number;
-  // The teammate they just killed for the second time that day.
+  // The teammate they just killed for the third time that day.
   sameTeammate: { steamId: string; name: string; kills: number } | null;
   // The incidents in this batch by them, newest last.
   incidents: Incident[];

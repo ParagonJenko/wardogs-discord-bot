@@ -44,7 +44,12 @@ const totals = (overrides: Partial<PlayerTotals> = {}): PlayerTotals => ({
 });
 
 const sources = (overrides: Partial<AdminSources> = {}): AdminSources => {
-  const day = recordGrief(emptyGriefDay(), [death(ASH, BO), death(ASH, BO), death(ASH, BO), death(ASH, CY)], NOW - DAY, (id) => SIDES[id] ?? null).day;
+  const day = recordGrief(
+    emptyGriefDay(),
+    [death(ASH, BO), death(ASH, BO), death(ASH, BO), death(ASH, BO), death(ASH, CY)],
+    NOW - DAY,
+    (id) => SIDES[id] ?? null,
+  ).day;
   return {
     now: NOW,
     days: 7,
@@ -76,19 +81,19 @@ describe('buildAdminOverview', () => {
     const overview = buildAdminOverview(sources({ serverBans: [{ steamId: ASH, reason: 'TK', bannedBy: null }] }));
 
     expect(overview).toMatchObject({ generatedAt: NOW, days: 7, feedSince: '2026-09-20', flags: FLAGS });
-    expect(overview.totals).toEqual({ teamKills: 3, vehicleTeamKills: 0, crashTeamKills: 0, suicides: 0, vehicleSuicides: 0, flaggedPlayers: 1 });
+    expect(overview.totals).toEqual({ teamKills: 4, vehicleTeamKills: 0, crashTeamKills: 0, suicides: 0, vehicleSuicides: 0, flaggedPlayers: 1 });
     expect(overview.players).toEqual([
       {
         steamId: ASH,
         name: 'Ash',
         id: 'a00000000001',
-        teamKills: 3,
+        teamKills: 4,
         vehicleTeamKills: 0,
         crashTeamKills: 0,
         teamKilled: 0,
         suicides: 0,
         vehicleSuicides: 0,
-        mostKilledTeammate: { steamId: BO, name: 'Bo', kills: 3 },
+        mostKilledTeammate: { steamId: BO, name: 'Bo', kills: 4 },
         flags: ['teamKills', 'sameTeammate'],
         flaggedDays: 1,
         matches: 3,
@@ -97,7 +102,7 @@ describe('buildAdminOverview', () => {
         minutes: 240,
         banned: true,
       },
-      expect.objectContaining({ steamId: BO, name: 'Bo', teamKilled: 3, banned: false }),
+      expect.objectContaining({ steamId: BO, name: 'Bo', teamKilled: 4, banned: false }),
     ]);
   });
 
@@ -110,7 +115,7 @@ describe('buildAdminOverview', () => {
   it('shows each incident, newest first, with the map and weapon by name', () => {
     const overview = buildAdminOverview(sources());
 
-    expect(overview.incidents).toHaveLength(3);
+    expect(overview.incidents).toHaveLength(4);
     expect(overview.incidents[0]).toEqual({
       at: NOW - DAY,
       kind: 'team-kill',
@@ -401,7 +406,7 @@ describe('the server list on the staff page', () => {
       firstSeen: '2026-09-01',
       steam: { risk: 'high', score: 4, flags: ['vacBan', 'recentBan'] },
       griefFlags: ['teamKills', 'sameTeammate'],
-      teamKillsToday: 3,
+      teamKillsToday: 4,
       vehicleSuicidesToday: 0,
       headshotsToday: { kills: 12, headshots: 11, expected: 3.1, chance: 0.0000002, flagged: true },
       banned: false,

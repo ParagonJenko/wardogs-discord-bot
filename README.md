@@ -512,7 +512,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | 🎖️ VIP added / removed  | Staff use `/vip add` or `/vip remove`. With the player, their Steam ID, the reason (Friend, Regular, Seeder, Paid or Other, and any note), how long and who did it. Not automatic VIP from seeding, which is announced in the alerts channel |
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
-| 🚩 Possible griefing     | A player reaches 3, 6, 9… team kills in a day, 2, 4, 6… suicides in a vehicle, or kills the same teammate a second time that day. Teammates killed in a helicopter crash don't count (see [Possible griefers](#staff-page)). With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
+| 🚩 Possible griefing     | A player reaches 4, 8, 12… team kills in a day, 4, 8, 12… suicides in a vehicle, or kills the same teammate a third time that day. Teammates killed in a helicopter crash don't count (see [Possible griefers](#staff-page)). With their latest incidents, and their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
 | 🕵️ Risky Steam account   | A player in game has one of the riskiest Steam accounts (7 points or more), such as a new account with a VAC ban, or VAC and game bans with one recent. Once, and again if it gets riskier. Needs `STEAM_API_KEY`: see [Risky Steam accounts](#risky-steam-accounts) |
 | 🎯 Unlikely headshots    | A player in game has a flagged day of headshots (see [Kills and headshots](#kills-and-headshots)): today's headshots and kills, what is usual for their weapons, the chance by luck and their weapon with the most kills. Once a UTC day for each player. Red, and "again", when they were flagged on another day in the last 30, and red with their [Steam account](#risky-steam-accounts) when it is high risk or worth a look. Needs the [kill feed](#weapon-stats) |
 | 🔴 Server crashed / 📉 players dropped at once | A live server lost more than three quarters of its players from one check to the next, and 3 minutes later still has under half of them. With the players before and now, and whether it was at a map change |
@@ -569,11 +569,12 @@ flagged, and any player's history. Staff sign in with Discord, and the page show
   the SQLite database's `sessions` table for their history, kept for 30 days.
 - **The kill feed, live**: every kill a second or two after the game sends it (see below).
 - **Possible griefers** over today, 7 or 30 days: everyone who team killed, was team killed or killed themselves, from
-  the [kill feed](#weapon-stats). A player's day is flagged for 3 or more team kills, killing the same teammate twice
-  or more, 2 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
-  suicides. Teammates killed in a helicopter crash are counted and listed, but don't count towards the team kill or
-  same-teammate flags: pilots crash by accident, and one crash can kill a full load. A pilot who crashes twice in a day
-  is still flagged for vehicle suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
+  the [kill feed](#weapon-stats). A player's day is flagged for 4 or more team kills, killing the same teammate 3 times
+  or more, 4 or more suicides in a vehicle (crashing it, or blowing it up with themselves in it), or 10 or more
+  suicides (`FLAGS` in `src/griefing.ts`, set from the [alert review](#alert-review) of the first days of the kill
+  feed). Teammates killed in a helicopter crash are counted and listed, but don't count towards the team kill or
+  same-teammate flags: pilots crash by accident, and one crash can kill a full load. A pilot who crashes 4 times in a
+  day is still flagged for vehicle suicides. Those in game now first, then most flagged days first, with their matches, kills and time played for scale,
   and whether they are banned.
 - **Team kills and vehicle suicides**, each with when, who, which teammate, with what, how far and on which map.
 - **[Kills and headshots](#kills-and-headshots)**: who gets far more headshots than the server's players get with the
@@ -828,7 +829,7 @@ characters. To let Claude Code on the web read it, add the token to the environm
 | `thresholds` | Every mark the alerts use: population (seeding, live, low pop, cooldown, drop grace, the seeding alert's wait, quiet hours), outages, griefing flags, the headshot flag, Steam risk points, and which moderation log posts are on |
 | `alerts`     | What was posted: `totals` and `byDay`, by kind: `seeding`, `live`, `lowPop`, `back`, and in the moderation log `grief`, `steam`, `headshot`, `down` and `up`. Counted from this update on, for 60 days |
 | `outages`    | The outage going on `now`, if any, and the `log` of outages confirmed in the period: kind, when, players before, the fewest, how long unreachable, and when they ended and whether the players came back. The last 100 are kept |
-| `grief`      | Each player's day with a team kill, team death or suicide: how many had 0, 1, 2… team kills (not counting helicopter crashes), the most kills of one teammate, vehicle suicides and suicides; the days each flag was earned; and how many players were flagged on 1, 2… days |
+| `grief`      | Each player's day with a team kill, team death or suicide: how many had 0, 1, 2… team kills (not counting helicopter crashes), the most kills of one teammate, vehicle suicides and suicides; the days each flag was earned; how many players were flagged on 1, 2… days; and `vehicles`: team kills and vehicle suicides with a vehicle by how (`helicopter`, `runOver`, `explosion`, `other`), how many run-over team kills each player's day had, and how many of the day's team kills and vehicle suicides the kept incidents cover |
 | `headshots`  | The server's share of headshots; players' days by kills (`killsPerDay`) and, for days with enough kills to judge, by chance by luck; flagged days, and how many players were flagged on 1, 2… days |
 | `steam`      | The checked Steam accounts of everyone on the server in the period, by risk and by points, and how many are at the alert mark. `null` without `STEAM_API_KEY` |
 
