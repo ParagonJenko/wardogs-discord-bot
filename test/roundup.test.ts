@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { KillDaySummary } from '../src/killfeed.ts';
 import type { MatchPlayer, MatchRecord, PlayerDay, PlayerTotals } from '../src/players.ts';
+import { PRIVATE_NAME } from '../src/privacy.ts';
 import {
   buildRoundup,
   currentPeriod,
@@ -243,6 +244,15 @@ describe('buildRoundup', () => {
       { name: 'Di', id: 'dddddddddddd', seedDays: 0, minutes: 5 },
     ]);
     expect(JSON.stringify(roundup)).not.toMatch(/steamId/);
+  });
+
+  it('names a private profile [private profile], with no id, on every board', () => {
+    const hidden = buildRoundup({ period: WEEK, days, matches, idOf: (steamId) => (steamId === 'a' ? null : idOf(steamId)) });
+
+    expect(hidden?.kills[1]).toEqual({ name: PRIVATE_NAME, kills: 38 });
+    expect(hidden?.playtime[0]).toEqual({ name: PRIVATE_NAME, minutes: 220 });
+    expect(hidden?.regular).toEqual({ name: PRIVATE_NAME, days: 4, of: 7 });
+    expect(JSON.stringify(hidden)).not.toMatch(/Ash|aaaaaaaaaaaa/);
   });
 
   it('counts wins on the winning side, MVPs (players level at the top share it) and each best match', () => {

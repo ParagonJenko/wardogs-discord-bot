@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { factionKey, mapName } from './discord.ts';
-import type { CurrentMatch, IdOf, Public, ServerSnapshot } from './stats.ts';
+import { publicPlayer, type PublicIdOf } from './privacy.ts';
+import type { CurrentMatch, Public, ServerSnapshot } from './stats.ts';
 import type { RankedStats } from './tracking.ts';
 import { isKill, weaponKind, weaponName, type FeedEvent, type WeaponKind } from './weapons.ts';
 
@@ -430,11 +431,10 @@ export const trimLive = (match: LiveMatch, maxBytes = LIVE_BYTES): LiveMatch => 
   return { ...favourites, players: [], pairs: {}, firstBlood: null, feed: [] };
 };
 
-export const liveStats = (match: LiveMatch, idOf: IdOf): LiveStats => {
+export const liveStats = (match: LiveMatch, idOf: PublicIdOf): LiveStats => {
   const ref = (index: number): LivePlayerRef => {
     const p = match.players[index]!;
-    const id = idOf(p.steamId);
-    return { name: p.name, ...(id === undefined ? {} : { id }), ...(p.faction === null ? {} : { faction: p.faction }) };
+    return { ...publicPlayer(p.steamId, p.name, idOf), ...(p.faction === null ? {} : { faction: p.faction }) };
   };
   const refOf = (p: LivePlayer): LivePlayerRef => ref(match.players.indexOf(p));
   const weapons = new Map<string, { name: string; kind: WeaponKind; kills: number }>();

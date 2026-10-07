@@ -16,6 +16,7 @@ import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
 import { modesFor, planSetup, setupLabels, type SetupCatalog } from './matchsetup.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
 import type { PlayerTotals } from './players.ts';
+import { PRIVATE_NAME, type PrivateProfiles } from './privacy.ts';
 import {
   endMatch,
   fetchBans,
@@ -77,6 +78,8 @@ export type PlayerRecord = {
   vipBlockedUntil: number | null;
   // Whether they are staff who linked their Steam account, so the bot keeps a staff spot for them.
   staffSpot: boolean;
+  // Whether their profile is private: the public sees them as PRIVATE_NAME (see privacy.ts).
+  privateProfile: boolean;
   log: ModEntry[];
   ban: BanRecord | null;
   // Their team kills and suicides today (UTC), from the kill feed. null when the bot has never had the feed.
@@ -114,6 +117,10 @@ export type StaffRecords = {
   // Changes them as staff asked (`by`, a Discord user ID, with the name they go by), and puts a rotation on the server
   // when the change calls for it.
   editRotations: (edit: RotationEdit, by: string, byName?: string) => Promise<RotationEditResult>;
+  // The private profiles (see privacy.ts), and making one private or public again. False when it already was.
+  privateProfiles: () => Promise<PrivateProfiles>;
+  makePrivate: (player: Named, by: string, byName?: string) => Promise<boolean>;
+  makePublic: (steamId: string) => Promise<boolean>;
 };
 
 export type StaffDeps = {
@@ -124,7 +131,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -164,6 +171,21 @@ const who = (player: Named): string => `**${playerName(player.name)}**`;
 
 // For the logs: JSON quoting keeps line breaks in names and messages from faking extra log lines.
 const logged = (player: Named): string => `${JSON.stringify(player.name)} (${player.steamId})`;
+
+// Discord caps a message at 2000 characters, so /private list names at most this many.
+const PRIVATE_LISTED = 15;
+
+// /private list: who is private, the latest first, with who made them private and when.
+const privateList = (profiles: PrivateProfiles): string => {
+  const entries = Object.entries(profiles).sort(([, a], [, b]) => b.at - a.at);
+  if (entries.length === 0) return 'No private profiles. /private add makes one private.';
+  const lines = entries
+    .slice(0, PRIVATE_LISTED)
+    .map(([steamId, p]) => `${who({ steamId, name: p.name })} · \`${steamId}\`${p.by === 'unknown' ? '' : ` · by <@${p.by}>`} <t:${unix(p.at)}:R>`);
+  const more = entries.length - lines.length;
+  const count = `${entries.length} private profile${entries.length === 1 ? '' : 's'}`;
+  return [`🔒 ${count}, the latest first:`, ...lines, ...(more > 0 ? [`And ${more} more.`] : [])].join('\n');
+};
 
 // Online players first, so their current name wins, then everyone else once.
 const merge = (...lists: Named[][]): Named[] => {
@@ -293,6 +315,11 @@ export const suggestStaff =
       if (focused === 'player' && ['warn', 'kick', 'switchteam'].includes(name)) return players(false);
       if (focused === 'player' && ['player', 'ban'].includes(name)) return players(true);
       if (name === 'vip' && options['subcommand'] === 'add') return players(true);
+      if (name === 'private' && options['subcommand'] === 'add') return players(true);
+      if (name === 'private' && options['subcommand'] === 'remove') {
+        const hidden = Object.entries(await records.privateProfiles()).map(([steamId, p]) => ({ steamId, name: p.name }));
+        return matching(hidden, typed).map((p) => playerChoice(p));
+      }
       if (name === 'vip' && options['subcommand'] === 'remove') {
         const [serverConfig, live, known, teams] = await Promise.all([
           fetchConfig(rconUrl, rconPassword, http),
@@ -497,6 +524,26 @@ export const runStaffCommand =
     }
 
     if (name === 'rotations') return runRotations({ config, http, records, now, log }, options, by, userName);
+
+    if (name === 'private') {
+      if (options['subcommand'] === 'list') return { content: privateList(await records.privateProfiles()) };
+      const { found } = await anyTarget('steam_id');
+      if ('problem' in found) return { content: found.problem };
+      const { player } = found;
+      log.info(`/private ${options['subcommand'] === 'remove' ? 'remove' : 'add'} by ${staff}: ${logged(player)}`);
+      if (options['subcommand'] === 'remove') {
+        return (await records.makePublic(player.steamId))
+          ? { content: `🔓 ${who(player)}'s profile is public again. The website and Discord show their name within a minute.` }
+          : { content: `${who(player)}'s profile isn't private.` };
+      }
+      return (await records.makePrivate(player, by, userName))
+        ? {
+            content:
+              `🔒 ${who(player)}'s profile is private. Within a minute the website and the bot's public Discord posts show them ` +
+              `as ${PRIVATE_NAME}, with no player page. Staff still see them as they are.`,
+          }
+        : { content: `${who(player)}'s profile is already private.` };
+    }
 
     if (name === 'vip') {
       const { found } = await anyTarget('steam_id');

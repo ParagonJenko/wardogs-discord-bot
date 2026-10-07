@@ -919,7 +919,7 @@ describe('buildPlayerEmbed', () => {
   const NOW = Date.UTC(2026, 8, 30, 12);
   const DAY = 86_400_000;
   const ID = '76561198000000001';
-  const record: PlayerRecord = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, log: [], ban: null, grief: null };
+  const record: PlayerRecord = { name: 'Ash', totals: null, vip: null, vipBlockedUntil: null, staffSpot: false, privateProfile: false, log: [], ban: null, grief: null };
   const profile = { steamId: ID, name: 'Ash_*', record, online: null, reserved: false, serverBan: null, days: 90, now: NOW };
   const field = (embed: ReturnType<typeof buildPlayerEmbed>, name: string) => embed.fields?.find((f) => f.name === name)?.value;
   const t = (at: number, style: string) => `<t:${at / 1000}:${style}>`;
@@ -931,6 +931,14 @@ describe('buildPlayerEmbed', () => {
     expect(embed.description).toBe(`\`${ID}\` · [Steam profile](https://steamcommunity.com/profiles/${ID})\n⚫ Not in game`);
     expect(field(embed, 'Time · last 90 days')).toBe('Not seen on the server.');
     expect(field(embed, 'Staff history')).toBe('Nothing through the bot yet.');
+  });
+
+  it('says when their profile is private', () => {
+    const embed = buildPlayerEmbed({ ...profile, record: { ...record, privateProfile: true } });
+
+    expect(embed.description).toBe(
+      `\`${ID}\` · [Steam profile](https://steamcommunity.com/profiles/${ID})\n⚫ Not in game\n🔒 Private profile: the public sees them as \\[private profile\\]`,
+    );
   });
 
   it('shows a ban the bot made, and trusts the server when the ban was lifted or replaced by hand', () => {

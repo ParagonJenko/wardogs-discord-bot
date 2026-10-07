@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
 import { ranks, totals, type MatchRecord, type PlayerDay, type PlayerTotals, type Ranks } from './players.ts';
+import type { PublicIdOf } from './privacy.ts';
 import type { FactionScore, Player } from './rcon.ts';
 import { byKills } from './tracking.ts';
 import type { VipGrant } from './vip.ts';
@@ -185,12 +186,12 @@ export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online
 
 export type DirectoryEntry = { id: string; name: string; minutes: number; lastSeen: string; online: boolean };
 
-// Everyone seen in the last `days` UTC days, most time played first.
+// Everyone seen in the last `days` UTC days, most time played first. Private profiles (see privacy.ts) are left out.
 export type PlayerDirectory = { generatedAt: number; days: number; players: DirectoryEntry[] };
 
 export const directory = (
   days: DayRecords[],
-  idOf: (steamId: string) => string | undefined,
+  idOf: PublicIdOf,
   online: Set<string>,
   now: number,
 ): PlayerDirectory => {
@@ -203,7 +204,7 @@ export const directory = (
       .flatMap((p) => {
         const id = idOf(p.steamId);
         const seen = lastSeen.get(p.steamId);
-        if (id === undefined || seen === undefined) return [];
+        if (id === undefined || id === null || seen === undefined) return [];
         return [{ id, name: p.name, minutes: p.seedingMinutes + p.liveMinutes, lastSeen: seen, online: online.has(p.steamId) }];
       })
       .sort((a, b) => b.minutes - a.minutes || a.name.localeCompare(b.name)),

@@ -3,6 +3,7 @@ import type { Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
 import { mapName } from './discord.ts';
 import type { Leaderboard, RankedPlayer } from './players.ts';
+import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 import { topPlayers, type MatchState, type MatchSummary, type RankedStats } from './tracking.ts';
 import type { TeamBoard } from './teams.ts';
@@ -359,7 +360,8 @@ export type PublicExtras = {
 // Looks up a player's public id by Steam ID (see profiles.ts).
 export type IdOf = (steamId: string) => string | undefined;
 
-// A player as the website sees them: the Steam ID swapped for their public id, or left out when there is none.
+// A player as the website sees them: the Steam ID swapped for their public id, or left out when there is none. A
+// private profile goes by PRIVATE_NAME, with no id (see privacy.ts).
 export type Public<T> = Omit<T, 'steamId'> & { id?: string };
 
 export type PublicMatch = Omit<RecentMatch, 'top'> & { top: Public<RankedStats>[] };
@@ -377,16 +379,13 @@ export type PublicStats = Omit<SiteStats, 'hours' | 'crashes' | 'matches' | 'cur
   teams: TeamBoard;
 };
 
-const named = <T extends { steamId?: string }>(rows: T[], idOf: IdOf): Public<T>[] =>
-  rows.map(({ steamId, ...row }) => {
-    const id = steamId === undefined ? undefined : idOf(steamId);
-    return id === undefined ? row : { ...row, id };
-  });
+const named = <T extends { steamId?: string; name: string }>(rows: T[], idOf: PublicIdOf): Public<T>[] =>
+  rows.map(({ steamId, ...row }) => ({ ...row, ...publicPlayer(steamId, row.name, idOf) }));
 
 // The match on now, as the website sees it.
 export const publicCurrentMatch = (
   match: CurrentMatch | null,
-  idOf: IdOf,
+  idOf: PublicIdOf,
 ): (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null => (match === null ? null : { ...match, top: named(match.top, idOf) });
 
 // Everyone the public stats name, so their public ids can be worked out before publicStats needs them.
@@ -441,7 +440,7 @@ export const publicStats = (
   thresholds: Thresholds,
   now: number,
   { leaderboard, vip, seederVip, weapons, teams }: PublicExtras,
-  idOf: IdOf,
+  idOf: PublicIdOf,
 ): PublicStats => ({
   generatedAt: now,
   thresholds,

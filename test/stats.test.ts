@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PRIVATE_NAME } from '../src/privacy.ts';
 import type { ServerStatus } from '../src/rcon.ts';
 import {
   CRASH_MS,
@@ -465,6 +466,23 @@ describe('publicStats and Steam IDs', () => {
 
     expect(served.seederVip).toEqual([{ id: 'a1a1a1a1a1a1', name: 'Ash', until: MIDNIGHT + 86_400_000 }]);
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
+  });
+
+  it('names a private profile [private profile], with no id, everywhere it is shown', () => {
+    const seederVip = [{ steamId: '76561198000000001', name: 'Ash', until: MIDNIGHT + 86_400_000 }];
+    const idOf = (steamId: string) => (steamId === '76561198000000001' ? null : ids[steamId]);
+    const served = publicStats(stats, thresholds, MIDNIGHT, { leaderboard, vip: null, seederVip, weapons: null, teams }, idOf);
+
+    expect(served.currentMatch?.top).toEqual([
+      { id: 'b2b2b2b2b2b2', name: 'Bo', kills: 9, deaths: 3 },
+      { name: PRIVATE_NAME, kills: 4, deaths: 1 },
+    ]);
+    for (const board of [served.leaderboard.kills, served.leaderboard.playtime, served.leaderboard.seeding]) {
+      expect(board).toEqual([{ ...ash, steamId: undefined, name: PRIVATE_NAME }]);
+      expect(board[0]).not.toHaveProperty('id');
+    }
+    expect(served.seederVip).toEqual([{ name: PRIVATE_NAME, until: MIDNIGHT + 86_400_000 }]);
+    expect(JSON.stringify(served)).not.toMatch(/Ash|a1a1a1a1a1a1|7656119|steamId/);
   });
 
   it('lists everyone the public stats name, once each', () => {

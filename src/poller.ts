@@ -21,6 +21,7 @@ import {
   type WelcomeWatch,
 } from './messages.ts';
 import type { SeedCredit } from './players.ts';
+import { publicNames, publicNamesBySteamId } from './privacy.ts';
 import type { Player, Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
 import {
@@ -77,6 +78,9 @@ type PollerDeps = {
   lines?: () => Promise<Lines>;
   // Staff's Steam IDs: they are never named as top seeders (see staffprofiles.ts). Only asked when the server goes live.
   staff?: () => Promise<ReadonlySet<string>>;
+  // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
+  // players: the live alert's top seeders and the match summary.
+  privateProfiles?: () => Promise<ReadonlySet<string>>;
 };
 
 // Feeds the website's stats and the player records. `check` runs once for every check that reached the server,
@@ -223,6 +227,7 @@ export const createPoller = ({
   random = Math.random,
   lines,
   staff,
+  privateProfiles,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
@@ -301,8 +306,13 @@ export const createPoller = ({
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
     // Not caught, like the seed below: nothing has been saved yet, so the next check tries again.
     const staffIds = wentLive && staff !== undefined ? await staff() : new Set<string>();
+    const naming = wentLive || finished !== null || state.unsentSummary !== null;
+    const hidden = naming && privateProfiles !== undefined ? await privateProfiles() : new Set<string>();
     const seeders = wentLive
-      ? topSeeders(state.seeding, TOP_SEEDERS, staffIds).map((s) => ({ name: s.name, minutes: minutes(s.checks) }))
+      ? topSeeders(publicNamesBySteamId(state.seeding, hidden), TOP_SEEDERS, staffIds).map((s) => ({
+          name: s.name,
+          minutes: minutes(s.checks),
+        }))
       : [];
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
     if (credits.length > 0) await stats?.seeded(credits, time);
@@ -359,7 +369,7 @@ export const createPoller = ({
     try {
       const summary = tracked.unsentSummary;
       if (summary !== null) {
-        await send(buildMatchSummary(summary, status.name, config.siteUrl));
+        await send(buildMatchSummary({ ...summary, top: publicNames(summary.top, hidden) }, status.name, config.siteUrl));
         // So a failed alert below does not post the summary a second time.
         tracked = { ...tracked, unsentSummary: null };
         log.info(`Sent match summary for ${summary.map}`);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PRIVATE_NAME } from '../src/privacy.ts';
 import {
   feedKillsSince,
   feedAuthorized,
@@ -348,6 +349,12 @@ describe('weaponBoard', () => {
       ],
       longest: { weapon: 'SVD', distance: 650, name: 'Bo', id: 'b2b2b2b2b2b2' },
     });
+  });
+
+  it('names a private profile [private profile], with no id, for a longest kill', () => {
+    const board = weaponBoard(days, 30, '2026-09-20', 2, (steamId) => (steamId === BO ? null : ids[steamId]));
+
+    expect(board.longest).toEqual({ weapon: 'SVD', distance: 650, name: PRIVATE_NAME });
     expect(JSON.stringify(board)).not.toMatch(/7656119|steamId/);
   });
 

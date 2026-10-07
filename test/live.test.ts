@@ -12,6 +12,7 @@ import {
   trimLive,
   type LiveMatch,
 } from '../src/live.ts';
+import { PRIVATE_NAME } from '../src/privacy.ts';
 import type { FeedEvent } from '../src/weapons.ts';
 
 const ASH = '76561198000000001';
@@ -155,6 +156,17 @@ describe('liveStats', () => {
     expect(served.feed[0]).toMatchObject({ killer: { name: 'Cy', faction: 'Lonestar' }, victim: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' } });
     expect(served.feed[0]?.killer).not.toHaveProperty('id');
     expect(JSON.stringify(served)).not.toMatch(/7656119|steamId/);
+  });
+
+  it('names a private profile [private profile], with no id, in the feed, the table and the highlights', () => {
+    const match = play([death(ASH, BO, 10), death(ASH, CY, 20), death(CY, ASH, 30)]);
+    const served = liveStats(match, (steamId) => (steamId === ASH ? null : ids[steamId]));
+
+    expect(served.feed[0]).toMatchObject({ killer: { name: 'Cy', faction: 'Lonestar' }, victim: { name: PRIVATE_NAME, faction: 'Valkyra' } });
+    expect(served.feed[2]?.killer).toEqual({ name: PRIVATE_NAME, faction: 'Valkyra' });
+    expect(served.players[0]).toMatchObject({ name: PRIVATE_NAME, kills: 2 });
+    expect(served.highlights.firstBlood?.killer).toEqual({ name: PRIVATE_NAME, faction: 'Valkyra' });
+    expect(JSON.stringify(served)).not.toMatch(/"Ash"|a1a1a1a1a1a1|7656119/);
   });
 
   it('lists the feed newest first, with weapon names, and the players with the most kills', () => {

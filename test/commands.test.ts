@@ -19,6 +19,9 @@ const records: StaffRecords = {
   steam: vi.fn(async () => 'off' as const),
   rotations: vi.fn(),
   editRotations: vi.fn(),
+  privateProfiles: vi.fn(),
+  makePrivate: vi.fn(),
+  makePublic: vi.fn(),
 };
 
 const config: Config = {
@@ -62,6 +65,7 @@ const setup = (
   lastMatch: unknown = null,
   settings: Config = config,
   found: Roundup | null = null,
+  hidden: ReadonlySet<string> = new Set(),
 ) => {
   const server = rcon(responses);
   const log = { info: vi.fn() };
@@ -73,6 +77,7 @@ const setup = (
     config: () => settings,
     http: server.http,
     lastMatch: async () => lastMatch as never,
+    privateProfiles: async () => hidden,
     roundup,
     seeders,
     removeMatch,
@@ -114,6 +119,19 @@ describe('runCommand', () => {
     const reply = await run({ name: 'players', options: {}, userId: null });
 
     expect(reply.embeds?.[0]).toMatchObject({ title: '👥 1 player online', description: '🥇 **Ash** · 3 kills · 1 death' });
+  });
+
+  it('/players and /lastmatch name a private profile [private profile]', async () => {
+    const online = { '/v1/players': { players: [{ name: 'Ash', steamId: '1', kills: 3, deaths: 1 }], count: 1 } };
+    const match = { map: 'Ozeti', endedAt: 0, durationMs: 60_000, peakPlayers: 30, factionScores: [], top: [{ steamId: '1', name: 'Ash', kills: 3, deaths: 1 }] };
+    const { run } = setup(online, match, config, null, new Set(['1']));
+
+    const players = await run({ name: 'players', options: {}, userId: null });
+    const last = await run({ name: 'lastmatch', options: {}, userId: null });
+
+    expect(players.embeds?.[0]?.description).toBe('🥇 **\\[private profile\\]** · 3 kills · 1 death');
+    expect(JSON.stringify([players, last])).not.toMatch(/Ash/);
+    expect(JSON.stringify(last)).toMatch(/private profile/);
   });
 
   it('/rotation shows the rotation', async () => {
@@ -189,6 +207,7 @@ describe('runCommand', () => {
         config: settings,
         http: rcon({}).http,
         lastMatch: async () => match,
+        privateProfiles: async () => new Set<string>(),
         roundup: async () => null,
         seeders: async () => [],
         removeMatch: async () => null,
@@ -354,6 +373,7 @@ describe('runCommand', () => {
         throw new Error('RCON request timed out after 8000ms');
       },
       lastMatch: async () => null,
+      privateProfiles: async () => new Set<string>(),
       roundup: async () => null,
       seeders: async () => [],
       removeMatch: async () => null,
