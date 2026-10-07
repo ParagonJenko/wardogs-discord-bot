@@ -2,6 +2,8 @@ import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.
 import type { VipRule } from './config.ts';
 import { isBotBan, type BanRecord, type ModAction, type ModEntry } from './moderation.ts';
 import type { Flag, GriefAlert, Incident, PlayerGrief } from './griefing.ts';
+import type { HeadshotAlert } from './killfeed.ts';
+import { BACK_SHARE, unreachableFor, type OutageEvent } from './outages.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, RoleAward, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
@@ -87,6 +89,7 @@ const COLORS: Record<AlertKind, number> = {
   seeding: 0xf1c40f,
   live: 0x2ecc71,
   lowPop: 0xe74c3c,
+  back: 0xf1c40f,
 };
 
 const INFO_COLOR = 0x5865f2;
@@ -103,7 +106,7 @@ const shorten = (name: string): string =>
 const BAR_WIDTH = 10;
 
 // Emoji squares look the same in every Discord client: 🟩🟩🟩⬛⬛⬛⬛⬛⬛⬛ **30**/98, in the colour of the state.
-const BAR_FILL: Record<Phase | AlertKind, string> = { live: '🟩', seeding: '🟨', lowPop: '🟥', empty: '⬜' };
+const BAR_FILL: Record<Phase | AlertKind, string> = { live: '🟩', seeding: '🟨', back: '🟨', lowPop: '🟥', empty: '⬜' };
 
 const population = (players: number, max: number, state: Phase | AlertKind): string => {
   const filled = max > 0 && players > 0 ? Math.max(1, Math.round(Math.min(players / max, 1) * BAR_WIDTH)) : 0;
@@ -217,6 +220,7 @@ const joinField = (serverId: string | undefined): EmbedField[] =>
 const title = (kind: AlertKind, server: Population, lowPop: number): string => {
   const name = shorten(server.name);
   if (kind === 'seeding') return `🌱 ${name} is seeding`;
+  if (kind === 'back') return `🔁 ${name} is back up`;
   if (kind === 'live') return `🟢 ${name} is live`;
   return `🔻 ${name} dropped below ${lowPop} players`;
 };
@@ -225,6 +229,7 @@ const CALL_TO_ACTION: Record<AlertKind, string> = {
   seeding: 'Jump in and help get it live!',
   live: 'Round is on. Get in while there are slots.',
   lowPop: 'Jump in to keep it going!',
+  back: 'It crashed and is back up. Rejoin and help fill it!',
 };
 
 const span = (days: number): string => (days === 7 ? 'a week' : plural(days, 'day'));
@@ -238,7 +243,7 @@ export const vipRule = (vip: VipRule): string =>
   `A seed counts when you're on for more than ${vip.seedMinutes} min and the server goes live.`;
 
 const needed = (kind: AlertKind, server: Population, options: MessageOptions): EmbedField[] => {
-  if (kind === 'seeding' && options.live !== undefined) {
+  if ((kind === 'seeding' || kind === 'back') && options.live !== undefined) {
     return [{ name: 'To go live', value: `**${Math.max(0, options.live - server.players)}** more`, inline: true }];
   }
   if (kind === 'lowPop') {
@@ -1251,4 +1256,114 @@ export const buildSteamAlerts = (alerts: SteamAlert[], now: number, siteUrl?: st
     embeds: embeds.slice(i * EMBEDS_PER_MESSAGE, (i + 1) * EMBEDS_PER_MESSAGE),
     allowed_mentions: NO_PINGS,
   }));
+};
+
+// "45 min", "1 h 10 min".
+const lasted = (ms: number): string => {
+  const total = Math.max(0, Math.round(ms / 60_000));
+  if (total < 60) return `${total} min`;
+  const rest = total % 60;
+  return `${Math.floor(total / 60)} h${rest > 0 ? ` ${rest} min` : ''}`;
+};
+
+// A crash that left this many players or fewer is a crash, not a crowd leaving.
+const CRASH_LEFT = 2;
+
+// An outage confirmed (down) or over (back), for the moderation log channel (see outages.ts).
+export const buildOutageAlert = (event: OutageEvent, siteUrl?: string): DiscordMessage => {
+  const { outage } = event;
+  const lowest = outage.lowest ?? 0;
+  const mapChange = event.map !== null && outage.map !== '' && event.map !== outage.map;
+  const where = outage.map === '' ? '' : ` on ${escapeMarkdown(mapName(outage.map))}`;
+  const away = unreachableFor(outage, event.at);
+  if (event.type === 'down') {
+    const crash = outage.kind === 'crash';
+    const title = !crash
+      ? "🔴 Can't reach the server"
+      : lowest <= CRASH_LEFT
+        ? '🔴 Server crashed'
+        : `📉 ${outage.before - lowest} players dropped at once`;
+    const lines = crash
+      ? [
+          `**${outage.before} → ${lowest}** players${where}${mapChange ? ` at a map change (now ${escapeMarkdown(mapName(event.map ?? ''))})` : ''}, ${when(outage.at, 'R')}.`,
+          event.players === null ? "The bot can't reach it now." : `**${event.players}** now.`,
+        ]
+      : [
+          `The bot has not reached it for **${lasted(event.at - outage.at)}**. It had **${outage.before}** players${where}.`,
+          "It may still be running with RCON down: check the host's panel before restarting it.",
+        ];
+    return {
+      embeds: [
+        {
+          title,
+          ...staffPage(siteUrl),
+          description: lines.join('\n'),
+          color: COLORS.lowPop,
+          footer: { text: `From the bot's checks, every minute. It posts again when ${Math.ceil(outage.before * BACK_SHARE)} players are back.` },
+          timestamp: new Date(outage.at).toISOString(),
+        },
+      ],
+      allowed_mentions: NO_PINGS,
+    };
+  }
+  const what = outage.kind === 'crash' ? 'it crashed' : 'the bot lost it';
+  const facts = [
+    `${outage.before} before`,
+    ...(outage.kind === 'crash' && outage.lowest !== null ? [`lowest ${outage.lowest}`] : []),
+    ...(away >= 60_000 ? [`unreachable for ${lasted(away)}`] : []),
+  ];
+  return {
+    embeds: [
+      {
+        title: event.refilled
+          ? `🟢 Server back to ${event.players} players`
+          : `⚪ Server not back to ${Math.ceil(outage.before * BACK_SHARE)} players`,
+        ...staffPage(siteUrl),
+        description: [
+          event.refilled
+            ? `**${lasted(event.at - outage.at)}** after ${what}.`
+            : `**${lasted(event.at - outage.at)}** after ${what}, it has **${event.players}**. The bot has stopped watching this one.`,
+          facts.join(' · '),
+        ].join('\n'),
+        color: event.refilled ? COLORS.live : EMPTY_COLOR,
+        timestamp: new Date(event.at).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
+// The chance of that many headshots by luck, as the staff page says it: "1 in 4,800", "1 in 2.3 million".
+export const luckOdds = (chance: number): string => {
+  const n = 1 / Math.max(chance, Number.MIN_VALUE);
+  if (n >= 1e9) return 'under 1 in a billion';
+  if (n >= 1e6) return `1 in ${Number((n / 1e6).toPrecision(2))} million`;
+  return `1 in ${Number(n.toPrecision(2)).toLocaleString('en-GB')}`;
+};
+
+// A player in game passing the headshot flag today (see killfeed.ts). Red when it is not their first flagged day in the
+// last 30, or their Steam account is high risk or worth a look; orange otherwise.
+export const buildHeadshotAlert = (alert: HeadshotAlert, now: number, siteUrl?: string, steam: SteamCheck | null = null): DiscordMessage => {
+  const risky = steam !== null && assess(steam, now).risk !== 'low';
+  const again = alert.flaggedDays > 1;
+  const usual = alert.expected === null ? '' : ` · about ${Math.round(alert.expected)} usual for their weapons`;
+  return {
+    embeds: [
+      {
+        title: `🎯 Unlikely headshots${again ? ' again' : ''} · ${playerName(alert.name)}`,
+        ...staffPage(siteUrl),
+        description: [
+          steamLine(alert.steamId),
+          `**${alert.headshots} headshots in ${alert.kills} kills** today${usual}`,
+          `Chance by luck: **${luckOdds(alert.chance)}**${alert.weapon === null ? '' : ` · most kills with ${escapeMarkdown(alert.weapon)}`}`,
+          again ? `Flagged on **${alert.flaggedDays} days** in the last 30` : 'Their first flagged day in the last 30',
+        ].join('\n'),
+        color: again || risky ? COLORS.lowPop : 0xe67e22,
+        fields: risky && steam !== null ? [{ name: 'Steam account', value: steamText(steam, now) }] : [],
+        footer: { text: 'From the kill feed. A reason to look, not proof: watch them play and check their kills first.' },
+        timestamp: new Date(now).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
 };

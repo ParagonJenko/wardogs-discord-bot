@@ -17,12 +17,14 @@ describe('loadConfig', () => {
       modLogWebhookUrl: undefined,
       griefAlerts: true,
       steamAlerts: true,
+      headshotAlerts: true,
+      outageAlerts: true,
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
       serverId: undefined,
       pollIntervalMs: 60_000,
-      rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000 },
+      rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000, seedHoldMs: 300_000 },
       quietHours: { start: 21, end: 6, timeZone: 'Europe/London' },
       busyThreshold: 97,
       scoreToWin: 100,
@@ -65,6 +67,18 @@ describe('loadConfig', () => {
   it('posts high-risk Steam accounts to the moderation log unless STEAM_ALERTS is off', () => {
     expect(loadConfig({ ...required, STEAM_ALERTS: 'off' }).steamAlerts).toBe(false);
     expect(() => loadConfig({ ...required, STEAM_ALERTS: 'no' })).toThrow(/STEAM_ALERTS/);
+  });
+
+  it('posts unlikely headshots and outages to the moderation log unless HEADSHOT_ALERTS or OUTAGE_ALERTS is off', () => {
+    expect(loadConfig({ ...required, HEADSHOT_ALERTS: 'off' }).headshotAlerts).toBe(false);
+    expect(loadConfig({ ...required, OUTAGE_ALERTS: 'off' }).outageAlerts).toBe(false);
+    expect(() => loadConfig({ ...required, OUTAGE_ALERTS: 'no' })).toThrow(/OUTAGE_ALERTS/);
+  });
+
+  it('holds the seeding alert for SEEDING_ALERT_MINUTES, 5 by default, and 0 sends it straight away', () => {
+    expect(loadConfig(required).rules.seedHoldMs).toBe(5 * 60_000);
+    expect(loadConfig({ ...required, SEEDING_ALERT_MINUTES: '0' }).rules.seedHoldMs).toBe(0);
+    expect(() => loadConfig({ ...required, SEEDING_ALERT_MINUTES: '-1' })).toThrow(/SEEDING_ALERT_MINUTES/);
   });
 
   it('reads the webhook for the live status, which must be a Discord webhook too', () => {
@@ -133,12 +147,13 @@ describe('loadConfig', () => {
       POLL_INTERVAL_SECONDS: '120',
       ALERT_COOLDOWN_MINUTES: '0',
       DROP_GRACE_MINUTES: '2',
+      SEEDING_ALERT_MINUTES: '0',
       BUSY_THRESHOLD: '60',
     });
 
     expect(config.roleId).toBe('987654321');
     expect(config.pollIntervalMs).toBe(120_000);
-    expect(config.rules).toEqual({ seeding: 5, live: 40, lowPop: 30, cooldownMs: 0, graceMs: 120_000 });
+    expect(config.rules).toEqual({ seeding: 5, live: 40, lowPop: 30, cooldownMs: 0, graceMs: 120_000, seedHoldMs: 0 });
     expect(config.busyThreshold).toBe(60);
   });
 

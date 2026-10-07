@@ -72,6 +72,8 @@ const EnvSchema = z
     ALERT_COOLDOWN_MINUTES: z.coerce.number().int().min(0).default(10),
     // A drop in players only counts (low-pop alert, seeding re-armed) once it has lasted this long.
     DROP_GRACE_MINUTES: z.coerce.number().int().min(0).default(5),
+    // The seeding alert waits until an empty server has kept its first players this long. 0 sends it straight away.
+    SEEDING_ALERT_MINUTES: z.coerce.number().int().min(0).default(5),
     // The night, when the seeding and low-pop alerts go out without pinging the role: from QUIET_START_HOUR up to
     // QUIET_END_HOUR, in QUIET_TIME_ZONE's own time, so it follows the clocks changing. The same hour for both turns it off.
     QUIET_START_HOUR: z.coerce.number().int().min(0).max(23).default(21),
@@ -107,6 +109,10 @@ const EnvSchema = z
     // Posts to the moderation log when a player with one of the riskiest Steam accounts is in game (needs STEAM_API_KEY):
     // "on" or "off".
     STEAM_ALERTS: z.enum(['on', 'off']).default('on'),
+    // Posts to the moderation log when a player in game has a day of unlikely headshots: "on" or "off".
+    HEADSHOT_ALERTS: z.enum(['on', 'off']).default('on'),
+    // Posts to the moderation log when the server crashes or cannot be reached, and when it is back: "on" or "off".
+    OUTAGE_ALERTS: z.enum(['on', 'off']).default('on'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -135,6 +141,10 @@ export type Config = {
   griefAlerts: boolean;
   // Whether the riskiest Steam accounts are posted to the moderation log.
   steamAlerts: boolean;
+  // Whether days of unlikely headshots are posted to the moderation log.
+  headshotAlerts: boolean;
+  // Whether crashes and the server being unreachable are posted to the moderation log.
+  outageAlerts: boolean;
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
@@ -184,6 +194,8 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     modLogWebhookUrl: e.DISCORD_MODLOG_WEBHOOK_URL,
     griefAlerts: e.GRIEF_ALERTS === 'on',
     steamAlerts: e.STEAM_ALERTS === 'on',
+    headshotAlerts: e.HEADSHOT_ALERTS === 'on',
+    outageAlerts: e.OUTAGE_ALERTS === 'on',
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,
@@ -195,6 +207,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
       lowPop: e.LOW_POP_THRESHOLD,
       cooldownMs: e.ALERT_COOLDOWN_MINUTES * 60_000,
       graceMs: e.DROP_GRACE_MINUTES * 60_000,
+      seedHoldMs: e.SEEDING_ALERT_MINUTES * 60_000,
     },
     quietHours:
       e.QUIET_START_HOUR === e.QUIET_END_HOUR

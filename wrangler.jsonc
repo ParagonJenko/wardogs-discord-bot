@@ -47,6 +47,7 @@
     "ALERT_COOLDOWN_MINUTES": "10",
     // A drop in players only counts once it lasts this long, so a crash or restart that fills again quickly pings nobody.
     "DROP_GRACE_MINUTES": "5",
+    "SEEDING_ALERT_MINUTES": "5",
     // The night (hours 0 to 23 in QUIET_TIME_ZONE), when the seeding and low-pop alerts go out without pinging the
     // Seeders role. Europe/London follows the clocks changing, so 21 to 6 is 9pm to 6am in summer and winter. The same
     // hour for both turns it off.
@@ -65,6 +66,8 @@
     // Posts to the moderation log when a player with one of the riskiest Steam accounts (7 points or more) is in game
     // (needs STEAM_API_KEY): "on" or "off".
     "STEAM_ALERTS": "on",
+    "HEADSHOT_ALERTS": "on",
+    "OUTAGE_ALERTS": "on",
     // Automatic VIP: seed on this many days in a week to get a reserved slot for a week. "0" turns it off.
     "VIP_SEED_DAYS": "3",
     // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.

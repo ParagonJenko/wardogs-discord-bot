@@ -2,6 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import {
   adminFeed,
+  alertedOn,
   buildAdminKills,
   buildPlayerKills,
   chanceOfAtLeast,
@@ -12,6 +13,7 @@ import {
   firstKillDay,
   flaggedDay,
   headshotOdds,
+  headshotAlertsDue,
   headshotRows,
   headshotsOn,
   killDaySummaries,
@@ -544,5 +546,35 @@ describe('headshotsOn', () => {
     expect(today.get(ASH)?.expected).toBeCloseTo(3, 0);
     expect(today.get(BO)).toMatchObject({ kills: 8, headshots: 2, flagged: false });
     expect(today.get(BO)?.chance).toBeGreaterThan(0.3);
+  });
+});
+
+describe('headshotAlertsDue', () => {
+  const kept = [
+    ...crowd('2026-10-02'),
+    ...crowd('2026-10-03'),
+    ...crowd('2026-10-04'),
+    summary(ASH, '2026-10-02', { [AK]: [12, 10] }),
+    summary(ASH, '2026-10-04', { [AK]: [12, 10], [SVD]: [2, 2] }),
+    summary(BO, '2026-10-04', { [AK]: [12, 11] }),
+    summary(CY, '2026-10-04', { [AK]: [8, 2] }),
+  ];
+
+  it("picks those in game flagged today and not alerted yet, with today's figures and their flagged days", () => {
+    const due = headshotAlertsDue(kept, '2026-10-04', [ASH, BO, CY, DEE], new Set([BO]));
+
+    expect(due.map((a) => a.steamId)).toEqual([ASH]);
+    expect(due[0]).toMatchObject({ name: 'Ash', kills: 14, headshots: 12, flaggedDays: 2, weapon: 'AK74' });
+    expect(due[0]?.chance).toBeLessThan(1 / 1_000);
+  });
+
+  it('leaves out those not in game', () => {
+    expect(headshotAlertsDue(kept, '2026-10-04', [CY, DEE], new Set())).toEqual([]);
+  });
+
+  it("reads who had an alert today, and nobody from another day's record", () => {
+    expect(alertedOn({ day: '2026-10-04', steamIds: [ASH] }, '2026-10-04')).toEqual(new Set([ASH]));
+    expect(alertedOn({ day: '2026-10-03', steamIds: [ASH] }, '2026-10-04')).toEqual(new Set());
+    expect(alertedOn(undefined, '2026-10-04')).toEqual(new Set());
   });
 });
