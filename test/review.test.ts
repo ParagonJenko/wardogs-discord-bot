@@ -145,7 +145,7 @@ describe('buildReview', () => {
     outageLog: [],
     outage: null,
     grief: [
-      recordGrief(emptyGriefDay(), [kill(ASH, BO), kill(ASH, BO), kill(ASH, BO), kill(BO, ASH)], NOW - DAY, sides).day,
+      recordGrief(emptyGriefDay(), [kill(ASH, BO), kill(ASH, BO), kill(ASH, BO), kill(ASH, BO), kill(BO, ASH)], NOW - DAY, sides).day,
       recordGrief(emptyGriefDay(), [kill(BO, ASH, { cause: 'Vehicle.Variant.Air.Rotary.Littlebird.Default', tags: ['VehicleExplosion'] })], NOW, sides).day,
     ],
     kept: [...crowd('2026-10-06'), ...crowd('2026-10-07'), summary(ASH, '2026-10-07', 12, 10), summary(BO, '2026-10-07', 4, 1)],
@@ -162,7 +162,7 @@ describe('buildReview', () => {
       seedingAlertMinutes: 5,
       quietHours: { start: 21, end: 6, timeZone: 'Europe/London' },
     });
-    expect(review.thresholds.grief).toEqual({ teamKills: 3, sameTeammate: 2, vehicleSuicides: 2, suicides: 10 });
+    expect(review.thresholds.grief).toEqual({ teamKills: 4, sameTeammate: 3, vehicleSuicides: 4, suicides: 10 });
     expect(review.thresholds.headshots).toEqual({ kills: 10, odds: 1_000 });
   });
 
@@ -179,10 +179,10 @@ describe('buildReview', () => {
   it('spreads the players’ griefing days out against the flags, crashes left out', () => {
     expect(review.grief).toMatchObject({
       playerDays: 4,
-      // Ash's three on Bo, Bo's one on Ash, and Bo's helicopter crash the next day, which does not count.
-      teamKills: { '0': 2, '1': 1, '3': 1 },
+      // Ash's four on Bo, Bo's one on Ash, and Bo's helicopter crash the next day, which does not count.
+      teamKills: { '0': 2, '1': 1, '4': 1 },
       crashTeamKills: 1,
-      sameTeammate: { '0': 2, '1': 1, '3': 1 },
+      sameTeammate: { '0': 2, '1': 1, '4': 1 },
       flaggedDays: { teamKills: 1, sameTeammate: 1, vehicleSuicides: 0, suicides: 0 },
       flaggedPlayers: 1,
       playersByFlaggedDays: { '1': 1 },
