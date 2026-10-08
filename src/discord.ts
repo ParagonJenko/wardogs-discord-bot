@@ -299,21 +299,22 @@ export const buildSeedCall = (
 };
 
 // `markdown` escapes names and bolds the winner, for embeds; without it the text is plain, for a menu.
-// Plain text without markdown is for a choice, so each faction's name has its colour's dot too.
+// Plain text without markdown is for a choice, so each faction's name has its colour's dot too. Teams never draw, so
+// level at the top is no result: the bot missed the winning points, or the match was cut short.
 const result = (scores: FactionScore[], markdown = true): string[] => {
   const ranked = byScore(scores);
   const [first, second, ...rest] = ranked;
   if (!first || !second) return [];
   const name = (s: FactionScore): string => (markdown ? escapeMarkdown(s.name) : `${factionDot(s.name, s.colorHex)}${s.name}`);
   const winner = markdown ? `**${name(first)}**` : name(first);
-  const draw = first.score === second.score;
+  const level = first.score === second.score;
   if (rest.length === 0) {
-    return [draw ? `Draw ${first.score} – ${second.score}` : `${winner} won ${first.score} – ${second.score}`];
+    return [level ? `No result: ${first.score} – ${second.score}` : `${winner} won ${first.score} – ${second.score}`];
   }
   // Three or more factions: name them all, so it is clear who came second and third.
   const others = ranked.slice(1).map((s) => `${name(s)} ${s.score}`);
   return [
-    draw ? `Draw: ${name(first)} ${first.score}, ${others.join(', ')}` : `${winner} won ${first.score}, ${others.join(', ')}`,
+    level ? `No result: ${name(first)} ${first.score}, ${others.join(', ')}` : `${winner} won ${first.score}, ${others.join(', ')}`,
   ];
 };
 
@@ -322,7 +323,9 @@ const minutes = (ms: number): string => `${Math.round(ms / 60_000)} min`;
 const headline = (scores: FactionScore[]): string | null => {
   const [first, second] = byScore(scores);
   if (!first || !second) return null;
-  return first.score === second.score ? '🤝 **Draw**' : `🏆 ${factionEmoji(first.name)}**${escapeMarkdown(first.name)}** won`;
+  return first.score === second.score
+    ? '❔ **No result**: the top teams were level at the last check'
+    : `🏆 ${factionEmoji(first.name)}**${escapeMarkdown(first.name)}** won`;
 };
 
 // The embed takes the winning faction's colour.
@@ -712,7 +715,7 @@ const matchLine = (m: MatchHighlight): string => {
 
 const teamLine = (t: TeamStanding, best: boolean): string => {
   const name = escapeMarkdown(t.name);
-  const record = [`${t.wins} W`, `${t.losses} L`, ...(t.draws > 0 ? [`${t.draws} D`] : []), percent(t.wins, t.matches)];
+  const record = [`${t.wins} W`, `${t.losses} L`, percent(t.wins, t.matches)];
   return `${factionBadge(t.name, t.colorHex)}${best ? `**${name}**` : name} · ${record.join(' · ')}`;
 };
 

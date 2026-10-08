@@ -89,7 +89,7 @@ export const markPosted = (posted: RoundupsPosted, period: Period): RoundupsPost
 // A player in a roundup, by their public id when they have one.
 export type RoundupPlayer = { name: string; id?: string };
 
-export type TeamStanding = { name: string; colorHex?: string; matches: number; wins: number; losses: number; draws: number };
+export type TeamStanding = { name: string; colorHex?: string; matches: number; wins: number; losses: number };
 
 export type MatchHighlight = { map: string; endedAt: number; factionScores: FactionScore[] };
 
@@ -192,11 +192,12 @@ export type RoundupSources = {
 
 const ranked = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
 
-// The winning side's key, 'draw', or null for a match without two sides' scores.
+// The winning side's key, or null for a match without a result: without two sides' scores, or with the top sides level.
+// Teams never draw, so level scores mean the bot missed the winning points, or the match was cut short.
 const winner = (scores: FactionScore[]): string | null => {
   const [first, second] = ranked(scores);
-  if (first === undefined || second === undefined) return null;
-  return first.score === second.score ? 'draw' : factionKey(first.name);
+  if (first === undefined || second === undefined || first.score === second.score) return null;
+  return factionKey(first.name);
 };
 
 const margin = (scores: FactionScore[]): number => {
@@ -215,17 +216,15 @@ const byStanding = (a: TeamStanding, b: TeamStanding): number =>
   a.losses - b.losses ||
   a.name.localeCompare(b.name);
 
-// Every side's wins, losses and draws, oldest match first so each keeps its latest name and colour.
+// Every side's wins and losses, oldest match first so each keeps its latest name and colour.
 const standings = (matches: MatchRecord[]): TeamStanding[] => {
   const teams = new Map<string, TeamStanding>();
   for (const match of matches) {
     const won = winner(match.factionScores);
     if (won === null) continue;
-    const top = ranked(match.factionScores)[0]?.score;
     for (const side of match.factionScores) {
       const key = factionKey(side.name);
-      const known = teams.get(key) ?? { name: side.name, matches: 0, wins: 0, losses: 0, draws: 0 };
-      const draw = won === 'draw' && side.score === top;
+      const known = teams.get(key) ?? { name: side.name, matches: 0, wins: 0, losses: 0 };
       const win = won === key;
       const colorHex = side.colorHex ?? known.colorHex;
       teams.set(key, {
@@ -233,8 +232,7 @@ const standings = (matches: MatchRecord[]): TeamStanding[] => {
         ...(colorHex === undefined ? {} : { colorHex }),
         matches: known.matches + 1,
         wins: known.wins + (win ? 1 : 0),
-        losses: known.losses + (win || draw ? 0 : 1),
-        draws: known.draws + (draw ? 1 : 0),
+        losses: known.losses + (win ? 0 : 1),
       });
     }
   }
@@ -364,10 +362,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
   const rows = <T extends { name: string }>(tally: Map<string, T>): (RoundupPlayer & Omit<T, 'name'>)[] =>
     [...tally].map(([steamId, { name, ...row }]) => named(steamId, name, row));
 
-  const decisive = played.filter((m) => {
-    const won = winner(m.factionScores);
-    return won !== null && won !== 'draw';
-  });
+  const decisive = played.filter((m) => winner(m.factionScores) !== null);
   // Ties go to the latest match.
   const pickBy = (score: (m: MatchRecord) => number): MatchRecord | null =>
     decisive.reduce<MatchRecord | null>((chosen, m) => (chosen === null || score(m) >= score(chosen) ? m : chosen), null);

@@ -218,7 +218,7 @@ describe('buildMatchSummary', () => {
     expect(embedOf(buildMatchSummary({ ...summary, factionScores: black }, 'UK'))?.color).toBe(0);
   });
 
-  it('lists every faction when there are three, and calls a draw a draw', () => {
+  it('lists every faction when there are three, and gives no result when the top two are level', () => {
     const three = [
       { name: 'Kharr', score: 100 },
       { name: 'Valkyra', score: 100 },
@@ -226,7 +226,7 @@ describe('buildMatchSummary', () => {
     ];
     const message = buildMatchSummary({ ...summary, factionScores: three }, 'UK');
 
-    expect(embedOf(message)).toMatchObject({ description: '🤝 **Draw**', color: 0x5865f2 });
+    expect(embedOf(message)).toMatchObject({ description: '❔ **No result**: the top teams were level at the last check', color: 0x5865f2 });
     expect(field(message, 'Score')).toBe('**Kharr 100**\n🐻 Valkyra 100\nHaldor 41');
   });
 
@@ -628,10 +628,10 @@ describe('buildRoundupMessage', () => {
     peakPlayers: 98,
     busiestDay: { day: '2026-10-03', players: 84 },
     teams: [
-      { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5, draws: 0 },
-      { name: 'Lonestar', matches: 10, wins: 4, losses: 5, draws: 1 },
+      { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5 },
+      { name: 'Lonestar', matches: 10, wins: 4, losses: 6 },
     ],
-    bestTeam: { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5, draws: 0 },
+    bestTeam: { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5 },
     teamMinMatches: 3,
     kdMinHours: 2,
     kills: [
@@ -690,7 +690,7 @@ describe('buildRoundupMessage', () => {
       color: 0x3366ff,
       url: 'https://gaminginit.com/',
     });
-    expect(field(message, '⚔️ Teams')).toBe('🐻 **Valkyra** · 9 W · 5 L · 64%\n🤠 Lonestar · 4 W · 5 L · 1 D · 40%');
+    expect(field(message, '⚔️ Teams')).toBe('🐻 **Valkyra** · 9 W · 5 L · 64%\n🤠 Lonestar · 4 W · 6 L · 40%');
     expect(field(message, '🔫 Most kills')).toBe(
       '🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 54\n🥈 **Bo\\_b** · 41',
     );
@@ -773,7 +773,7 @@ describe('buildRoundupMessage', () => {
     const message = buildRoundupMessage({ ...week, bestTeam: null });
     expect(embedOf(message)?.description).toBe('**14 matches** · **32 h** played · **186 players** · peak **98**');
     expect(embedOf(message)?.color).toBe(0xf1c40f);
-    expect(field(message, '⚔️ Teams')).toBe('🐻 Valkyra · 9 W · 5 L · 64%\n🤠 Lonestar · 4 W · 5 L · 1 D · 40%');
+    expect(field(message, '⚔️ Teams')).toBe('🐻 Valkyra · 9 W · 5 L · 64%\n🤠 Lonestar · 4 W · 6 L · 40%');
     expect(field(message, '🔫 Most kills')).toBe('🥇 **Ash** · 54\n🥈 **Bo\\_b** · 41');
     expect(embedOf(message)).not.toHaveProperty('url');
   });

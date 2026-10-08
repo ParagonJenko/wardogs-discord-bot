@@ -125,10 +125,12 @@ describe('playerMatch', () => {
     expect(playerMatch(record({ factionScores: scores }), ASH)).toMatchObject({ result: 'won', factionScores: scores });
   });
 
-  it('calls a level score a draw for the sides on top', () => {
-    const level = record({ factionScores: [{ name: 'Valkyra', score: 80 }, { name: 'Lonestar', score: 80 }] });
+  it('has no result for a side level at the top, as teams never draw, and a loss for a side below them', () => {
+    const level = [{ name: 'Valkyra', score: 80 }, { name: 'Lonestar', score: 80 }, { name: 'Manticore', score: 10 }];
+    const below = record({ factionScores: level, players: [{ steamId: ASH, name: 'Ash', kills: 1, deaths: 1, faction: 'Manticore' }] });
 
-    expect(playerMatch(level, ASH)?.result).toBe('draw');
+    expect(playerMatch(record({ factionScores: level }), ASH)?.result).toBeNull();
+    expect(playerMatch(below, ASH)?.result).toBe('lost');
   });
 
   it('has no result without a side, or for a side the scores do not name', () => {
