@@ -158,7 +158,7 @@ every month a roundup of the month before. Each one celebrates:
 | ----------------------- | -------------------------------------------------------------------------------------- |
 | Summary                 | Matches, time played, players and the peak                                              |
 | 🏆 Team of the week     | The side with the best win rate, from 3 matches up. None when the top two are level     |
-| ⚔️ Teams                | Every side's wins, losses, draws and win rate, best first                               |
+| ⚔️ Teams                | Every side's wins, losses and win rate, best first                                      |
 | 🔫 Most kills           | The top 3 by kills                                                                     |
 | 🎯 Best K/D             | The top 3 by K/D, from 2 hours played in a week or 9 to 10 in a month (the website's leaderboard needs 10 over 30 days) |
 | 💥 Most kills in a match | Each player's best match, top 3, with the map                                         |
@@ -959,14 +959,17 @@ A [private profile](#private-profiles) has `[private profile]` for its name, and
 | Field      | What                                                                                           |
 | ---------- | ---------------------------------------------------------------------------------------------- |
 | `days`     | How many UTC days it covers, today included: 30                                                |
-| `matches`  | The matches recorded in those days with at least two teams' scores, and how many were `draws` (level at the top). `averageMs`: their average length |
+| `matches`  | The matches recorded in those days with a result (see below). `averageMs`: their average length |
 | `teams`    | Most wins first: each team's `name`, `colorHex` (its colour in game, when the server sent one), `matches` played and `wins` |
-| `maps`     | Most played first: each map's `matches`, `draws`, `averageMs` and `teams`: each team that played it, `{ name, wins }`, most wins first |
-| `streak`   | The team that won the latest match and how many in a row it has won, `{ name, wins }`, or null after a draw or with no matches |
+| `maps`     | Most played first: each map's `matches`, `averageMs` and `teams`: each team that played it, `{ name, wins }`, most wins first |
+| `streak`   | The team that won the latest match and how many in a row it has won, `{ name, wins }`, or null with no matches |
 | `closest`  | The win by the fewest points over the next team, `{ map, endedAt, durationMs, factionScores }`, or null. `biggest`: the win by the most |
 
-A match goes to the team with the most points. Teams are matched by name whatever its case or spacing, and named and
-coloured as in their latest match. The records start when the bot started keeping them for the player pages.
+A match goes to the team with the most points. Teams never draw, so a match recorded with the top teams level has no
+result: the bot missed the winning points (it reads the server once a minute), or the match was cut short, by a crash or
+a map change. Those are left out of the teams, the roundups and players' wins, and so are matches recorded without two
+teams' scores. The match summary in Discord says "No result" for them. Teams are matched by name whatever its case or
+spacing, and named and coloured as in their latest match. The records start when the bot started keeping them for the player pages.
 
 `server.seenAt` only moves when a check reaches the game server, so a site can tell the server is down when
 it is a few minutes old. The stats are kept in the same Durable Object as the bot's state.
@@ -1011,7 +1014,7 @@ A player page has:
 | ---------- | ------------------------------------------------------------------------------------------ |
 | `name`     | The name they used most recently                                                           |
 | `activity` | Each UTC day they were on in the last 90 days: seeding and live minutes, seed day, matches, kills and deaths |
-| `matches`  | Their matches in the last 90 days (up to 500), newest first: map, end time, length, kills, deaths, place on the scoreboard out of how many, their side (`faction`), `result` (`won`, `lost` or `draw`) and every side's score, with its in-game colour (`colorHex`) when the server reported it |
+| `matches`  | Their matches in the last 90 days (up to 500), newest first: map, end time, length, kills, deaths, place on the scoreboard out of how many, their side (`faction`), `result` (`won` or `lost`, or null when their side was level at the top: see below) and every side's score, with its in-game colour (`colorHex`) when the server reported it |
 | `ranks`    | Their place on each leaderboard board over the last 30 days (null when they are not on it), out of how many players |
 | `online`   | When they are in game now: the map, their side, and their kills and deaths this match      |
 | `vip`      | `{ until }` while they have a reserved slot from the bot                                   |

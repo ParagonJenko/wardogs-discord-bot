@@ -59,7 +59,7 @@ export const parseOnline = (raw: unknown): OnlineSnapshot | null => {
   return parsed.success ? parsed.data : null;
 };
 
-export type MatchResult = 'won' | 'lost' | 'draw';
+export type MatchResult = 'won' | 'lost';
 
 // One match a player played, from the match's record.
 export type PlayerMatch = {
@@ -72,8 +72,8 @@ export type PlayerMatch = {
   // everyone seen in the match.
   place: number;
   players: number;
-  // The side they ended the match on, and how it did. Null for matches recorded before sides were kept, and for a
-  // side the scores do not name.
+  // The side they ended the match on, and how it did. Null for matches recorded before sides were kept, for a side the
+  // scores do not name, and for a side level at the top: teams never draw, so the bot missed who won.
   faction: string | null;
   result: MatchResult | null;
   factionScores: FactionScore[];
@@ -115,7 +115,7 @@ const resultFor = (faction: string | null, scores: FactionScore[]): MatchResult 
   const [first, second] = [...scores].sort((a, b) => b.score - a.score);
   const mine = faction === null ? undefined : scores.find((s) => factionKey(s.name) === factionKey(faction));
   if (first === undefined || second === undefined || mine === undefined) return null;
-  if (first.score === second.score) return mine.score === first.score ? 'draw' : 'lost';
+  if (first.score === second.score) return mine.score === first.score ? null : 'lost';
   return mine === first ? 'won' : 'lost';
 };
 

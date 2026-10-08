@@ -4,21 +4,21 @@ import type { FactionScore } from './rcon.ts';
 import { dayOf } from './stats.ts';
 
 // Which team wins most, for the website's teams page: the matches the bot recorded over a number of UTC days, by team
-// and by map. A match goes to the team with the most points; level at the top is a draw. Matches recorded without
-// two teams' scores are left out. Teams are matched by name whatever its case or spacing, and named and coloured as in
-// their latest match.
+// and by map. A match goes to the team with the most points. Teams never draw, so a match recorded with the top teams
+// level has no result: the bot missed the winning points, or the match was cut short. Those are left out, and so are
+// matches recorded without two teams' scores. Teams are matched by name whatever its case or spacing, and named and
+// coloured as in their latest match.
 
 export type TeamStanding = { name: string; colorHex?: string; matches: number; wins: number };
 
 // A map's matches, how long they took on average, and each team that played it, most wins first.
-export type MapTeams = { map: string; matches: number; draws: number; averageMs: number; teams: { name: string; wins: number }[] };
+export type MapTeams = { map: string; matches: number; averageMs: number; teams: { name: string; wins: number }[] };
 
 export type TeamMatch = { map: string; endedAt: number; durationMs: number; factionScores: FactionScore[] };
 
 export type TeamBoard = {
   days: number;
   matches: number;
-  draws: number;
   averageMs: number;
   // Most wins first.
   teams: TeamStanding[];
@@ -31,14 +31,13 @@ export type TeamBoard = {
   biggest: TeamMatch | null;
 };
 
-type Scored = { record: MatchRecord; ranked: FactionScore[]; winner: string | null; margin: number };
+type Scored = { record: MatchRecord; ranked: FactionScore[]; winner: string; margin: number };
 
 const scored = (record: MatchRecord): Scored | null => {
   const ranked = [...record.factionScores].sort((a, b) => b.score - a.score);
   const [first, second] = ranked;
-  if (first === undefined || second === undefined) return null;
-  const margin = first.score - second.score;
-  return { record, ranked, winner: margin > 0 ? factionKey(first.name) : null, margin };
+  if (first === undefined || second === undefined || first.score === second.score) return null;
+  return { record, ranked, winner: factionKey(first.name), margin: first.score - second.score };
 };
 
 const average = (list: Scored[]): number =>
@@ -89,24 +88,21 @@ export const teamBoard = (records: MatchRecord[], days: number, now: number): Te
   let streak = 0;
   for (let i = matches.length - 1; i >= 0 && matches[i]?.winner === streakTeam; i--) streak++;
 
-  const decided = matches.filter((m) => m.winner !== null);
   // A tie goes to the later match.
   const pick = (better: (a: Scored, b: Scored) => boolean): TeamMatch | null => {
-    const found = decided.reduce<Scored | null>((best, m) => (best === null || !better(best, m) ? m : best), null);
+    const found = matches.reduce<Scored | null>((best, m) => (best === null || !better(best, m) ? m : best), null);
     return found === null ? null : teamMatch(found);
   };
 
   return {
     days,
     matches: matches.length,
-    draws: matches.length - decided.length,
     averageMs: average(matches),
     teams: [...teams.values()].sort(byWins),
     maps: [...maps]
       .map(([map, { list, wins }]) => ({
         map,
         matches: list.length,
-        draws: list.filter((m) => m.winner === null).length,
         averageMs: average(list),
         teams: [...wins].map(([key, w]) => ({ name: nameOf(key), wins: w })).sort(byWins),
       }))

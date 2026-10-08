@@ -195,9 +195,9 @@ describe('buildRoundup', () => {
 
   it('ranks the teams by win rate among those with 3+ matches, and names the best', () => {
     expect(roundup?.teams).toEqual([
-      { name: 'Valkyra', colorHex: '#3366ff', matches: 4, wins: 3, losses: 1, draws: 0 },
-      { name: 'Lonestar', matches: 4, wins: 1, losses: 3, draws: 0 },
-      { name: 'Manticore', matches: 1, wins: 0, losses: 1, draws: 0 },
+      { name: 'Valkyra', colorHex: '#3366ff', matches: 4, wins: 3, losses: 1 },
+      { name: 'Lonestar', matches: 4, wins: 1, losses: 3 },
+      { name: 'Manticore', matches: 1, wins: 0, losses: 1 },
     ]);
     expect(roundup?.bestTeam?.name).toBe('Valkyra');
   });
@@ -213,13 +213,11 @@ describe('buildRoundup', () => {
     expect(buildRoundup({ period: WEEK, days, matches: level.slice(0, 2), idOf })?.bestTeam).toBeNull();
   });
 
-  it('counts a draw for each side level at the top, and a loss for the rest', () => {
-    const drawn = [match(at('2026-09-28', 20), 'Ozeti', [['Valkyra', 80], ['Lonestar', 80], ['Manticore', 10]], [])];
-    expect(buildRoundup({ period: WEEK, days, matches: drawn, idOf })?.teams).toEqual([
-      { name: 'Lonestar', matches: 1, wins: 0, losses: 0, draws: 1 },
-      { name: 'Valkyra', colorHex: '#3366ff', matches: 1, wins: 0, losses: 0, draws: 1 },
-      { name: 'Manticore', matches: 1, wins: 0, losses: 1, draws: 0 },
-    ]);
+  it('leaves out a match with the sides level at the top: teams never draw, so the bot missed who won', () => {
+    const level = [match(at('2026-09-28', 20), 'Ozeti', [['Valkyra', 80], ['Lonestar', 80], ['Manticore', 10]], [])];
+    const roundup = buildRoundup({ period: WEEK, days, matches: level, idOf });
+    expect(roundup?.teams).toEqual([]);
+    expect(roundup?.closestMatch).toBeNull();
   });
 
   it('gives the top 3 on each board, by public id, with their latest name', () => {
