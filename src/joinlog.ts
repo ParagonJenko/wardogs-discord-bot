@@ -21,6 +21,8 @@ export const JOINS_BYTES = 80_000;
 export const JOIN_GAP_MS = 3 * 60_000;
 // The staff page's longest period.
 export const SESSION_DAYS_KEPT = 30;
+// The UTC day the sessions no longer kept were last deleted ('sessionsPruned'), so it is done once a day.
+export const SESSIONS_PRUNED_KEY = 'sessionsPruned';
 // A player's history lists at most this many of their times on the server.
 export const SESSIONS_LISTED = 300;
 

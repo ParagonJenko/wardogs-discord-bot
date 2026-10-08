@@ -7,7 +7,9 @@ import {
   buildPlayerKills,
   chanceOfAtLeast,
   createKillDays,
+  DAY_DONE_MS,
   DAY_KILLS_KEPT,
+  dayDone,
   FEED_BYTES,
   FEED_KEPT,
   firstKillDay,
@@ -17,17 +19,22 @@ import {
   headshotRows,
   headshotsOn,
   killDaySummaries,
+  loadKillDays,
   parseKillFeed,
   playerKillDays,
   pruneKillDays,
   readKillDays,
   recordKillDay,
   recordKillFeed,
+  saveKillDays,
+  savedKillDays,
   socketSession,
   STAFF_SOCKET_PROTOCOL,
+  SUMMARIES_PER_ROW,
   tally,
   toStaffKills,
   unnamedWeapons,
+  withKillDays,
   writeKillDays,
   type DayWeapon,
   type KillDay,
@@ -252,6 +259,109 @@ describe('the kill_days table', () => {
     createKillDays(sql);
     expect(firstKillDay(sql)).toBeNull();
     expect(readKillDays(sql, '2026-10-04', [ASH]).size).toBe(0);
+  });
+
+  it('clears the kills of the days from the last prune only, and deletes the old summaries with the old days', () => {
+    const sql = database();
+    createKillDays(sql);
+    writeKillDays(sql, [
+      recordKillDay(null, ASH, '2026-10-01', [kill(ASH, BO)]),
+      recordKillDay(null, ASH, '2026-10-02', [kill(ASH, BO)]),
+      recordKillDay(null, ASH, '2026-10-03', [kill(ASH, BO)]),
+    ]);
+    saveKillDays(sql, '2026-10-01', killDaySummaries(sql, '2026-10-01', '2026-10-01'));
+    saveKillDays(sql, '2026-10-02', killDaySummaries(sql, '2026-10-02', '2026-10-02'));
+    // A prune before cleared the days before 10-02, so this one leaves 10-01 alone.
+    pruneKillDays(sql, '2026-09-01', '2026-10-03', '2026-10-02');
+    expect(playerKillDays(sql, ASH, '2026-09-01').map((d) => [d.day, d.list.length])).toEqual([
+      ['2026-10-01', 1],
+      ['2026-10-02', 0],
+      ['2026-10-03', 1],
+    ]);
+    pruneKillDays(sql, '2026-10-02', '2026-10-03', '2026-10-03');
+    expect(playerKillDays(sql, ASH, '2026-09-01').map((d) => d.day)).toEqual(['2026-10-02', '2026-10-03']);
+    expect([...savedKillDays(sql, '2026-09-01', '2026-10-31').keys()]).toEqual(['2026-10-02']);
+  });
+});
+
+describe('saved kill summaries', () => {
+  const players = (n: number): string[] => Array.from({ length: n }, (_, i) => `7656119${String(i).padStart(10, '0')}`);
+
+  it('counts a day as done once its last batch is long written', () => {
+    const end = Date.UTC(2026, 9, 5);
+    expect(dayDone('2026-10-04', end)).toBe(false);
+    expect(dayDone('2026-10-04', end + DAY_DONE_MS - 1)).toBe(false);
+    expect(dayDone('2026-10-04', end + DAY_DONE_MS)).toBe(true);
+    expect(dayDone('2026-10-05', end + DAY_DONE_MS)).toBe(false);
+  });
+
+  it('saves a day across rows and reads it back as kill_days has it, and an empty day as empty', () => {
+    const sql = database();
+    createKillDays(sql);
+    const many = players(SUMMARIES_PER_ROW * 2 + 1);
+    writeKillDays(sql, many.map((steamId) => recordKillDay(null, steamId, '2026-10-03', [kill(steamId, ASH, { headshot: true })])));
+    const day = killDaySummaries(sql, '2026-10-03', '2026-10-03');
+    saveKillDays(sql, '2026-10-03', day);
+    saveKillDays(sql, '2026-10-02', []);
+    expect(sql.exec('SELECT COUNT(*) AS n FROM kill_day_summaries').toArray()[0]?.['n']).toBe(4);
+    expect(savedKillDays(sql, '2026-10-01', '2026-10-03')).toEqual(
+      new Map([
+        ['2026-10-02', []],
+        ['2026-10-03', day],
+      ]),
+    );
+    // Saved again with fewer players, the day has no rows left over from before.
+    saveKillDays(sql, '2026-10-03', day.slice(0, 1));
+    expect(savedKillDays(sql, '2026-10-03', '2026-10-03').get('2026-10-03')).toEqual(day.slice(0, 1));
+  });
+
+  it('leaves out a day with a row it cannot read', () => {
+    const sql = database();
+    createKillDays(sql);
+    saveKillDays(sql, '2026-10-03', [summary(ASH, '2026-10-03', { [AK]: [2, 1] })]);
+    sql.exec("INSERT INTO kill_day_summaries (day, part, summaries) VALUES ('2026-10-03', 1, 'nonsense')");
+    expect(savedKillDays(sql, '2026-10-03', '2026-10-03').size).toBe(0);
+  });
+
+  it('reads a done day from its rows once, then from what was saved, and the day still going from its rows', () => {
+    const sql = database();
+    createKillDays(sql);
+    const ash = recordKillDay(null, ASH, '2026-10-03', [kill(ASH, BO, { headshot: true })]);
+    writeKillDays(sql, [ash, recordKillDay(null, BO, '2026-10-04', [kill(BO, ASH)])]);
+    const now = Date.UTC(2026, 9, 4, 12);
+    const saves: string[] = [];
+    const save = (write: () => void): void => {
+      saves.push('save');
+      write();
+    };
+    const first = loadKillDays(sql, ['2026-10-02', '2026-10-03', '2026-10-04'], now, save);
+    expect([...first.keys()]).toEqual(['2026-10-02', '2026-10-03', '2026-10-04']);
+    expect(first.get('2026-10-03')).toEqual(killDaySummaries(sql, '2026-10-03', '2026-10-03'));
+    expect(first.get('2026-10-04')?.map((d) => d.steamId)).toEqual([BO]);
+    expect(saves).toHaveLength(2);
+    // Rows changed under it now would not be seen for a done day: it is read from what was saved.
+    writeKillDays(sql, [recordKillDay(ash, ASH, '2026-10-03', [kill(ASH, CY)]), recordKillDay(null, CY, '2026-10-04', [kill(CY, ASH)])]);
+    const again = loadKillDays(sql, ['2026-10-02', '2026-10-03', '2026-10-04'], now, save);
+    expect(again.get('2026-10-02')).toEqual([]);
+    expect(again.get('2026-10-03')?.[0]?.kills).toBe(1);
+    expect(again.get('2026-10-04')?.map((d) => d.steamId)).toEqual([BO, CY]);
+    expect(saves).toHaveLength(2);
+  });
+
+  it('puts a batch’s days into a day’s summaries as kill_days has them', () => {
+    const sql = database();
+    createKillDays(sql);
+    const bo = recordKillDay(null, BO, '2026-10-04', [kill(BO, ASH)]);
+    writeKillDays(sql, [bo]);
+    const before = killDaySummaries(sql, '2026-10-04', '2026-10-04');
+    const batch = [
+      recordKillDay(bo, BO, '2026-10-04', [kill(BO, CY, { headshot: true })]),
+      recordKillDay(null, DEE, '2026-10-04', [kill(DEE, BO)]),
+      recordKillDay(null, ASH, '2026-10-04', [kill(ASH, BO)]),
+    ];
+    writeKillDays(sql, batch);
+    expect(withKillDays(before, batch)).toEqual(killDaySummaries(sql, '2026-10-04', '2026-10-04'));
+    expect(withKillDays([], batch).map((d) => d.steamId)).toEqual([ASH, BO, DEE]);
   });
 });
 

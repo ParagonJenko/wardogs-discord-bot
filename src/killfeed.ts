@@ -13,6 +13,8 @@ import { isNamed, weaponKind, weaponName, type FeedKill, type WeaponKind } from 
 // table, in the Durable Object's SQLite database, has a row for each player on each UTC day they killed someone: their
 // kills and headshots, the same by weapon, and each kill. A batch writes one row per killer, as for their weapons. Rows
 // keep their kills for KILL_DAYS_KEPT days, and their counts, which the roundups' awards read, for KILL_DAYS_STORED.
+// Once a day is done, its rows without their kills are also saved in kill_day_summaries, a few hundred players to a row:
+// storage is charged by the row read, and the headshot checks need every player's days, so they read those instead.
 
 export const KILL_FEED_KEY = 'killFeed';
 // The feed keeps the server's latest kills, up to this many, and fewer when their names are long, so the record stays
@@ -23,6 +25,15 @@ export const FEED_BYTES = 80_000;
 export const KILL_DAYS_KEPT = 30;
 // /roundup shows last month until the end of this one: 62 days at most.
 export const KILL_DAYS_STORED = 62;
+// The UTC day the days before it lost their kills ('killListsCleared'), at the last prune: the next reads only the
+// rows from there, and none on the day it ran.
+export const KILL_LISTS_CLEARED_KEY = 'killListsCleared';
+// A day's summaries are saved this many players to a row, well under SQLite's limit for one row (2 MB).
+export const SUMMARIES_PER_ROW = 250;
+// Kills count on the UTC day the bot gets them, and a batch from just before midnight is written just after it: this
+// long after a day ends, nothing more is written to it.
+export const DAY_DONE_MS = 10 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
 // A player's day keeps their latest kills, up to this many. Their counts are always complete.
 export const DAY_KILLS_KEPT = 1_000;
 // The headshots list, and a player's kills, on the staff page.
@@ -189,6 +200,14 @@ export const createKillDays = (sql: Sql): void => {
     )`,
   );
   sql.exec('CREATE INDEX IF NOT EXISTS kill_days_player ON kill_days (steam_id, day)');
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS kill_day_summaries (
+      day TEXT NOT NULL,
+      part INTEGER NOT NULL,
+      summaries TEXT NOT NULL,
+      PRIMARY KEY (day, part)
+    )`,
+  );
 };
 
 const json = (text: unknown): unknown => {
@@ -271,10 +290,74 @@ export const playerKillDays = (sql: Sql, steamId: string, from: string): KillDay
     .toArray()
     .flatMap((row) => dayOfRow(row) ?? []);
 
-// Deletes the days before `oldest`, and the kills of the days before `listedFrom`, which keep their counts.
-export const pruneKillDays = (sql: Sql, oldest: string, listedFrom: string): void => {
+// Deletes the days before `oldest`, and the kills of the days before `listedFrom`, which keep their counts. The days
+// before `clearedFrom` lost their kills at an earlier prune, so only the days since are read: each row looked at is
+// charged, whether or not it changes.
+export const pruneKillDays = (sql: Sql, oldest: string, listedFrom: string, clearedFrom = ''): void => {
   sql.exec('DELETE FROM kill_days WHERE day < ?', oldest);
-  sql.exec("UPDATE kill_days SET list = '[]' WHERE day < ? AND list != '[]'", listedFrom);
+  sql.exec('DELETE FROM kill_day_summaries WHERE day < ?', oldest);
+  sql.exec("UPDATE kill_days SET list = '[]' WHERE day >= ? AND day < ? AND list != '[]'", clearedFrom, listedFrom);
+};
+
+// Whether nothing more is written to `day` (see DAY_DONE_MS).
+export const dayDone = (day: string, now: number): boolean => Date.parse(`${day}T00:00:00Z`) + DAY_MS + DAY_DONE_MS <= now;
+
+const SavedSchema = z.array(z.object({ steamId: z.string(), name: z.string(), kills: count, headshots: count, weapons: WeaponsSchema }));
+
+// The summaries saved for the days from `from` to `to`, by day. A day with a row that cannot be read is left out, so it
+// is read from kill_days again.
+export const savedKillDays = (sql: Sql, from: string, to: string): Map<string, KillDaySummary[]> => {
+  const days = new Map<string, KillDaySummary[] | null>();
+  const rows = sql.exec('SELECT day, summaries FROM kill_day_summaries WHERE day >= ? AND day <= ? ORDER BY day, part', from, to).toArray();
+  for (const row of rows) {
+    const day = row['day'];
+    if (typeof day !== 'string') continue;
+    const parsed = SavedSchema.safeParse(json(row['summaries']));
+    const known = days.get(day);
+    if (!parsed.success || known === null) days.set(day, null);
+    else days.set(day, [...(known ?? []), ...parsed.data.map((s) => ({ day, ...s }))]);
+  }
+  return new Map([...days].flatMap(([day, list]): [string, KillDaySummary[]][] => (list === null ? [] : [[day, list]])));
+};
+
+// Saves a done day's summaries in place of any saved before. A day without kills saves one empty row, so it is not read
+// again either. Run it in a transaction: half a day saved would be read as all of it.
+export const saveKillDays = (sql: Sql, day: string, summaries: KillDaySummary[]): void => {
+  sql.exec('DELETE FROM kill_day_summaries WHERE day = ?', day);
+  for (let part = 0; part === 0 || part * SUMMARIES_PER_ROW < summaries.length; part++) {
+    const rows = summaries.slice(part * SUMMARIES_PER_ROW, (part + 1) * SUMMARIES_PER_ROW).map(({ day: _day, ...s }) => s);
+    sql.exec('INSERT INTO kill_day_summaries (day, part, summaries) VALUES (?, ?, ?)', day, part, JSON.stringify(rows));
+  }
+};
+
+// The summaries of `days` (UTC days, oldest first), by day, as killDaySummaries has them. A done day comes from what was
+// saved for it, or else from its rows, and is then saved, so each day's rows are read about once. `save` runs the save
+// in a transaction, and only logs a failure: the day is read from its rows again next time.
+export const loadKillDays = (sql: Sql, days: string[], now: number, save: (write: () => void) => void): Map<string, KillDaySummary[]> => {
+  const done = days.filter((day) => dayDone(day, now));
+  const saved = done.length === 0 ? new Map<string, KillDaySummary[]>() : savedKillDays(sql, done[0] ?? '', done[done.length - 1] ?? '');
+  return new Map(
+    days.map((day): [string, KillDaySummary[]] => {
+      const known = saved.get(day);
+      if (known !== undefined) return [day, known];
+      const read = killDaySummaries(sql, day, day);
+      if (done.includes(day)) save(() => saveKillDays(sql, day, read));
+      return [day, read];
+    }),
+  );
+};
+
+// A day's summaries (in Steam ID order, as read) with these players' days put in, for a cache kept in step with what a
+// batch writes.
+export const withKillDays = (summaries: KillDaySummary[], days: KillDay[]): KillDaySummary[] => {
+  const next = [...summaries];
+  for (const { list: _list, ...day } of days) {
+    const at = next.findIndex((s) => s.steamId >= day.steamId);
+    if (at === -1) next.push(day);
+    else if (next[at]?.steamId === day.steamId) next[at] = day;
+    else next.splice(at, 0, day);
+  }
+  return next;
 };
 
 // The first UTC day kept, or null before the first kill.
