@@ -1,6 +1,6 @@
 import type { ConfigResult } from './rcon.ts';
 
-// ServerSettings.ini, as the reserved list (vip.ts) and the map rotations (rotations.ts) edit it: one section at a time,
+// ServerSettings.ini, as the whitelist (vip.ts) and the map rotations (rotations.ts) edit it: one section at a time,
 // leaving every other line as it was.
 
 const isHeader = (line: string): boolean => /^\s*\[.*\]\s*$/.test(line);

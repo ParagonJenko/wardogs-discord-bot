@@ -383,10 +383,10 @@ describe('runStaffCommand', () => {
     const { run, records } = setup();
 
     await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'regular', days: '30' })).resolves.toEqual({
-      content: `🎖️ Gave **Ash** a reserved slot until <t:${(NOW + 30 * 86_400_000) / 1000}:f>. It starts after the server's next restart.`,
+      content: `🎖️ Gave **Ash** a whitelist slot until <t:${(NOW + 30 * 86_400_000) / 1000}:f>. It starts after the server's next restart.`,
     });
     await expect(run('vip', { subcommand: 'remove', steam_id: BO })).resolves.toEqual({
-      content: "🎖️ Took **Bo** off the reserved list. It takes effect after the server's next restart. Automatic VIP will not give it back for 7 days.",
+      content: "🎖️ Took **Bo** off the whitelist. It takes effect after the server's next restart. Automatic VIP will not give it back for 7 days.",
     });
     await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'regular', days: '0' })).resolves.toEqual({
       content: 'Give VIP for 1 to 365 days, or set permanent to True.',
@@ -439,18 +439,18 @@ describe('runStaffCommand', () => {
     });
   });
 
-  it('/vip add with permanent gives a reserved slot with no end date', async () => {
+  it('/vip add with permanent gives a whitelist slot with no end date', async () => {
     const { run, records } = setup();
     records.vipAdd.mockResolvedValueOnce({ outcome: 'added' }).mockResolvedValueOnce({ outcome: 'extended' }).mockResolvedValueOnce({ outcome: 'already-reserved' });
 
     await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', permanent: 'true' })).resolves.toEqual({
-      content: "🎖️ Gave **Ash** a permanent reserved slot, with no end date. It starts after the server's next restart.",
+      content: "🎖️ Gave **Ash** a permanent whitelist slot, with no end date. It starts after the server's next restart.",
     });
     await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', permanent: 'true' })).resolves.toEqual({
-      content: '🎖️ **Ash** keeps their reserved slot, with no end date.',
+      content: '🎖️ **Ash** keeps their whitelist slot, with no end date.',
     });
     await expect(run('vip', { subcommand: 'add', steam_id: ASH, reason: 'friend', permanent: 'true' })).resolves.toEqual({
-      content: '**Ash** already has a permanent reserved slot, with no end date. Nothing changed.',
+      content: '**Ash** already has a permanent whitelist slot, with no end date. Nothing changed.',
     });
     expect(records.vipAdd).toHaveBeenCalledWith({ steamId: ASH, name: 'Ash', days: null, reason: 'Friend', by: '42' });
   });
@@ -475,7 +475,7 @@ describe('runStaffCommand', () => {
       expect.arrayContaining([
         { name: 'Playtime · last 90 days', value: '12 h 10 min', inline: true },
         { name: 'Seeding', value: '2 h 10 min · 4 seed days', inline: true },
-        { name: 'VIP', value: '🎖️ Permanent reserved slot, no end date' },
+        { name: 'VIP', value: '🎖️ Permanent whitelist slot, no end date' },
         { name: 'Ban', value: 'Not banned' },
         { name: 'Staff history', value: `1 kick\n<t:${(NOW - 86_400_000) / 1000}:d> **Kick** by <@42>: Teamkilling` },
       ]),
@@ -533,13 +533,13 @@ describe('runStaffCommand', () => {
     expect(await steamField()).toBeUndefined();
   });
 
-  it('/player still answers when the reserved list cannot be read safely', async () => {
+  it('/player still answers when the whitelist cannot be read safely', async () => {
     const twice = `${settings}[/Script/WDGame.WDGameSession]\nMaxReservedSlots=2\n`;
     const { run } = setup({ 'GET /v1/config': [200, { revision: '1', writable: true, text: twice }] });
 
     const embed = (await run('player', { player: BO })).embeds?.[0];
 
-    expect(embed?.fields).toEqual(expect.arrayContaining([{ name: 'VIP', value: "Couldn't read the reserved list" }]));
+    expect(embed?.fields).toEqual(expect.arrayContaining([{ name: 'VIP', value: "Couldn't read the whitelist" }]));
   });
 
   it('/player still answers when the server cannot be reached', async () => {
@@ -554,7 +554,7 @@ describe('runStaffCommand', () => {
     expect(embed?.title).toBe('👤 Oldtimer');
     expect(embed?.fields).toEqual(
       expect.arrayContaining([
-        { name: 'VIP', value: "Couldn't read the reserved list" },
+        { name: 'VIP', value: "Couldn't read the whitelist" },
         { name: 'Ban', value: "Couldn't read the ban list" },
       ]),
     );
@@ -663,7 +663,7 @@ describe('suggestStaff', () => {
     await expect(suggest({ name: 'vip', options: { subcommand: 'add', steam_id: 'old' }, focused: 'steam_id' })).resolves.toHaveLength(1);
   });
 
-  it('offers the banned players for /unban and the reserved list for /vip remove', async () => {
+  it('offers the banned players for /unban and the whitelist for /vip remove', async () => {
     const { suggest } = setup();
 
     await expect(suggest({ name: 'unban', options: { steam_id: '' }, focused: 'steam_id' })).resolves.toEqual([

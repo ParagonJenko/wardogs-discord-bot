@@ -225,13 +225,13 @@ export const COMMANDS = [
   },
   {
     name: 'vip',
-    description: 'Give or take away a reserved slot (staff only)',
+    description: 'Give or take away a whitelist slot (staff only)',
     ...STAFF_ONLY,
     options: [
       {
         type: SUBCOMMAND,
         name: 'add',
-        description: 'Give a player a reserved slot for a number of days, or permanently',
+        description: 'Give a player a whitelist slot for a number of days, or permanently',
         options: [
           steamId('Pick the player, or type a name or Steam ID'),
           {
@@ -249,9 +249,9 @@ export const COMMANDS = [
       {
         type: SUBCOMMAND,
         name: 'remove',
-        description: 'Take a player off the reserved list; automatic VIP skips them for 7 days',
+        description: 'Take a player off the whitelist; automatic VIP skips them for 7 days',
         options: [
-          steamId('Pick from the reserved list, or type a Steam ID'),
+          steamId('Pick from the whitelist, or type a Steam ID'),
           { type: STRING, name: 'reason', description: 'Why; posted to the moderation log', required: false, max_length: VIP_NOTE_MAX_LENGTH },
         ],
       },

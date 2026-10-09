@@ -234,9 +234,9 @@ const CALL_TO_ACTION: Record<AlertKind, string> = {
 
 const span = (days: number): string => (days === 7 ? 'a week' : plural(days, 'day'));
 
-// What seeding earns: "Seed on 3 days in a week and get a reserved slot for a week."
+// What seeding earns: "Seed on 3 days in a week and get a whitelist slot for a week."
 export const vipOffer = (vip: VipRule): string =>
-  `Seed on ${plural(vip.seedDays, 'day')} in ${span(vip.windowDays)} and get a reserved slot for ${span(vip.lengthDays)}.`;
+  `Seed on ${plural(vip.seedDays, 'day')} in ${span(vip.windowDays)} and get a whitelist slot for ${span(vip.lengthDays)}.`;
 
 // What counts as a seed.
 export const vipRule = (vip: VipRule): string =>
@@ -642,7 +642,7 @@ const nameList = (names: string[]): string => {
   return andList(all);
 };
 
-// Posted when seeders get a reserved slot, or keep one for another week, so everyone sees what seeding earns.
+// Posted when seeders get a whitelist slot, or keep one for another week, so everyone sees what seeding earns.
 export const buildVipMessage = (
   added: { name: string }[],
   renewed: { name: string }[],
@@ -653,13 +653,13 @@ export const buildVipMessage = (
   const week = vip.lengthDays === 7 ? 'week' : span(vip.lengthDays);
   const earned =
     added.length > 0
-      ? `🎉 **${nameList(added.map((p) => p.name))}** earned ${added.length === 1 ? 'a reserved slot' : 'reserved slots'} ` +
+      ? `🎉 **${nameList(added.map((p) => p.name))}** earned ${added.length === 1 ? 'a whitelist slot' : 'whitelist slots'} ` +
         `for ${span(vip.lengthDays)} by seeding. Thank you!`
       : null;
   return {
     embeds: [
       {
-        title: '🎖️ Reserved slots for seeders',
+        title: '🎖️ Whitelist slots for seeders',
         ...(earned ? { description: earned } : {}),
         color: COLORS.seeding,
         fields: [
@@ -667,7 +667,7 @@ export const buildVipMessage = (
           { name: 'Earn one too', value: `${vipOffer(vip)}\n${vipRule(vip)}` },
         ],
         ...linked,
-        footer: { text: ["Reserved slots start after the server's next restart.", linked.footer?.text].filter(Boolean).join(' · ') },
+        footer: { text: ["Whitelist slots start after the server's next restart.", linked.footer?.text].filter(Boolean).join(' · ') },
       },
     ],
     allowed_mentions: NO_PINGS,
@@ -978,22 +978,22 @@ const when = (at: number, style: 'f' | 'd' | 'R'): string => `<t:${Math.floor(at
 const cut = (text: string): string => (text.length > MAX_REASON_SHOWN ? `${text.slice(0, MAX_REASON_SHOWN - 1)}…` : text);
 
 const vipText = ({ record, reserved, now }: PlayerProfile): string => {
-  // The reserved list is the truth when it can be read; otherwise the bot's record is shown as only that.
+  // The whitelist is the truth when it can be read; otherwise the bot's record is shown as only that.
   const lines = [
     reserved === null
       ? record.staffSpot
-        ? "🎖️ Staff spot: a reserved slot while they are staff, by the bot's records\n(Couldn't check the reserved list.)"
+        ? "🎖️ Staff spot: a whitelist slot while they are staff, by the bot's records\n(Couldn't check the whitelist.)"
         : record.vip === null
-          ? "Couldn't read the reserved list"
-          : `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`
+          ? "Couldn't read the whitelist"
+          : `🎖️ Whitelist slot until ${when(record.vip.expiresAt, 'f')}, by the bot's records\n(Couldn't check the whitelist.)`
       : record.staffSpot
         ? reserved
-          ? '🎖️ Staff spot: a reserved slot while they are staff'
-          : '🎖️ Staff spot: on the reserved list from the next check'
+          ? '🎖️ Staff spot: a whitelist slot while they are staff'
+          : '🎖️ Staff spot: on the whitelist from the next check'
         : record.vip !== null && reserved
-          ? `🎖️ Reserved slot until ${when(record.vip.expiresAt, 'f')}`
+          ? `🎖️ Whitelist slot until ${when(record.vip.expiresAt, 'f')}`
           : reserved
-            ? '🎖️ Permanent reserved slot, no end date'
+            ? '🎖️ Permanent whitelist slot, no end date'
             : 'None',
     ...(record.vipBlockedUntil !== null && record.vipBlockedUntil > now
       ? [`Staff removed VIP: automatic VIP is off for them until ${when(record.vipBlockedUntil, 'f')}`]

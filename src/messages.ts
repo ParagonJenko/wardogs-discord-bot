@@ -41,7 +41,7 @@ export const nearlyScore = (scoreToWin: number): number => Math.ceil(scoreToWin 
 // What the bot puts around the lines (see lines.ts). The staff page shows them too, so staff see the whole message.
 export const HALFWAY_START = 'Halfway there!';
 export const halfwayCall = (siteHost: string, vip: VipRule | null): string =>
-  vip ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}` : `Check the leaderboard and join our Discord at ${siteHost}`;
+  vip ? `Seed on ${days(vip.seedDays)} in a week and get a whitelist slot. How at ${siteHost}` : `Check the leaderboard and join our Discord at ${siteHost}`;
 export const nearlyCall = (siteHost: string): string => `Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`;
 
 // A line the bot chose: its message, which list it came from and the line as written (before placeholders).
@@ -182,17 +182,17 @@ export const nextMessage = (
   return { messages: { ...previous, sent: [...previous.sent, next.key] }, send: next.text, used: next.pick };
 };
 
-// What seeding earns, after the seeding line: a reserved slot when automatic VIP is on, otherwise a place on the
+// What seeding earns, after the seeding line: a whitelist slot when automatic VIP is on, otherwise a place on the
 // website's top seeders board.
 export const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
   if (vip) {
-    const offer = `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a reserved slot.`;
+    const offer = `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a whitelist slot.`;
     return siteHost ? `${offer} How at ${siteHost}` : offer;
   }
   return siteHost ? `Top seeders make the leaderboard at ${siteHost}` : 'Thanks for helping get it live!';
 };
 
-// "We're seeding! 5 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How
+// "We're seeding! 5 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How
 // at gaminginit.com"
 export const seedingPick = (
   players: number,

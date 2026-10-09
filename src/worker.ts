@@ -472,7 +472,7 @@ const oneAtATime = () => {
 // A single Durable Object holds the bot's state, so it survives between cron runs and is never read stale.
 // Storage keys: 'state' (alerts, the match in progress and any outage), 'stats' (public, for /api/stats), the private
 // player records: 'players:<UTC date>' (each player's totals that day) and 'match:<start time>' (each finished match),
-// 'vip' (who the bot put on the reserved list, and until when), 'mod:<Steam ID>' (what staff did to that player through
+// 'vip' (who the bot put on the whitelist, and until when), 'mod:<Steam ID>' (what staff did to that player through
 // the bot), 'bans' (the bans the bot made, and when the timed ones end), 'board' (which Discord message is the live
 // status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
 // was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow), 'winsSettled'
@@ -501,7 +501,7 @@ export class Watcher extends DurableObject<Env> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
 
-  // Bans, the reserved list and the map rotation all live in the server's settings file. Changes to them run one at a
+  // Bans, the whitelist and the map rotation all live in the server's settings file. Changes to them run one at a
   // time, so one never overwrites another, or the VIP state or the saved rotations, with what it read before the other
   // finished. Staff Steam accounts change in turn too, as the VIP updates read them.
   private serial = oneAtATime();
@@ -560,7 +560,7 @@ export class Watcher extends DurableObject<Env> {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
   }
 
-  // ServerSettings.ini, which holds the reserved list and the map rotation.
+  // ServerSettings.ini, which holds the whitelist and the map rotation.
   private settingsFile({ config, http }: { config: Config; http: HttpClient }) {
     return {
       fetchConfig: () => fetchConfig(config.rconUrl, config.rconPassword, http),
@@ -1655,7 +1655,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Every 10 minutes: gives VIP to players who have earned it, and takes it back when their time is up, and keeps a
-  // staff spot on the reserved list for each staff member who linked their Steam account. A staff member who linked
+  // staff spot on the whitelist for each staff member who linked their Steam account. A staff member who linked
   // or unlinked since the last update is seen to at the next check. VIP staff gave ends on time even when automatic
   // VIP is off.
   private async updateVip(config: Config): Promise<void> {
@@ -2244,7 +2244,7 @@ export class Watcher extends DurableObject<Env> {
       try {
         return reservedListing(serverConfig.text);
       } catch (error) {
-        console.error(`Staff page: the reserved list could not be read: ${errorText(error)}`);
+        console.error(`Staff page: the whitelist could not be read: ${errorText(error)}`);
         return null;
       }
     })();
@@ -2345,8 +2345,8 @@ export class Watcher extends DurableObject<Env> {
     action: ProfileAction,
     user: { id: string; name: string },
   ): Promise<{ steamId: string | null; player: string | null } | { problem: string }> {
-    // One at a time with the VIP updates: one that read the staff before this change and is still writing the reserved
-    // list would otherwise save VIP for an account linked meanwhile. Waiting for it makes it come before the link.
+    // One at a time with the VIP updates: one that read the staff before this change and is still writing the whitelist
+    // would otherwise save VIP for an account linked meanwhile. Waiting for it makes it come before the link.
     const changed = await this.serial(async (): Promise<{ steamId: string | null } | { problem: string }> => {
       const storage = this.ctx.storage;
       const profiles = parseStaffProfiles(await storage.get(STAFF_PROFILES_KEY));
@@ -2558,7 +2558,7 @@ export class Watcher extends DurableObject<Env> {
         name,
         ...(reason === undefined ? {} : { reason }),
         // Still logged: automatic VIP skips them for 7 days either way.
-        detail: outcome === 'removed' ? 'automatic VIP off for 7 days' : "wasn't on the reserved list; automatic VIP off for 7 days",
+        detail: outcome === 'removed' ? 'automatic VIP off for 7 days' : "wasn't on the whitelist; automatic VIP off for 7 days",
       };
       await this.record(steamId, entry, { vip: change.state });
       return { outcome };

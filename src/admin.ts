@@ -81,7 +81,7 @@ export type AdminBan = {
   bot: { by: string; at: number; until: number | null; reason: string } | null;
 };
 
-// Everyone on the server's reserved list. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
+// Everyone on the server's whitelist. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
 // when it ends; `staff` a staff spot the bot keeps while their Steam account is linked, and since when. With neither,
 // the slot is permanent (added by hand, or with /vip add permanent).
 export type AdminReserved = {
@@ -155,7 +155,7 @@ export type AdminOnlinePlayer = AdminPlayer & {
   // Today's headshots, judged against what their weapons usually get (see killfeed.ts). Null with no kills today.
   headshotsToday: HeadshotDay | null;
   banned: boolean;
-  // On the reserved list, from the bot or by hand. Null when ServerSettings.ini could not be read.
+  // On the whitelist, from the bot or by hand. Null when ServerSettings.ini could not be read.
   reserved: boolean | null;
   // A staff member checked them today and found nothing to act on, with what they were flagged for then (see
   // checked.ts). Null when nobody has.
@@ -232,7 +232,7 @@ export type AdminSources = {
   // Staff the bot has seen or looked up, by Discord user ID.
   staffNames: StaffNames;
   staffProfiles: StaffProfiles;
-  // The reserved list in ServerSettings.ini, or null when it could not be read, and the VIP the bot gave.
+  // The whitelist in ServerSettings.ini, or null when it could not be read, and the VIP the bot gave.
   reserved: ReservedListing | null;
   vip: VipState;
   // Null without STEAM_API_KEY.

@@ -53,7 +53,7 @@ const row = (name: string, seedDays: number): PlayerTotals => ({
 });
 
 describe('reservedIds', () => {
-  it('reads the reserved list from the game session section only', () => {
+  it('reads the whitelist from the game session section only', () => {
     const text = ini([...settings.trim().split('\n'), `+DefaultReservedPlayerIds=${BO}`]);
 
     expect(reservedIds(text)).toEqual([ADMIN]);
@@ -71,7 +71,7 @@ describe('reservedIds', () => {
 });
 
 describe('editReserved', () => {
-  it('adds after the last reserved player and removes only the ones asked, leaving every other line', () => {
+  it('adds after the last whitelisted player and removes only the ones asked, leaving every other line', () => {
     const text = editReserved(ini([...settings.trim().split('\n').slice(0, 4), `+DefaultReservedPlayerIds=${BO}`, ...settings.trim().split('\n').slice(4)]), [ASH], [BO]);
 
     expect(text).toBe(
@@ -307,7 +307,7 @@ describe('syncVip', () => {
     expect(rcon.validate).toHaveBeenCalledWith(written);
     expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: written });
     expect(log.info).toHaveBeenCalledWith(
-      `VIP added: Ash (${ASH}). The server uses the new reserved list after its next restart.`,
+      `VIP added: Ash (${ASH}). The server uses the new whitelist after its next restart.`,
     );
   });
 
@@ -332,7 +332,7 @@ describe('syncVip', () => {
 
     expect(rcon.put).toHaveBeenCalledWith({ revision: '4', writable: true, text: settings });
     expect(result).toEqual({ state: { granted: {}, checkedAt: NOW, revoked: {}, staffSpots: {} }, added: [], renewed: [] });
-    expect(log.info).toHaveBeenCalledWith(`VIP ended: Ash (${ASH}). The server uses the new reserved list after its next restart.`);
+    expect(log.info).toHaveBeenCalledWith(`VIP ended: Ash (${ASH}). The server uses the new whitelist after its next restart.`);
   });
 
   it('keeps a player on the list for another week if they earned it again, without writing', async () => {
@@ -366,8 +366,8 @@ describe('syncVip', () => {
       added: [],
       renewed: [],
     });
-    expect(log.info).toHaveBeenCalledWith(`Staff spots taken over from the reserved list: Sarge (${ADMIN}).`);
-    expect(log.info).toHaveBeenCalledWith(`Staff spots added: Kestrel (${BO}). The server uses the new reserved list after its next restart.`);
+    expect(log.info).toHaveBeenCalledWith(`Staff spots taken over from the whitelist: Sarge (${ADMIN}).`);
+    expect(log.info).toHaveBeenCalledWith(`Staff spots added: Kestrel (${BO}). The server uses the new whitelist after its next restart.`);
   });
 
   it('turns VIP a staff member had from the bot into their staff spot, which does not run out', async () => {
@@ -525,7 +525,7 @@ describe('addVip and removeVip', () => {
     expect(result).toEqual({ state: empty, outcome: 'extended' });
   });
 
-  it('leaves a player an admin reserved by hand alone, but lifts a block from /vip remove', async () => {
+  it('leaves a player an admin whitelisted by hand alone, but lifts a block from /vip remove', async () => {
     const rcon = server();
     const blocked = { ...empty, revoked: { [ADMIN]: NOW + DAY } };
 
@@ -571,7 +571,7 @@ describe('addVip and removeVip', () => {
 });
 
 describe('reservedListing', () => {
-  it('lists who the lines leave on the reserved list, and the slots held back', () => {
+  it('lists who the lines leave on the whitelist, and the slots held back', () => {
     const text = [
       '[/Script/WDGame.WDGameSession]',
       'MaxReservedSlots=2',

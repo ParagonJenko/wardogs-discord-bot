@@ -92,10 +92,10 @@ export type BanRequest = Named & { length: string; reason: string; by: string; b
 // bans them when it next sees them.
 export type BanResult = { outcome: 'banned' | 'already-banned'; until: number | null; byBot: boolean; waiting?: boolean };
 export type VipAddResult = { outcome: 'added' | 'extended' | 'already-reserved'; until?: number };
-// `staff-spot`: a staff member's own reserved slot, which only unlinking their Steam account takes away.
+// `staff-spot`: a staff member's own whitelist slot, which only unlinking their Steam account takes away.
 export type VipRemoveResult = { outcome: 'removed' | 'not-reserved' | 'staff-spot' };
 
-// The records, and the actions that change the server's settings file (bans and the reserved list), which the
+// The records, and the actions that change the server's settings file (bans and the whitelist), which the
 // Durable Object runs one at a time so they never overwrite each other or the automatic VIP update.
 export type StaffRecords = {
   player: (steamId: string) => Promise<PlayerRecord>;
@@ -247,7 +247,7 @@ const namedIds = (ids: string[], known: Named[]): Named[] =>
 
 const optional = async <T>(work: Promise<T>): Promise<T | null> => work.catch(() => null);
 
-// Null when the reserved list cannot be read safely, such as a settings file with the section twice.
+// Null when the whitelist cannot be read safely, such as a settings file with the section twice.
 const isReserved = (settings: string, steamId: string): boolean | null => {
   try {
     return reservedIds(settings).includes(steamId);
@@ -560,8 +560,8 @@ export const runStaffCommand =
         }
         const blocked = 'Automatic VIP will not give it back for 7 days.';
         return outcome === 'removed'
-          ? { content: `🎖️ Took ${who(player)} off the reserved list. It takes effect after the server's next restart. ${blocked}` }
-          : { content: `${who(player)} wasn't on the reserved list. ${blocked}` };
+          ? { content: `🎖️ Took ${who(player)} off the whitelist. It takes effect after the server's next restart. ${blocked}` }
+          : { content: `${who(player)} wasn't on the whitelist. ${blocked}` };
       }
       const why = VIP_REASONS.find((r) => r.value === options['reason']);
       if (why === undefined) return { content: `Pick why they get VIP: ${VIP_REASONS.map((r) => r.name).join(', ')}.` };
@@ -577,12 +577,12 @@ export const runStaffCommand =
       log.info(`/vip add by ${staff}: ${logged(player)} ${days === null ? 'permanently' : `for ${days} days`}: ${JSON.stringify(reason)}`);
       const result = await records.vipAdd({ ...player, days, reason, by, ...named });
       if (result.outcome === 'already-reserved') {
-        return { content: `${who(player)} already has a permanent reserved slot, with no end date. Nothing changed.` };
+        return { content: `${who(player)} already has a permanent whitelist slot, with no end date. Nothing changed.` };
       }
       const until = result.until === undefined ? ', with no end date' : ` until <t:${unix(result.until)}:f>`;
       return result.outcome === 'extended'
-        ? { content: `🎖️ ${who(player)} keeps their reserved slot${until}.` }
-        : { content: `🎖️ Gave ${who(player)} a${days === null ? ' permanent' : ''} reserved slot${until}. It starts after the server's next restart.` };
+        ? { content: `🎖️ ${who(player)} keeps their whitelist slot${until}.` }
+        : { content: `🎖️ Gave ${who(player)} a${days === null ? ' permanent' : ''} whitelist slot${until}. It starts after the server's next restart.` };
     }
 
     // /player: what the bot knows, and what the server says now. The server's parts are left out if it cannot be read.

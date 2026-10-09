@@ -74,7 +74,7 @@ describe('milestones', () => {
       },
     ]);
     expect(milestones(match(scores(50, 20)), 0, rule, vip, first)[0]?.text).toBe(
-      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com',
+      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com',
     );
   });
 
@@ -178,10 +178,10 @@ describe('seedingMessage', () => {
 
   it('says how many more players are needed to go live, and what seeding earns', () => {
     expect(seedingMessage(5, 20, site, vip, first)).toBe(
-      "We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How at gaminginit.com",
+      "We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How at gaminginit.com",
     );
     expect(seedingMessage(19, 20, noSite, vip, first)).toBe(
-      "We're seeding! 1 more player and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot.",
+      "We're seeding! 1 more player and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot.",
     );
   });
 

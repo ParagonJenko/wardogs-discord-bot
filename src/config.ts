@@ -123,7 +123,7 @@ const EnvSchema = z
     message: 'must not be above LIVE_THRESHOLD',
   });
 
-// Seed on `seedDays` days within `windowDays` and get a reserved slot for `lengthDays`. A day counts when the player
+// Seed on `seedDays` days within `windowDays` and get a whitelist slot for `lengthDays`. A day counts when the player
 // was on for more than `seedMinutes` while the server seeded, and it then went live.
 export type VipRule = { seedDays: number; seedMinutes: number; windowDays: number; lengthDays: number };
 

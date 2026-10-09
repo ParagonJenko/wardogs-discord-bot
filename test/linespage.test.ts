@@ -113,7 +113,7 @@ describe('editLines', () => {
 
   it('refuses a line too long for the game with what the bot adds to it', () => {
     // The room a Lonestar halfway line has: what is left of 200 after "Halfway there! " and the seeding call to action.
-    const after = ' Seed on 3 days in a week and get a reserved slot. How at gaminginit.com';
+    const after = ' Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com';
     const room = 200 - 'Halfway there! '.length - after.length;
 
     expect(save({}, 'halfwayLevel', ['x'.repeat(200 - after.length)])).toHaveProperty('saved');
@@ -127,7 +127,7 @@ describe('editLines', () => {
   });
 
   it('checks {score} and {team} at the longest they can be when the message goes out, not as the preview shows them', () => {
-    const room = 200 - 'Halfway there! '.length - ' Seed on 3 days in a week and get a reserved slot. How at gaminginit.com'.length;
+    const room = 200 - 'Halfway there! '.length - ' Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com'.length;
 
     // The preview shows 50, but the leader can be on 100 when the message goes out.
     expect(save({}, 'halfway.lonestar', [`${'x'.repeat(room - 3)}{score}`])).toHaveProperty('saved');
@@ -140,7 +140,7 @@ describe('editLines', () => {
   });
 
   it('keeps every line it saves from being cut short in game', () => {
-    const room = 200 - 'Halfway there! '.length - ' Seed on 3 days in a week and get a reserved slot. How at gaminginit.com'.length;
+    const room = 200 - 'Halfway there! '.length - ' Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com'.length;
     const line = `${'x'.repeat(room - TEAM_LONGEST - 4)}{team} {score}`;
     const sent = milestones(
       {
@@ -185,7 +185,7 @@ describe('buildLinesPage', () => {
     expect(page.lists.find((l) => l.id === 'seeding')).toMatchObject({
       lines: DEFAULT_LINES.seeding,
       values: { needed: '19 more players' },
-      after: ' Seed for over 10 min on 3 days in a week and get a reserved slot. How at gaminginit.com',
+      after: ' Seed for over 10 min on 3 days in a week and get a whitelist slot. How at gaminginit.com',
       changed: null,
     });
   });
@@ -194,7 +194,7 @@ describe('buildLinesPage', () => {
     const page = buildLinesPage({}, { ...context, match: false, siteHost: null });
 
     expect(page.lists.find((l) => l.id === 'seeding')?.off).toBeNull();
-    expect(page.lists.find((l) => l.id === 'seeding')?.after).toBe(' Seed for over 10 min on 3 days in a week and get a reserved slot.');
+    expect(page.lists.find((l) => l.id === 'seeding')?.after).toBe(' Seed for over 10 min on 3 days in a week and get a whitelist slot.');
     expect(page.lists.find((l) => l.id === 'tenMinutes')?.off).toBe(
       'The bot is not sending match messages: MATCH_MESSAGES is off, or SITE_URL is not set.',
     );
