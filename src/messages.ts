@@ -44,7 +44,12 @@ export const halfwayCall = (siteHost: string, vip: VipRule | null): string =>
   vip ? `Seed on ${days(vip.seedDays)} in a week and get a reserved slot. How at ${siteHost}` : `Check the leaderboard and join our Discord at ${siteHost}`;
 export const nearlyCall = (siteHost: string): string => `Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`;
 
+// A line the bot chose: its message, which list it came from and the line as written (before placeholders).
+export type Picked = { text: string; list: string; line: string };
+
 type Milestone = { key: string; text: string };
+
+type Reached = Milestone & { pick: Picked };
 
 type Score = MatchState['factionScores'][number];
 
@@ -52,24 +57,97 @@ type Score = MatchState['factionScores'][number];
 export const fillLine = (line: string, values: Record<string, string | number>): string =>
   line.replace(/\{(\w+)\}/g, (whole, name: string) => (Object.hasOwn(values, name) ? String(values[name]) : whole));
 
-// A random line from a list, with its placeholders filled in.
-const pickLine = (list: string[], values: Record<string, string | number>, random: () => number): string =>
-  fillLine(list[Math.floor(random() * list.length)] ?? list[0] ?? '', values);
+// The lines each list used lately, newest last, by list. Saved with the bot's state, so the next message avoids them.
+export type Recent = Record<string, string[]>;
+
+export const RecentSchema = z.record(z.string(), z.array(z.string()));
+
+// How many lines a list remembers.
+const RECENT_KEPT = 10;
+
+// Adds a chosen line to what is remembered.
+export const remember = (recent: Recent, picked: Picked): Recent => ({
+  ...recent,
+  [picked.list]: [...(recent[picked.list] ?? []).filter((line) => line !== picked.line), picked.line].slice(-RECENT_KEPT),
+});
+
+// A random line from a list, with its placeholders filled in. A line used lately is passed over while the list has
+// others, so a list is gone through before any line comes round again: up to half the list, so even a short one varies.
+const pickLine = (
+  id: string,
+  list: string[],
+  values: Record<string, string | number>,
+  random: () => number,
+  recent: Recent,
+): Picked => {
+  const avoid = new Set((recent[id] ?? []).slice(-Math.min(RECENT_KEPT, Math.floor(list.length / 2))));
+  const fresh = list.filter((line) => !avoid.has(line));
+  const from = fresh.length > 0 ? fresh : list;
+  const line = from[Math.floor(random() * from.length)] ?? from[0] ?? '';
+  return { text: fillLine(line, values), list: id, line };
+};
 
 // The team in front's line: from its own list, or the plain one for a faction without a list.
-const teamLine = (lists: Record<string, string[]>, other: string[], team: Score, score: number, random: () => number): string =>
-  pickLine(lists[factionKey(team.name)] ?? other, { team: team.name, score }, random);
+const teamLine = (
+  id: string,
+  lists: Record<string, string[]>,
+  other: string[],
+  team: Score,
+  score: number,
+  random: () => number,
+  recent: Recent,
+): Picked => {
+  const key = factionKey(team.name);
+  return key in lists
+    ? pickLine(`${id}:${key}`, lists[key] ?? other, { team: team.name, score }, random, recent)
+    : pickLine(`${id}Other`, other, { team: team.name, score }, random, recent);
+};
 
 // Only the team in front is named; when the top teams are level, nobody is.
-const halfwayLine = (scores: Score[], lines: Lines, random: () => number): string => {
+const halfwayLine = (scores: Score[], lines: Lines, random: () => number, recent: Recent): { text: string; pick: Picked | null } => {
   const [first, second] = [...scores].sort((a, b) => b.score - a.score);
-  if (!first) return HALFWAY_START;
-  if (second && second.score === first.score) return pickLine(lines.halfwayLevel, {}, random);
-  return `${HALFWAY_START} ${teamLine(lines.halfway, lines.halfwayOther, first, first.score, random)}`;
+  if (!first) return { text: HALFWAY_START, pick: null };
+  if (second && second.score === first.score) {
+    const pick = pickLine('halfwayLevel', lines.halfwayLevel, {}, random, recent);
+    return { text: pick.text, pick };
+  }
+  const pick = teamLine('halfway', lines.halfway, lines.halfwayOther, first, first.score, random, recent);
+  return { text: `${HALFWAY_START} ${pick.text}`, pick };
 };
 
 // Everything this match has reached so far, in the order it happens.
 // `random` picks the lines; each message's line is chosen when it is sent. `lines` are staff's, or the bot's own.
+const reached = (
+  match: MatchState,
+  now: number,
+  rule: MessageRule,
+  vip: VipRule | null,
+  random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
+  recent: Recent,
+): Reached[] => {
+  const { siteHost, scoreToWin } = rule;
+  const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
+  const top = Math.max(0, leader?.score ?? 0);
+  const nearly = nearlyScore(scoreToWin);
+  const out: Reached[] = [];
+  // Only when the bot saw the match start, so the time is right.
+  if (match.summarisable && match.liveAt !== null && now - match.liveAt >= TEN_MINUTES) {
+    const pick = pickLine('tenMinutes', lines.tenMinutes, { site: siteHost }, random, recent);
+    out.push({ key: 'ten-minutes', text: pick.text, pick });
+  }
+  if (top >= scoreToWin / 2) {
+    const { text, pick } = halfwayLine(match.factionScores, lines, random, recent);
+    out.push({ key: 'halfway', text: `${text} ${halfwayCall(siteHost, vip)}`, pick: pick ?? { text, list: 'halfway', line: text } });
+  }
+  // Once per match, for the first team to get there.
+  if (leader && leader.score >= nearly) {
+    const pick = teamLine('nearly', lines.nearly, lines.nearlyOther, leader, nearly, random, recent);
+    out.push({ key: 'nearly', text: `${pick.text} ${nearlyCall(siteHost)}`, pick });
+  }
+  return out.map((m) => ({ ...m, text: fit(m.text) }));
+};
+
 export const milestones = (
   match: MatchState,
   now: number,
@@ -77,27 +155,10 @@ export const milestones = (
   vip: VipRule | null,
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
-): Milestone[] => {
-  const { siteHost, scoreToWin } = rule;
-  const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
-  const top = Math.max(0, leader?.score ?? 0);
-  const nearly = nearlyScore(scoreToWin);
-  return [
-    // Only when the bot saw the match start, so the time is right.
-    ...(match.summarisable && match.liveAt !== null && now - match.liveAt >= TEN_MINUTES
-      ? [{ key: 'ten-minutes', text: pickLine(lines.tenMinutes, { site: siteHost }, random) }]
-      : []),
-    ...(top >= scoreToWin / 2
-      ? [{ key: 'halfway', text: `${halfwayLine(match.factionScores, lines, random)} ${halfwayCall(siteHost, vip)}` }]
-      : []),
-    // Once per match, for the first team to get there.
-    ...(leader && leader.score >= nearly
-      ? [{ key: 'nearly', text: `${teamLine(lines.nearly, lines.nearlyOther, leader, nearly, random)} ${nearlyCall(siteHost)}` }]
-      : []),
-  ].map((m) => ({ ...m, text: fit(m.text) }));
-};
+  recent: Recent = {},
+): Milestone[] => reached(match, now, rule, vip, random, lines, recent).map(({ key, text }) => ({ key, text }));
 
-// The message to send now, if any, and what to remember. At most one per check, so they never arrive in a burst.
+// The message to send now, if any, and what to remember. `used` is the line it chose, for `remember`. At most one per check, so they never arrive in a burst.
 // The first time a match is seen, what it has already reached is marked as sent without sending: a match seen from
 // its start has reached nothing, and one first seen part-way (after the bot restarts) is not announced late.
 export const nextMessage = (
@@ -108,16 +169,17 @@ export const nextMessage = (
   vip: VipRule | null,
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
-): { messages: MatchMessages; send: string | null } => {
-  const due = milestones(match, now, rule, vip, random, lines);
+  recent: Recent = {},
+): { messages: MatchMessages; send: string | null; used: Picked | null } => {
+  const due = reached(match, now, rule, vip, random, lines, recent);
   if (previous === null || previous.match !== match.startedAt) {
-    return { messages: { match: match.startedAt, sent: due.map((m) => m.key) }, send: null };
+    return { messages: { match: match.startedAt, sent: due.map((m) => m.key) }, send: null, used: null };
   }
   // Saved before "nearly" was once per match, it was one key per team ("nearly:Valkyra"); either counts as sent.
   const sent = (key: string): boolean => previous.sent.some((k) => k === key || k.startsWith(`${key}:`));
   const next = due.find((m) => !sent(m.key));
-  if (next === undefined) return { messages: previous, send: null };
-  return { messages: { ...previous, sent: [...previous.sent, next.key] }, send: next.text };
+  if (next === undefined) return { messages: previous, send: null, used: null };
+  return { messages: { ...previous, sent: [...previous.sent, next.key] }, send: next.text, used: next.pick };
 };
 
 // What seeding earns, after the seeding line: a reserved slot when automatic VIP is on, otherwise a place on the
@@ -132,6 +194,19 @@ export const seedingReward = (siteHost: string | null, vip: VipRule | null): str
 
 // "We're seeding! 5 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How
 // at gaminginit.com"
+export const seedingPick = (
+  players: number,
+  live: number,
+  rule: SeedingMessageRule,
+  vip: VipRule | null,
+  random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
+  recent: Recent = {},
+): Picked => {
+  const pick = pickLine('seeding', lines.seeding, { needed: morePlayers(Math.max(1, live - players)) }, random, recent);
+  return { ...pick, text: fit(`${pick.text} ${seedingReward(rule.siteHost, vip)}`) };
+};
+
 export const seedingMessage = (
   players: number,
   live: number,
@@ -139,8 +214,8 @@ export const seedingMessage = (
   vip: VipRule | null,
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
-): string =>
-  fit(`${pickLine(lines.seeding, { needed: morePlayers(Math.max(1, live - players)) }, random)} ${seedingReward(rule.siteHost, vip)}`);
+  recent: Recent = {},
+): string => seedingPick(players, live, rule, vip, random, lines, recent).text;
 
 // Whether the seeding message is due. Checks land a little early or late, so one within half a check of the time
 // counts: every 5 minutes stays every 5 minutes, not 6.
@@ -185,8 +260,13 @@ export const welcomeLinks = (siteHost: string | null, discord: string | null): s
   return links.length === 0 ? '' : ` ${links.join(' | ')}`;
 };
 
-export const welcomeMessage = (rule: WelcomeRule, random: () => number = Math.random, lines: Lines = DEFAULT_LINES): string =>
-  fit(`${pickLine(lines.welcome, {}, random)}${welcomeLinks(rule.siteHost, rule.discord)}`);
+export const welcomePick = (rule: WelcomeRule, random: () => number = Math.random, lines: Lines = DEFAULT_LINES, recent: Recent = {}): Picked => {
+  const pick = pickLine('welcome', lines.welcome, {}, random, recent);
+  return { ...pick, text: fit(`${pick.text}${welcomeLinks(rule.siteHost, rule.discord)}`) };
+};
+
+export const welcomeMessage = (rule: WelcomeRule, random: () => number = Math.random, lines: Lines = DEFAULT_LINES, recent: Recent = {}): string =>
+  welcomePick(rule, random, lines, recent).text;
 
 // Who was in game at the last reading (Steam IDs); who joined and is still waiting for their welcome, with when the bot
 // first saw them; and who was welcomed in the last WELCOME_AGAIN_MS, or was on when the bot started watching, with when.

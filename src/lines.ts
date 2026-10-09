@@ -1,4 +1,4 @@
-// The lines the bot says in game. Each time a message goes out, one is picked at random from its list. Staff can
+// The lines the bot says in game. Each time a message goes out, one is picked at random from its list, passing over the ones it used lately. Staff can
 // replace any list on the staff page's Lines tab (see linespage.ts); a list they have not replaced uses the one here,
 // so rewording one here and deploying reaches every list staff left alone. Keep them short, as the game shows a message
 // on one line of up to 200 characters with the call to action the bot adds after it.

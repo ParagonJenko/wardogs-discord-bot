@@ -1376,7 +1376,8 @@ leaderboard, the Discord and seeding:
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
-- Each message's line is picked at random from its list: the seeding lines, the 10-minute lines, and for halfway and
+- Each message's line is picked at random from its list, passing over the lines it used lately (up to half the list, so
+  the same line doesn't come up game after game): the seeding lines, the 10-minute lines, and for halfway and
   90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any
   other faction (for halfway and 90 points, from the leading faction's list). Staff change them on the staff page's
   [Lines tab](#lines-tab). `{team}`, `{score}` and `{site}` are filled in.
