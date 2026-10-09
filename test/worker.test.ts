@@ -3,14 +3,15 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createTestHarness, type TestHarness } from 'wrangler';
+import { createSession } from '../src/adminauth.ts';
 
 // The Worker as Cloudflare runs it: built from wrangler.jsonc by Wrangler and run in workerd, the same runtime, with the
 // Durable Object and its SQLite storage. The other tests cover each part on its own; these check they still fit
 // together, so a deploy does not break the cron, the website's API, the kill feed or the slash commands.
 //
 // The game server is a fake one on localhost, and nothing here reaches Discord: every request that would is either
-// refused before it leaves (a bad signature, someone who is not staff) or answered by the Worker itself (PING,
-// suggestions).
+// refused before it leaves (a bad signature, someone who is not staff), answered by the Worker itself (PING,
+// suggestions), or a redirect to Discord that is not followed (the staff sign-in).
 
 // No telemetry, and no fetch of Cloudflare's Request.cf data, from a test run.
 process.env['WRANGLER_SEND_METRICS'] = 'false';
@@ -18,6 +19,9 @@ process.env['CLOUDFLARE_CF_FETCH_ENABLED'] = 'false';
 
 const GUILD = '100000000000000001';
 const STAFF_ROLE = '100000000000000002';
+const APPLICATION_ID = '100000000000000005';
+const CLIENT_SECRET = 'discord-client-secret-for-tests';
+const SITE = 'https://site.example';
 const FEED_TOKEN = 'kill-feed-token-for-tests';
 const REVIEW_TOKEN = 'review-token-for-tests';
 const ASH = '76561198000000001';
@@ -122,7 +126,7 @@ const playerMember = { roles: [], permissions: '0', user: { id: '100000000000000
 
 const command = (name: string, member: unknown, guildId = GUILD) => ({
   type: APPLICATION_COMMAND,
-  application_id: '100000000000000005',
+  application_id: APPLICATION_ID,
   token: 'interaction-token',
   guild_id: guildId,
   member,
@@ -172,6 +176,8 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
           vars: {
             DISCORD_GUILD_ID: GUILD,
             DISCORD_ADMIN_ROLE_IDS: STAFF_ROLE,
+            DISCORD_APPLICATION_ID: APPLICATION_ID,
+            SITE_URL: SITE,
             DISCORD_INVITE: '',
             ROUNDUPS: 'off',
           },
@@ -180,6 +186,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
             RCON_PASSWORD: 'rcon-password',
             DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/not-a-real-webhook',
             DISCORD_PUBLIC_KEY: PUBLIC_KEY_HEX,
+            DISCORD_CLIENT_SECRET: CLIENT_SECRET,
             KILL_FEED_TOKEN: FEED_TOKEN,
             REVIEW_TOKEN,
           },
@@ -355,14 +362,33 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
   });
 
   describe('the staff page', () => {
-    it('says what is missing for the Discord sign-in', async () => {
-      const login = await json('/auth/login');
-      expect(login.status).toBe(503);
-      expect(login.body).toMatch(/DISCORD_CLIENT_SECRET/);
+    it('sends staff to Discord to sign in', async () => {
+      const login = await server.fetch('/auth/login', { redirect: 'manual' });
+      expect(login.status).toBe(302);
+      const to = new URL(login.headers.get('location') ?? '');
+      expect(`${to.origin}${to.pathname}`).toBe('https://discord.com/oauth2/authorize');
+      expect(to.searchParams.get('client_id')).toBe(APPLICATION_ID);
+      expect(new URL(to.searchParams.get('redirect_uri') ?? '').pathname).toBe('/auth/callback');
+      expect(login.headers.get('set-cookie')).toMatch(/^wardogs_login=/);
     });
 
-    it('refuses its API without a session', async () => {
-      expect((await server.fetch('/api/admin/overview')).status).not.toBe(200);
+    it('serves its API only with a session the Worker signed', async () => {
+      const commands = (session?: string) =>
+        server.fetch('/api/admin/commands', session === undefined ? {} : { headers: { authorization: `Bearer ${session}` } });
+      const staffer = { id: '100000000000000003', name: 'Staffer' };
+
+      const none = await commands();
+      expect(none.status).toBe(401);
+      expect(await none.json()).toEqual({ error: 'Sign in again' });
+      // Only the website may read it.
+      expect(none.headers.get('access-control-allow-origin')).toBe(SITE);
+
+      const forged = await createSession('not-the-client-secret', staffer, Date.now());
+      expect((await commands(forged)).status).toBe(401);
+
+      const signedIn = await commands(await createSession(CLIENT_SECRET, staffer, Date.now()));
+      expect(signedIn.status).toBe(200);
+      expect(((await signedIn.json()) as { commands: unknown[] }).commands.length).toBeGreaterThan(0);
     });
   });
 });

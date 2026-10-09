@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Runs on main go one at a time, in the order they were pushed, so an older commit never deploys after a newer one.
+# A run waiting its turn is dropped when a newer one arrives. Pull requests each run on their own.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+  cancel-in-progress: false
+
 env:
   WRANGLER_SEND_METRICS: false
 
@@ -30,10 +36,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: production
-    # One deploy at a time, in order: a newer push waits for the one before it to finish.
-    concurrency:
-      group: deploy
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

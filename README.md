@@ -1474,5 +1474,5 @@ npm run typecheck
 
 `test/worker.test.ts` runs the Worker as Cloudflare does: Wrangler builds it from `wrangler.jsonc` and runs it in
 workerd, with the Durable Object's storage, against a fake game server on localhost. It checks the cron, the website's
-API, the kill feed, the alert review and the slash commands' signature and staff checks. Nothing in it reaches Discord
+API, the kill feed, the alert review, the staff page's sign-in and the slash commands' signature and staff checks. Nothing in it reaches Discord
 or the game.
