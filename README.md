@@ -104,7 +104,26 @@ logs `Watching "<server name>": N/M players`. `RCON rejected the password (401)`
 is wrong; `timed out` means the address or port is wrong or the host's firewall blocks it. On Workers the check always runs every minute;
 `POLL_INTERVAL_SECONDS` is not used.
 
-To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` again.
+To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` again, or merge it to `main` with
+[Deploy from GitHub](#deploy-from-github) set up.
+
+### Deploy from GitHub
+
+With two repository secrets, every push to `main` deploys the bot once the typecheck and tests pass (the CI workflow's
+`deploy` job). A push that fails them is not deployed, and the bot keeps running the last version that passed.
+
+1. In the Cloudflare dashboard: My Profile → API Tokens → Create Token → **Edit Cloudflare Workers** template. Limit it
+   to your account, then create it and copy the token.
+2. Your **Account ID**: `npx wrangler whoami` prints it, or it is on Workers & Pages in the dashboard.
+3. On GitHub: the repository's Settings → Secrets and variables → Actions → New repository secret. Add
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+
+Until both are set, the `deploy` job passes with a warning and deploys nothing. Actions → CI → Run workflow deploys
+`main` again by hand.
+
+A deploy from GitHub is the same as `npm run deploy`: it sets `vars` from `wrangler.jsonc` and keeps the secrets set
+with `wrangler secret put`. It does not register slash commands: after adding or changing a command, run
+`npm run register` as before.
 
 Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
 socket to the RCON listener and sends the HTTP request itself.
@@ -1453,3 +1472,8 @@ npm ci
 npm test
 npm run typecheck
 ```
+
+`test/worker.test.ts` runs the Worker as Cloudflare does: Wrangler builds it from `wrangler.jsonc` and runs it in
+workerd, with the Durable Object's storage, against a fake game server on localhost. It checks the cron, the website's
+API, the kill feed, the alert review, the staff page's sign-in and the slash commands' signature and staff checks. Nothing in it reaches Discord
+or the game.
