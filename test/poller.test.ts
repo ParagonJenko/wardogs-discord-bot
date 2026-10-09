@@ -9,6 +9,9 @@ import type { Player, Snapshot } from '../src/rcon.ts';
 import type { Observation } from '../src/stats.ts';
 import type { MatchState } from '../src/tracking.ts';
 
+// The bot's own lines with one seeding line, for tests of when a message goes out rather than what it says.
+const firstSeeding = async (): Promise<Lines> => ({ ...DEFAULT_LINES, seeding: DEFAULT_LINES.seeding.slice(0, 1) });
+
 const config: Config = {
   rconUrl: 'http://203.0.113.10:7776',
   rconPassword: 'secret',
@@ -343,6 +346,7 @@ describe('poller', () => {
       welcomes: null,
       last: null,
       outage: null,
+      recent: {},
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -989,6 +993,7 @@ describe('parseState', () => {
       welcomes: null,
       last: null,
       outage: null,
+      recent: {},
     });
   });
 
@@ -1006,6 +1011,7 @@ describe('parseState', () => {
       welcomes: null,
       last: null,
       outage: null,
+      recent: {},
     });
   });
 
@@ -1174,6 +1180,7 @@ describe('in-game messages', () => {
         store: memoryStore(),
         broadcast,
         random: () => 0,
+        lines: firstSeeding,
       });
       return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, sent, broadcast };
     };
@@ -1249,7 +1256,7 @@ describe('in-game messages', () => {
         store: memoryStore(),
         broadcast,
         random: () => 0,
-        ...(lines === undefined ? {} : { lines }),
+        lines: lines ?? firstSeeding,
       };
       const check = createPoller({ ...deps, fetchSnapshot: async () => snapshot(who(second)), send: vi.fn(async () => {}) });
       const joinCheck = createJoinCheck({ ...deps, fetchPlayers });
@@ -1288,6 +1295,16 @@ describe('in-game messages', () => {
         // 5 minutes after 130, on the next check.
         [420, "We're seeding! 16 more players"],
       ]);
+    });
+
+    it('does not say the same seeding line twice running, even when the pick would be the same', async () => {
+      const { runUntil, sent } = joinBot(joining(3, 100), {}, async () => DEFAULT_LINES);
+
+      await runUntil(450);
+
+      const said = sent.map(([, message]) => message.split(' Top seeders')[0]);
+      expect(said).toHaveLength(3);
+      expect(new Set(said.map((message) => message?.replace(/\d+ more players?/, 'N'))).size).toBe(3);
     });
 
     it('sends one for several players joining together, 30 seconds after the last of them', async () => {

@@ -6,12 +6,15 @@ import {
   MAX_LENGTH,
   milestones,
   nextMessage,
+  remember,
+  type Recent,
   seedingMessage,
   seedingMessageDue,
   watchJoins,
   watchWelcomes,
   WELCOME_AGAIN_MS,
   welcomeMessage,
+  welcomePick,
   welcomesDue,
   type MatchMessages,
   type WelcomeWatch,
@@ -375,5 +378,52 @@ describe('nextMessage', () => {
     ]);
 
     expect(sent.map((s) => s?.split(' ')[0] ?? null)).toEqual([null, 'Halfway', null, '10']);
+  });
+});
+
+describe('not repeating lines', () => {
+  const ten = (recent: Recent) => nextMessage({ match: 0, sent: [] }, match(), 10 * MINUTE, rule, null, first, undefined, recent);
+
+  it('passes over the lines a list used lately, so a game does not repeat the last one', () => {
+    const used = ten({}).used;
+
+    expect(used?.line).toBe(lines.TEN_MINUTES[0]);
+    expect(ten(remember({}, used!)).used?.line).toBe(lines.TEN_MINUTES[1]);
+  });
+
+  it('goes through half a list before a line comes round again', () => {
+    const half = Math.floor(lines.TEN_MINUTES.length / 2);
+    let recent: Recent = {};
+    const seen: string[] = [];
+    for (let i = 0; i < half + 1; i++) {
+      const picked = ten(recent).used!;
+      seen.push(picked.line);
+      recent = remember(recent, picked);
+    }
+
+    expect(new Set(seen.slice(0, half)).size).toBe(half);
+    expect(seen[half]).toBe(lines.TEN_MINUTES[half]);
+  });
+
+  it('keeps each list, and each faction, to its own memory', () => {
+    const recent = remember({}, { text: '', list: 'halfway:valkyra', line: lines.HALFWAY.valkyra![0]! });
+
+    expect(ten(recent).used?.line).toBe(lines.TEN_MINUTES[0]);
+  });
+
+  it('uses the only line of a list that has one', () => {
+    const one = { ...lines.DEFAULT_LINES, welcome: ['Hi'] };
+    const rule = { afterMs: 0, siteHost: null, discord: null };
+    const picked = welcomePick(rule, first, one);
+
+    expect(welcomePick(rule, first, one, remember({}, picked)).text).toBe('Hi');
+  });
+
+  it('remembers a line once, and only the latest few', () => {
+    let recent: Recent = {};
+    for (let i = 0; i < 30; i++) recent = remember(recent, { text: '', list: 'x', line: `l${i}` });
+
+    expect(recent.x).toEqual(Array.from({ length: 10 }, (_, i) => `l${i + 20}`));
+    expect(remember(recent, { text: '', list: 'x', line: 'l29' }).x?.filter((line) => line === 'l29')).toHaveLength(1);
   });
 });
