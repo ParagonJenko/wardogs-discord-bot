@@ -283,10 +283,11 @@ day the feed covers). And on top of those:
   profile]` and no `id` for a [private profile](#private-profiles), as they are now, whenever it was made private.
 - A match counts in the season it ended in, and a day by its UTC date, so a match that runs past midnight into 15
   October counts for Season 2. Staff's seeding counts as playing, as in the roundups.
-- **Kept for good.** 10 minutes after the season ends the bot saves the roundup (`season:1` in its storage) and serves
-  that from then on, so it stays the same once the kill feed's records of those days are gone (after 62 days) and
-  however the records change. `/removematch` on a Season 1 match deletes it, and the next request builds it again
-  without that match. To build it again after changing how it is made, raise `SEASON_VERSION` in `src/season.ts`.
+- **Kept for good.** 10 minutes after the season ends the bot's check saves the roundup (`season:1` in its storage),
+  whether or not anyone has opened the page, and serves that from then on, so it stays the same once the kill feed's
+  records of those days are gone (after 62 days) and however the records change. `/removematch` on a Season 1 match
+  deletes it, and the next check builds and saves it again without that match. To build it again after changing how
+  it is made, raise `SEASON_VERSION` in `src/season.ts`.
 - The season's end is `SEASON` in `src/season.ts`; moving it moves when the page opens too.
 - Like `/api/stats`, each Worker instance reuses an answer for 30 seconds, so the page opens up to 30 seconds after
   the wipe.

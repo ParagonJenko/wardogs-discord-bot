@@ -523,6 +523,8 @@ export class Watcher extends DurableObject<Env> {
   private idKey: Promise<CryptoKey> | null = null;
   // Saves reading 'winsSettled' on every check once it is set.
   private winsSettled = false;
+  // Whether this instance has made sure the season roundup is kept (see keepSeason).
+  private seasonLooked = false;
   // Kill feed event ids already counted, oldest first.
   private killsSeen = new Set<string>();
   // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
@@ -906,6 +908,7 @@ export class Watcher extends DurableObject<Env> {
       }
     }
     await this.roundingUp(() => this.postRoundups(config));
+    await this.keepSeason();
     // Live pages get the new score, players and map.
     await this.broadcastLive();
   }
@@ -972,25 +975,45 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // The website's season page (see season.ts). The public gets the roundup once the season is over; staff (`early`) get
-  // the season so far before that. It is kept once the season has been over SEASON_SETTLE_MS, and read back after.
+  // the season so far before that.
   async season(early = false): Promise<SeasonPage> {
     const now = Date.now();
     const open = now >= SEASON.endsAt;
     const page = { number: SEASON.number, name: SEASON.name, endsAt: SEASON.endsAt, open };
     if (!open && !early) return { ...page, roundup: null };
-    const storage = this.ctx.storage;
-    let roundup = open ? parseKeptSeason(await storage.get(SEASON_KEY)) : null;
-    if (roundup === null) {
-      roundup = await this.seasonRoundup(now);
-      if (roundup !== null && now >= SEASON.endsAt + SEASON_SETTLE_MS) {
-        await storage.put(SEASON_KEY, keptSeason(roundup));
-        console.info(`Kept the ${SEASON.name} roundup`);
-      }
-    }
+    const roundup = open ? await this.seasonOver(now) : await this.seasonRoundup(now);
     if (roundup === null) return { ...page, roundup: null };
     const ids = await this.idsFor(keptSteamIds(roundup));
     const idOf = publicIdOf(await this.privateSteam(), (steamId) => ids.get(steamId));
     return { ...page, roundup: publicSeason(roundup, idOf) };
+  }
+
+  // The roundup of a season that is over: the kept one, or else one built now, which is kept once the season has been
+  // over SEASON_SETTLE_MS. Null when nobody played.
+  private async seasonOver(now: number): Promise<SeasonRoundup | null> {
+    const storage = this.ctx.storage;
+    const kept = parseKeptSeason(await storage.get(SEASON_KEY));
+    if (kept !== null) return kept;
+    const roundup = await this.seasonRoundup(now);
+    if (roundup !== null && now >= SEASON.endsAt + SEASON_SETTLE_MS) {
+      await storage.put(SEASON_KEY, keptSeason(roundup));
+      console.info(`Kept the ${SEASON.name} roundup`);
+    }
+    return roundup;
+  }
+
+  // The checks keep the season roundup once the season has been over SEASON_SETTLE_MS, so it is kept even if nobody
+  // opens the season page before the kill feed's records of those days are gone. Each instance looks once it is due,
+  // and again after /removematch takes a match out of it. A failure is tried again at the next check.
+  private async keepSeason(): Promise<void> {
+    const now = Date.now();
+    if (this.seasonLooked || now < SEASON.endsAt + SEASON_SETTLE_MS) return;
+    try {
+      await this.seasonOver(now);
+      this.seasonLooked = true;
+    } catch (error) {
+      console.error(`Keeping the ${SEASON.name} roundup failed: ${errorText(error)}`);
+    }
   }
 
   // From the player records since their first day, the match records, each day's weapons and the kill feed's records.
@@ -2388,9 +2411,10 @@ export class Watcher extends DurableObject<Env> {
     const gone = endedAt < SEASON.endsAt ? [found[0], SEASON_KEY] : [found[0]];
     // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
     await Promise.all([storage.put({ stats, [dayKey]: day }), storage.delete(gone)]);
-    // The player pages read the records again, without it.
+    // The player pages read the records again, without it, and the next check keeps the season roundup again.
     this.dayCache.clear();
     this.matchCache.clear();
+    this.seasonLooked = false;
     return { match: removed, players: record.players.length };
   }
 
