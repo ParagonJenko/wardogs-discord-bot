@@ -702,7 +702,7 @@ How it works:
   person to let the app know who they are, their servers and their roles in them (scopes `identify`, `guilds` and
   `guilds.members.read`), once. Discord then sends them back to `/auth/callback`, and the Worker asks Discord whether
   they are staff in your server. The Discord access token is used for that and then dropped.
-- Staff go back to the page with a session that lasts 8 hours. It is signed with `DISCORD_CLIENT_SECRET`, so resetting
+- Staff go back to the page with a session that lasts 36 hours. It is signed with `DISCORD_CLIENT_SECRET`, so resetting
   the client secret signs everyone out. Someone who stops being staff can use a session they already have until it
   runs out.
 - Anyone else goes back to the page with why: not in the server, or not staff. Each sign-in is logged
