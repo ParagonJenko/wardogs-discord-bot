@@ -6,7 +6,7 @@ import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import type { FactionScore } from './rcon.ts';
 import { dayOf } from './stats.ts';
 import { byKills } from './tracking.ts';
-import { weaponKind, weaponName, weaponRole, type WeaponRole } from './weapons.ts';
+import { isGun, weaponName, weaponRole, type WeaponRole } from './weapons.ts';
 
 // Weekly and monthly roundups: the best players and the best team over a UTC week (Monday to Sunday) or calendar month,
 // from the player records. Posted to Discord when a week or month ends, and shown by /roundup. Players are named with
@@ -160,7 +160,7 @@ export type FeedAwards = {
   roles: { role: RoleAward; top: Kills[] }[];
   // Each award goes to one player, null when nobody earned it.
   headshots: (RoundupPlayer & { headshots: number }) | null;
-  // With a hand-held weapon.
+  // With a gun (see isGun).
   longest: (RoundupPlayer & { distance: number; weapon: string }) | null;
   // Kills with the most different weapons.
   variety: (RoundupPlayer & { weapons: number }) | null;
@@ -267,7 +267,7 @@ const feedAwards = (
   const inPeriod = new Set(covered.filter((day) => day >= from));
   type Tally = { roles: Map<WeaponRole, number>; headshots: number; kills: number; weapons: Set<string>; name: string };
   const players = new Map<string, Tally>();
-  // With a hand-held weapon. Ties go to the earliest, which got there first.
+  // With a gun. Ties go to the earliest, which got there first.
   let longest: { distance: number; steamId: string; cause: string } | null = null;
   // Days are oldest first, so each player keeps their latest name, unless the player records have one.
   for (const d of [...feed.kills].sort((a, b) => a.day.localeCompare(b.day))) {
@@ -275,7 +275,7 @@ const feedAwards = (
     const known = players.get(d.steamId) ?? { roles: new Map(), headshots: 0, kills: 0, weapons: new Set(), name: d.steamId };
     if (d.name !== '') known.name = d.name;
     for (const [cause, w] of Object.entries(d.weapons)) {
-      if (w.longest !== undefined && weaponKind(cause) === 'weapon' && (longest === null || w.longest > longest.distance)) {
+      if (w.longest !== undefined && isGun(cause) && (longest === null || w.longest > longest.distance)) {
         longest = { distance: w.longest, steamId: d.steamId, cause };
       }
       const kills = w.kills - (w.teamKills ?? 0);

@@ -66,21 +66,22 @@ describe('recordLive', () => {
     expect(match).toMatchObject({ kills: 4, headshots: 1, teamKills: 0, otherDeaths: 0, map: 'Kavkazi' });
   });
 
-  it('takes the longest kill from hand-held weapons only', () => {
+  it('takes the longest kill from guns only', () => {
     const match = play([
       death(ASH, BO, 10, { distance: 80, cause: 'Id.Item.SVDM' }),
+      death(ASH, BO, 15, { distance: 1450.2, cause: 'Id.Item.Launcher_04' }),
       death(ASH, CY, 20, { distance: 851.1, cause: 'Id.Item.ATMine' }),
       death(ASH, BO, 30, { distance: 706.8, cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel' }),
       death(ASH, CY, 40, { distance: 300, cause: 'Id.Buildable.BarbedWire' }),
       death(BO, DEE, 50, { distance: 500, cause: 'Vehicle.Variant.Stationary.MistralAA' }),
     ]);
 
-    expect(match.players.find((p) => p.steamId === ASH)).toMatchObject({ kills: 4, longest: 80, longestCause: 'Id.Item.SVDM' });
+    expect(match.players.find((p) => p.steamId === ASH)).toMatchObject({ kills: 5, longest: 80, longestCause: 'Id.Item.SVDM' });
     expect(match.players.find((p) => p.steamId === BO)).toMatchObject({ kills: 1, longest: null, longestCause: null });
     expect(stats(match).highlights.longest).toEqual({ player: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' }, weapon: 'SVD', distance: 80 });
   });
 
-  it('lets a hand-held kill replace a longest kill saved before only hand-held weapons counted', () => {
+  it('lets a gun’s kill replace a longest kill saved before only guns counted', () => {
     const match = play([death(CY, DEE, 10, { distance: 120 })]);
     const saved = { ...match, players: match.players.map((p) => (p.steamId === CY ? { ...p, longest: 851.1, longestCause: 'Id.Item.ATMine' } : p)) };
     const resumed = play([death(CY, ASH, 20, { distance: 300, cause: 'Id.Item.SVDM' })], saved);
@@ -218,9 +219,9 @@ describe('liveStats', () => {
     });
   });
 
-  it('leaves out a longest kill saved before only hand-held weapons counted', () => {
+  it('leaves out a longest kill saved before only guns counted', () => {
     const match = play([death(ASH, BO, 10, { distance: 120 }), death(CY, DEE, 20, { distance: 300 })]);
-    const saved = { ...match, players: match.players.map((p) => (p.steamId === CY ? { ...p, longest: 851.1, longestCause: 'Id.Item.ATMine' } : p)) };
+    const saved = { ...match, players: match.players.map((p) => (p.steamId === CY ? { ...p, longest: 1450.2, longestCause: 'Id.Item.Launcher_04' } : p)) };
 
     expect(stats(saved).highlights.longest).toEqual({ player: { name: 'Ash', id: 'a1a1a1a1a1a1', faction: 'Valkyra' }, weapon: 'AK74', distance: 120 });
   });
