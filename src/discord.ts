@@ -697,7 +697,13 @@ const periodLabel = (r: Roundup): string => {
 
 // "Weekly roundup · 28 Sep – 4 Oct", "Monthly roundup · September 2026", or "This week so far · 28 Sep – 3 Oct".
 const roundupTitle = (r: Roundup): string => {
-  const name = r.partial ? `This ${r.kind} so far` : r.kind === 'month' ? 'Monthly roundup' : 'Weekly roundup';
+  const name = r.partial
+    ? `This ${r.kind} so far`
+    : r.kind === 'month'
+      ? 'Monthly roundup'
+      : r.kind === 'season'
+        ? 'Season roundup'
+        : 'Weekly roundup';
   return `🏆 ${name} · ${periodLabel(r)}`;
 };
 

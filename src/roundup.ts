@@ -10,11 +10,14 @@ import { countsForLongest, weaponName, weaponRole, type WeaponRole } from './wea
 
 // Weekly and monthly roundups: the best players and the best team over a UTC week (Monday to Sunday) or calendar month,
 // from the player records. Posted to Discord when a week or month ends, and shown by /roundup. Players are named with
-// their public ids, never their Steam IDs, so a roundup can go anywhere.
+// their public ids, never their Steam IDs, so a roundup can go anywhere. The website's season page has one for a whole
+// game season too (see season.ts).
 
-export type RoundupKind = 'week' | 'month';
+// A week or month, which the roundups follow on the calendar.
+export type CalendarKind = 'week' | 'month';
+export type RoundupKind = CalendarKind | 'season';
 
-// A UTC week or month: from `start` up to, not including, `end`. A period still going (`partial`) ends now.
+// A UTC week, month or season: from `start` up to, not including, `end`. A period still going (`partial`) ends now.
 export type Period = { kind: RoundupKind; start: number; end: number; partial: boolean };
 
 // What /roundup can show: the last full week or month, or the one going on now.
@@ -24,14 +27,14 @@ export type RoundupChoice = (typeof ROUNDUP_CHOICES)[number];
 const DAY_MS = 24 * 60 * 60_000;
 const HOUR_MS = 60 * 60_000;
 
-// Each board's top this many.
+// Each board's top this many, unless the roundup asks for more (see RoundupSources).
 export const AWARDS_SHOWN = 3;
 // A team needs this many matches to be the best team.
 export const TEAM_MIN_MATCHES = 3;
 // A rookie is first seen in the period, by records going back at least this many days before it.
 export const ROOKIE_LOOKBACK_DAYS = 28;
 
-const startOf = (kind: RoundupKind, at: number): number => {
+const startOf = (kind: CalendarKind, at: number): number => {
   const d = new Date(at);
   if (kind === 'month') return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
   // getUTCDay is 0 on Sunday; weeks start on Monday.
@@ -39,13 +42,13 @@ const startOf = (kind: RoundupKind, at: number): number => {
 };
 
 // The last full week or month before `now`.
-export const lastPeriod = (kind: RoundupKind, now: number): Period => {
+export const lastPeriod = (kind: CalendarKind, now: number): Period => {
   const end = startOf(kind, now);
   return { kind, start: startOf(kind, end - 1), end, partial: false };
 };
 
 // The week or month going on at `now`, up to now.
-export const currentPeriod = (kind: RoundupKind, now: number): Period => ({ kind, start: startOf(kind, now), end: now, partial: true });
+export const currentPeriod = (kind: CalendarKind, now: number): Period => ({ kind, start: startOf(kind, now), end: now, partial: true });
 
 export const periodFor = (choice: RoundupChoice, now: number): Period =>
   choice === 'this-week'
@@ -54,15 +57,18 @@ export const periodFor = (choice: RoundupChoice, now: number): Period =>
       ? currentPeriod('month', now)
       : lastPeriod(choice, now);
 
-// How many days the whole week or month has, including those still to come of one going on now.
-const fullLength = (period: Period): number =>
-  Math.round((startOf(period.kind, period.start + (period.kind === 'week' ? 7 : 32) * DAY_MS) - period.start) / DAY_MS);
-
 // The UTC days a period covers, oldest first.
 export const periodDays = (period: Period): string[] =>
   Array.from({ length: Math.ceil((period.end - period.start) / DAY_MS) }, (_, i) => dayOf(period.start + i * DAY_MS)).filter(
     (day) => Date.parse(`${day}T00:00:00Z`) < period.end,
   );
+
+// How many days the whole week or month has, including those still to come of one going on now. A season has the days
+// it covers: a season still going, only those so far.
+const fullLength = (period: Period): number =>
+  period.kind === 'season'
+    ? periodDays(period).length
+    : Math.round((startOf(period.kind, period.start + (period.kind === 'week' ? 7 : 32) * DAY_MS) - period.start) / DAY_MS);
 
 // Which roundups have gone out: the first day of the last week and the last month posted.
 export type RoundupsPosted = { week?: string; month?: string };
@@ -112,7 +118,8 @@ export type Roundup = {
   // The best team, when one is clearly ahead of the rest.
   bestTeam: TeamStanding | null;
   teamMinMatches: number;
-  // Time played the K/D board needs: the leaderboard's share for the whole week or month, even one still going.
+  // Time played the K/D board needs: the leaderboard's share for the whole week or month, even one still going, or for a
+  // season's days so far.
   kdMinHours: number;
   kills: (RoundupPlayer & { kills: number })[];
   kd: (RoundupPlayer & { kd: number })[];
@@ -156,7 +163,7 @@ type Kills = RoundupPlayer & { kills: number };
 export type FeedAwards = {
   // The first UTC day of the period the feed covers: later than the period's first when the feed began during it.
   from: string;
-  // The top 3 by kills with each role's weapons, in the order of ROLE_AWARDS.
+  // The top 3 (or the roundup's `shown`) by kills with each role's weapons, in the order of ROLE_AWARDS.
   roles: { role: RoleAward; top: Kills[] }[];
   // Each award goes to one player, null when nobody earned it.
   headshots: (RoundupPlayer & { headshots: number }) | null;
@@ -188,6 +195,8 @@ export type RoundupSources = {
   idOf: PublicIdOf;
   // Left out without the kill feed.
   feed?: FeedSources;
+  // Each board's top this many: AWARDS_SHOWN unless set.
+  shown?: number;
 };
 
 const ranked = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
@@ -247,7 +256,7 @@ const best = (teams: TeamStanding[]): TeamStanding | null => {
   return winRate(first) > winRate(second) || (winRate(first) === winRate(second) && first.wins > second.wins) ? first : null;
 };
 
-const top = <T>(rows: T[], order: (a: T, b: T) => number): T[] => [...rows].sort(order).slice(0, AWARDS_SHOWN);
+const top = <T>(rows: T[], order: (a: T, b: T) => number, shown: number): T[] => [...rows].sort(order).slice(0, shown);
 
 const minutesOf = (p: { seedingMinutes: number; liveMinutes: number }): number => p.seedingMinutes + p.liveMinutes;
 
@@ -261,6 +270,7 @@ const feedAwards = (
   covered: string[],
   named: <T extends object>(steamId: string, name: string, row: T) => RoundupPlayer & T,
   nameOf: Map<string, string>,
+  shown: number,
 ): FeedAwards | null => {
   const first = covered[0] ?? '';
   const from = feed.since > first ? feed.since : first;
@@ -293,7 +303,7 @@ const feedAwards = (
   const roleKills = (role: WeaponRole) => (row: Tally) => row.roles.get(role) ?? 0;
   const board = (role: WeaponRole): Kills[] =>
     mostFirst(rows, roleKills(role))
-      .slice(0, AWARDS_SHOWN)
+      .slice(0, shown)
       .map((row) => named(row.steamId, row.name, { kills: roleKills(role)(row) }));
   const winner = (role: WeaponRole): Kills | null => board(role)[0] ?? null;
   // Fewer kills for as many headshots is the better aim.
@@ -319,7 +329,7 @@ const feedAwards = (
 };
 
 // Null when nobody was on the server in the period.
-export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSources): Roundup | null => {
+export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS_SHOWN }: RoundupSources): Roundup | null => {
   const covered = new Set(periodDays(period));
   const inPeriod = days.filter((d) => covered.has(d.day) && Object.keys(d.players).length > 0);
   if (inPeriod.length === 0) return null;
@@ -334,7 +344,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
   const fromBoard = <T extends object>(rows: RankedPlayer[], pick: (p: RankedPlayer) => T) =>
     rows.map((p) => named(p.steamId, p.name, pick(p)));
 
-  const board = leaderboard(inPeriod.map((d) => d.players), fullLength(period), AWARDS_SHOWN);
+  const board = leaderboard(inPeriod.map((d) => d.players), fullLength(period), shown);
 
   // Matches are oldest first, so each player keeps the name from their latest match.
   const wins = new Map<string, { name: string; wins: number; played: number }>();
@@ -426,11 +436,13 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
     wins: top(
       rows(wins).filter((p) => p.wins > 0),
       (a, b) => b.wins - a.wins || a.played - b.played || a.name.localeCompare(b.name),
+      shown,
     ),
-    mvps: top(rows(mvps), (a, b) => b.mvps - a.mvps || a.name.localeCompare(b.name)),
+    mvps: top(rows(mvps), (a, b) => b.mvps - a.mvps || a.name.localeCompare(b.name), shown),
     bestMatch: top(
       rows(bests).filter((p) => p.kills > 0),
       (a, b) => byKills(a, b) || a.name.localeCompare(b.name),
+      shown,
     ),
     biggestWin: highlight(biggest),
     // Only one decisive match, or all won by as much, has no closest finish of its own.
@@ -438,6 +450,6 @@ export const buildRoundup = ({ period, days, matches, idOf, feed }: RoundupSourc
     topMap: mostPlayed !== undefined && (nextMost === undefined || mostPlayed[1] > nextMost[1]) ? { map: mostPlayed[0], matches: mostPlayed[1] } : null,
     regular: regular === undefined ? null : named(regular[0], regular[1].name, { days: regular[1].days, of: covered.size }),
     rookie: rookie === undefined ? null : named(rookie.steamId, rookie.name, { minutes: rookie.minutes }),
-    awards: feed === undefined ? null : feedAwards(feed, periodDays(period), named, nameOf),
+    awards: feed === undefined ? null : feedAwards(feed, periodDays(period), named, nameOf, shown),
   };
 };

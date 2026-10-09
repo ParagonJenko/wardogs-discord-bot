@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createTestHarness, type TestHarness } from 'wrangler';
 import { createSession } from '../src/adminauth.ts';
+import { SEASON } from '../src/season.ts';
 
 // The Worker as Cloudflare runs it: built from wrangler.jsonc by Wrangler and run in workerd, the same runtime, with the
 // Durable Object and its SQLite storage. The other tests cover each part on its own; these check they still fit
@@ -389,6 +390,25 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       const signedIn = await commands(await createSession(CLIENT_SECRET, staffer, Date.now()));
       expect(signedIn.status).toBe(200);
       expect(((await signedIn.json()) as { commands: unknown[] }).commands.length).toBeGreaterThan(0);
+    });
+
+    it('sees the season roundup before the public does', async () => {
+      // The test's records start today, so once the season is over there is no season in them: then neither gets one.
+      const open = Date.now() >= SEASON.endsAt;
+      server.clearLogs();
+      const shown = { number: SEASON.number, name: SEASON.name, endsAt: SEASON.endsAt, open };
+      const page = await json('/api/season');
+      expect(page.status).toBe(200);
+      expect(page.body).toEqual({ ...shown, roundup: null });
+
+      expect((await server.fetch('/api/admin/season')).status).toBe(401);
+      const session = await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now());
+      const early = await json('/api/admin/season', { headers: { authorization: `Bearer ${session}` } });
+      expect(early.status).toBe(200);
+      expect(early.body).toMatchObject(shown);
+      if (open) expect(early.body.roundup).toBeNull();
+      else expect(early.body.roundup).toMatchObject({ kind: 'season', partial: true, players: 1 });
+      expect(errors()).toEqual([]);
     });
   });
 });
