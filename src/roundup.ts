@@ -118,9 +118,9 @@ export type Roundup = {
   // The best team, when one is clearly ahead of the rest.
   bestTeam: TeamStanding | null;
   teamMinMatches: number;
-  // Time played the K/D board needs: the leaderboard's share for the whole week or month, even one still going, or for a
+  // Matches the K/D board needs: the leaderboard's share for the whole week or month, even one still going, or for a
   // season's days so far.
-  kdMinHours: number;
+  kdMinMatches: number;
   kills: (RoundupPlayer & { kills: number })[];
   kd: (RoundupPlayer & { kd: number })[];
   playtime: (RoundupPlayer & { minutes: number })[];
@@ -428,7 +428,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS
     teams,
     bestTeam: best(teams),
     teamMinMatches: TEAM_MIN_MATCHES,
-    kdMinHours: board.kdMinHours,
+    kdMinMatches: board.kdMinMatches,
     kills: fromBoard(board.kills, (p) => ({ kills: p.kills })),
     kd: fromBoard(board.kd, (p) => ({ kd: p.kills / Math.max(p.deaths, 1) })),
     playtime: fromBoard(board.playtime, (p) => ({ minutes: p.seedingMinutes + p.liveMinutes })),

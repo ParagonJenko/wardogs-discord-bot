@@ -193,7 +193,7 @@ describe('buildProfile', () => {
   });
 
   it('ranks them on each leaderboard board over the rank days', () => {
-    expect(buildProfile(sources())?.ranks).toEqual({ days: 30, kdMinHours: 10, players: 2, kills: 2, kd: null, playtime: 1, seeding: 1 });
+    expect(buildProfile(sources())?.ranks).toEqual({ days: 30, kdMinMatches: 10, players: 2, kills: 2, kd: null, playtime: 1, seeding: 1 });
   });
 
   it('counts their seed days in the VIP window, as the bot does', () => {

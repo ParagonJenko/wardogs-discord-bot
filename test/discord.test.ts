@@ -633,7 +633,7 @@ describe('buildRoundupMessage', () => {
     ],
     bestTeam: { name: 'Valkyra', colorHex: '#3366ff', matches: 14, wins: 9, losses: 5 },
     teamMinMatches: 3,
-    kdMinHours: 2,
+    kdMinMatches: 3,
     kills: [
       { name: 'Ash', id: 'aaaaaaaaaaaa', kills: 54 },
       { name: 'Bo_b', kills: 41 },
@@ -694,7 +694,7 @@ describe('buildRoundupMessage', () => {
     expect(field(message, '🔫 Most kills')).toBe(
       '🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 54\n🥈 **Bo\\_b** · 41',
     );
-    expect(field(message, '🎯 Best K/D (2+ hours played)')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 3.20');
+    expect(field(message, '🎯 Best K/D (3+ matches)')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 3.20');
     expect(field(message, '💥 Most kills in a match')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 32 · 🟦 Ozeti');
     expect(field(message, '🏅 Most wins')).toBe('🥇 **[Ash](https://gaminginit.com/player?id=aaaaaaaaaaaa)** · 9 of 12');
     expect(field(message, '⭐ Most MVPs')).toBe('–');
