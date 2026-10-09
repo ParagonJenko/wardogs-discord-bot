@@ -31,7 +31,7 @@ import type { SteamCheck } from '../src/steam.ts';
 
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
-const offer = 'Seed on 3 days in a week and get a reserved slot for a week.';
+const offer = 'Seed on 3 days in a week and get a whitelist slot for a week.';
 const rule = "A seed counts when you're on for more than 10 min and the server goes live.";
 
 const serverId = '2615de90-da95-4950-913a-246b1db49237';
@@ -899,30 +899,30 @@ describe('buildSeedersEmbed', () => {
 });
 
 describe('buildVipMessage', () => {
-  it('thanks who earned a reserved slot, and says how to earn one', () => {
+  it('thanks who earned a whitelist slot, and says how to earn one', () => {
     const message = buildVipMessage([{ name: 'Ash_1' }], [], vip, 'https://gaminginit.com');
 
     expect(embedOf(message)).toEqual({
-      title: '🎖️ Reserved slots for seeders',
-      description: '🎉 **Ash\\_1** earned a reserved slot for a week by seeding. Thank you!',
+      title: '🎖️ Whitelist slots for seeders',
+      description: '🎉 **Ash\\_1** earned a whitelist slot for a week by seeding. Thank you!',
       color: 0xf1c40f,
       fields: [{ name: 'Earn one too', value: `${offer}\n${rule}` }],
       url: 'https://gaminginit.com',
-      footer: { text: "Reserved slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com" },
+      footer: { text: "Whitelist slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com" },
     });
     expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
   });
 
   it('keeps the website in the footer next to the restart note', () => {
     expect(embedOf(buildVipMessage([{ name: 'Ash' }], [], vip, 'https://gaminginit.com'))?.footer).toEqual({
-      text: "Reserved slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com",
+      text: "Whitelist slots start after the server's next restart. · Live stats and leaderboard: gaminginit.com",
     });
   });
 
   it('lists several players, and who kept theirs for another week', () => {
     const message = buildVipMessage([{ name: 'Ash' }, { name: 'Bo' }, { name: 'Cy' }], [{ name: 'Dee' }], vip);
 
-    expect(embedOf(message)?.description).toBe('🎉 **Ash, Bo and Cy** earned reserved slots for a week by seeding. Thank you!');
+    expect(embedOf(message)?.description).toBe('🎉 **Ash, Bo and Cy** earned whitelist slots for a week by seeding. Thank you!');
     expect(field(message, 'Kept for another week')).toBe('Dee');
   });
 
@@ -1022,20 +1022,20 @@ describe('buildPlayerEmbed', () => {
     const vip = { name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY };
 
     expect(field(buildPlayerEmbed({ ...profile, reserved: true, record: { ...record, vip } }), 'VIP')).toBe(
-      `🎖️ Reserved slot until ${t(NOW + 7 * DAY, 'f')}`,
+      `🎖️ Whitelist slot until ${t(NOW + 7 * DAY, 'f')}`,
     );
     expect(field(buildPlayerEmbed({ ...profile, reserved: null, record: { ...record, vip } }), 'VIP')).toBe(
-      `🎖️ Reserved slot until ${t(NOW + 7 * DAY, 'f')}, by the bot's records\n(Couldn't check the reserved list.)`,
+      `🎖️ Whitelist slot until ${t(NOW + 7 * DAY, 'f')}, by the bot's records\n(Couldn't check the whitelist.)`,
     );
-    expect(field(buildPlayerEmbed({ ...profile, reserved: null }), 'VIP')).toBe("Couldn't read the reserved list");
+    expect(field(buildPlayerEmbed({ ...profile, reserved: null }), 'VIP')).toBe("Couldn't read the whitelist");
     expect(field(buildPlayerEmbed({ ...profile, reserved: true, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
-      '🎖️ Staff spot: a reserved slot while they are staff',
+      '🎖️ Staff spot: a whitelist slot while they are staff',
     );
     expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
-      '🎖️ Staff spot: on the reserved list from the next check',
+      '🎖️ Staff spot: on the whitelist from the next check',
     );
     expect(field(buildPlayerEmbed({ ...profile, reserved: null, record: { ...record, staffSpot: true } }), 'VIP')).toBe(
-      "🎖️ Staff spot: a reserved slot while they are staff, by the bot's records\n(Couldn't check the reserved list.)",
+      "🎖️ Staff spot: a whitelist slot while they are staff, by the bot's records\n(Couldn't check the whitelist.)",
     );
     expect(field(buildPlayerEmbed({ ...profile, reserved: false, record: { ...record, vip } }), 'VIP')).toBe('None');
     expect(field(buildPlayerEmbed({ ...profile, record: { ...record, vipBlockedUntil: NOW + DAY } }), 'VIP')).toBe(

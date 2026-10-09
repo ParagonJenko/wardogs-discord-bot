@@ -52,7 +52,7 @@ public once the season is over. It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
 kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
 [live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. It gives
-[automatic VIP](#automatic-vip): seed on 3 days in a week and get a reserved slot for a week. And it runs the website's
+[automatic VIP](#automatic-vip): seed on 3 days in a week and get a whitelist slot for a week. And it runs the website's
 [staff page](#staff-page): staff sign in with Discord to see possible griefers (team kills, suicides in vehicles),
 [risky Steam accounts](#risky-steam-accounts) (VAC and game bans, new and hidden accounts), the moderation log and the bans
 on the server. And it enforces [weapon rules](#weapon-rules): staff pick weapons the server doesn't allow, such as the
@@ -317,8 +317,8 @@ The Node/Docker version does not serve the season roundup.
 | `/unban`        | Staff only           | Lifts a ban                                                        |
 | `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
-| `/vip add`      | Staff only           | Gives a player a reserved slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
-| `/vip remove`   | Staff only           | Takes a player off the reserved list, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
+| `/vip add`      | Staff only           | Gives a player a whitelist slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
+| `/vip remove`   | Staff only           | Takes a player off the whitelist, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
 | `/private …`    | Staff only           | [Private profiles](#private-profiles): `add` makes a player's profile private, `remove` makes it public again, `list` shows them |
 
@@ -442,13 +442,13 @@ works when it matches exactly one player.
   server's own lighting and zones). So `/setnextmap map:Ozeti infantry_only:True` is the rotation's Ozeti, infantry
   only. `mode` and `zones` list the choices once a map is picked. The reply says the setup, such as
   "Next map: **Ozeti** · King of the Hill · Infantry only · Day, clear".
-- **`/vip add`** puts a player on the reserved list for the number of days given, and needs a `reason`: Friend,
+- **`/vip add`** puts a player on the whitelist for the number of days given, and needs a `reason`: Friend,
   Regular, Seeder, Paid or Other. `note` adds more, such as "Patreon, October", and is needed for Other. The reason
   and note go in the staff history and the [moderation log](#moderation-log). It ends like automatic VIP: when
   the time is up, unless they have earned it by seeding by then. For a player who already has VIP from the bot, it
   sets the end to the later of the two. With `permanent` set to True instead of `days`, the slot has no end date: the
   bot leaves it on the list, as it does a slot added by hand, until staff remove it. That also makes VIP the bot gave
-  earlier permanent. A reserved slot an admin added by hand in `ServerSettings.ini` is left as it is. **`/vip remove`**
+  earlier permanent. A whitelist slot an admin added by hand in `ServerSettings.ini` is left as it is. **`/vip remove`**
   takes a player off the list, however they got there, and automatic VIP does not give it back for 7 days (`/vip add`
   lifts that). It takes an optional `reason`. Both take effect at the server's next restart, like automatic VIP.
 - **`/player`** shows the Steam ID with a link to the Steam profile, whether they are in game, their playtime,
@@ -480,7 +480,7 @@ with `/private add`, in Discord or from the staff page's tools. From then on, ev
   VIP from seeding, the weapons' longest kills, and the [live match](#live-match): the kill feed, the scoreboard and
   the highlights. They are left off the players list (`/api/players`), and their player page answers 404, as for an
   id nobody has, so a private profile cannot be told from nobody.
-- **The bot's public Discord posts and commands**: the match summary, the live alert's top seeders, the reserved slots
+- **The bot's public Discord posts and commands**: the match summary, the live alert's top seeders, the whitelist slots
   for seeders, the [live server status](#live-server-status), the [roundups](#roundups), `/players`, `/lastmatch` and
   `/roundup`.
 
@@ -663,7 +663,7 @@ lines, weapon rules and admin tools. Staff sign in with Discord, and the pages s
   reason and who did it, and bans made or lifted outside the bot.
 - **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
   player to join.
-- **The reserved slots**: everyone on the reserved list in `ServerSettings.ini`, with VIP from the bot and when it ends,
+- **The whitelist slots**: everyone on the whitelist in `ServerSettings.ini`, with VIP from the bot and when it ends,
   or added by hand, and how many slots `MaxReservedSlots` holds back.
 - **Admin tools**: every staff slash command, run from the page: warn, kick, move team, ban, unban, look up a player,
   give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders,
@@ -805,16 +805,16 @@ account to their Discord sign-in, and the bot then counts their time on the serv
   `/seeders`, the roundups' top seeders, the website's seeding board and its list of who has VIP from seeding. Its
   seeding time counts as time played, so time played stays the same. Its player page shows no seed days and no
   progress towards seeder VIP. Everything else (kills, K/D, matches, time played) shows as for anyone.
-- **Staff spots.** Each linked staff member gets a reserved slot on the server's reserved list for as long as they are
+- **Staff spots.** Each linked staff member gets a whitelist slot on the server's whitelist for as long as they are
   linked, in place of one an admin adds by hand. A slot they already had (added by hand, or VIP from the bot) is taken
   over as it is, so nothing changes in `ServerSettings.ini` for them, and VIP the bot gave them stops running out. The
   bot puts it on (or takes it off) at the check after they link (or unlink), within a minute, and so for staff who
   linked before the bot kept staff spots, at the first check after it is deployed. The server uses it
   after its next restart. It is never announced in Discord. `/vip remove` leaves a staff spot alone and says to unlink
   their Steam account instead; an admin who takes one off by hand sees it put back. Each change is logged
-  (`Staff spots added: …`, `Staff spots taken over from the reserved list: …`, `Staff spots ended: …`).
+  (`Staff spots added: …`, `Staff spots taken over from the whitelist: …`, `Staff spots ended: …`).
 - A Steam account can only be linked to one staff member. Any staff member can unlink anyone's, for someone who is no
-  longer staff: their staff spot comes off the reserved list (unless they have earned seeder VIP, which they then keep
+  longer staff: their staff spot comes off the whitelist (unless they have earned seeder VIP, which they then keep
   as a seeder), and their time counts as seeding again, including before they were unlinked, as the bot keeps the
   records as they were.
 - The page sends `POST /api/admin/profile` (`{"action": "link", "steamId": "…"}`, or `{"action": "unlink"}` with
@@ -1088,7 +1088,7 @@ A player page has:
 | `matches`  | Their matches in the last 90 days (up to 500), newest first: map, end time, length, kills, deaths, place on the scoreboard out of how many, their side (`faction`), `result` (`won` or `lost`, or null when their side was level at the top: see below) and every side's score, with its in-game colour (`colorHex`) when the server reported it |
 | `ranks`    | Their place on each leaderboard board over the last 30 days (null when they are not on it), out of how many players |
 | `online`   | When they are in game now: the map, their side, and their kills and deaths this match      |
-| `vip`      | `{ until }` while they have a reserved slot from the bot                                   |
+| `vip`      | `{ until }` while they have a whitelist slot from the bot                                   |
 | `seeding`  | Their seed days in the VIP window and the rule they count towards, or `null` when automatic VIP is off |
 | `weapons`  | From the [kill feed](#weapon-stats): `since` (as in `/api/stats`) and `used`, a row for each weapon on each day they killed with it in the last 90 days: `day`, `name`, `kind`, `lockOn` (as in `/api/stats`), `kills`, `headshots` and `longest` (metres, or null). `null` until the bot has had the feed |
 
@@ -1261,18 +1261,18 @@ The Node/Docker version does not keep player records.
 
 ## Automatic VIP
 
-Players who seed get a reserved slot, so they skip the queue when the server is full:
+Players who seed get a whitelist slot, so they skip the queue when the server is full:
 
 - **Seed on 3 days in a week** (`VIP_SEED_DAYS` successful seeds in the last 7 UTC days, including today), and the
-  bot adds you to the server's reserved list for **a week**.
+  bot adds you to the server's whitelist for **a week**.
 - Staff who linked their Steam account on the [staff page](#staff-steam-accounts) never earn it: it is for the players
   who seed.
 - When the week is up, you come off the list, unless you earned it again during that week. Then it runs for
   another week.
-- The bot checks every 10 minutes. The game server only reads the reserved list when it restarts, so VIP starts
+- The bot checks every 10 minutes. The game server only reads the whitelist when it restarts, so VIP starts
   (and ends) at the server's next restart, usually its daily one.
-- When players get a reserved slot, or keep one for another week, the bot posts it to the Discord channel
-  ("🎖️ Reserved slots for seeders: **Ash and Bo** earned reserved slots for a week by seeding.") with what seeding
+- When players get a whitelist slot, or keep one for another week, the bot posts it to the Discord channel
+  ("🎖️ Whitelist slots for seeders: **Ash and Bo** earned whitelist slots for a week by seeding.") with what seeding
   earns. It never pings anyone. If the post fails it is logged, not retried, so nobody is announced twice.
 
 Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
@@ -1284,7 +1284,7 @@ Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
 
 How it changes the server:
 
-- Live WARDOGS builds only change reserved slots through `ServerSettings.ini`, so the bot reads it with
+- Live WARDOGS builds only change whitelist slots through `ServerSettings.ini`, so the bot reads it with
   `GET /v1/config`, adds or removes `+DefaultReservedPlayerIds=<Steam ID>` lines in
   `[/Script/WDGame.WDGameSession]`, checks the result with `POST /v1/config/validate`, and writes it back with
   `PUT /v1/config`. Every other line stays exactly as it was.
@@ -1340,7 +1340,7 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
 
 | VIP and website                     | Message                                                                       |
 | ----------------------------------- | ----------------------------------------------------------------------------- |
-| Automatic VIP on, `SITE_URL` set    | We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a reserved slot. How at gaminginit.com |
+| Automatic VIP on, `SITE_URL` set    | We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How at gaminginit.com |
 | Automatic VIP off, `SITE_URL` set   | We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com |
 | Neither                             | We're seeding! 15 more players and we go live. Thanks for helping get it live! |
 
@@ -1373,7 +1373,7 @@ leaderboard, the Discord and seeding:
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
 | 10 minutes after the match went live             | 10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com |
-| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a reserved slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
+| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
 - Each message's line is picked at random from its list, passing over the lines it used lately (up to half the list, so
@@ -1504,7 +1504,7 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). On its own
 the bot only reads the server, sends the [in-game messages](#in-game-messages) (`POST /v1/broadcast`, and
 `POST /v1/players/…/message` for the welcome), changes the
-reserved list in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`), puts each day's planned
+whitelist in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`), puts each day's planned
 [map rotation](#map-rotations) there in the same way, and lifts timed bans when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
 [staff command](#staff-commands). Still:
 

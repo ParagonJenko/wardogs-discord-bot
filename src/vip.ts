@@ -4,19 +4,19 @@ import { appendSection, refusal, sectionLines, sectionRange } from './ini.ts';
 import { totals, type PlayerDay } from './players.ts';
 import type { ConfigResult, ServerConfig } from './rcon.ts';
 
-// Automatic VIP: players who seed on enough days in a week get a reserved slot for a week. The bot adds them to
-// the reserved list in ServerSettings.ini (live builds have no other way to change it) and takes them off again when
-// their week is up, unless they have earned another. It only ever removes players it added itself, so reserved slots
+// Automatic VIP: players who seed on enough days in a week get a whitelist slot for a week. The bot adds them to
+// the whitelist in ServerSettings.ini (live builds have no other way to change it) and takes them off again when
+// their week is up, unless they have earned another. It only ever removes players it added itself, so whitelist slots
 // an admin gave out by hand are left alone. The server reads the list when it restarts.
 
 // `source`: how they got it, by seeding or from staff with /vip add. Grants saved before the bot kept track have none,
 // and count as seeding, as nearly all of them were; a staff grant among them is gone once its time is up.
 export type VipGrant = { name: string; grantedAt: number; expiresAt: number; source?: 'seeding' | 'staff' };
 
-// A staff member's reserved slot (see staffprofiles.ts): theirs while their Steam account is linked, since `since`.
+// A staff member's whitelist slot (see staffprofiles.ts): theirs while their Steam account is linked, since `since`.
 export type StaffSpot = { name: string; since: number };
 
-// The players the bot put on the reserved list, by Steam ID.
+// The players the bot put on the whitelist, by Steam ID.
 // `revoked`: players staff took VIP from, by Steam ID, and until when automatic VIP must not give it back.
 // `staffSpots`: the staff the bot keeps on the list, by Steam ID, including ones an admin had put there by hand.
 export type VipState = {
@@ -50,7 +50,7 @@ export const parseVipState = (raw: unknown): VipState => {
 
 export const vipDue = (state: VipState, now: number): boolean => now - state.checkedAt >= VIP_CHECK_MS;
 
-// Whether the reserved list needs bringing in line with who is staff now: someone linked their Steam account without a
+// Whether the whitelist needs bringing in line with who is staff now: someone linked their Steam account without a
 // staff spot yet (such as staff who linked before the bot kept staff spots), or has one but is no longer linked. Then
 // the next check does it, not the next 10-minute mark.
 export const staffSpotsDue = (state: VipState, staff: Iterable<string>): boolean => {
@@ -75,7 +75,7 @@ export const qualified = (days: PlayerDay[], rule: VipRule): { steamId: string; 
     .filter((p) => p.seedDays >= rule.seedDays)
     .map(({ steamId, name }) => ({ steamId, name }));
 
-// The reserved list lives in this section as `+DefaultReservedPlayerIds=<Steam ID>` lines.
+// The whitelist lives in this section as `+DefaultReservedPlayerIds=<Steam ID>` lines.
 const SECTION = '[/Script/WDGame.WDGameSession]';
 // The game reads the list's lines in order, as Unreal does: `+` adds a player (once), `.` or no prefix adds them too,
 // `-` takes one off, and `!` (as in `!DefaultReservedPlayerIds=ClearArray`) empties the list so far.
@@ -106,7 +106,7 @@ const applyLines = (lines: string[]): string[] =>
 
 export const reservedIds = (text: string): string[] => applyLines(sectionLines(text, SECTION));
 
-// The reserved list for the staff page to show: everyone on it, and how many slots are held back for them
+// The whitelist for the staff page to show: everyone on it, and how many slots are held back for them
 // (MaxReservedSlots, null when the file does not say).
 export type ReservedListing = { ids: string[]; maxSlots: number | null };
 
@@ -179,7 +179,7 @@ export const planVip = (
   };
 };
 
-// Staff spots: every staff member who linked their Steam account has a reserved slot while they are staff, instead of
+// Staff spots: every staff member who linked their Steam account has a whitelist slot while they are staff, instead of
 // one an admin puts in by hand. One already on the list (by hand, or VIP from the bot) is taken over as it is; one
 // whose Steam account is unlinked (they left staff) comes off the list. `staff` is who is linked now, with their name.
 export type StaffSpotPlan = { add: Named[]; adopted: Named[]; remove: string[]; staffSpots: Record<string, StaffSpot> };
@@ -224,7 +224,7 @@ const names = (players: Named[]): string => players.map((p) => `${p.name} (${p.s
 
 type VipRcon = VipDeps['rcon'];
 
-// Writes the reserved list, checking the result first. Throws with the reason when the server would refuse or ignore it.
+// Writes the whitelist, checking the result first. Throws with the reason when the server would refuse or ignore it.
 const writeReserved = async (rcon: VipRcon, config: ServerConfig, add: string[], remove: string[]): Promise<void> => {
   if (!config.writable) throw new Error('the server settings are read-only over RCON');
   const text = editReserved(config.text, add, remove);
@@ -238,7 +238,7 @@ const unexpired = (revoked: Record<string, number>, now: number): Record<string,
 // The new state to save, and who got VIP or kept it for another week, to announce.
 export type VipSync = { state: VipState; added: Named[]; renewed: Named[] };
 
-// Brings the reserved list in line with who has earned VIP, and who is staff. Throws if the server cannot be read or
+// Brings the whitelist in line with who has earned VIP, and who is staff. Throws if the server cannot be read or
 // refuses the change; nothing is recorded then, so the next check tries again.
 export const syncVip = async ({ rule, days, state, now, staff = new Map(), rcon, log }: VipDeps): Promise<VipSync> => {
   const config = await rcon.fetchConfig();
@@ -262,7 +262,7 @@ export const syncVip = async ({ rule, days, state, now, staff = new Map(), rcon,
     renewed: plan.renewed,
   });
   if (plan.renewed.length > 0) log.info(`VIP renewed for another week: ${names(plan.renewed)}.`);
-  if (spots.adopted.length > 0) log.info(`Staff spots taken over from the reserved list: ${names(spots.adopted)}.`);
+  if (spots.adopted.length > 0) log.info(`Staff spots taken over from the whitelist: ${names(spots.adopted)}.`);
   const add = [...plan.add, ...spots.add].map((p) => p.steamId);
   const remove = [...plan.remove, ...spots.remove];
   if (add.length === 0 && remove.length === 0) return done();
@@ -277,7 +277,7 @@ export const syncVip = async ({ rule, days, state, now, staff = new Map(), rcon,
       ...(removed.length > 0 ? [`VIP ended: ${names(removed)}.`] : []),
       ...(spots.add.length > 0 ? [`Staff spots added: ${names(spots.add)}.`] : []),
       ...(spotsEnded.length > 0 ? [`Staff spots ended: ${names(spotsEnded)}.`] : []),
-      'The server uses the new reserved list after its next restart.',
+      'The server uses the new whitelist after its next restart.',
     ].join(' '),
   );
   return done();
@@ -292,7 +292,7 @@ export type VipChange = {
 };
 
 // Gives a player VIP for `days`, as staff asked. It ends like any other: when the time is up, unless they earned it.
-// It also lifts any block from /vip remove, even for a player who already has a reserved slot by hand. Longer VIP for
+// It also lifts any block from /vip remove, even for a player who already has a whitelist slot by hand. Longer VIP for
 // a seeder still counts as theirs from seeding. `days` null makes it permanent: the bot puts them on the list and
 // forgets any end it had for them, so, like a slot added by hand, it stays until staff remove it.
 export const addVip = async (
@@ -317,7 +317,7 @@ export const addVip = async (
   };
 };
 
-// Takes a player off the reserved list, whoever put them there, and keeps automatic VIP from giving it back for a week.
+// Takes a player off the whitelist, whoever put them there, and keeps automatic VIP from giving it back for a week.
 export const removeVip = async (
   { steamId, now, state, rcon }: { steamId: string; now: number; state: VipState; rcon: VipRcon },
 ): Promise<VipChange> => {

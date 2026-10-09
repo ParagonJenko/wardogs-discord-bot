@@ -357,7 +357,7 @@ describe('the server list on the staff page', () => {
     setUp: true,
     createdAt: NOW - 3000 * DAY,
   };
-  // Ash (Valkyra) has played before and team killed today; Dee (Kharr) is new today, on the reserved list, and banned
+  // Ash (Valkyra) has played before and team killed today; Dee (Kharr) is new today, on the whitelist, and banned
   // while still in game. Bo shows twice in the snapshot.
   const online = {
     at: NOW - 30_000,
@@ -435,7 +435,7 @@ describe('the server list on the staff page', () => {
     expect(page.staff[sarge]).toEqual({ name: 'Sarge', username: 'sarge_gi' });
   });
 
-  it('says nothing about the reserved list it could not read, and has no list while the server is not answering', () => {
+  it('says nothing about the whitelist it could not read, and has no list while the server is not answering', () => {
     expect(overview({ reserved: null }).online?.players[0]?.reserved).toBeNull();
     expect(overview({ online: null }).online).toBeNull();
   });

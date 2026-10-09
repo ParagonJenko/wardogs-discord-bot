@@ -42,7 +42,7 @@ type FakeRcon = {
 
 const startFakeRcon = async (password: string): Promise<FakeRcon> => {
   const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false };
-  // ServerSettings.ini, which the bot writes the map rotation and the reserved list to.
+  // ServerSettings.ini, which the bot writes the map rotation and the whitelist to.
   let config = { revision: 1, text: '' };
   const answer = (req: IncomingMessage, body: string): { status: number; body: unknown } => {
     if (req.headers.authorization !== `Bearer ${password}`) return { status: 401, body: { error: { code: 'unauthorized' } } };

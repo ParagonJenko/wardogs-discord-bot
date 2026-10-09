@@ -301,7 +301,7 @@ export const endMatch = async (rconUrl: string, password: string, http: HttpClie
   await rconRequest(rconUrl, password, '/v1/match/end', http, { method: 'POST', body: '{}' });
 };
 
-// ServerSettings.ini, as the server's config document. Live builds only change reserved slots through it.
+// ServerSettings.ini, as the server's config document. Live builds only change whitelist slots through it.
 const ConfigSchema = z.object({
   revision: z.union([z.string(), z.number()]),
   writable: z.boolean().nullish(),
