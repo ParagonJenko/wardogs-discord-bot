@@ -31,6 +31,9 @@ export const SEEDING = [
   '{needed} to go live. Your K/D, wins and play time are all on your player page.',
   'We track your stats, match by match. {needed} and we go live.',
   'Active admins, leaderboards and full stats. {needed} to go live.',
+  'Season in Review: who carried, who fed and who got roasted. {needed} to go live.',
+  'Your season in slides, roast and all, in the Season in Review. {needed} to go live.',
+  'The Season in Review counts your seeding too. {needed} to go live.',
 ];
 
 // 10 minutes after the match goes live. These are the whole message, so they point at the rules and the site.
@@ -43,6 +46,9 @@ export const TEN_MINUTES = [
   '10 minutes in. Blue, park the spawn truck so people can spawn. Rules in our Discord, leaderboard at {site}',
   'Still spamming the green button? We started 10 minutes ago. Rules in our Discord, leaderboard at {site}',
   '10 minutes in. Cash is nice, the zone is nicer. Rules in our Discord, leaderboard at {site}',
+  '10 minutes in. Who carried, who fed, who got roasted? Season in Review at {site}/season, rules in our Discord',
+  'Still alive? Your whole season in slides, roast included, at {site}/season. Rules in our Discord',
+  '10 minutes in. Rules in our Discord, and your season gets roasted at {site}/season',
 ];
 
 // The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
@@ -61,6 +67,7 @@ export const HALFWAY: Record<string, string[]> = {
     'Lonestar leads on {score}! Somebody finally parked the spawn truck.',
     'Lonestar leads on {score}! Two fronts, bright blue kit, still in front.',
     'Lonestar leads on {score}! Reddit wrote blue off. Reddit was wrong.',
+    'Lonestar leads on {score}! Saving this for the Season in Review.',
   ],
   manticore: [
     'Manticore leads on {score}. Green winning? Shocking. Truly.',
@@ -71,6 +78,7 @@ export const HALFWAY: Record<string, string[]> = {
     'Manticore leads on {score}. Easy mode, played as intended.',
     'Manticore leads on {score}. Blends into every bush, beats every team.',
     'Manticore leads on {score}. Even the devs say green wins most of the time.',
+    'Manticore leads on {score}. The Season in Review saw this coming.',
   ],
   valkyra: [
     'Valkyra leads on {score}. Not my points, OUR points, comrade.',
@@ -81,6 +89,7 @@ export const HALFWAY: Record<string, string[]> = {
     'Valkyra leads on {score}. Normal mode, abnormal results.',
     'Valkyra leads on {score}. Somebody stopped farming cash and took the zone.',
     'Valkyra leads on {score}. Dark armour: hard to spot, harder to stop.',
+    'Valkyra leads on {score}. The Season in Review will remember this, comrade.',
   ],
 };
 
@@ -91,6 +100,7 @@ export const HALFWAY_LEVEL = [
   'Halfway there and dead level. Somebody do something.',
   "Halfway there and level. Nobody's on easy mode this match.",
   'Halfway there and level. Blue, this is your moment.',
+  'Halfway there and level. Somebody give the Season in Review a winner.',
 ];
 
 // The first team to reach 90% of the winning score. The bot puts the leaderboard call to action after the line.
@@ -104,6 +114,7 @@ export const NEARLY: Record<string, string[]> = {
     'Lonestar has {score}! The devs said blue gets destroyed. Not this match.',
     'Lonestar has {score}! Fighting from the south on two fronts, and nearly there.',
     'Lonestar has {score}! Bright blue and nearly winning. Who needs camo?',
+    'Lonestar has {score}! This is going straight in the Season in Review.',
   ],
   manticore: [
     'Manticore has {score}. Green about to win again. Groundbreaking.',
@@ -114,6 +125,7 @@ export const NEARLY: Record<string, string[]> = {
     'Manticore has {score}. Towers taken, FOBs up, sweat everywhere.',
     'Manticore has {score}. Can somebody else have a go on green next match?',
     'Manticore has {score}. The green queue was worth it, apparently.',
+    'Manticore has {score}. The Season in Review already wrote this bit.',
   ],
   valkyra: [
     'Valkyra has {score}! Victory for the motherland is in sight, comrades.',
@@ -124,6 +136,7 @@ export const NEARLY: Record<string, string[]> = {
     'Valkyra has {score}! Fairly even with green, said the devs. Red disagrees.',
     'Valkyra has {score}! Less cash farming, more capping. Nearly there, comrades.',
     'Valkyra has {score}! Pushing deep and, for once, playing the objective.',
+    'Valkyra has {score}! Glory for the motherland, and a slide in the Season in Review.',
   ],
 };
 
