@@ -722,8 +722,7 @@ How it works:
 Admin tools: the page runs the staff commands through the bot, as the signed-in staff member:
 
 - `GET /api/admin/commands` gives the page the staff commands as Discord has them, and it builds its forms from them, so
-  they always match. `POST /api/admin/suggest` fills the pick-lists (players, teams, maps, modes, bans, the reserved
-  list, recent matches) from the same suggestions Discord shows, and `POST /api/admin/command` runs one.
+  they always match. `POST /api/admin/suggest` fills the pick-lists (players, teams, maps, modes, bans, the whitelist, recent matches) from the same suggestions Discord shows, and `POST /api/admin/command` runs one.
 - A command is checked the way Discord checks one (its options only, required ones given, lengths, ranges and choices),
   then run by the same code as the slash command, so it does exactly the same: the same replies, the staff history,
   the [moderation log](#moderation-log) and the Worker logs, with the staff member's Discord user ID and name. Each is
@@ -1290,7 +1289,7 @@ How it changes the server:
   `PUT /v1/config`. Every other line stays exactly as it was.
 - It writes with the revision it read, so if someone edits the file in between, the server refuses the write and
   the bot tries again 10 minutes later.
-- It only removes players it added itself, and the [staff spots](#staff-steam-accounts) of staff who unlinked. Reserved
+- It only removes players it added itself, and the [staff spots](#staff-steam-accounts) of staff who unlinked. Whitelist
   slots an admin gave out by hand are never touched, unless they are a linked staff member's, which the bot takes over
   as their staff spot. A player who already has one is left as they are.
 - If an admin takes a bot-given VIP off the list, the bot forgets it. It adds them again only if they earn it again.

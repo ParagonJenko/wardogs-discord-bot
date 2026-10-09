@@ -2345,8 +2345,8 @@ export class Watcher extends DurableObject<Env> {
     action: ProfileAction,
     user: { id: string; name: string },
   ): Promise<{ steamId: string | null; player: string | null } | { problem: string }> {
-    // One at a time with the VIP updates: one that read the staff before this change and is still writing the reserved
-    // list would otherwise save VIP for an account linked meanwhile. Waiting for it makes it come before the link.
+    // One at a time with the VIP updates: one that read the staff before this change and is still writing the whitelist
+    // would otherwise save VIP for an account linked meanwhile. Waiting for it makes it come before the link.
     const changed = await this.serial(async (): Promise<{ steamId: string | null } | { problem: string }> => {
       const storage = this.ctx.storage;
       const profiles = parseStaffProfiles(await storage.get(STAFF_PROFILES_KEY));
