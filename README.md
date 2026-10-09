@@ -47,7 +47,8 @@ And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the busiest hours, the current and recent matches, Discord member counts and a public
 leaderboard (see [Website stats](#website-stats)). It serves a page of stats for every player, too (see
-[Player pages](#player-pages)). It keeps [player records](#player-records):
+[Player pages](#player-pages)), and the [season roundup](#season-roundup): everything it recorded in Season 1, for the
+public once the season is over. It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
 kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
 [live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. It gives
@@ -243,6 +244,54 @@ npx wrangler secret put DISCORD_ROUNDUP_WEBHOOK_URL
 ```
 
 The Node/Docker version does not post roundups.
+
+## Season roundup
+
+On Cloudflare the bot serves a roundup of the whole game season for the website's season page: **`GET /api/season`**.
+Season 1 runs from the first day of the [player records](#player-records) up to the wipe on **15 October 2026, 00:00
+UTC** (1am in the UK). The public only gets the roundup once the season is over; until then the endpoint says when it
+ends and nothing else. Staff signed in on the website can see the season so far at `GET /api/admin/season`, to check
+the page before it opens.
+
+| Field     | What                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------- |
+| `number`, `name` | The season: `1`, `"Season 1"`                                                        |
+| `endsAt`  | When the season ends (Unix ms): the wipe                                                    |
+| `open`    | Whether the season is over, so the public gets the roundup                                  |
+| `roundup` | The roundup (below), or null: for the public before the season is over, and when nobody played |
+
+The roundup has everything a [weekly or monthly roundup](#roundups) has, with each board's top 10 rather than 3: `kind`
+(`"season"`), `start`, `end` and `partial` (true while the season is still going: staff only), `matches`, `playedMs`
+(the matches' length added up), `players`, `peakPlayers`, `busiestDay`, `teams` (every side's wins and losses) and
+`bestTeam` (from `teamMinMatches` matches), the boards `kills`, `kd` (from `kdMinHours` played: the leaderboard's share
+for the season's days), `bestMatch` (most kills in a match), `wins`, `mvps`, `playtime` and `seeding`, the highlights
+`biggestWin`, `closestMatch` and `topMap`, `regular` (on the server on the most days), `rookie` (always null for Season 1:
+the records start with it) and `awards` from the kill feed (each role's top 10 and the shout-outs; `from` is the first
+day the feed covers). And on top of those:
+
+| Field          | What                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `days`         | Each UTC day: `players` on the server, their `minutes` added up, the `matches` that ended and the `peak` players in them (null without matches) |
+| `totals`       | Everyone added up: `kills` and `deaths` (from the matches' scoreboards), `minutes` played, `seedingMinutes` and `seedDays` |
+| `averageMs`, `maps` | The matches with a result: their average length, and each map's matches, average length and each team's wins there, as in `teams` on [`/api/stats`](#website-stats) |
+| `streak`       | The most matches one team won in a row: `{ name, colorHex, wins, from, to }` (the first and last of them), or null. A tie goes to the latest |
+| `longestMatch` | The longest match: `{ map, endedAt, durationMs, factionScores }`, or null                |
+| `quickestWin`  | The shortest match a team won by reaching `SCORE_TO_WIN`, so not one cut short by a crash or a map change, or null |
+| `weapons`      | The season's top 10 weapons, as `weapons` on `/api/stats`, or null without the kill feed |
+
+- Players are named as everywhere else: their name and the `id` of their [player page](#player-pages), or `[private
+  profile]` and no `id` for a [private profile](#private-profiles), as they are now, whenever it was made private.
+- A match counts in the season it ended in, and a day by its UTC date, so a match that runs past midnight into 15
+  October counts for Season 2. Staff's seeding counts as playing, as in the roundups.
+- **Kept for good.** 10 minutes after the season ends the bot saves the roundup (`season:1` in its storage) and serves
+  that from then on, so it stays the same once the kill feed's records of those days are gone (after 62 days) and
+  however the records change. `/removematch` on a Season 1 match deletes it, and the next request builds it again
+  without that match. To build it again after changing how it is made, raise `SEASON_VERSION` in `src/season.ts`.
+- The season's end is `SEASON` in `src/season.ts`; moving it moves when the page opens too.
+- Like `/api/stats`, each Worker instance reuses an answer for 30 seconds, so the page opens up to 30 seconds after
+  the wipe.
+
+The Node/Docker version does not serve the season roundup.
 
 ## Slash commands
 
@@ -1475,5 +1524,6 @@ npm run typecheck
 
 `test/worker.test.ts` runs the Worker as Cloudflare does: Wrangler builds it from `wrangler.jsonc` and runs it in
 workerd, with the Durable Object's storage, against a fake game server on localhost. It checks the cron, the website's
-API, the kill feed, the alert review, the staff page's sign-in and the slash commands' signature and staff checks. Nothing in it reaches Discord
+API, the kill feed, the alert review, the staff page's sign-in, the season roundup's gate and the slash commands'
+signature and staff checks. Nothing in it reaches Discord
 or the game.

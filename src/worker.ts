@@ -196,6 +196,19 @@ import {
   type Roundup,
   type RoundupChoice,
 } from './roundup.ts';
+import {
+  buildSeason,
+  keptSeason,
+  keptSteamIds,
+  parseKeptSeason,
+  publicSeason,
+  SEASON,
+  SEASON_KEY,
+  SEASON_SETTLE_MS,
+  seasonPeriod,
+  type SeasonPage,
+  type SeasonRoundup,
+} from './season.ts';
 import { socketHttp } from './socket-http.ts';
 import {
   alertDue,
@@ -464,7 +477,8 @@ const oneAtATime = () => {
 // status), 'nextMap' (the map staff set to play next), 'playerIdKey' (the key for players' public ids), 'online' (who
 // was in game at the last check that reached the server), 'seedCall' (when staff last sent /seednow), 'winsSettled'
 // (set once the matches saved before settleWin have been put right), 'roundups' (the first day of the last week and
-// month whose roundup went out), and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
+// month whose roundup went out), 'season:<number>' (the season roundup, kept once the season is over; see season.ts),
+// and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
 // UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last reading, to
@@ -955,6 +969,60 @@ export class Watcher extends DurableObject<Env> {
   async roundup(choice: RoundupChoice): Promise<Roundup | null> {
     const now = Date.now();
     return this.roundupFor(periodFor(choice, now), now);
+  }
+
+  // The website's season page (see season.ts). The public gets the roundup once the season is over; staff (`early`) get
+  // the season so far before that. It is kept once the season has been over SEASON_SETTLE_MS, and read back after.
+  async season(early = false): Promise<SeasonPage> {
+    const now = Date.now();
+    const open = now >= SEASON.endsAt;
+    const page = { number: SEASON.number, name: SEASON.name, endsAt: SEASON.endsAt, open };
+    if (!open && !early) return { ...page, roundup: null };
+    const storage = this.ctx.storage;
+    let roundup = open ? parseKeptSeason(await storage.get(SEASON_KEY)) : null;
+    if (roundup === null) {
+      roundup = await this.seasonRoundup(now);
+      if (roundup !== null && now >= SEASON.endsAt + SEASON_SETTLE_MS) {
+        await storage.put(SEASON_KEY, keptSeason(roundup));
+        console.info(`Kept the ${SEASON.name} roundup`);
+      }
+    }
+    if (roundup === null) return { ...page, roundup: null };
+    const ids = await this.idsFor(keptSteamIds(roundup));
+    const idOf = publicIdOf(await this.privateSteam(), (steamId) => ids.get(steamId));
+    return { ...page, roundup: publicSeason(roundup, idOf) };
+  }
+
+  // From the player records since their first day, the match records, each day's weapons and the kill feed's records.
+  // Players are kept by Steam ID (see buildSeason). Null before the records start, or when nobody played.
+  private async seasonRoundup(now: number): Promise<SeasonRoundup | null> {
+    const storage = this.ctx.storage;
+    const [firstKey] = (await storage.list({ prefix: 'players:', limit: 1 })).keys();
+    const firstDay = firstKey === undefined ? null : dayOfKey(firstKey);
+    const period = firstDay === null ? null : seasonPeriod(firstDay, now);
+    if (firstDay === null || period === null) return null;
+    const covered = periodDays(period);
+    const dayKeys = covered.map((day) => playerDayKey(Date.parse(`${day}T00:00:00Z`)));
+    const weaponKeys = covered.map((day) => weaponDayKey(Date.parse(`${day}T00:00:00Z`)));
+    const keys = [...dayKeys, ...weaponKeys, 'killFeedSince', STAFF_PROFILES_KEY];
+    const stored = new Map<string, unknown>();
+    for (let i = 0; i < keys.length; i += RECORDS_PER_WRITE) {
+      for (const [key, value] of await storage.get(keys.slice(i, i + RECORDS_PER_WRITE))) stored.set(key, value);
+    }
+    const records = await storage.list({ prefix: 'match:', start: matchRecordKey(period.start - DAY_MS), end: matchRecordKey(period.end) });
+    const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const since = stored.get('killFeedSince');
+    const feed = this.roundupFeed(covered, now);
+    return buildSeason({
+      firstDay,
+      now,
+      days: covered.map((day, i) => ({ day, players: withoutStaffSeeding(parsePlayerDay(stored.get(dayKeys[i] ?? '')), staff) })),
+      matches: [...records.values()].flatMap((value) => parseMatchRecord(value) ?? []),
+      weaponDays: weaponKeys.map((key) => parseWeaponDay(stored.get(key))),
+      weaponsSince: typeof since === 'string' ? since : null,
+      ...(feed === null ? {} : { feed }),
+      scoreToWin: loadConfig(stringVars(this.env)).scoreToWin,
+    });
   }
 
   // Brings the live status message up to date, after the check has saved the match and stats it shows. A failure
@@ -2316,8 +2384,10 @@ export class Watcher extends DurableObject<Env> {
     }
     const dayKey = playerDayKey(endedAt);
     const day = unrecordMatchPlayers(parsePlayerDay(await storage.get(dayKey)), record.players);
+    // A match of a season that is over leaves its kept roundup, which is built again without it.
+    const gone = endedAt < SEASON.endsAt ? [found[0], SEASON_KEY] : [found[0]];
     // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
-    await Promise.all([storage.put({ stats, [dayKey]: day }), storage.delete(found[0])]);
+    await Promise.all([storage.put({ stats, [dayKey]: day }), storage.delete(gone)]);
     // The player pages read the records again, without it.
     this.dayCache.clear();
     this.matchCache.clear();
@@ -2567,7 +2637,8 @@ const serveJson = async (key: string, load: () => Promise<unknown>, ctx: Executi
   return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...headers } });
 };
 
-// The website's JSON: the server's stats, the live match, everyone to find a player page for, and one player's page.
+// The website's JSON: the server's stats, the live match, everyone to find a player page for, the season roundup, and one
+// player's page.
 const publicRoute = (
   url: URL,
   watcher: () => DurableObjectStub<Watcher>,
@@ -2575,6 +2646,7 @@ const publicRoute = (
   if (url.pathname === '/api/stats') return { key: 'stats', load: () => watcher().stats() };
   if (url.pathname === '/api/live') return { key: 'live', load: () => watcher().live(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
+  if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
   return null;
@@ -2820,6 +2892,15 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page weapon rules failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the weapon rules right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // The season page's roundup before the season is over, so staff can check it before the public sees it.
+  if (route === 'GET /api/admin/season') {
+    try {
+      return Response.json(await watcher().season(true), { headers });
+    } catch (error) {
+      console.error(`Staff page season roundup failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't build the season roundup right now." }, { status: 503, headers });
     }
   }
   // A staff member links their Steam account, so the bot never counts them as a seeder, or unlinks one.
