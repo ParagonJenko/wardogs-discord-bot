@@ -180,7 +180,7 @@ every month a roundup of the month before. Each one celebrates:
 | 🏆 Team of the week     | The side with the best win rate, from 3 matches up. None when the top two are level     |
 | ⚔️ Teams                | Every side's wins, losses and win rate, best first                                      |
 | 🔫 Most kills           | The top 3 by kills                                                                     |
-| 🎯 Best K/D             | The top 3 by K/D, from 2 hours played in a week or 9 to 10 in a month (the website's leaderboard needs 10 over 30 days) |
+| 🎯 Best K/D             | The top 3 by K/D, from 3 matches in a week or 9 to 10 in a month (the website's leaderboard needs 10 over 30 days) |
 | 💥 Most kills in a match | Each player's best match, top 3, with the map                                         |
 | 🏅 Most wins            | Matches won on the winning side, out of the matches they played                         |
 | ⭐ Most MVPs            | Times top of a match's scoreboard (most kills, then fewest deaths; players level share it) |
@@ -263,7 +263,7 @@ the page before it opens.
 The roundup has everything a [weekly or monthly roundup](#roundups) has, with each board's top 10 rather than 3: `kind`
 (`"season"`), `start`, `end` and `partial` (true while the season is still going: staff only), `matches`, `playedMs`
 (the matches' length added up), `players`, `peakPlayers`, `busiestDay`, `teams` (every side's wins and losses) and
-`bestTeam` (from `teamMinMatches` matches), the boards `kills`, `kd` (from `kdMinHours` played: the leaderboard's share
+`bestTeam` (from `teamMinMatches` matches), the boards `kills`, `kd` (from `kdMinMatches` matches: the leaderboard's share
 for the season's days), `bestMatch` (most kills in a match), `wins`, `mvps`, `playtime` and `seeding`, the highlights
 `biggestWin`, `closestMatch` and `topMap`, `regular` (on the server on the most days), `rookie` (always null for Season 1:
 the records start with it) and `awards` from the kill feed (each role's top 10 and the shout-outs; `from` is the first
@@ -1004,7 +1004,7 @@ characters. To let Claude Code on the web read it, add the token to the environm
 | `matches`      | The last 10 match summaries, newest first                                              |
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
-| `leaderboard`  | Top 10 by kills, K/D (10+ hours played, `kdMinHours`), time played and seeding, over the last 30 days (UTC)  |
+| `leaderboard`  | Top 10 by kills, K/D (10+ matches, `kdMinMatches`), time played and seeding, over the last 30 days (UTC). A match counts for anyone seen in it, even for one reading, so K/D needs more than one evening (such as an evening on the mortar) can reach; a shorter period needs its share, never fewer than 3 |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
 | `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`), nor [staff](#staff-steam-accounts). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |

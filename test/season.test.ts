@@ -143,8 +143,8 @@ describe('buildSeason', () => {
     const big = buildSeason(sources({ days: [day('2026-10-12', many)], matches: [] })) as SeasonRoundup;
     expect(big.kills).toHaveLength(SEASON_SHOWN);
     expect(big.playtime).toHaveLength(SEASON_SHOWN);
-    // The K/D board's time is the leaderboard's share for the season's days: 10 hours over 30 days, so 1 for 3 days.
-    expect(big.kdMinHours).toBe(1);
+    // The K/D board's matches are the leaderboard's share for the season's days, and at least 3.
+    expect(big.kdMinMatches).toBe(3);
   });
 
   it("has each map's wins and the average length of the matches with a result", () => {

@@ -319,7 +319,7 @@ describe('crashes', () => {
     expect(dayLater.crashes).toEqual([]);
 
     const teams = { days: 30, matches: 0, averageMs: 0, teams: [], maps: [], streak: null, closest: null, biggest: null };
-    const leaderboard = { days: 30, kdMinHours: 10, kills: [], kd: [], playtime: [], seeding: [] };
+    const leaderboard = { days: 30, kdMinMatches: 10, kills: [], kd: [], playtime: [], seeding: [] };
     const served = publicStats(crashed, { seeding: 1, ...LEVELS }, EIGHT, { leaderboard, vip: null, seederVip: null, weapons: null, teams }, () => undefined);
     expect(served).not.toHaveProperty('crashes');
   });
@@ -412,7 +412,7 @@ describe('parseStats', () => {
 describe('publicStats', () => {
   it('adds the time, the thresholds the site draws on its chart, the leaderboard and what seeding earns', () => {
     const thresholds = { seeding: 1, live: 20, busy: BUSY };
-    const leaderboard = { days: 30, kdMinHours: 10, kills: [], kd: [], playtime: [], seeding: [] };
+    const leaderboard = { days: 30, kdMinMatches: 10, kills: [], kd: [], playtime: [], seeding: [] };
     const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
     const teams = { days: 30, matches: 0, averageMs: 0, teams: [], maps: [], streak: null, closest: null, biggest: null };
 
@@ -437,7 +437,7 @@ describe('publicStats and Steam IDs', () => {
   const ids: Record<string, string> = { '76561198000000001': 'a1a1a1a1a1a1', '76561198000000002': 'b2b2b2b2b2b2' };
   const thresholds = { seeding: 1, live: 20, busy: BUSY };
   const ash = { steamId: '76561198000000001', name: 'Ash', seedingMinutes: 5, liveMinutes: 60, seedDays: 1, matches: 2, kills: 4, deaths: 1 };
-  const leaderboard = { days: 30, kdMinHours: 10, kills: [ash], kd: [], playtime: [ash], seeding: [ash] };
+  const leaderboard = { days: 30, kdMinMatches: 10, kills: [ash], kd: [], playtime: [ash], seeding: [ash] };
   const stats = recordMatch(
     recordObservation(emptyStats(), observation(MIDNIGHT, 30), 1, LEVELS),
     { ...summary, top: [{ steamId: '76561198000000002', name: 'Bo', kills: 9, deaths: 3 }, { name: 'Old', kills: 1, deaths: 0 }] },

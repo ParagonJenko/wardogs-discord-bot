@@ -167,7 +167,7 @@ describe('runCommand', () => {
       teams: [],
       bestTeam: null,
       teamMinMatches: 3,
-      kdMinHours: 2,
+      kdMinMatches: 3,
       kills: [],
       kd: [],
       playtime: [],

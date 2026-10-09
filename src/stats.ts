@@ -450,7 +450,7 @@ export const publicStats = (
   hourly: hourlyAverages(hours, now, thresholds.busy),
   leaderboard: {
     days: leaderboard.days,
-    kdMinHours: leaderboard.kdMinHours,
+    kdMinMatches: leaderboard.kdMinMatches,
     kills: named(leaderboard.kills, idOf),
     kd: named(leaderboard.kd, idOf),
     playtime: named(leaderboard.playtime, idOf),

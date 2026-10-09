@@ -761,7 +761,7 @@ const buildRoundupEmbed = (r: Roundup, pages: string | null, siteUrl: string | u
     r.matches > 0
       ? [
           { name: '🔫 Most kills', value: board(r.kills, (p) => String(p.kills)), inline: true },
-          { name: `🎯 Best K/D (${r.kdMinHours}+ hours played)`, value: board(r.kd, (p) => p.kd.toFixed(2)), inline: true },
+          { name: `🎯 Best K/D (${r.kdMinMatches}+ matches)`, value: board(r.kd, (p) => p.kd.toFixed(2)), inline: true },
           { name: '💥 Most kills in a match', value: board(r.bestMatch, (p) => `${p.kills} · ${mapTitle(p.map)}`), inline: true },
           { name: '🏅 Most wins', value: board(r.wins, (p) => `${p.wins} of ${p.played}`), inline: true },
           { name: '⭐ Most MVPs', value: board(r.mvps, (p) => String(p.mvps)), inline: true },
