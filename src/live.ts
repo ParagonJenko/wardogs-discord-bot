@@ -3,7 +3,7 @@ import { factionKey, mapName } from './discord.ts';
 import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import type { CurrentMatch, Public, ServerSnapshot } from './stats.ts';
 import type { RankedStats } from './tracking.ts';
-import { isGun, isKill, weaponKind, weaponName, type FeedEvent, type WeaponKind } from './weapons.ts';
+import { countsForLongest, isKill, weaponKind, weaponName, type FeedEvent, type WeaponKind } from './weapons.ts';
 
 // The match going on now, from the game's kill feed, for the website's live page: every death as it happens, each
 // player's kills, deaths and streaks, and the match's highlights. Kept in storage ('live') and sent to the page as
@@ -28,12 +28,12 @@ const QUIET_MS = 20 * 60_000;
 // The batches come in clock order, but a clock this little behind the last one is not a new match.
 const CLOCK_SLACK = 30;
 
-// Only a gun's kill counts as a longest kill (see isGun). A match saved before that rule can have another's, such as a
-// mine's or a launcher's, which counts as none.
-const gun = (cause: string | null): boolean => cause !== null && isGun(cause);
+// Only a hand-held weapon's kill that did not lock on counts as a longest kill (see countsForLongest). A match saved
+// before that rule can have another's, such as a mine's or the 9K333 Verba's, which counts as none.
+const counts = (cause: string | null): boolean => cause !== null && countsForLongest(cause);
 
 // A player in this match. `chain` is their kills in a row each within MULTI_KILL_SECONDS of the last, the last at
-// `chainTime`; `longest` is their longest kill with a gun in metres, with `longestCause`.
+// `chainTime`; `longest` is their longest kill with a hand-held weapon that does not lock on, in metres, with `longestCause`.
 export type LivePlayer = {
   steamId: string;
   name: string;
@@ -236,7 +236,7 @@ export const recordLive = (
         k.chain = chained ? k.chain + 1 : 1;
         k.chainTime = e.time;
         k.bestChain = Math.max(k.bestChain, k.chain);
-        if (e.distance !== null && gun(e.cause) && (k.longest === null || !gun(k.longestCause) || e.distance > k.longest)) {
+        if (e.distance !== null && counts(e.cause) && (k.longest === null || !counts(k.longestCause) || e.distance > k.longest)) {
           k.longest = e.distance;
           k.longestCause = e.cause;
         }
@@ -332,7 +332,7 @@ const best = (players: LivePlayer[], value: (p: LivePlayer) => number, least: nu
 
 // The players the highlights name, apart from first blood and the rivalry.
 const leaders = (players: LivePlayer[]) => ({
-  longest: best(players, (p) => (gun(p.longestCause) ? (p.longest ?? -1) : -1), 0),
+  longest: best(players, (p) => (counts(p.longestCause) ? (p.longest ?? -1) : -1), 0),
   multi: best(players, (p) => p.bestChain, 2),
   streak: best(players, (p) => p.bestStreak, 3),
   headshots: best(players, (p) => p.headshots, 1),
