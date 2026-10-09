@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { factionKey } from './discord.ts';
-import type { MatchRecord, PlayerDay } from './players.ts';
+import { totals as playerTotals, type MatchRecord, type PlayerDay } from './players.ts';
 import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import type { FactionScore } from './rcon.ts';
-import { buildRoundup, periodDays, type FeedSources, type MatchHighlight, type Period, type Roundup } from './roundup.ts';
+import { buildRoundup, periodDays, type FeedSources, type MatchHighlight, type Period, type Roundup, type RoundupPlayer } from './roundup.ts';
 import { dayOf } from './stats.ts';
 import { teamBoard, type MapTeams } from './teams.ts';
 import { weaponBoard, type WeaponBoard, type WeaponDay } from './weapons.ts';
@@ -11,7 +11,8 @@ import { weaponBoard, type WeaponBoard, type WeaponDay } from './weapons.ts';
 // The season roundup, for the website's season page: everything the bot recorded in a game season, from the first day of
 // its records up to the wipe that ends the season. The same records and rules as the weekly and monthly roundups (see
 // roundup.ts), with each board's top 10, and on top of them each day's players and matches, the season's totals, each
-// map's wins, the longest winning streak, the longest match and the quickest win, and the weapons. The public only sees
+// map's wins, the longest winning streak, the longest match and the quickest win, the weapons, and two boards for the
+// season page's jokes: the most deaths and the most team kills. The public only sees
 // it once the season is over; staff can see the season so far. Once the season is over the bot keeps it, so it stays the
 // same when the kill feed's records of those days are gone (KILL_DAYS_STORED in killfeed.ts).
 
@@ -51,6 +52,10 @@ export type SeasonRoundup = Roundup & {
   quickestWin: SeasonMatch | null;
   // Null without the kill feed.
   weapons: WeaponBoard | null;
+  // Most deaths, from the matches' scoreboards: fewer kills first when level.
+  deaths: (RoundupPlayer & { deaths: number; kills: number })[];
+  // Most team kills, from the kill feed (null without it). Days saved before the bot kept team kills apart have none.
+  teamKills: (RoundupPlayer & { teamKills: number })[] | null;
 };
 
 // What /api/season serves. `open` once the season is over, when the public gets the roundup; before that, only staff
@@ -156,6 +161,33 @@ export const buildSeason = (sources: SeasonSources): SeasonRoundup | null => {
       }),
       { kills: 0, deaths: 0, minutes: 0, seedingMinutes: 0, seedDays: 0 },
     );
+  // Each player's latest name in the season, for the boards from the kill feed.
+  const nameOf = new Map<string, string>();
+  for (const day of covered) for (const [steamId, t] of Object.entries(byDay.get(day) ?? {})) nameOf.set(steamId, t.name);
+  const named = <T extends object>(steamId: string, name: string, row: T): RoundupPlayer & T => ({ ...publicPlayer(steamId, name, steamIds), ...row });
+  const deaths = playerTotals(covered.map((day) => byDay.get(day) ?? {}))
+    .filter((p) => p.deaths > 0)
+    .sort((a, b) => b.deaths - a.deaths || a.kills - b.kills || a.name.localeCompare(b.name))
+    .slice(0, SEASON_SHOWN)
+    .map((p) => named(p.steamId, p.name, { deaths: p.deaths, kills: p.kills }));
+  // The season's days the kill feed covers; days are oldest first, so each player keeps their latest name.
+  const fed = new Set(covered.filter((day) => feed !== undefined && day >= feed.since));
+  const teamKillers = new Map<string, { name: string; teamKills: number }>();
+  for (const d of [...(feed?.kills ?? [])].sort((a, b) => a.day.localeCompare(b.day))) {
+    if (!fed.has(d.day)) continue;
+    const count = Object.values(d.weapons).reduce((sum, w) => sum + (w.teamKills ?? 0), 0);
+    const known = teamKillers.get(d.steamId);
+    teamKillers.set(d.steamId, { name: d.name || known?.name || d.steamId, teamKills: (known?.teamKills ?? 0) + count });
+  }
+  const teamKills =
+    feed === undefined
+      ? null
+      : [...teamKillers]
+          .map(([steamId, t]) => ({ steamId, ...t, name: nameOf.get(steamId) ?? t.name }))
+          .filter((t) => t.teamKills > 0)
+          .sort((a, b) => b.teamKills - a.teamKills || a.name.localeCompare(b.name))
+          .slice(0, SEASON_SHOWN)
+          .map((t) => named(t.steamId, t.name, { teamKills: t.teamKills }));
   // The board takes the matches of the days up to `end`; the season's are all of them.
   const teams = teamBoard(played, covered.length, period.end - 1);
   const timed = played.filter((m) => m.durationMs > 0);
@@ -172,6 +204,8 @@ export const buildSeason = (sources: SeasonSources): SeasonRoundup | null => {
     quickestWin: pick(won, (chosen, m) => chosen.durationMs < m.durationMs),
     weapons:
       sources.weaponsSince === null ? null : weaponBoard(sources.weaponDays, covered.length, sources.weaponsSince, SEASON_SHOWN, steamIds),
+    deaths,
+    teamKills,
   };
 };
 

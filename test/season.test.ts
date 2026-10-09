@@ -179,6 +179,32 @@ describe('buildSeason', () => {
     expect(buildSeason(sources({ weaponsSince: null }))?.weapons).toBeNull();
   });
 
+  it('lists the most deaths, fewer kills first when level', () => {
+    expect(season.deaths).toEqual([
+      { name: 'Ash', id: 'a', deaths: 15, kills: 34 },
+      { name: 'Bo', id: 'b', deaths: 5, kills: 5 },
+      { name: 'Cy', id: 'c', deaths: 2, kills: 30 },
+    ]);
+    const level = [day('2026-10-12', { a: totals('Ash', { deaths: 4, kills: 9 }), b: totals('Bo', { deaths: 4, kills: 2 }) })];
+    expect(buildSeason(sources({ days: level, matches: [] }))?.deaths.map((row) => row.name)).toEqual(['Bo', 'Ash']);
+  });
+
+  it('lists the most team kills from the kill feed, only with it', () => {
+    const kills: KillDaySummary[] = [
+      { day: '2026-10-12', steamId: 'a', name: 'Ash (old)', kills: 9, headshots: 0, weapons: { 'Id.Item.AK74M': { kills: 9, headshots: 0, teamKills: 2 } } },
+      { day: '2026-10-13', steamId: 'a', name: 'Ash', kills: 3, headshots: 0, weapons: { 'Id.Item.M249': { kills: 3, headshots: 0, teamKills: 1 } } },
+      { day: '2026-10-14', steamId: 'b', name: 'Bo', kills: 5, headshots: 0, weapons: { 'Id.Item.AK74M': { kills: 5, headshots: 0, teamKills: 5 } } },
+      { day: '2026-10-14', steamId: 'c', name: 'Cy', kills: 4, headshots: 0, weapons: { 'Id.Item.AK74M': { kills: 4, headshots: 0 } } },
+      // After the wipe.
+      { day: '2026-10-15', steamId: 'c', name: 'Cy', kills: 9, headshots: 0, weapons: { 'Id.Item.AK74M': { kills: 9, headshots: 0, teamKills: 9 } } },
+    ];
+    expect(buildSeason(sources({ feed: { since: '2026-10-12', kills } }))?.teamKills).toEqual([
+      { name: 'Bo', id: 'b', teamKills: 5 },
+      { name: 'Ash', id: 'a', teamKills: 3 },
+    ]);
+    expect(season.teamKills).toBeNull();
+  });
+
   it('has the awards from the kill feed', () => {
     const kills: KillDaySummary[] = [
       { day: '2026-10-13', steamId: 'b', name: 'Bo', kills: 4, headshots: 4, weapons: { 'Id.Item.SV98': { kills: 4, headshots: 4, longest: 512 } } },

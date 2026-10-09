@@ -278,6 +278,8 @@ day the feed covers). And on top of those:
 | `longestMatch` | The longest match: `{ map, endedAt, durationMs, factionScores }`, or null                |
 | `quickestWin`  | The shortest match a team won by reaching `SCORE_TO_WIN`, so not one cut short by a crash or a map change, or null |
 | `weapons`      | The season's top 10 weapons, as `weapons` on `/api/stats`, or null without the kill feed |
+| `deaths`       | The top 10 by deaths, from the matches' scoreboards (`deaths` and `kills`; fewer kills first when level), for the page's jokes |
+| `teamKills`    | The top 10 by team kills, from the kill feed, or null without it. Days saved before the bot kept team kills apart count none |
 
 - Players are named as everywhere else: their name and the `id` of their [player page](#player-pages), or `[private
   profile]` and no `id` for a [private profile](#private-profiles), as they are now, whenever it was made private.
