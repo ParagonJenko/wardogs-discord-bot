@@ -212,7 +212,7 @@ describe('buildAdminOverview', () => {
     });
   });
 
-  it('lists the reserved players, with the VIP the bot gave and when it ends, and the staff spots', () => {
+  it('lists the whitelisted players, with the VIP the bot gave and when it ends, and the staff spots', () => {
     const overview = buildAdminOverview(
       sources({
         reserved: { ids: [DEE, ASH, CY], maxSlots: 2 },

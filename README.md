@@ -1297,7 +1297,7 @@ How it changes the server:
   far, `-DefaultReservedPlayerIds=<Steam ID>` takes a player off, and `+` adds one. It leaves those lines as they are.
   It adds a player with a line after the list's last line, so nothing before it takes them off again, and removes one
   by deleting the lines that add them.
-- `MaxReservedSlots` in the same section sets how many slots are held back for reserved players. The bot does not
+- `MaxReservedSlots` in the same section sets how many slots are held back for whitelisted players. The bot does not
   change it.
 - Each change is logged (`VIP added: …`, `VIP ended: …`), and `/seeders` shows who has VIP from the bot and until when.
 - The website lists who has VIP from seeding (`seederVip` in [`/api/stats`](#website-stats)). The bot keeps whether

@@ -118,7 +118,7 @@ export const reservedListing = (text: string): ReservedListing => {
   return { ids: applyLines(lines), maxSlots: slots === undefined ? null : Number(slots) };
 };
 
-// Adds and removes reserved players, leaving every other line as it was. A player is removed by deleting the lines
+// Adds and removes whitelisted players, leaving every other line as it was. A player is removed by deleting the lines
 // that add them; one is added by a line after the list's last line, so no `-` or `!` line before it takes them off.
 export const editReserved = (text: string, add: string[], remove: string[]): string => {
   if (![...add, ...remove].every((id) => STEAM_ID.test(id))) throw new Error('refusing to write something that is not a Steam ID');

@@ -71,7 +71,7 @@ describe('reservedIds', () => {
 });
 
 describe('editReserved', () => {
-  it('adds after the last reserved player and removes only the ones asked, leaving every other line', () => {
+  it('adds after the last whitelisted player and removes only the ones asked, leaving every other line', () => {
     const text = editReserved(ini([...settings.trim().split('\n').slice(0, 4), `+DefaultReservedPlayerIds=${BO}`, ...settings.trim().split('\n').slice(4)]), [ASH], [BO]);
 
     expect(text).toBe(
@@ -525,7 +525,7 @@ describe('addVip and removeVip', () => {
     expect(result).toEqual({ state: empty, outcome: 'extended' });
   });
 
-  it('leaves a player an admin reserved by hand alone, but lifts a block from /vip remove', async () => {
+  it('leaves a player an admin whitelisted by hand alone, but lifts a block from /vip remove', async () => {
     const rcon = server();
     const blocked = { ...empty, revoked: { [ADMIN]: NOW + DAY } };
 
