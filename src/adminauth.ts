@@ -14,7 +14,7 @@ import { z } from 'zod';
 //
 // Tokens are signed with an HMAC of DISCORD_CLIENT_SECRET, so resetting the client secret signs everyone out.
 
-export const SESSION_HOURS = 8;
+export const SESSION_HOURS = 36;
 const SESSION_MS = SESSION_HOURS * 60 * 60_000;
 // How long someone has to finish signing in at Discord.
 const LOGIN_MS = 10 * 60_000;
