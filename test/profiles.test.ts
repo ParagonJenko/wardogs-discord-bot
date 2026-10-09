@@ -209,7 +209,7 @@ describe('buildProfile', () => {
   });
 
   it('passes on their weapons from the kill feed, or null without the feed', () => {
-    const weapons = { since: '2026-09-01', used: [{ day: '2026-09-30', name: 'AK74', kind: 'weapon' as const, kills: 4, headshots: 1, longest: 88.2 }] };
+    const weapons = { since: '2026-09-01', used: [{ day: '2026-09-30', name: 'AK74', kind: 'weapon' as const, lockOn: false, kills: 4, headshots: 1, longest: 88.2 }] };
 
     expect(buildProfile(sources({ weapons }))?.weapons).toEqual(weapons);
     expect(buildProfile(sources())?.weapons).toBeNull();

@@ -398,6 +398,16 @@ export const weaponRole = (cause: string): WeaponRole => {
   }
 };
 
+// Hand-held anti-air launchers that lock on to their target: the 9K333 Verba.
+const LOCK_ON = new Set(['id.item.launcher_04']);
+
+export const isLockOn = (cause: string): boolean => LOCK_ON.has(cause.toLowerCase());
+
+// Whether a kill with it can be a longest kill: one with a hand-held weapon that does not lock on. How far a mine was
+// from whoever laid it, an emplacement from its target, or a locked-on missile from whoever fired it says nothing about
+// their aim.
+export const countsForLongest = (cause: string): boolean => weaponKind(cause) === 'weapon' && !isLockOn(cause);
+
 // The longest kill with a weapon in a day, and who made it.
 export type LongestKill = { distance: number; steamId: string; name: string };
 
@@ -488,6 +498,8 @@ const metres = (value: number): number => Math.round(value * 10) / 10;
 export type WeaponRow = {
   name: string;
   kind: WeaponKind;
+  // Whether it is a hand-held launcher that locks on (see isLockOn), whose kills cannot be the longest of all.
+  lockOn: boolean;
   kills: number;
   headshots: number;
   // Metres, over the kills the game sent a distance for; null when it sent none.
@@ -504,7 +516,7 @@ export type WeaponBoard = {
   headshots: number;
   // Most kills first.
   top: WeaponRow[];
-  // The longest kill of all with a hand-held weapon, and what with.
+  // The longest kill of all with a hand-held weapon that does not lock on, and what with.
   longest: { distance: number; weapon: string; name: string; id?: string } | null;
 };
 
@@ -520,14 +532,15 @@ const holder = (longest: LongestKill, idOf: PublicIdOf): { distance: number; nam
 
 // The days' weapons, the top `count` by kills. `days` holds just the days the board covers.
 export const weaponBoard = (days: WeaponDay[], period: number, since: string, count: number, idOf: PublicIdOf): WeaponBoard => {
-  const weapons = new Map<string, WeaponTotals & { kind: WeaponKind }>();
+  const weapons = new Map<string, WeaponTotals & { kind: WeaponKind; lockOn: boolean }>();
   for (const day of days) {
     for (const [cause, t] of Object.entries(day)) {
       const name = weaponName(cause);
-      const known = weapons.get(name) ?? { kind: weaponKind(cause), kills: 0, headshots: 0, ranged: 0, distance: 0, longest: null };
+      const known = weapons.get(name) ?? { kind: weaponKind(cause), lockOn: false, kills: 0, headshots: 0, ranged: 0, distance: 0, longest: null };
       const longer = t.longest !== null && (known.longest === null || t.longest.distance > known.longest.distance);
       weapons.set(name, {
         kind: mergedKind(known.kind, weaponKind(cause)),
+        lockOn: known.lockOn || isLockOn(cause),
         kills: known.kills + t.kills,
         headshots: known.headshots + t.headshots,
         ranged: known.ranged + t.ranged,
@@ -537,10 +550,9 @@ export const weaponBoard = (days: WeaponDay[], period: number, since: string, co
     }
   }
   const all = [...weapons].sort(([a, x], [b, y]) => y.kills - x.kills || a.localeCompare(b));
-  // Only a hand-held weapon's kill can be the longest of all: how far a mine was from whoever laid it, or an emplacement
-  // from its target, says nothing about their aim.
+  // Only a hand-held weapon's kill that did not lock on can be the longest of all (see countsForLongest).
   const furthest = all.reduce<[string, LongestKill] | null>((best, [name, w]) => {
-    if (w.kind !== 'weapon' || w.longest === null || (best !== null && w.longest.distance <= best[1].distance)) return best;
+    if (w.kind !== 'weapon' || w.lockOn || w.longest === null || (best !== null && w.longest.distance <= best[1].distance)) return best;
     return [name, w.longest];
   }, null);
   return {
@@ -551,6 +563,7 @@ export const weaponBoard = (days: WeaponDay[], period: number, since: string, co
     top: all.slice(0, count).map(([name, w]) => ({
       name,
       kind: w.kind,
+      lockOn: w.lockOn,
       kills: w.kills,
       headshots: w.headshots,
       averageDistance: w.ranged === 0 ? null : metres(w.distance / w.ranged),
@@ -560,8 +573,17 @@ export const weaponBoard = (days: WeaponDay[], period: number, since: string, co
   };
 };
 
-// One UTC day's kills with one weapon, for a player page, which adds up the days of the period it shows.
-export type PlayerWeaponDay = { day: string; name: string; kind: WeaponKind; kills: number; headshots: number; longest: number | null };
+// One UTC day's kills with one weapon, for a player page, which adds up the days of the period it shows. `lockOn` is as
+// on the weapon board: a lock-on launcher's kill cannot be their longest.
+export type PlayerWeaponDay = {
+  day: string;
+  name: string;
+  kind: WeaponKind;
+  lockOn: boolean;
+  kills: number;
+  headshots: number;
+  longest: number | null;
+};
 
 // A player's weapons on a player page. `since` is as on the weapon board.
 export type PlayerWeaponsPage = { since: string; used: PlayerWeaponDay[] };
@@ -575,10 +597,11 @@ export const playerWeaponDays = (record: PlayerWeapons, oldest: string): PlayerW
       const named = new Map<string, PlayerWeaponDay>();
       for (const [cause, w] of Object.entries(weapons)) {
         const name = weaponName(cause);
-        const known = named.get(name) ?? { day, name, kind: weaponKind(cause), kills: 0, headshots: 0, longest: null };
+        const known = named.get(name) ?? { day, name, kind: weaponKind(cause), lockOn: false, kills: 0, headshots: 0, longest: null };
         named.set(name, {
           ...known,
           kind: mergedKind(known.kind, weaponKind(cause)),
+          lockOn: known.lockOn || isLockOn(cause),
           kills: known.kills + w.kills,
           headshots: known.headshots + w.headshots,
           longest: further(known.longest, w.longest),

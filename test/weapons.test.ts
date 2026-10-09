@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { PRIVATE_NAME } from '../src/privacy.ts';
 import {
+  countsForLongest,
+  isLockOn,
   feedKillsSince,
   feedAuthorized,
   isNamed,
@@ -259,6 +261,26 @@ describe('weaponRole', () => {
   });
 });
 
+describe('countsForLongest', () => {
+  it('counts hand-held weapons, but not lock-on launchers', () => {
+    expect(
+      ['Id.Item.AK74M', 'Id.Item.SVDM', 'Id.Item.CombatBow', 'Id.Item.RPG7', 'Id.Item.M67Grenade', 'Id.Item.WEPN_099'].every(countsForLongest),
+    ).toBe(true);
+    expect(isLockOn('Id.Item.Launcher_04')).toBe(true);
+    expect(isLockOn('Id.Item.RPG7')).toBe(false);
+    expect(
+      [
+        'Id.Item.Launcher_04',
+        'id.item.launcher_04',
+        'Id.Item.ATMine',
+        'Id.Vehicle.WeaponExtension.WHL_05.RingMinigun',
+        'Vehicle.Variant.Stationary.MistralAA',
+        'Id.Buildable.BarbedWire',
+      ].some(countsForLongest),
+    ).toBe(false);
+  });
+});
+
 describe('recordWeaponDay', () => {
   it('adds up each weapon’s kills, headshots and distances, and keeps its longest kill', () => {
     const day = recordWeaponDay(parseWeaponDay(undefined), [
@@ -338,6 +360,7 @@ describe('weaponBoard', () => {
         {
           name: 'AK74',
           kind: 'weapon',
+          lockOn: false,
           kills: 3,
           headshots: 1,
           averageDistance: 103.3,
@@ -345,7 +368,7 @@ describe('weaponBoard', () => {
           longest: { distance: 210, name: 'Cy' },
         },
         // Each side's M113 is the same vehicle.
-        { name: 'M113 APC', kind: 'vehicle', kills: 2, headshots: 0, averageDistance: null, longest: null },
+        { name: 'M113 APC', kind: 'vehicle', lockOn: false, kills: 2, headshots: 0, averageDistance: null, longest: null },
       ],
       longest: { weapon: 'SVD', distance: 650, name: 'Bo', id: 'b2b2b2b2b2b2' },
     });
@@ -358,7 +381,7 @@ describe('weaponBoard', () => {
     expect(JSON.stringify(board)).not.toMatch(/7656119|steamId/);
   });
 
-  it('takes the longest kill of all from hand-held weapons only', () => {
+  it('takes the longest kill of all from hand-held weapons that do not lock on', () => {
     const board = weaponBoard(
       [
         ...days,
@@ -367,6 +390,9 @@ describe('weaponBoard', () => {
           kill({ cause: 'Id.Vehicle.WeaponExtension.STN_03.MainBarrel', killerSteamId: CY, killerName: 'Cy', distance: 706.8 }),
           kill({ cause: 'Vehicle.Variant.Stationary.MistralAA', killerSteamId: CY, killerName: 'Cy', distance: 900 }),
           kill({ cause: 'Id.Buildable.BarbedWire', killerSteamId: CY, killerName: 'Cy', distance: 1200 }),
+          // Carried by hand, but it locks on.
+          kill({ cause: 'Id.Item.Launcher_04', killerSteamId: CY, killerName: 'Cy', distance: 1450.2 }),
+          kill({ cause: 'Id.Item.CombatBow', killerSteamId: CY, killerName: 'Cy', distance: 680 }),
         ]),
       ],
       30,
@@ -375,13 +401,20 @@ describe('weaponBoard', () => {
       (steamId) => ids[steamId],
     );
 
-    expect(board.longest).toEqual({ weapon: 'SVD', distance: 650, name: 'Bo', id: 'b2b2b2b2b2b2' });
+    expect(board.longest).toEqual({ weapon: 'Compound bow', distance: 680, name: 'Cy' });
     // Each still has its own longest kill.
     expect(board.top.find((w) => w.name === 'AT mine')).toMatchObject({ kind: 'placed', longest: { distance: 851.1, name: 'Cy' } });
+    expect(board.top.find((w) => w.name === '9K333 Verba')).toMatchObject({ kind: 'weapon', lockOn: true, longest: { distance: 1450.2 } });
   });
 
-  it('has no longest kill of all without a hand-held weapon’s', () => {
-    const board = weaponBoard([recordWeaponDay({}, [kill({ cause: 'Id.Item.Claymore', distance: 30 })])], 30, '2026-09-20', 10, () => undefined);
+  it('has no longest kill of all without a hand-held weapon’s that does not lock on', () => {
+    const board = weaponBoard(
+      [recordWeaponDay({}, [kill({ cause: 'Id.Item.Claymore', distance: 30 }), kill({ cause: 'Id.Item.Launcher_04', distance: 900 })])],
+      30,
+      '2026-09-20',
+      10,
+      () => undefined,
+    );
 
     expect(board.longest).toBeNull();
   });
@@ -410,7 +443,7 @@ describe('weaponBoard', () => {
         },
         '2026-10-01',
       ),
-    ).toEqual([{ day: '2026-10-03', name: 'Talon 9K-SAM', kind: 'emplacement', kills: 2, headshots: 0, longest: null }]);
+    ).toEqual([{ day: '2026-10-03', name: 'Talon 9K-SAM', kind: 'emplacement', lockOn: false, kills: 2, headshots: 0, longest: null }]);
   });
 
   it('is empty when nobody was killed in those days', () => {
@@ -442,9 +475,9 @@ describe('playerWeaponDays', () => {
     };
 
     expect(playerWeaponDays(record, '2026-07-06')).toEqual([
-      { day: '2026-10-01', name: 'SVD', kind: 'weapon', kills: 2, headshots: 2, longest: 512.3 },
-      { day: '2026-10-03', name: 'M113 APC', kind: 'vehicle', kills: 3, headshots: 0, longest: 3 },
-      { day: '2026-10-03', name: 'M4', kind: 'weapon', kills: 1, headshots: 0, longest: null },
+      { day: '2026-10-01', name: 'SVD', kind: 'weapon', lockOn: false, kills: 2, headshots: 2, longest: 512.3 },
+      { day: '2026-10-03', name: 'M113 APC', kind: 'vehicle', lockOn: false, kills: 3, headshots: 0, longest: 3 },
+      { day: '2026-10-03', name: 'M4', kind: 'weapon', lockOn: false, kills: 1, headshots: 0, longest: null },
     ]);
   });
 });

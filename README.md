@@ -951,8 +951,8 @@ A [private profile](#private-profiles) has `[private profile]` for its name, and
 | `days`     | How many UTC days it covers, today included: 30                                                |
 | `since`    | The UTC day the bot first had the kill feed. Kills before it have no weapon                    |
 | `kills`    | Every kill in the feed in those days, and `headshots`, how many of them were headshots         |
-| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon` for hand-held, `placed`, `vehicle-weapon`, `emplacement`, `vehicle` or `buildable`), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
-| `longest`  | The longest kill of all with a hand-held weapon: `{ weapon, distance, name, id }`, or null     |
+| `top`      | Most kills first: each weapon's `name`, `kind` (`weapon` for hand-held, `placed`, `vehicle-weapon`, `emplacement`, `vehicle` or `buildable`), `lockOn` (whether it is a hand-held launcher that locks on, such as the 9K333 Verba, whose kills cannot be the longest of all), `kills`, `headshots`, `averageDistance` in metres (null when the game sent no distances) and `longest`: its longest kill, `{ distance, name, id }` |
+| `longest`  | The longest kill of all with a hand-held weapon that does not lock on: `{ weapon, distance, name, id }`, or null |
 
 `teams` has:
 
@@ -1019,7 +1019,7 @@ A player page has:
 | `online`   | When they are in game now: the map, their side, and their kills and deaths this match      |
 | `vip`      | `{ until }` while they have a reserved slot from the bot                                   |
 | `seeding`  | Their seed days in the VIP window and the rule they count towards, or `null` when automatic VIP is off |
-| `weapons`  | From the [kill feed](#weapon-stats): `since` (as in `/api/stats`) and `used`, a row for each weapon on each day they killed with it in the last 90 days: `day`, `name`, `kind`, `kills`, `headshots` and `longest` (metres, or null). `null` until the bot has had the feed |
+| `weapons`  | From the [kill feed](#weapon-stats): `since` (as in `/api/stats`) and `used`, a row for each weapon on each day they killed with it in the last 90 days: `day`, `name`, `kind`, `lockOn` (as in `/api/stats`), `kills`, `headshots` and `longest` (metres, or null). `null` until the bot has had the feed |
 
 - Players are known by a public `id`, never their Steam ID: the first 12 hex characters of an HMAC of the Steam ID,
   with a random key the bot makes the first time it needs one and keeps in its storage (`playerIdKey`). Ids stay the
@@ -1071,9 +1071,10 @@ match` means `Token` in the file is not the secret.
   and things built, like barbed wire. The game blames placed and built things on whoever put them there. Suicides,
   falls and deaths with nobody to blame are left out. The feed does not say who is on which side, so team kills count
   too.
-- **Longest kill.** The longest kill of all, and the live match's, count hand-held weapons only (`kind` `weapon`): how
-  far a mine was from whoever laid it, or an emplacement from its target, says nothing about their aim. Each weapon
-  still has its own longest kill.
+- **Longest kill.** The longest kill of all, the live match's and the roundups' count hand-held weapons only (`kind`
+  `weapon`), but not anti-air launchers that lock on (`lockOn`: the 9K333 Verba, listed in `LOCK_ON` in
+  `src/weapons.ts`). How far a mine was from whoever laid it, an emplacement from its target, or a locked-on missile
+  from whoever fired it says nothing about their aim. Each weapon still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
   [Warcon](https://github.com/warcon-app/warcon)'s list. Some Warcon has no name for: `Id.Item.WEPN_030` is the FAL,
   `WEPN_033` the Bushmaster M17S, `SMG_03` the PP-19 Vityaz, `WEPN_028` the MP5, `WEPN_026` the M1911, `WEPN_027` the
@@ -1126,7 +1127,7 @@ kills and other deaths (`otherDeaths`: suicides and falls), and:
 | `feed`       | The last 40 deaths, newest first: `killer` (null for a fall or suicide) and `victim` (`name`, `id`, `faction`), `weapon`, `kind`, `distance`, `headshot`, `teamKill`, `tags` (`RoadKill`, `Penetration`, `Ricochet`, `WeaponMelee`, `VehicleExplosion`, `Falling`, `Suicide`), and the killer's `streak` and `chain` after it |
 | `players`    | The top 10 by kills, then fewest deaths: kills, deaths, headshots, team kills, `streak` (kills since they last died), `bestStreak` and the `weapon` they have the most kills with |
 | `weapons`    | The top 5 weapons this match                                                                   |
-| `highlights` | `firstBlood`, `longest` kill (hand-held weapons only), `bestStreak` (3 or more), `onFire` (up to 3 players on 5 or more kills without dying now), `bestMultiKill` (2 or more kills each within 8 seconds), `mostHeadshots`, and a `rivalry` (one player killing another 3 or more times) |
+| `highlights` | `firstBlood`, `longest` kill (hand-held weapons only, not lock-on launchers), `bestStreak` (3 or more), `onFire` (up to 3 players on 5 or more kills without dying now), `bestMultiKill` (2 or more kills each within 8 seconds), `mostHeadshots`, and a `rivalry` (one player killing another 3 or more times) |
 
 - **Sides.** The feed does not say who is on which side, so the bot takes it from its last check of the server. Two
   players on the same side make a team kill, which counts as neither a kill nor towards a streak.

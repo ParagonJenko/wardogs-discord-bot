@@ -353,7 +353,8 @@ describe('buildRoundup', () => {
           'Id.Item.Glock17': { kills: 2, headshots: 1 },
           'Vehicle.Variant.Land.Wheeled.Humvee.Default': { kills: 2, headshots: 0 },
         }),
-        kills('e', 'Eve', '2026-09-30', 0, { 'Id.Item.RPG7': { kills: 2, headshots: 0 } }),
+        // It locks on, so it is not a shot either.
+        kills('e', 'Eve', '2026-09-30', 0, { 'Id.Item.Launcher_04': { kills: 2, headshots: 0, longest: 1450 } }),
         kills('c', 'Cy', '2026-10-04', 0, {
           // Not a shot.
           'Vehicle.Variant.Stationary.Mortar': { kills: 5, headshots: 0, longest: 900 },
