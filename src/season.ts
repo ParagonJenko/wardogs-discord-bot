@@ -22,6 +22,10 @@ export const SEASON = { number: 1, name: 'Season 1', endsAt: Date.UTC(2026, 9, 1
 // Each board's top this many.
 export const SEASON_SHOWN = 10;
 
+// The K/D board needs as many matches as the website's leaderboard over its 30 days (10), not a share for the season's
+// days: a season's share would be few enough for a couple of evenings to top it.
+export const SEASON_KD_DAYS = 30;
+
 // The roundup is kept once the season has been over this long, so the last check before the end has saved its records.
 export const SEASON_SETTLE_MS = 10 * 60_000;
 
@@ -132,7 +136,15 @@ export const buildSeason = (sources: SeasonSources): SeasonRoundup | null => {
   const period = seasonPeriod(sources.firstDay, sources.now);
   if (period === null) return null;
   const { days, matches, feed } = sources;
-  const roundup = buildRoundup({ period, days, matches, idOf: steamIds, shown: SEASON_SHOWN, ...(feed === undefined ? {} : { feed }) });
+  const roundup = buildRoundup({
+    period,
+    days,
+    matches,
+    idOf: steamIds,
+    shown: SEASON_SHOWN,
+    kdDays: SEASON_KD_DAYS,
+    ...(feed === undefined ? {} : { feed }),
+  });
   if (roundup === null) return null;
 
   const covered = periodDays(period);

@@ -143,8 +143,14 @@ describe('buildSeason', () => {
     const big = buildSeason(sources({ days: [day('2026-10-12', many)], matches: [] })) as SeasonRoundup;
     expect(big.kills).toHaveLength(SEASON_SHOWN);
     expect(big.playtime).toHaveLength(SEASON_SHOWN);
-    // The K/D board's matches are the leaderboard's share for the season's days, and at least 3.
-    expect(big.kdMinMatches).toBe(3);
+    // The K/D board needs the leaderboard's 10 matches, not a share for the season's days.
+    expect(big.kdMinMatches).toBe(10);
+    expect(big.kd).toEqual([]);
+    const regulars = Object.fromEntries(
+      [9, 10].map((matches) => [`m${matches}`, totals(`Played ${matches}`, { matches, kills: 30, deaths: 10 })]),
+    );
+    const kd = buildSeason(sources({ days: [day('2026-10-12', regulars)], matches: [] }))?.kd;
+    expect(kd?.map((row) => row.name)).toEqual(['Played 10']);
   });
 
   it("has each map's wins and the average length of the matches with a result", () => {
