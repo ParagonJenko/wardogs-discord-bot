@@ -118,8 +118,8 @@ export type Roundup = {
   // The best team, when one is clearly ahead of the rest.
   bestTeam: TeamStanding | null;
   teamMinMatches: number;
-  // Matches the K/D board needs: the leaderboard's share for the whole week or month, even one still going, or for a
-  // season's days so far.
+  // Matches the K/D board needs: the leaderboard's share for the whole week or month, even one still going, or for
+  // `kdDays` when the roundup sets them (the season's: the leaderboard's own 10).
   kdMinMatches: number;
   kills: (RoundupPlayer & { kills: number })[];
   kd: (RoundupPlayer & { kd: number })[];
@@ -197,6 +197,8 @@ export type RoundupSources = {
   feed?: FeedSources;
   // Each board's top this many: AWARDS_SHOWN unless set.
   shown?: number;
+  // The days the K/D board's matches are the share of: the whole week or month (or a season's days) unless set.
+  kdDays?: number;
 };
 
 const ranked = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
@@ -329,7 +331,7 @@ const feedAwards = (
 };
 
 // Null when nobody was on the server in the period.
-export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS_SHOWN }: RoundupSources): Roundup | null => {
+export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS_SHOWN, kdDays }: RoundupSources): Roundup | null => {
   const covered = new Set(periodDays(period));
   const inPeriod = days.filter((d) => covered.has(d.day) && Object.keys(d.players).length > 0);
   if (inPeriod.length === 0) return null;
@@ -344,7 +346,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS
   const fromBoard = <T extends object>(rows: RankedPlayer[], pick: (p: RankedPlayer) => T) =>
     rows.map((p) => named(p.steamId, p.name, pick(p)));
 
-  const board = leaderboard(inPeriod.map((d) => d.players), fullLength(period), shown);
+  const board = leaderboard(inPeriod.map((d) => d.players), kdDays ?? fullLength(period), shown);
 
   // Matches are oldest first, so each player keeps the name from their latest match.
   const wins = new Map<string, { name: string; wins: number; played: number }>();

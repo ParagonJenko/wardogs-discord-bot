@@ -263,8 +263,8 @@ the page before it opens.
 The roundup has everything a [weekly or monthly roundup](#roundups) has, with each board's top 10 rather than 3: `kind`
 (`"season"`), `start`, `end` and `partial` (true while the season is still going: staff only), `matches`, `playedMs`
 (the matches' length added up), `players`, `peakPlayers`, `busiestDay`, `teams` (every side's wins and losses) and
-`bestTeam` (from `teamMinMatches` matches), the boards `kills`, `kd` (from `kdMinMatches` matches: the leaderboard's share
-for the season's days), `bestMatch` (most kills in a match), `wins`, `mvps`, `playtime` and `seeding`, the highlights
+`bestTeam` (from `teamMinMatches` matches), the boards `kills`, `kd` (from `kdMinMatches` matches: 10, as on the website's
+leaderboard, so a couple of evenings can't top it), `bestMatch` (most kills in a match), `wins`, `mvps`, `playtime` and `seeding`, the highlights
 `biggestWin`, `closestMatch` and `topMap`, `regular` (on the server on the most days), `rookie` (always null for Season 1:
 the records start with it) and `awards` from the kill feed (each role's top 10 and the shout-outs; `from` is the first
 day the feed covers). And on top of those:
