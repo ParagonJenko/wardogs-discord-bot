@@ -611,6 +611,9 @@ To set it up:
 - **Kicks outside the bot** cannot be seen: the game's RCON does not report them, and its kill feed only has deaths.
 - **Possible griefing** posts can be turned off with `GRIEF_ALERTS` `"off"` in the `vars` block of `wrangler.jsonc`.
   They are a reason to look, not proof: sides come from the bot's last check (see [Staff page](#staff-page)).
+- **Team kill warning.** When the kill feed shows a player killing a teammate, the bot messages them in game: team
+  killing is against the rules, so apologise in team chat. Not sent for helicopter crashes. Turn it off with
+  `TEAMKILL_WARNING` `"off"`. Sides come from the bot's last check, so it can be wrong for a player who just switched.
 - **Risky Steam account** posts can be turned off with `STEAM_ALERTS` `"off"`. They are a reason to look, not proof too.
 - **Unlikely headshots** posts can be turned off with `HEADSHOT_ALERTS` `"off"`. The bot judges everyone in game at each
   check, so a post goes out up to a minute after the kill that flags the day. A reason to look, not proof.

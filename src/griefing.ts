@@ -101,6 +101,9 @@ const GriefDaySchema = z.object({
   ),
 });
 
+// The in-game message to a player who just team killed. The rules note is added after it, as /warn does.
+export const TEAM_KILL_WARNING = 'Team killing is against the rules. Please apologise in team chat.';
+
 export const emptyGriefDay = (): GriefDay => ({ players: {}, incidents: [] });
 
 // Nothing saved yet, or anything unrecognisable, is an empty day.
@@ -174,7 +177,7 @@ export const recordGrief = (
   events: FeedEvent[],
   at: number,
   factionOf: (steamId: string) => string | null,
-): { day: GriefDay; alerts: GriefAlert[] } => {
+): { day: GriefDay; alerts: GriefAlert[]; teamKillers: { steamId: string; name: string }[] } => {
   const players: Record<string, GriefTotals> = Object.fromEntries(
     Object.entries(day.players).map(([steamId, t]) => [steamId, { ...t, victims: { ...t.victims } }]),
   );
@@ -252,7 +255,15 @@ export const recordGrief = (
       },
     ];
   });
-  return { day: { players, incidents }, alerts };
+  // Who to warn: whoever team killed in this batch, once each, not for a crash (pilots crash by accident).
+  const teamKillers = [
+    ...new Map(
+      added
+        .filter((i) => i.kind === 'team-kill' && !byAircraft(i))
+        .map((i) => [i.steamId, { steamId: i.steamId, name: i.name }] as const),
+    ).values(),
+  ];
+  return { day: { players, incidents }, alerts, teamKillers };
 };
 
 // Whether a batch has anything for the griefing records, so a batch without saves a storage write.
