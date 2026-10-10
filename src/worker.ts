@@ -45,7 +45,7 @@ import {
   mapName,
   postWebhook,
 } from './discord.ts';
-import { griefDayKey, hasGrief, parseGriefDay, playerGrief, recordGrief, type GriefAlert } from './griefing.ts';
+import { TEAM_KILL_WARNING, griefDayKey, hasGrief, parseGriefDay, playerGrief, recordGrief, type GriefAlert } from './griefing.ts';
 import {
   ADMIN_COMMAND_DEFINITIONS,
   checkOptions,
@@ -683,6 +683,33 @@ export class Watcher extends DurableObject<Env> {
           ),
         );
       })(),
+    );
+  }
+
+  // Tells whoever just team killed that it is against the rules and to apologise in team chat, when TEAMKILL_WARNING is
+  // on. In the background, once the game has its reply, so a slow server never holds up the feed. One that fails (the
+  // player left) is logged, not tried again.
+  private warnTeamKillers(killers: { steamId: string; name: string }[]): void {
+    this.ctx.waitUntil(
+      (async () => {
+        const { config, http } = this.rcon();
+        if (!config.teamKillWarning) return;
+        const text = `${TEAM_KILL_WARNING} | ${rulesNote(config.siteUrl)}`;
+        await Promise.all(
+          killers.map(async (k) => {
+            try {
+              await messagePlayer(config.rconUrl, config.rconPassword, k.steamId, text, http);
+            } catch (error) {
+              console.error(`Team kill warning for ${JSON.stringify(k.name)} (${k.steamId}) failed: ${errorText(error)}`);
+              return;
+            }
+            // In their history and the moderation log, like a staff member's /warn.
+            await this.record(k.steamId, { action: 'warn', at: Date.now(), by: 'bot', name: k.name, reason: TEAM_KILL_WARNING, detail: 'Team kill' }).catch(
+              (error: unknown) => console.error(`Team kill warning log for ${k.steamId} failed: ${errorText(error)}`),
+            );
+          }),
+        );
+      })().catch((error: unknown) => console.error(`Team kill warnings failed: ${errorText(error)}`)),
     );
   }
 
@@ -1761,6 +1788,7 @@ export class Watcher extends DurableObject<Env> {
     if (staffKills.length > 0) this.recordKillDays(day, now, staffKills);
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
+    if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the live pages are not part of it: they are updated once it has gone.

@@ -93,6 +93,24 @@ describe('telling deaths apart', () => {
   });
 });
 
+describe('recordGrief team killers to warn', () => {
+  it('lists each team killer once, and not enemy kills, suicides or crashes', () => {
+    const { teamKillers } = recordGrief(
+      emptyGriefDay(),
+      [
+        death(ASH, BO),
+        death(ASH, CY),
+        death(ASH, DEE),
+        death(BO, BO),
+        death(CY, BO, { cause: LITTLEBIRD, tags: ['VehicleExplosion'] }),
+      ],
+      AT,
+      sideOf,
+    );
+    expect(teamKillers).toEqual([{ steamId: ASH, name: 'Ash' }]);
+  });
+});
+
 describe('recordGrief', () => {
   it('counts team kills, whom they killed, and how often each player was team killed', () => {
     const { day } = recordGrief(emptyGriefDay(), [death(ASH, BO), death(ASH, BO), death(ASH, CY), death(ASH, DEE)], AT, sideOf);

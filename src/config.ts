@@ -106,6 +106,9 @@ const EnvSchema = z
     ROTATION_HOUR: z.coerce.number().int().min(0).max(23).default(5),
     // Posts to the moderation log when a player passes a griefing flag (team kills, vehicle suicides): "on" or "off".
     GRIEF_ALERTS: z.enum(['on', 'off']).default('on'),
+    // Messages a player in game when they team kill, telling them it is against the rules and to apologise in team chat:
+    // "on" or "off".
+    TEAMKILL_WARNING: z.enum(['on', 'off']).default('on'),
     // Posts to the moderation log when a player with one of the riskiest Steam accounts is in game (needs STEAM_API_KEY):
     // "on" or "off".
     STEAM_ALERTS: z.enum(['on', 'off']).default('on'),
@@ -139,6 +142,8 @@ export type Config = {
   modLogWebhookUrl: string | undefined;
   // Whether possible griefing is posted to the moderation log.
   griefAlerts: boolean;
+  // Whether a player who team kills is messaged in game.
+  teamKillWarning: boolean;
   // Whether the riskiest Steam accounts are posted to the moderation log.
   steamAlerts: boolean;
   // Whether days of unlikely headshots are posted to the moderation log.
@@ -193,6 +198,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     statusWebhookUrl: e.DISCORD_STATUS_WEBHOOK_URL,
     modLogWebhookUrl: e.DISCORD_MODLOG_WEBHOOK_URL,
     griefAlerts: e.GRIEF_ALERTS === 'on',
+    teamKillWarning: e.TEAMKILL_WARNING === 'on',
     steamAlerts: e.STEAM_ALERTS === 'on',
     headshotAlerts: e.HEADSHOT_ALERTS === 'on',
     outageAlerts: e.OUTAGE_ALERTS === 'on',

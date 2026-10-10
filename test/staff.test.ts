@@ -22,6 +22,7 @@ const config: Config = {
   statusWebhookUrl: undefined,
   modLogWebhookUrl: undefined,
   griefAlerts: true,
+  teamKillWarning: true,
   steamAlerts: true,
   headshotAlerts: true,
   outageAlerts: true,
