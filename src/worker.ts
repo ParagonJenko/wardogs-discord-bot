@@ -696,11 +696,18 @@ export class Watcher extends DurableObject<Env> {
         if (!config.teamKillWarning) return;
         const text = `${TEAM_KILL_WARNING} | ${rulesNote(config.siteUrl)}`;
         await Promise.all(
-          killers.map((k) =>
-            messagePlayer(config.rconUrl, config.rconPassword, k.steamId, text, http).catch((error: unknown) =>
-              console.error(`Team kill warning for ${JSON.stringify(k.name)} (${k.steamId}) failed: ${errorText(error)}`),
-            ),
-          ),
+          killers.map(async (k) => {
+            try {
+              await messagePlayer(config.rconUrl, config.rconPassword, k.steamId, text, http);
+            } catch (error) {
+              console.error(`Team kill warning for ${JSON.stringify(k.name)} (${k.steamId}) failed: ${errorText(error)}`);
+              return;
+            }
+            // In their history and the moderation log, like a staff member's /warn.
+            await this.record(k.steamId, { action: 'warn', at: Date.now(), by: 'bot', name: k.name, reason: TEAM_KILL_WARNING, detail: 'Team kill' }).catch(
+              (error: unknown) => console.error(`Team kill warning log for ${k.steamId} failed: ${errorText(error)}`),
+            );
+          }),
         );
       })().catch((error: unknown) => console.error(`Team kill warnings failed: ${errorText(error)}`)),
     );
