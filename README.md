@@ -47,8 +47,8 @@ And it has Discord slash commands: `/serverstatus`, `/players`, `/lastmatch`, `/
 On Cloudflare it also serves **`GET /api/stats`** for a community website: live status, 24 hours of
 population, daily peaks, the busiest hours, the current and recent matches, Discord member counts and a public
 leaderboard (see [Website stats](#website-stats)). It serves a page of stats for every player, too (see
-[Player pages](#player-pages)), and the [season roundup](#season-roundup): everything it recorded in Season 1, for the
-public once the season is over. It keeps [player records](#player-records):
+[Player pages](#player-pages)), and the [season roundup](#season-roundup): everything it recorded in Season 1, open to
+the public since the season ended on 15 October 2026. It keeps [player records](#player-records):
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
 kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
 [live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. It gives
@@ -248,10 +248,10 @@ The Node/Docker version does not post roundups.
 ## Season roundup
 
 On Cloudflare the bot serves a roundup of the whole game season for the website's season page: **`GET /api/season`**.
-Season 1 runs from the first day of the [player records](#player-records) up to the wipe on **15 October 2026, 00:00
-UTC** (1am in the UK). The public only gets the roundup once the season is over; until then the endpoint says when it
-ends and nothing else. Staff signed in on the website can see the season so far at `GET /api/admin/season`, to check
-the page before it opens.
+Season 1 ran from the first day of the [player records](#player-records) up to the wipe on **15 October 2026, 00:00
+UTC** (1am in the UK). **It is over, so the roundup is open to everyone.** The public only gets the roundup once the
+season is over; before then the endpoint says when it ends and nothing else, and staff signed in on the website can
+see the season so far at `GET /api/admin/season`, to check the page before it opens.
 
 | Field     | What                                                                                        |
 | --------- | ------------------------------------------------------------------------------------------- |
@@ -1396,10 +1396,11 @@ leaderboard, the Discord and seeding:
   90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any
   other faction (for halfway and 90 points, from the leading faction's list). Staff change them on the staff page's
   [Lines tab](#lines-tab). `{team}`, `{score}` and `{site}` are filled in.
-- A few lines in the seeding, 10-minute, halfway and 90-point lists point players at the Season in Review (the
-  [season roundup](#season-roundup), such as "10 minutes in. Who carried, who fed, who got roasted? Season in Review
-  at gaminginit.com/season, rules in our Discord"). They go out at the same times as the rest, picked at random like
-  any other line. A list staff replaced on the Lines tab keeps staff's lines, so it has none of them.
+- A few lines in the seeding and 10-minute lists point players at Season 1's Season in Review (the
+  [season roundup](#season-roundup), such as "10 minutes in. Who carried, who fed, who got roasted? Season 1 in Review
+  is out at gaminginit.com/season. Rules in our Discord"), and a few in the halfway and 90-point lists mention Season 2.
+  They go out at the same times as the rest, picked at random like any other line. A list staff replaced on the Lines
+  tab keeps staff's lines, so it has none of them.
 - The halfway and 90-point messages name only the team in front. Factions are matched however the server spells them
   ("LONESTAR", "Lone Star").
 - Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst. The 90-point
