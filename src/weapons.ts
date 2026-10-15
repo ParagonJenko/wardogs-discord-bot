@@ -3,13 +3,14 @@ import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import { dayOf } from './stats.ts';
 
 // Weapon stats from the game's kill feed. With an endpoint's `Url` and `Token` in +EventFeedEndpoints under
-// [/Script/WDRCON.WDRCONSettings] in ServerSettings.ini (until Season 2, under [WDServerFeed]), the game POSTs its kills
-// to Url + /api/ingest/events, a batch of one to ten about every two seconds, with the token as a bearer. Each kill
-// names the killer and the victim by Steam ID, what killed them (`cause`, a tag like Id.Item.AK74M), how far apart they
-// were in centimetres, and tags such as a headshot. The bot keeps each UTC day's totals by weapon, and each player's, for
-// /api/stats and the player pages. Like the other player records, the Steam IDs stay private.
+// [/Script/WDRCON.WDRCONSettings] in ServerSettings.ini, the game POSTs its kills to that Url, a batch of one to ten
+// about every two seconds, with the token as a bearer. (Until Season 2 they were under [WDServerFeed], and the game
+// added /api/ingest/events to the Url itself.) Each kill names the killer and the victim by Steam ID, what killed them
+// (`cause`, a tag like Id.Item.AK74M), how far apart they were in centimetres, and tags such as a headshot. The bot
+// keeps each UTC day's totals by weapon, and each player's, for /api/stats and the player pages. Like the other player
+// records, the Steam IDs stay private.
 
-// Where the game posts. It always adds this to the Url it is given.
+// Where the game posts. Since Season 2 the Url names it; before, the game added it to the Url it was given.
 export const FEED_PATH = '/api/ingest/events';
 // The game sends at most ten kills in a batch; a body much bigger than that is not the game.
 export const MAX_FEED_BYTES = 65_536;
@@ -47,9 +48,14 @@ export type FeedKill = FeedEvent & { killerSteamId: string; cause: string };
 export const isKill = (e: FeedEvent): e is FeedKill =>
   e.killerSteamId !== null && e.killerSteamId !== e.victimSteamId && e.cause !== null && !e.tags.includes('Suicide');
 
-// Every death in a batch, in the order the game sent them, the kills among them, and how many of its events were
-// something else.
-export type FeedBatch = { events: FeedEvent[]; kills: FeedKill[]; skipped: number };
+// Every death in a batch, in the order the game sent them, the kills among them, how many of its events were something
+// else, and how many of those the bot does not know: neither a death it can read nor one of OTHER_TYPES.
+export type FeedBatch = { events: FeedEvent[]; kills: FeedKill[]; skipped: number; unread: number };
+
+// What else the feed sends since Season 2 (15 October 2026): players joining and leaving, the match's state and its
+// result. The bot has these from its own checks, so it leaves them out, and they are not unread.
+const OTHER_TYPES = ['player_joined', 'player_left', 'match_state', 'match_ended'];
+const typeOf = (raw: unknown): unknown => (typeof raw === 'object' && raw !== null && 'type' in raw ? raw.type : undefined);
 
 const STEAM_ID = /^\d{17}$/;
 const TAG_PREFIXES = ['Meta.Progression.Context.Player.KillContext.', 'Meta.PlayerKillFlag.Player.'];
@@ -78,9 +84,13 @@ export const parseFeed = (body: unknown): FeedBatch | null => {
   const batch = z.object({ events: z.array(z.unknown()).max(MAX_FEED_EVENTS) }).safeParse(body);
   if (!batch.success) return null;
   const events: FeedEvent[] = [];
+  let unread = 0;
   for (const raw of batch.data.events) {
     const parsed = EventSchema.safeParse(raw);
-    if (!parsed.success) continue;
+    if (!parsed.success) {
+      if (!OTHER_TYPES.includes(String(typeOf(raw)))) unread++;
+      continue;
+    }
     const e = parsed.data;
     const tags = [...new Set((e.contextTags ?? []).map(shortTag))].filter((t) => TAGS.includes(t));
     events.push({
@@ -99,7 +109,7 @@ export const parseFeed = (body: unknown): FeedBatch | null => {
       tags: tags.filter((t) => t !== 'Headshot'),
     });
   }
-  return { events, kills: events.filter(isKill), skipped: batch.data.events.length - events.length };
+  return { events, kills: events.filter(isKill), skipped: batch.data.events.length - events.length, unread };
 };
 
 const sha256 = async (text: string): Promise<Uint8Array> =>

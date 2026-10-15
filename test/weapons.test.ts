@@ -80,7 +80,7 @@ describe('parseFeed', () => {
       tags: [],
     };
 
-    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({ events: [kill], kills: [kill], skipped: 0 });
+    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({ events: [kill], kills: [kill], skipped: 0, unread: 0 });
   });
 
   it('keeps suicides, falls and deaths with nobody to blame as deaths, not kills', () => {
@@ -109,6 +109,22 @@ describe('parseFeed', () => {
 
     expect(batch?.events.map((e) => e.eventId)).toEqual(['kept']);
     expect(batch?.skipped).toBe(3);
+    expect(batch?.unread).toBe(3);
+  });
+
+  it("leaves out Season 2's joins, leaves, match states and results without counting them unread", () => {
+    const batch = parseFeed({
+      events: [
+        { type: 'player_joined', eventId: 'j1', eventTime: 1, playerName: 'Ash', playerSteamId: ASH, players: 42 },
+        { type: 'player_left', eventId: 'l1', eventTime: 2, playerName: 'Bo', playerSteamId: BO, players: 41 },
+        { type: 'match_state', eventId: 's1', eventTime: 3, state: 'MatchState.Playing.KOTH' },
+        { type: 'match_ended', eventId: 'r1', eventTime: 4, players: 98, winningFaction: 'Lonestar', factionScores: [] },
+        event({ eventId: 'kept' }),
+      ],
+    });
+
+    expect(batch?.events.map((e) => e.eventId)).toEqual(['kept']);
+    expect(batch).toMatchObject({ skipped: 4, unread: 0 });
   });
 
   it('keeps a kill without a distance, as when a vehicle blows up', () => {

@@ -307,6 +307,11 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 2 } });
     });
 
+    it("answers a batch of Season 2's other events, with no deaths in it", async () => {
+      const batch = { events: [{ type: 'player_joined', eventId: 'j1', playerSteamId: ASH, players: 1 }, { type: 'match_state', eventId: 's1', state: 'MatchState.Playing' }] };
+      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 2 } });
+    });
+
     it('takes it after whatever path the game was given', async () => {
       const batch = { events: [killEvent('e3', ASH, BO)] };
       expect((await json('/some/prefix/api/ingest/events', feedPost(batch))).body).toMatchObject({ ok: true, accepted: 1 });
