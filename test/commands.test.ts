@@ -35,6 +35,7 @@ const config: Config = {
   steamAlerts: true,
   headshotAlerts: true,
   outageAlerts: true,
+  feedAlerts: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,

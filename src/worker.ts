@@ -33,6 +33,7 @@ import {
   startLogin,
 } from './adminauth.ts';
 import {
+  buildFeedAlert,
   buildGriefAlert,
   buildHeadshotAlert,
   buildLiveStatus,
@@ -45,6 +46,7 @@ import {
   mapName,
   postWebhook,
 } from './discord.ts';
+import { FEED_WATCH_KEY, observeFeed, parseFeedWatch } from './feedwatch.ts';
 import { TEAM_KILL_WARNING, griefDayKey, hasGrief, parseGriefDay, playerGrief, recordGrief, type GriefAlert } from './griefing.ts';
 import {
   ADMIN_COMMAND_DEFINITIONS,
@@ -480,7 +482,8 @@ const oneAtATime = () => {
 // month whose roundup went out), 'season:<number>' (the season roundup, kept once the season is over; see season.ts),
 // and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
-// UTC date of the first kill the feed sent), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
+// UTC date of the first kill the feed sent), 'killFeedHeardAt' (when its last batch came), 'feedWatch' (whether it has
+// gone quiet on a live server; see feedwatch.ts), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last reading, to
 // notice bans made or lifted outside the bot), 'bansReadAt' (when that was), 'boardRotation' (the server's rotation
 // for the live status's next map, and when it was read), 'staffNames' (staff's names on Discord, by user ID, for the
@@ -924,6 +927,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.updateRotation(config, seen.snapshot));
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
     await this.checkHeadshots(seen.snapshot);
+    await this.watchFeed(config, seen.snapshot);
 
     const { inviteCode } = config;
     if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
@@ -1756,6 +1760,7 @@ export class Watcher extends DurableObject<Env> {
     const staffKills = toStaffKills(kills, now, factionOf);
     const write = this.ctx.storage.put({
       live: recordLive(parseLiveMatch(stored.get('live')), fresh, now, factionOf),
+      killFeedHeardAt: now,
       ...(grief === null ? {} : { [griefKey]: grief.day }),
       ...(first ? { killFeedSince: day } : {}),
       ...(kills.length === 0
@@ -1920,6 +1925,41 @@ export class Watcher extends DurableObject<Env> {
       );
     } catch (error) {
       console.error(`Headshot alerts failed: ${errorText(error)}`);
+    }
+  }
+
+  // The kill feed going quiet while the server is live, and kills arriving again after (see feedwatch.ts), to the
+  // moderation log channel when FEED_ALERTS is on. Watched once the bot has had the feed, while KILL_FEED_TOKEN is set.
+  // A failure never stops the rest of the check.
+  private async watchFeed(config: Config, snapshot: Snapshot | null): Promise<void> {
+    if ((stringVars(this.env)['KILL_FEED_TOKEN']?.trim() ?? '') === '') return;
+    try {
+      const stored = await this.ctx.storage.get([FEED_WATCH_KEY, 'killFeedHeardAt', 'killFeedSince']);
+      if (typeof stored.get('killFeedSince') !== 'string') return;
+      const heard = stored.get('killFeedHeardAt');
+      const before = parseFeedWatch(stored.get(FEED_WATCH_KEY));
+      const { watch, event } = observeFeed(before, {
+        at: Date.now(),
+        players: snapshot?.status.players ?? null,
+        live: config.rules.live,
+        heardAt: typeof heard === 'number' ? heard : null,
+      });
+      if (watch !== before) await this.ctx.storage.put(FEED_WATCH_KEY, watch);
+      if (event === null) return;
+      console.info(
+        event.type === 'quiet'
+          ? `Kill feed quiet: no batch for ${Math.round((event.at - event.quietFrom) / 60_000)} minutes with ${event.players} players on`
+          : `Kill feed back: kills arriving again after ${Math.round((event.heardAt - event.quietFrom) / 60_000)} minutes quiet`,
+      );
+      const { modLogWebhookUrl, feedAlerts, siteUrl } = config;
+      if (modLogWebhookUrl === undefined || !feedAlerts) return;
+      this.ctx.waitUntil(
+        postWebhook(modLogWebhookUrl, buildFeedAlert(event, siteUrl))
+          .then(() => this.countAlert(event.type === 'quiet' ? 'feedQuiet' : 'feedBack', event.at))
+          .catch((error: unknown) => console.error(`Kill feed alert failed: ${errorText(error)}`)),
+      );
+    } catch (error) {
+      console.error(`Kill feed watch failed: ${errorText(error)}`);
     }
   }
 
@@ -3032,9 +3072,11 @@ const reviewApi = async (request: Request, vars: Record<string, string>, watcher
   }
 };
 
-// A refused kill feed post is logged at most this often, so a wrong token does not fill the logs every two seconds.
+// A refused kill feed post is logged at most this often, so a wrong token does not fill the logs every two seconds. The
+// same for a batch with none of its events read.
 const REFUSAL_LOG_MS = 10 * 60_000;
 let refusalLoggedAt = 0;
+let unreadLoggedAt = 0;
 
 // The game's kill feed (see weapons.ts). It is only taken with the KILL_FEED_TOKEN secret as the bearer; without the
 // secret, the route is not there.
@@ -3048,7 +3090,9 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
   if (!(await feedAuthorized(request.headers.get('authorization'), token))) {
     if (Date.now() - refusalLoggedAt >= REFUSAL_LOG_MS) {
       refusalLoggedAt = Date.now();
-      console.error('Kill feed refused: the token does not match KILL_FEED_TOKEN. Check Token under [WDServerFeed] in ServerSettings.ini.');
+      console.error(
+        'Kill feed refused: the token does not match KILL_FEED_TOKEN. Check the Token in the EventFeedEndpoints line in ServerSettings.ini.',
+      );
     }
     return Response.json({ error: 'Unknown kill feed token' }, { status: 401 });
   }
@@ -3063,6 +3107,11 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
     // Not JSON: refused below.
   }
   if (batch === null) return Response.json({ error: 'Not a kill feed batch' }, { status: 400 });
+  // After a game update, this is how a feed sent in a new form shows: batches come, and nothing in them is read.
+  if (batch.events.length === 0 && batch.skipped > 0 && Date.now() - unreadLoggedAt >= REFUSAL_LOG_MS) {
+    unreadLoggedAt = Date.now();
+    console.error(`Kill feed: a batch came with ${batch.skipped} events, and none could be read. The game may send them in a new form.`);
+  }
   try {
     const accepted = batch.events.length === 0 ? 0 : await watcher().recordFeed(batch.events);
     return Response.json({ ok: true, accepted, skipped: batch.skipped });

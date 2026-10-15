@@ -302,6 +302,11 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 1 } });
     });
 
+    it('answers a batch it cannot read any of, as a game update might send', async () => {
+      const batch = { events: [{ ...killEvent('e4', ASH, BO), type: 'kill' }, { type: 'chat' }] };
+      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 2 } });
+    });
+
     it('takes it after whatever path the game was given', async () => {
       const batch = { events: [killEvent('e3', ASH, BO)] };
       expect((await json('/some/prefix/api/ingest/events', feedPost(batch))).body).toMatchObject({ ok: true, accepted: 1 });

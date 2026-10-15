@@ -2,6 +2,7 @@ import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.
 import type { VipRule } from './config.ts';
 import { isBotBan, type BanRecord, type ModAction, type ModEntry } from './moderation.ts';
 import type { Flag, GriefAlert, Incident, PlayerGrief } from './griefing.ts';
+import type { FeedWatchEvent } from './feedwatch.ts';
 import type { HeadshotAlert } from './killfeed.ts';
 import { BACK_SHARE, unreachableFor, type OutageEvent } from './outages.ts';
 import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from './rcon.ts';
@@ -1336,6 +1337,44 @@ export const buildOutageAlert = (event: OutageEvent, siteUrl?: string): DiscordM
         ].join('\n'),
         color: event.refilled ? COLORS.live : EMPTY_COLOR,
         timestamp: new Date(event.at).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
+// The kill feed quiet on a live server, or kills arriving again after, for the moderation log channel (see
+// feedwatch.ts).
+export const buildFeedAlert = (event: FeedWatchEvent, siteUrl?: string): DiscordMessage => {
+  if (event.type === 'back') {
+    return {
+      embeds: [
+        {
+          title: '🔊 Kill feed back',
+          ...staffPage(siteUrl),
+          description: `Kills are arriving again, **${lasted(event.heardAt - event.quietFrom)}** after the feed went quiet.`,
+          color: COLORS.live,
+          timestamp: new Date(event.heardAt).toISOString(),
+        },
+      ],
+      allowed_mentions: NO_PINGS,
+    };
+  }
+  const last = event.heardAt === null ? 'The bot has no batch from it on record.' : `The last batch came ${when(event.heardAt, 'R')}.`;
+  return {
+    embeds: [
+      {
+        title: '🔇 Kill feed quiet',
+        ...staffPage(siteUrl),
+        description: [
+          `The server is live with **${event.players}** players, and the game has sent no kills for **${lasted(event.at - event.quietFrom)}**. ${last}`,
+          'Until it is back there are no weapon stats, live match, griefing or headshot alerts, team kill warnings or weapon rules.',
+          'Check the feed lines under `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini`, as a game update can change them. ' +
+            "In the Worker's logs, `Kill feed refused` means the token does not match, and `none could be read` that the game sends kills in a new form.",
+        ].join('\n'),
+        color: COLORS.lowPop,
+        footer: { text: "From the bot's checks, every minute. It posts again when kills arrive." },
+        timestamp: new Date(event.quietFrom).toISOString(),
       },
     ],
     allowed_mentions: NO_PINGS,

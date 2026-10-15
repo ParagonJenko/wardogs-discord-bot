@@ -591,6 +591,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | 🔴 Server crashed / 📉 players dropped at once | A live server lost more than three quarters of its players from one check to the next, and 3 minutes later still has under half of them. With the players before and now, and whether it was at a map change |
 | 🔴 Can't reach the server | The bot could not reach a server that had players for 5 minutes. It may still be running with only RCON down |
 | 🟢 Server back / ⚪ not back | After either of those: when 90% of the players are back, with how long it took, the fewest players and how long the bot could not reach it; or 3 hours on, when they never came back |
+| 🔇 Kill feed quiet / 🔊 back | The server is live (`LIVE_THRESHOLD` players) and the [kill feed](#weapon-stats) has sent nothing for 10 minutes, such as after a game update that changed how the feed is set up; then again when kills arrive. Once the bot has had the feed, with `KILL_FEED_TOKEN` set |
 
 To set it up:
 
@@ -618,6 +619,8 @@ To set it up:
 - **Risky Steam account** posts can be turned off with `STEAM_ALERTS` `"off"`. They are a reason to look, not proof too.
 - **Unlikely headshots** posts can be turned off with `HEADSHOT_ALERTS` `"off"`. The bot judges everyone in game at each
   check, so a post goes out up to a minute after the kill that flags the day. A reason to look, not proof.
+- **Kill feed quiet** posts can be turned off with `FEED_ALERTS` `"off"`. A map change never gets that far: kills start
+  again within a few minutes. The post says what to check: the feed's lines in `ServerSettings.ini`, and the Worker's logs.
 - **Outage** posts can be turned off with `OUTAGE_ALERTS` `"off"`. A map change that empties the server for a minute or
   two is never posted: the players are back to half before the 3 minutes are up. The [alert review](#alert-review)
   keeps every outage either way.
@@ -1123,21 +1126,27 @@ To turn it on:
    npx wrangler secret put KILL_FEED_TOKEN
    ```
    It must be at least 16 characters.
-2. In the game server's `ServerSettings.ini` (your host's file manager or config editor), add this section, with the
-   Worker's URL and the same token:
+2. In the game server's `ServerSettings.ini` (your host's file manager), find the `[/Script/WDRCON.WDRCONSettings]`
+   section, keep what is in it, and add these lines, with the Worker's URL and the same token:
    ```ini
-   [WDServerFeed]
-   Url=https://wardogs-discord-bot.<you>.workers.dev
-   Token=<the token>
+   bEventFeedEnabled=True
+   +EventFeedEndpoints=(Url="https://wardogs-discord-bot.<you>.workers.dev",Token="<the token>")
+   EventFeedServerName="<your server's name>"
    ```
-   Only the Worker's URL, with nothing after it: the game adds `/api/ingest/events` itself.
-3. Restart the game server. It reads the section when it starts, so the daily restart also does.
+   Only the Worker's URL, with nothing after it: the game adds `/api/ingest/events` itself. Edit the file itself:
+   RCON cannot write these lines, so the bot, the official web console and other RCON tools cannot set them for you.
+3. Restart the game server. It reads the lines when it starts, so the daily restart also does.
 
 When the first kills arrive, the Worker logs `Kill feed: first kills received`. `Kill feed refused: the token does not
-match` means `Token` in the file is not the secret.
+match` means the `Token` in the file is not the secret. `none could be read` means batches come but the bot can't read
+them: the game sends them in a new form, and the bot needs changing.
 
-- **One feed per server.** The game sends its kills to one URL. If `[WDServerFeed]` already points at another tool,
-  such as a server panel, pointing it at the bot stops that tool getting them.
+- **Before Season 2.** Until the Season 2 update (15 October 2026) the game read a `[WDServerFeed]` section with `Url`
+  and `Token`. It now ignores that section, and drops it the next time the settings are saved, so a server set up the
+  old way sends no kills until it has the lines above. The bot posts to the [moderation log](#moderation-log) when that
+  happens: see Kill feed quiet.
+- **Other tools too.** `EventFeedEndpoints` is a list: a server panel can have its own `+EventFeedEndpoints=` line
+  beside the bot's, and both get every kill.
 - **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
 - **What counts.** A kill counts for the weapon that made it: guns, launchers, grenades and tools, things placed (mines,
   claymores, C4, IEDs), a vehicle's gun, an emplacement (the L81 mortar and other fixed weapons, such as AA, which the
@@ -1168,8 +1177,8 @@ match` means `Token` in the file is not the secret.
   killed, and a capture of a busy server saw about 550 an hour: some 6,600 a day for a server live 12 hours a day,
   against the free plan's 100,000. Each is one storage write, of the day's totals and each killer's, and one more row
   for each killer's day on the staff page's [Kills tab](#kills-and-headshots).
-- **Turning it off:** delete the secret (`npx wrangler secret delete KILL_FEED_TOKEN`), and the section from
-  `ServerSettings.ini`. Without the secret, the bot answers the game with a 404. The stats it kept stay.
+- **Turning it off:** delete the secret (`npx wrangler secret delete KILL_FEED_TOKEN`), and the bot's
+  `+EventFeedEndpoints=` line from `ServerSettings.ini`. Without the secret, the bot answers the game with a 404. The stats it kept stay.
 
 The Node/Docker version does not take the kill feed: the game needs a public URL to send it to.
 

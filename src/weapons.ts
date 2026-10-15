@@ -2,11 +2,12 @@ import { z } from 'zod';
 import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import { dayOf } from './stats.ts';
 
-// Weapon stats from the game's kill feed. With `Url` and `Token` set under [WDServerFeed] in ServerSettings.ini, the
-// game POSTs its kills to Url + /api/ingest/events, a batch of one to ten about every two seconds, with the token as a
-// bearer. Each kill names the killer and the victim by Steam ID, what killed them (`cause`, a tag like Id.Item.AK74M),
-// how far apart they were in centimetres, and tags such as a headshot. The bot keeps each UTC day's totals by weapon,
-// and each player's, for /api/stats and the player pages. Like the other player records, the Steam IDs stay private.
+// Weapon stats from the game's kill feed. With an endpoint's `Url` and `Token` in +EventFeedEndpoints under
+// [/Script/WDRCON.WDRCONSettings] in ServerSettings.ini (until Season 2, under [WDServerFeed]), the game POSTs its kills
+// to Url + /api/ingest/events, a batch of one to ten about every two seconds, with the token as a bearer. Each kill
+// names the killer and the victim by Steam ID, what killed them (`cause`, a tag like Id.Item.AK74M), how far apart they
+// were in centimetres, and tags such as a headshot. The bot keeps each UTC day's totals by weapon, and each player's, for
+// /api/stats and the player pages. Like the other player records, the Steam IDs stay private.
 
 // Where the game posts. It always adds this to the Url it is given.
 export const FEED_PATH = '/api/ingest/events';
