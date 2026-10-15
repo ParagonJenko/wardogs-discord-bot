@@ -20,6 +20,7 @@ describe('loadConfig', () => {
       steamAlerts: true,
       headshotAlerts: true,
       outageAlerts: true,
+      feedAlerts: true,
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
@@ -74,6 +75,12 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...required, HEADSHOT_ALERTS: 'off' }).headshotAlerts).toBe(false);
     expect(loadConfig({ ...required, OUTAGE_ALERTS: 'off' }).outageAlerts).toBe(false);
     expect(() => loadConfig({ ...required, OUTAGE_ALERTS: 'no' })).toThrow(/OUTAGE_ALERTS/);
+  });
+
+  it('posts the kill feed going quiet to the moderation log unless FEED_ALERTS is off', () => {
+    expect(loadConfig(required).feedAlerts).toBe(true);
+    expect(loadConfig({ ...required, FEED_ALERTS: 'off' }).feedAlerts).toBe(false);
+    expect(() => loadConfig({ ...required, FEED_ALERTS: 'no' })).toThrow(/FEED_ALERTS/);
   });
 
   it('holds the seeding alert for SEEDING_ALERT_MINUTES, 5 by default, and 0 sends it straight away', () => {

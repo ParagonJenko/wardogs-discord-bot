@@ -116,6 +116,9 @@ const EnvSchema = z
     HEADSHOT_ALERTS: z.enum(['on', 'off']).default('on'),
     // Posts to the moderation log when the server crashes or cannot be reached, and when it is back: "on" or "off".
     OUTAGE_ALERTS: z.enum(['on', 'off']).default('on'),
+    // Posts to the moderation log when the server is live and the kill feed has sent nothing for 10 minutes, and when
+    // kills arrive again: "on" or "off".
+    FEED_ALERTS: z.enum(['on', 'off']).default('on'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -150,6 +153,8 @@ export type Config = {
   headshotAlerts: boolean;
   // Whether crashes and the server being unreachable are posted to the moderation log.
   outageAlerts: boolean;
+  // Whether the kill feed going quiet on a live server is posted to the moderation log.
+  feedAlerts: boolean;
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
@@ -202,6 +207,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     steamAlerts: e.STEAM_ALERTS === 'on',
     headshotAlerts: e.HEADSHOT_ALERTS === 'on',
     outageAlerts: e.OUTAGE_ALERTS === 'on',
+    feedAlerts: e.FEED_ALERTS === 'on',
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,

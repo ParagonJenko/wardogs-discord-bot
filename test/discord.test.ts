@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { banReason } from '../src/moderation.ts';
 import {
+  buildFeedAlert,
   buildGriefAlert,
   buildHeadshotAlert,
   buildLastMatchEmbed,
@@ -1534,6 +1535,46 @@ describe('buildOutageAlert', () => {
     const message = buildOutageAlert({ type: 'back', at: AT + 54 * MINUTE, outage: lost, players: 100, map: 'Kavkazi', refilled: true });
 
     expect(embedOf(message)?.description).toBe('**54 min** after the bot lost it.\n99 before · unreachable for 53 min');
+  });
+});
+
+describe('buildFeedAlert', () => {
+  const MINUTE = 60_000;
+  const AT = Date.UTC(2026, 9, 15, 10, 7);
+  const t = (at: number) => `<t:${at / 1000}:R>`;
+
+  it('says the feed is quiet on a live server, what waits for it and where to look, without pinging anyone', () => {
+    const message = buildFeedAlert({ type: 'quiet', at: AT + 10 * MINUTE, quietFrom: AT, heardAt: AT - 2 * MINUTE, players: 99 }, 'https://gaminginit.com');
+
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(embedOf(message)).toMatchObject({
+      title: '🔇 Kill feed quiet',
+      url: 'https://gaminginit.com/admin',
+      footer: { text: "From the bot's checks, every minute. It posts again when kills arrive." },
+      timestamp: new Date(AT).toISOString(),
+    });
+    const lines = embedOf(message)?.description?.split('\n') ?? [];
+    expect(lines[0]).toBe(`The server is live with **99** players, and the game has sent no kills for **10 min**. The last batch came ${t(AT - 2 * MINUTE)}.`);
+    expect(lines[2]).toContain('`[/Script/WDRCON.WDRCONSettings]`');
+  });
+
+  it('says when the bot has never had a batch on record', () => {
+    const message = buildFeedAlert({ type: 'quiet', at: AT + 10 * MINUTE, quietFrom: AT, heardAt: null, players: 40 });
+
+    expect(embedOf(message)?.description?.split('\n')[0]).toBe(
+      'The server is live with **40** players, and the game has sent no kills for **10 min**. The bot has no batch from it on record.',
+    );
+  });
+
+  it('says when kills arrive again, and how long the feed was quiet', () => {
+    const message = buildFeedAlert({ type: 'back', at: AT + 71 * MINUTE, quietFrom: AT, heardAt: AT + 70 * MINUTE });
+
+    expect(embedOf(message)).toMatchObject({
+      title: '🔊 Kill feed back',
+      description: 'Kills are arriving again, **1 h 10 min** after the feed went quiet.',
+      color: 0x2ecc71,
+      timestamp: new Date(AT + 70 * MINUTE).toISOString(),
+    });
   });
 });
 
