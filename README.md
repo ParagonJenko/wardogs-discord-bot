@@ -1130,11 +1130,11 @@ To turn it on:
    section, keep what is in it, and add these lines, with the Worker's URL and the same token:
    ```ini
    bEventFeedEnabled=True
-   +EventFeedEndpoints=(Url="https://wardogs-discord-bot.<you>.workers.dev",Token="<the token>")
+   +EventFeedEndpoints=(Url="https://wardogs-discord-bot.<you>.workers.dev/api/ingest/events",Token="<the token>")
    EventFeedServerName="<your server's name>"
    ```
-   Only the Worker's URL, with nothing after it: the game adds `/api/ingest/events` itself. Edit the file itself:
-   RCON cannot write these lines, so the bot, the official web console and other RCON tools cannot set them for you.
+   The `Url` ends in `/api/ingest/events`: the game posts to it exactly as written. Edit the file itself: RCON cannot
+   write these lines, so the bot, the official web console and other RCON tools cannot set them for you.
 3. Restart the game server. It reads the lines when it starts, so the daily restart also does.
 
 When the first kills arrive, the Worker logs `Kill feed: first kills received`. `Kill feed refused: the token does not
@@ -1142,11 +1142,14 @@ match` means the `Token` in the file is not the secret. `none could be read` mea
 them: the game sends them in a new form, and the bot needs changing.
 
 - **Before Season 2.** Until the Season 2 update (15 October 2026) the game read a `[WDServerFeed]` section with `Url`
-  and `Token`. It now ignores that section, and drops it the next time the settings are saved, so a server set up the
-  old way sends no kills until it has the lines above. The bot posts to the [moderation log](#moderation-log) when that
+  (the Worker's URL alone: the game added `/api/ingest/events` to it) and `Token`. It now ignores that section, and
+  drops it the next time the settings are saved, so a server set up the old way sends no kills until it has the lines
+  above. The bot posts to the [moderation log](#moderation-log) when that
   happens: see Kill feed quiet.
 - **Other tools too.** `EventFeedEndpoints` is a list: a server panel can have its own `+EventFeedEndpoints=` line
   beside the bot's, and both get every kill.
+- **Not just kills.** Since Season 2 the feed also sends players joining and leaving, the match's state and its result.
+  The bot leaves those out: it has them from its own checks.
 - **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
 - **What counts.** A kill counts for the weapon that made it: guns, launchers, grenades and tools, things placed (mines,
   claymores, C4, IEDs), a vehicle's gun, an emplacement (the L81 mortar and other fixed weapons, such as AA, which the

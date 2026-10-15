@@ -3108,9 +3108,10 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
   }
   if (batch === null) return Response.json({ error: 'Not a kill feed batch' }, { status: 400 });
   // After a game update, this is how a feed sent in a new form shows: batches come, and nothing in them is read.
-  if (batch.events.length === 0 && batch.skipped > 0 && Date.now() - unreadLoggedAt >= REFUSAL_LOG_MS) {
+  // Season 2's joins, leaves and match events are known, and left out without a word.
+  if (batch.events.length === 0 && batch.unread > 0 && Date.now() - unreadLoggedAt >= REFUSAL_LOG_MS) {
     unreadLoggedAt = Date.now();
-    console.error(`Kill feed: a batch came with ${batch.skipped} events, and none could be read. The game may send them in a new form.`);
+    console.error(`Kill feed: a batch came with ${batch.unread} events, and none could be read. The game may send them in a new form.`);
   }
   try {
     const accepted = batch.events.length === 0 ? 0 : await watcher().recordFeed(batch.events);

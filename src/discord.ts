@@ -1369,7 +1369,8 @@ export const buildFeedAlert = (event: FeedWatchEvent, siteUrl?: string): Discord
         description: [
           `The server is live with **${event.players}** players, and the game has sent no kills for **${lasted(event.at - event.quietFrom)}**. ${last}`,
           'Until it is back there are no weapon stats, live match, griefing or headshot alerts, team kill warnings or weapon rules.',
-          'Check the feed lines under `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini`, as a game update can change them. ' +
+          'Check the feed lines under `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini` (the `Url` ends in `/api/ingest/events`), ' +
+            'as a game update can change them. ' +
             "In the Worker's logs, `Kill feed refused` means the token does not match, and `none could be read` that the game sends kills in a new form.",
         ].join('\n'),
         color: COLORS.lowPop,
