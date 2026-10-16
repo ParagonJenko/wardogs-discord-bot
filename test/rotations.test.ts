@@ -75,6 +75,15 @@ describe('parseRotationBook', () => {
     expect(parseRotationBook({ rotations: 'nonsense' })).toEqual(empty);
     expect(parseRotationBook(book())).toEqual(book());
   });
+
+  it('swaps a retired experience for its replacement, so the old one is never written back', () => {
+    const old: RotationEntry = { map: 'Kavkazi', experiences: ['Bakurani_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' };
+    const saved = book({ rotations: [{ name: 'Default', entries: [old, OZETI] }] });
+    expect(parseRotationBook(saved).rotations[0]?.entries).toEqual([
+      { map: 'Kavkazi', experiences: ['Bakurani_KOTH_02', 'KOTH_InfantryOnly'], lighting: 'DayClear' },
+      OZETI,
+    ]);
+  });
 });
 
 describe('editRotations', () => {
@@ -402,6 +411,17 @@ describe('putRotation', () => {
     await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toEqual({ written: true, next: null });
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text: setRotationEntries(settings, [OZETI, BAKURANI, ZESTAFONA]) });
     await expect(putRotation(file({}, ok, null), [BAKURANI, OZETI])).resolves.toEqual({ written: false });
+  });
+
+  it('writes a retired experience as its replacement, and puts right a file that still has the old one', async () => {
+    const old: RotationEntry = { map: 'Kavkazi', experiences: ['Bakurani_KOTH_01'] };
+    const current: RotationEntry = { map: 'Kavkazi', experiences: ['Bakurani_KOTH_02'] };
+    const server = file({ text: setRotationEntries(settings, [old, OZETI]) }, ok, 1);
+    await expect(putRotation(server, [old, OZETI])).resolves.toEqual({ written: true, next: current });
+    const text = setRotationEntries(settings, [current, OZETI]);
+    expect(text).toContain('+RotationEntries=(Map="Kavkazi",Experience="Bakurani_KOTH_02")');
+    expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
+    await expect(putRotation(file({ text }, ok, 1), [old, OZETI])).resolves.toEqual({ written: false });
   });
 
   it('writes nothing when the slot cannot be read, so it is tried again', async () => {

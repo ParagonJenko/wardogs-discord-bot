@@ -11,6 +11,14 @@ export const MODIFIERS = [
 
 export const isModifier = (id: string): boolean => MODIFIERS.some((m) => m.pattern.test(id));
 
+// Experiences a game update retired, by lower-case id, with what took their place. Season 2 (15 October 2026) made
+// Bakurani's King of the Hill Bakurani_KOTH_02, and the host said to replace Bakurani_KOTH_01 in rotations with it.
+// A Map, so an id such as "constructor" finds nothing rather than what every object has.
+const RETIRED = new Map([['bakurani_koth_01', 'Bakurani_KOTH_02']]);
+
+// The experience as the game has it now: a retired one's replacement, or the same.
+export const currentExperience = (id: string): string => RETIRED.get(id.toLowerCase()) ?? id;
+
 // What the server's catalogue knows, for checking what staff typed and for names. Null when it could not be read,
 // and then what staff typed is sent as it is.
 export type SetupCatalog = {
@@ -59,7 +67,7 @@ export const planSetup = (
   catalog: SetupCatalog,
 ): PlannedSetup | { problem: string } => {
   const entry = catalog.rotation?.entries.find((e) => e.map === map);
-  const rotationMode = entry?.experiences?.find((id) => !isModifier(id));
+  const rotationMode = entry?.experiences?.map(currentExperience).find((id) => !isModifier(id));
   const modes = catalog.mapExperiences === null ? null : modesFor(catalog);
 
   const typedMode = options['mode']?.trim();

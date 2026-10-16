@@ -555,6 +555,10 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
   and the bot tries again at every check until the server has it.
 - Changes made by hand on the server stay until the bot next puts a rotation on: the start of the next day, or a staff
   change. `/rotation` (for everyone) shows what the server is playing either way.
+- **Retired game modes.** Season 2 (15 October 2026) renamed Bakurani's King of the Hill from `Bakurani_KOTH_01` to
+  `Bakurani_KOTH_02`. Saved rotations that still have the old one show and are written with the new one, so the next
+  rotation the bot puts on replaces it in `ServerSettings.ini` too, and `/setnextmap` uses the new one when the server's
+  rotation still has the old. A mode a later update retires goes in `RETIRED` in `src/matchsetup.ts`.
 
 | Variable        | What                                                    | Default |
 | --------------- | ------------------------------------------------------- | ------- |

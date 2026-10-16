@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { appendSection, refusal, sectionLines, sectionRange } from './ini.ts';
+import { currentExperience } from './matchsetup.ts';
 import type { ConfigResult, MatchSetup, Rotation, ServerConfig } from './rcon.ts';
 
 // Map rotations staff save by name, such as "Rotation 1" and "Weekend", and which one the server plays on each day of
@@ -58,10 +59,16 @@ const BookSchema = z.object({
     .nullable(),
 });
 
-// Reads what the store saved. Nothing saved yet means no rotations and nothing planned.
+// A map with any retired experience swapped for what replaced it (see currentExperience).
+export const currentEntry = (entry: RotationEntry): RotationEntry =>
+  entry.experiences === undefined ? entry : { ...entry, experiences: entry.experiences.map(currentExperience) };
+
+// Reads what the store saved. Nothing saved yet means no rotations and nothing planned. Rotations saved before a game
+// update retired an experience come back with its replacement, so the bot never writes the old one back.
 export const parseRotationBook = (raw: unknown): RotationBook => {
   const parsed = BookSchema.safeParse(raw);
-  return parsed.success ? parsed.data : EMPTY_BOOK;
+  if (!parsed.success) return EMPTY_BOOK;
+  return { ...parsed.data, rotations: parsed.data.rotations.map((r) => ({ ...r, entries: r.entries.map(currentEntry) })) };
 };
 
 const HOUR_MS = 60 * 60_000;
@@ -458,8 +465,10 @@ export type RotationPut = { written: false } | { written: true; next: RotationEn
 // Puts these maps in the server's rotation, so it plays them from the first at the next map change (see fromTheStart).
 // When the server doesn't say which slot it is on, the rotation replaces the server's as it is. Throws with the reason
 // when the server cannot be read, or would refuse or ignore the change.
-export const putRotation = async (file: SettingsFile, entries: RotationEntry[]): Promise<RotationPut> => {
-  if (entries.length === 0) throw new Error('refusing to leave the server with no maps');
+export const putRotation = async (file: SettingsFile, maps: RotationEntry[]): Promise<RotationPut> => {
+  if (maps.length === 0) throw new Error('refusing to leave the server with no maps');
+  // Default saved from the server's own rotation can still name a retired experience.
+  const entries = maps.map(currentEntry);
   const config = await file.fetchConfig();
   const slot = await file.slot();
   const written = fromTheStart(entries, slot);
