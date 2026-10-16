@@ -39,6 +39,9 @@
     // (DISCORD_INVITE) and the website (SITE_URL). Not again for 6 hours, so a map change doesn't send it to everyone.
     // "0" turns it off.
     "WELCOME_MESSAGE_MINUTES": "2",
+    // When a match ends, a private message to this many of the top players on its scoreboard, with where they finished
+    // and the website (SITE_URL) for their stats. "0" turns it off.
+    "TOP_PLAYER_MESSAGES": "5",
     "SEEDING_THRESHOLD": "1",
     "LIVE_THRESHOLD": "20",
     "LOW_POP_THRESHOLD": "20",

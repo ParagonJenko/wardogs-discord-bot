@@ -13,6 +13,9 @@ import {
   remember,
   seedingMessageDue,
   seedingPick,
+  topPlayerMessages,
+  topPlayersDue,
+  TopPlayerWatchSchema,
   watchJoins,
   watchWelcomes,
   welcomePick,
@@ -21,6 +24,7 @@ import {
   type JoinWatch,
   type MatchMessages,
   type Recent,
+  type TopPlayerWatch,
   type WelcomeWatch,
 } from './messages.ts';
 import {
@@ -71,6 +75,8 @@ export type BotState = {
   outage: Outage | null;
   // The lines each list used lately, so the next message does not repeat one (see messages.ts).
   recent: Recent;
+  // The last match's top players' messages that are waiting for them to be in game.
+  topPlayers: TopPlayerWatch | null;
 };
 
 export type StateStore = {
@@ -185,6 +191,8 @@ const BotStateSchema = z.object({
   outage: OutageSchema.nullable().default(null),
   // Missing from state saved before lines avoided repeats.
   recent: RecentSchema.default({}),
+  // Missing from state saved before top players' messages.
+  topPlayers: TopPlayerWatchSchema.nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -203,6 +211,7 @@ const StoredStateSchema = z.union([
       last: null,
       outage: null,
       recent: {},
+      topPlayers: null,
     }),
   ),
 ]);
@@ -298,6 +307,35 @@ export const createPoller = ({
     return { watch: markWelcomed(watched, due, time), recent: lately };
   };
 
+  // The top players' messages from the last match that are due, privately to each player now in game. One that fails
+  // is not tried again. When a match just ended, its top players' messages wait for the next check (see
+  // TOP_PLAYER_WAIT_MS). Gives back what still waits, and the lines used lately.
+  const congratulate = async (
+    previous: TopPlayerWatch | null,
+    finished: MatchState | null,
+    players: Player[],
+    hidden: ReadonlySet<string>,
+    time: number,
+    wording: Lines,
+    recent: Recent,
+  ): Promise<{ watch: TopPlayerWatch | null; recent: Recent }> => {
+    if (messagePlayer === undefined) return { watch: null, recent };
+    const { due, watch } = topPlayersDue(previous, new Set(steamIds(players)), time);
+    for (const { steamId, name, text } of due) {
+      const who = `${JSON.stringify(name)} (${steamId})`;
+      try {
+        await messagePlayer(steamId, text);
+        log.info(`Sent top player message to ${who}: ${text}`);
+      } catch (error) {
+        log.error(`Top player message to ${who} failed: ${errorText(error)}`);
+      }
+    }
+    const rule = config.topPlayerMessages;
+    if (finished === null || rule === null) return { watch, recent };
+    const top = topPlayerMessages(finished, hidden, rule, random, wording, recent);
+    return { watch: top.messages.length === 0 ? null : { at: time, waiting: top.messages }, recent: top.recent };
+  };
+
   // An outage confirmed or over goes to staff once it is saved, so a check that fails after it never tells them twice.
   const tell = async (event: OutageEvent | null): Promise<void> => {
     if (event === null || tellOutage === undefined) return;
@@ -356,6 +394,7 @@ export const createPoller = ({
         last: reading,
         outage: null,
         recent: {},
+        topPlayers: null,
       });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
@@ -405,7 +444,8 @@ export const createPoller = ({
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
-    const wording = broadcast === undefined && !welcoming ? DEFAULT_LINES : await readLines(lines, log);
+    const congratulating = finished !== null && config.topPlayerMessages !== null && messagePlayer !== undefined;
+    const wording = broadcast === undefined && !welcoming && !congratulating ? DEFAULT_LINES : await readLines(lines, log);
     const { messages, send: milestone, used: milestoneLine } =
       config.matchMessages !== null && broadcast !== undefined && status.players > 0
         ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random, wording, state.recent)
@@ -439,7 +479,8 @@ export const createPoller = ({
       }
     }
 
-    const { watch: welcomes, recent } = await welcome(state.welcomes, players, status.players, time, wording, used);
+    const { watch: welcomes, recent: welcomed } = await welcome(state.welcomes, players, status.players, time, wording, used);
+    const { watch: topPlayers, recent } = await congratulate(state.topPlayers, finished, players, hidden, time, wording, welcomed);
 
     // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
     // Discord is down, and an unsent summary is kept to retry. A newer summary replaces one still waiting; that match
@@ -456,6 +497,7 @@ export const createPoller = ({
       last: reading,
       outage,
       recent,
+      topPlayers,
     };
     try {
       const summary = tracked.unsentSummary;
@@ -501,6 +543,7 @@ export const createPoller = ({
       last: reading,
       outage,
       recent,
+      topPlayers,
     });
   };
 

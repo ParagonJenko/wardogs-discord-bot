@@ -35,6 +35,7 @@ describe('loadConfig', () => {
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
       welcomeMessages: { afterMs: 120_000, siteHost: null, discord: null },
+      topPlayerMessages: null,
       roundups: { hour: 17, webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123' },
       rotationHour: 5,
     });
@@ -134,6 +135,17 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '5' }).welcomeMessages).toEqual({ afterMs: 300_000, siteHost: null, discord: null });
     expect(loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '0' }).welcomeMessages).toBeNull();
     expect(() => loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '-1' })).toThrow(/WELCOME_MESSAGE_MINUTES/);
+  });
+
+  it('messages the top 5 players when a match ends by default, only with a website, unless set to 0', () => {
+    const site = { ...required, SITE_URL: 'https://gaminginit.com/' };
+
+    expect(loadConfig(site).topPlayerMessages).toEqual({ count: 5, siteHost: 'gaminginit.com' });
+    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '10' }).topPlayerMessages).toEqual({ count: 10, siteHost: 'gaminginit.com' });
+    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '0' }).topPlayerMessages).toBeNull();
+    expect(loadConfig(required).topPlayerMessages).toBeNull();
+    expect(() => loadConfig({ ...site, TOP_PLAYER_MESSAGES: '101' })).toThrow(/TOP_PLAYER_MESSAGES/);
+    expect(() => loadConfig({ ...site, TOP_PLAYER_MESSAGES: '-1' })).toThrow(/TOP_PLAYER_MESSAGES/);
   });
 
   it('turns on automatic VIP when VIP_SEED_DAYS is set', () => {
