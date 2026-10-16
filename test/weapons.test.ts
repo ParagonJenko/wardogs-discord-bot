@@ -80,7 +80,7 @@ describe('parseFeed', () => {
       tags: [],
     };
 
-    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({ events: [kill], kills: [kill], skipped: 0, unread: 0 });
+    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({ events: [kill], kills: [kill], skipped: 0, unread: 0, ended: false });
   });
 
   it('keeps suicides, falls and deaths with nobody to blame as deaths, not kills', () => {
@@ -124,7 +124,12 @@ describe('parseFeed', () => {
     });
 
     expect(batch?.events.map((e) => e.eventId)).toEqual(['kept']);
-    expect(batch).toMatchObject({ skipped: 4, unread: 0 });
+    expect(batch).toMatchObject({ skipped: 4, unread: 0, ended: true });
+  });
+
+  it('says a match ended only when the batch has its result', () => {
+    expect(parseFeed({ events: [event({ eventId: 'k1' }), { type: 'match_state', eventId: 's1', state: 'MatchState.Ended' }] })?.ended).toBe(false);
+    expect(parseFeed({ events: [{ type: 'match_ended', eventId: 'r1' }] })?.ended).toBe(true);
   });
 
   it('keeps a kill without a distance, as when a vehicle blows up', () => {

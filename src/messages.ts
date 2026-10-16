@@ -2,14 +2,14 @@ import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import { topPlayers, type MatchState } from './tracking.ts';
+import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
 // seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (with a line about the team
 // in front), and when the first team is close to winning. Each goes out once per match. While the server seeds, a
 // seeding message goes out every few minutes too, and 30 seconds after someone joins. And each player who joins gets
-// a welcome of their own, a private message with the basic rules, the Discord and the website. When a match ends, its
-// top players get a private message too: where they finished, and the website, to see their stats.
+// a welcome of their own, a private message with the basic rules, the Discord and the website. When a match is won, its
+// best players get a private message too (see matchend.ts).
 
 export type MessageRule = { siteHost: string; scoreToWin: number };
 
@@ -19,9 +19,6 @@ export type SeedingMessageRule = { everyMs: number; siteHost: string | null };
 // The welcome goes to each player `afterMs` after they join, with the Discord invite ("discord.gg/abc123") and the
 // website when there are.
 export type WelcomeRule = { afterMs: number; siteHost: string | null; discord: string | null };
-
-// When a match ends, the top `count` players on its scoreboard get a private message pointing at the website.
-export type TopPlayerRule = { count: number; siteHost: string };
 
 // Which match the sent messages belong to (its start time) and which were sent.
 export type MatchMessages = { match: number; sent: string[] };
@@ -34,7 +31,7 @@ const NEARLY = 0.9;
 // The game shows broadcasts in one line; keep them short.
 export const MAX_LENGTH = 200;
 
-const fit = (text: string): string => (text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text);
+export const fit = (text: string): string => (text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text);
 
 const days = (count: number): string => `${count} day${count === 1 ? '' : 's'}`;
 export const morePlayers = (count: number): string => `${count} more player${count === 1 ? '' : 's'}`;
@@ -77,7 +74,7 @@ export const remember = (recent: Recent, picked: Picked): Recent => ({
 
 // A random line from a list, with its placeholders filled in. A line used lately is passed over while the list has
 // others, so a list is gone through before any line comes round again: up to half the list, so even a short one varies.
-const pickLine = (
+export const pickLine = (
   id: string,
   list: string[],
   values: Record<string, string | number>,
@@ -320,66 +317,4 @@ export const markWelcomed = (watch: WelcomeWatch, steamIds: string[], now: numbe
     waiting: Object.fromEntries(Object.entries(watch.waiting).filter(([id]) => !sent.has(id))),
     welcomed: { ...watch.welcomed, ...Object.fromEntries(steamIds.map((id) => [id, now])) },
   };
-};
-
-// The most top players the bot messages when a match ends.
-export const MAX_TOP_PLAYERS = 100;
-
-// "1st", "2nd", "3rd", "4th", "11th", "21st".
-export const ordinal = (n: number): string => {
-  const teen = n % 100 >= 11 && n % 100 <= 13;
-  return `${n}${teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
-};
-
-export const killCount = (count: number): string => `${count} kill${count === 1 ? '' : 's'}`;
-
-export type TopPlayerMessage = { steamId: string; name: string; text: string };
-
-// The messages for the top players of a match that just ended, in the scoreboard's order (see topPlayers). A player
-// without a kill is not a top player. A private profile (`hidden`) has no player page, so gets none, but keeps its
-// place: everyone is told the place the match summary gives them. Each line is remembered as it is picked, so the top
-// players mostly get different ones.
-export const topPlayerMessages = (
-  match: MatchState,
-  hidden: ReadonlySet<string>,
-  rule: TopPlayerRule,
-  random: () => number = Math.random,
-  lines: Lines = DEFAULT_LINES,
-  recent: Recent = {},
-): { messages: TopPlayerMessage[]; recent: Recent } => {
-  let lately = recent;
-  const messages: TopPlayerMessage[] = [];
-  for (const [index, player] of topPlayers(match.players, rule.count).entries()) {
-    const { steamId } = player;
-    if (steamId === undefined || player.kills <= 0 || hidden.has(steamId)) continue;
-    const values = { place: ordinal(index + 1), kills: killCount(player.kills), site: rule.siteHost };
-    const pick = pickLine('topPlayer', lines.topPlayer, values, random, lately);
-    lately = remember(lately, pick);
-    messages.push({ steamId, name: player.name, text: fit(pick.text) });
-  }
-  return { messages, recent: lately };
-};
-
-// Players reconnect while the next map loads, so the top players' messages wait for each of them to be in game: from
-// the check after the match ended, so they have loaded in to see it, until this long after it.
-export const TOP_PLAYER_WAIT_MS = 5 * 60_000;
-
-// The messages of the match that ended at `at` that have not gone out yet.
-export type TopPlayerWatch = { at: number; waiting: TopPlayerMessage[] };
-
-export const TopPlayerWatchSchema = z.object({
-  at: z.number(),
-  waiting: z.array(z.object({ steamId: z.string(), name: z.string(), text: z.string() })),
-});
-
-// The waiting messages to send now, to players in game (`online`), and what waits on. Null once nothing does.
-export const topPlayersDue = (
-  watch: TopPlayerWatch | null,
-  online: ReadonlySet<string>,
-  now: number,
-): { due: TopPlayerMessage[]; watch: TopPlayerWatch | null } => {
-  if (watch === null || now - watch.at > TOP_PLAYER_WAIT_MS) return { due: [], watch: null };
-  const due = watch.waiting.filter((m) => online.has(m.steamId));
-  const waiting = watch.waiting.filter((m) => !online.has(m.steamId));
-  return { due, watch: waiting.length === 0 ? null : { ...watch, waiting } };
 };

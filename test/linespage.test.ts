@@ -12,7 +12,9 @@ import {
   type LinesContext,
   type SavedLines,
 } from '../src/linespage.ts';
-import { fillLine, milestones, seedingMessage, topPlayerMessages, welcomeMessage } from '../src/messages.ts';
+import type { LiveMatch } from '../src/live.ts';
+import { LONGEST_EARNED, matchEndMessages } from '../src/matchend.ts';
+import { fillLine, milestones, seedingMessage, welcomeMessage } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
@@ -25,7 +27,7 @@ const context: LinesContext = {
   match: true,
   seeding: true,
   welcome: true,
-  top: true,
+  end: true,
 };
 const who = { by: '42', byName: 'Sarge', now: 1_000 };
 
@@ -100,13 +102,13 @@ describe('editLines', () => {
     });
   });
 
-  it('checks top player lines with {place} and {kills} at the longest they can be', () => {
-    const fits = `${'x'.repeat(200 - ' 100th 999 kills gaminginit.com'.length)} {place} {kills} {site}`;
+  it('checks end-of-match lines with {earned} at the longest it can be', () => {
+    const fits = `${'x'.repeat(200 - ` ${LONGEST_EARNED} gaminginit.com`.length)} {earned} {site}`;
 
-    expect(save({}, 'topPlayer', [fits])).toHaveProperty('saved');
-    expect(save({}, 'topPlayer', [`x${fits}`])).toEqual({ problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.' });
-    expect(save({}, 'topPlayer', ['GG {team}'])).toEqual({
-      problem: "Line 1 has {team}, which the bot can't fill in. It can fill in {place}, {kills} and {site}.",
+    expect(save({}, 'matchEnd', [fits])).toHaveProperty('saved');
+    expect(save({}, 'matchEnd', [`x${fits}`])).toEqual({ problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.' });
+    expect(save({}, 'matchEnd', ['GG {place}'])).toEqual({
+      problem: "Line 1 has {place}, which the bot can't fill in. It can fill in {earned} and {site}.",
     });
   });
 
@@ -213,8 +215,8 @@ describe('buildLinesPage', () => {
     expect(buildLinesPage({}, { ...context, welcome: false }).lists.find((l) => l.id === 'welcome')?.off).toBe(
       'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
     );
-    expect(buildLinesPage({}, { ...context, top: false }).lists.find((l) => l.id === 'topPlayer')?.off).toBe(
-      "The bot is not sending top players' messages: TOP_PLAYER_MESSAGES is 0, or SITE_URL is not set.",
+    expect(buildLinesPage({}, { ...context, end: false }).lists.find((l) => l.id === 'matchEnd')?.off).toBe(
+      'The bot is not sending end-of-match messages: TOP_PLAYER_MESSAGES is 0 and AWARD_MESSAGES is off, or SITE_URL is not set.',
     );
   });
 
@@ -253,9 +255,16 @@ describe('buildLinesPage', () => {
     expect(welcomeMessage({ afterMs: 1, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' }, first)).toBe(
       shown('welcome', DEFAULT_LINES.welcome[0] ?? ''),
     );
-    const winner = { ...match([]), players: { a: { name: 'Ash', kills: 25, deaths: 0, lastKills: 25, lastDeaths: 0 } } };
-    expect(topPlayerMessages(winner, new Set(), { count: 5, siteHost: 'gaminginit.com' }, first).messages[0]?.text).toBe(
-      shown('topPlayer', DEFAULT_LINES.topPlayer[0] ?? ''),
+    const won = { ...match([]), players: { a: { name: 'Ash', kills: 25, deaths: 0, lastKills: 25, lastDeaths: 0 } } };
+    const ash = { steamId: 'a', name: 'Ash', faction: null, kills: 25, deaths: 0, headshots: 0, teamKills: 0, streak: 0, bestStreak: 0 };
+    const feed: LiveMatch = {
+      ...{ matchId: 'm', map: 'Europe', startedAt: 0, lastAt: 0, lastTime: 0, pairs: {}, firstBlood: null, feed: [] },
+      ...{ kills: 25, headshots: 0, teamKills: 0, otherDeaths: 0 },
+      players: [{ ...ash, chain: 0, chainTime: null, bestChain: 0, longest: null, longestCause: null, weapons: { 'Id.Item.RPG7': 8 } }],
+    };
+    const end = { count: 5, awards: true, siteHost: 'gaminginit.com' };
+    expect(matchEndMessages(won, feed, new Set(['a']), new Set(), end, first).messages[0]?.text).toBe(
+      shown('matchEnd', DEFAULT_LINES.matchEnd[0] ?? ''),
     );
   });
 

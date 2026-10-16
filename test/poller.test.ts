@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import { DEFAULT_LINES, type Lines } from '../src/lines.ts';
+import type { LiveMatch, LivePlayer } from '../src/live.ts';
 import type { OutageEvent } from '../src/outages.ts';
 import {
   createJoinCheck,
+  createMatchEndCheck,
   createPoller,
   memoryStore,
   parseState,
@@ -46,7 +48,7 @@ const config: Config = {
   matchMessages: null,
   seedingMessages: null,
   welcomeMessages: null,
-  topPlayerMessages: null,
+  matchEndMessages: null,
   roundups: null,
   rotationHour: 5,
 };
@@ -358,7 +360,7 @@ describe('poller', () => {
       last: null,
       outage: null,
       recent: {},
-      topPlayers: null,
+      endMessages: null,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -908,30 +910,46 @@ describe('welcomes', () => {
   });
 });
 
-describe("top players' messages", () => {
-  const top = { count: 3, siteHost: 'gaminginit.com' };
-  const [line0, line1, line2] = DEFAULT_LINES.topPlayer;
-  const fill = (line: string | undefined, place: string, kills: string) =>
-    (line ?? '').replace('{place}', place).replace('{kills}', kills).replace('{site}', 'gaminginit.com');
-  const ash = (kills: number) => player('a', kills);
-  const bo = (kills: number) => player('b', kills);
-  const cy = (kills: number) => player('c', kills);
-  const dee = (kills: number) => player('d', kills);
-  // Seeding, live, a match on Kavkazi (a 9 kills, b 4, c 2, d 1), and the map changes to Europe at minute 4.
-  const match = [
-    snapshot(crowd(5)),
-    snapshot(crowd(22, [ash(1), bo(1), cy(1), dee(1)])),
-    snapshot(crowd(22, [ash(9), bo(4), cy(2), dee(1)])),
-    snapshot(crowd(22, [ash(0), bo(0), cy(0), dee(0)]), 'Europe'),
-  ];
-  const next = (named: Player[]) => snapshot(crowd(22, named), 'Europe');
+describe('end-of-match messages', () => {
+  const rule = { count: 3, awards: true, siteHost: 'gaminginit.com' };
+  const [line0, line1, line2] = DEFAULT_LINES.matchEnd;
+  const fill = (line: string | undefined, earned: string) => (line ?? '').replace('{earned}', earned).replace('{site}', 'gaminginit.com');
+  const [a, b, c, d, f] = ['a', 'b', 'c', 'd', 'f'];
+  const kills = (counts: [string, number][]) => counts.map(([id, k]) => player(id, k));
+  const scored = (players: Player[], points: number[], map = 'Kavkazi'): Snapshot => {
+    const base = snapshot(players, map);
+    const factionScores = points.map((score, i) => ({ name: ['Valkyra', 'Lonestar'][i] ?? 'Manticore', score }));
+    return { ...base, status: { ...base.status, factionScores } };
+  };
+  // Seeding, then live with a 9 kills, b 4, c 2 and d 1 by minute 3.
+  const live = [snapshot(crowd(5)), snapshot(crowd(22, kills([[a, 1], [b, 1], [c, 1], [d, 1]])))];
+  const playing = (points: number[], extra: Player[] = []) => scored(crowd(22, [...kills([[a, 9], [b, 4], [c, 2], [d, 1]]), ...extra]), points);
+  const nextMap = (ids: string[]) => snapshot(crowd(22, ids.map((id) => player(id))), 'Europe');
+  const first = fill(line0, '1st on the scoreboard (9 kills)');
+  const second = fill(line1, '2nd on the scoreboard (4 kills)');
+  const third = fill(line2, '3rd on the scoreboard (2 kills)');
+
+  const fedPlayer = (steamId: string, weapons: Record<string, number>): LivePlayer => ({
+    ...{ steamId, name: `P${steamId}`, faction: null, kills: 0, deaths: 0, headshots: 0, teamKills: 0 },
+    ...{ streak: 0, bestStreak: 0, chain: 0, chainTime: null, bestChain: 0, longest: null, longestCause: null, weapons },
+  });
+  // The kill feed's match: f is the best machine gunner.
+  const fed: LiveMatch = {
+    ...{ matchId: 'm1', map: 'Kavkazi', startedAt: 0, lastAt: 0, lastTime: 0, pairs: {}, firstBlood: null, feed: [] },
+    ...{ kills: 7, headshots: 0, teamKills: 0, otherDeaths: 0 },
+    players: [fedPlayer(f, { 'Id.Item.M249': 7 })],
+  };
+
+  type Options = {
+    lines?: () => Promise<Lines>;
+    privateProfiles?: () => Promise<ReadonlySet<string>>;
+    liveMatch?: (match: MatchState) => Promise<LiveMatch | null>;
+    store?: StateStore;
+    from?: number;
+  };
 
   // A minute a check; records the minute, the player and the message of each one sent.
-  const topPoller = (
-    snapshots: Snapshot[],
-    overrides: Partial<Config> = {},
-    options: { lines?: () => Promise<Lines>; privateProfiles?: () => Promise<ReadonlySet<string>>; store?: StateStore; from?: number } = {},
-  ) => {
+  const endPoller = (snapshots: Snapshot[], overrides: Partial<Config> = {}, options: Options = {}) => {
     const { store = memoryStore(), from = 0, ...deps } = options;
     const queue = [...snapshots];
     let clock = from * 60_000;
@@ -941,7 +959,7 @@ describe("top players' messages", () => {
     });
     const log = { info: vi.fn(), error: vi.fn() };
     const tick = createPoller({
-      config: { ...config, topPlayerMessages: top, ...overrides },
+      config: { ...config, matchEndMessages: rule, ...overrides },
       fetchSnapshot: async () => queue.shift() ?? snapshot([]),
       send: vi.fn(async () => {}),
       now: () => (clock += 60_000),
@@ -957,100 +975,172 @@ describe("top players' messages", () => {
     return { run, sent, messagePlayer, log, store };
   };
 
-  it('tells the top players where they finished and where their stats are, privately, once they are in the next match', async () => {
-    // b is reconnecting at minute 5.
-    const { run, sent, log, store } = topPoller([...match, next([ash(0), cy(0), dee(0)]), next([ash(0), bo(0), cy(0), dee(0)])]);
+  it('tells the top players where they finished the moment a check sees a team win, once', async () => {
+    const { run, sent, log, store } = endPoller([...live, playing([100, 60]), playing([100, 60]), nextMap([a, b, c])]);
 
-    await run(4);
-    expect(sent).toEqual([]);
-    await run(2);
+    await run(5);
 
     expect(sent).toEqual([
-      [5, 'a', fill(line0, '1st', '9 kills')],
-      [5, 'c', fill(line2, '3rd', '2 kills')],
-      [6, 'b', fill(line1, '2nd', '4 kills')],
+      [3, a, first],
+      [3, b, second],
+      [3, c, third],
     ]);
-    expect(log.info).toHaveBeenCalledWith(`Sent top player message to "Pa" (a): ${fill(line0, '1st', '9 kills')}`);
-    expect((await store.load())?.topPlayers).toBeNull();
+    expect(log.info).toHaveBeenCalledWith(`Sent end-of-match message to "Pa" (a): ${first}`);
+    expect((await store.load())?.endMessages).toBe(60_000);
   });
 
-  it('gives up on a top player who is not back within 5 minutes of the match ending', async () => {
-    const { run, sent } = topPoller([...match, ...Array.from({ length: 6 }, () => next([ash(0), cy(0)])), next([bo(0)])]);
+  it('sends them at the check that sees the match end, when no check saw the win', async () => {
+    const { run, sent } = endPoller([...live, playing([99, 60]), nextMap([a, c])]);
 
-    await run(11);
+    await run(4);
 
-    expect(sent.map(([minute, steamId]) => [minute, steamId])).toEqual([
-      [5, 'a'],
-      [5, 'c'],
+    expect(sent).toEqual([
+      [4, a, first],
+      [4, c, fill(line1, '3rd on the scoreboard (2 kills)')],
     ]);
+  });
+
+  it("adds the kill feed's award winners", async () => {
+    const liveMatch = vi.fn(async () => fed);
+    const { run, sent } = endPoller([...live, playing([100, 60], [player(f)])], { matchEndMessages: { ...rule, count: 1 } }, { liveMatch });
+
+    await run(3);
+
+    expect(sent).toEqual([
+      [3, a, first],
+      [3, f, fill(line1, 'best machine gunner (7 kills)')],
+    ]);
+    expect(liveMatch).toHaveBeenCalledWith(expect.objectContaining({ startedAt: 60_000 }));
+  });
+
+  it("still tells the top players when the kill feed's match cannot be read, and logs it", async () => {
+    const liveMatch = vi.fn(async (): Promise<LiveMatch | null> => {
+      throw new Error('storage gone');
+    });
+    const { run, sent, log } = endPoller([...live, playing([100, 60])], { matchEndMessages: { ...rule, count: 1 } }, { liveMatch });
+
+    await run(3);
+
+    expect(sent).toEqual([[3, a, first]]);
+    expect(log.error).toHaveBeenCalledWith("Reading the kill feed's match failed, so its awards are left out: storage gone");
   });
 
   it('sends a private profile nothing, and the others the place the match summary gives them', async () => {
-    const { run, sent } = topPoller([...match, next([ash(0), bo(0), cy(0), dee(0)])], {}, { privateProfiles: async () => new Set(['a']) });
+    const { run, sent } = endPoller([...live, playing([100, 60])], {}, { privateProfiles: async () => new Set([a]) });
 
-    await run(5);
-
-    expect(sent).toEqual([
-      [5, 'b', fill(line0, '2nd', '4 kills')],
-      [5, 'c', fill(line1, '3rd', '2 kills')],
-    ]);
-  });
-
-  it('skips a top player made private while their message waited', async () => {
-    let hidden = new Set<string>();
-    const { run, sent } = topPoller([...match, next([ash(0), bo(0), cy(0)])], {}, { privateProfiles: async () => hidden });
-
-    await run(4);
-    hidden = new Set(['a']);
-    await run(1);
+    await run(3);
 
     expect(sent).toEqual([
-      [5, 'b', fill(line1, '2nd', '4 kills')],
-      [5, 'c', fill(line2, '3rd', '2 kills')],
+      [3, b, fill(line0, '2nd on the scoreboard (4 kills)')],
+      [3, c, fill(line1, '3rd on the scoreboard (2 kills)')],
     ]);
-  });
-
-  it('sends none that were waiting when they are turned off', async () => {
-    const store = memoryStore();
-    await topPoller(match, {}, { store }).run(4);
-    expect((await store.load())?.topPlayers?.waiting).toHaveLength(3);
-
-    const { run, messagePlayer } = topPoller([next([ash(0), bo(0), cy(0)])], { topPlayerMessages: null }, { store, from: 4 });
-    await run(1);
-
-    expect(messagePlayer).not.toHaveBeenCalled();
-    expect((await store.load())?.topPlayers).toBeNull();
   });
 
   it("says staff's lines", async () => {
-    const { run, sent } = topPoller([...match, next([ash(0)])], { topPlayerMessages: { ...top, count: 1 } }, {
-      lines: async () => ({ ...DEFAULT_LINES, topPlayer: ['{place}, {kills}! {site}'] }),
+    const { run, sent } = endPoller([...live, playing([100, 60])], { matchEndMessages: { ...rule, count: 1 } }, {
+      lines: async () => ({ ...DEFAULT_LINES, matchEnd: ['{earned}! {site}'] }),
     });
 
-    await run(5);
+    await run(3);
 
-    expect(sent).toEqual([[5, 'a', '1st, 9 kills! gaminginit.com']]);
+    expect(sent).toEqual([[3, a, '1st on the scoreboard (9 kills)! gaminginit.com']]);
   });
 
   it('logs a failed message and does not send it again', async () => {
-    const { run, messagePlayer, log } = topPoller([...match, next([ash(0)]), next([ash(0)])], { topPlayerMessages: { ...top, count: 1 } });
+    const { run, messagePlayer, log } = endPoller([...live, playing([100, 60]), playing([100, 60])], { matchEndMessages: { ...rule, count: 1 } });
     messagePlayer.mockRejectedValue(new Error('RCON request failed: POST /v1/players/a/message 404 (player_not_found)'));
 
-    await run(6);
+    await run(4);
 
     expect(messagePlayer).toHaveBeenCalledTimes(1);
     expect(log.error).toHaveBeenCalledWith(
-      'Top player message to "Pa" (a) failed: RCON request failed: POST /v1/players/a/message 404 (player_not_found)',
+      'End-of-match message to "Pa" (a) failed: RCON request failed: POST /v1/players/a/message 404 (player_not_found)',
     );
   });
 
-  it('sends none, and keeps none waiting, when they are off', async () => {
-    const { run, messagePlayer, store } = topPoller([...match, next([ash(0), bo(0), cy(0)])], { topPlayerMessages: null });
+  it('sends none when they are off, or for a match that was already live when the bot started', async () => {
+    const off = endPoller([...live, playing([100, 60]), nextMap([a, b, c])], { matchEndMessages: null });
+    await off.run(4);
+    expect(off.messagePlayer).not.toHaveBeenCalled();
+    expect((await off.store.load())?.endMessages).toBeNull();
 
-    await run(5);
+    const late = endPoller([playing([90, 60]), playing([100, 60]), nextMap([a, b, c])]);
+    await late.run(3);
+    expect(late.messagePlayer).not.toHaveBeenCalled();
+  });
 
-    expect(messagePlayer).not.toHaveBeenCalled();
-    expect((await store.load())?.topPlayers).toBeNull();
+  describe('when the kill feed says the match ended', () => {
+    // The kill feed's word comes at 2 minutes 30 seconds, between the checks.
+    const endCheck = (store: StateStore, reading: Snapshot | Error, deps: Options = {}) => {
+      const sent: [steamId: string, text: string][] = [];
+      const messagePlayer = vi.fn(async (steamId: string, message: string) => {
+        sent.push([steamId, message]);
+      });
+      const log = { info: vi.fn(), error: vi.fn() };
+      const check = createMatchEndCheck({
+        config: { ...config, matchEndMessages: rule },
+        fetchSnapshot: async () => {
+          if (reading instanceof Error) throw reading;
+          return reading;
+        },
+        messagePlayer,
+        now: () => 150_000,
+        log,
+        store,
+        random: () => 0,
+        ...deps,
+      });
+      return { check, sent, log };
+    };
+
+    it('sends them at once when a team has won, or is a point short, and the next check sends none', async () => {
+      const store = memoryStore();
+      await endPoller(live, {}, { store }).run(2);
+      const { check, sent } = endCheck(store, playing([99, 60]));
+
+      await check();
+
+      expect(sent).toEqual([
+        [a, first],
+        [b, second],
+        [c, third],
+      ]);
+      const later = endPoller([playing([100, 60]), nextMap([a, b, c])], {}, { store, from: 2 });
+      await later.run(2);
+      expect(later.sent).toEqual([]);
+    });
+
+    it("adds the kill feed's award winners", async () => {
+      const store = memoryStore();
+      await endPoller(live, {}, { store }).run(2);
+      const { check, sent } = endCheck(store, playing([100, 60], [player(f)]), { liveMatch: async () => fed });
+
+      await check();
+
+      expect(sent.map(([steamId]) => steamId)).toEqual([a, b, c, f]);
+    });
+
+    it('sends none without a winner, as for word of a match long over, or after a check sent them', async () => {
+      const store = memoryStore();
+      await endPoller(live, {}, { store }).run(2);
+      const early = endCheck(store, playing([60, 40]));
+      await early.check();
+      expect(early.sent).toEqual([]);
+
+      await endPoller([playing([100, 60])], {}, { store, from: 2 }).run(1);
+      const again = endCheck(store, playing([100, 60]));
+      await again.check();
+      expect(again.sent).toEqual([]);
+    });
+
+    it('logs a failed read and never throws', async () => {
+      const store = memoryStore();
+      await endPoller(live, {}, { store }).run(2);
+      const { check, log } = endCheck(store, new Error('fetch failed'));
+
+      await expect(check()).resolves.toBeUndefined();
+      expect(log.error).toHaveBeenCalledWith('Match end check failed: fetch failed');
+    });
   });
 });
 
@@ -1152,7 +1242,7 @@ describe('parseState', () => {
       last: null,
       outage: null,
       recent: {},
-      topPlayers: null,
+      endMessages: null,
     });
   });
 
@@ -1171,7 +1261,7 @@ describe('parseState', () => {
       last: null,
       outage: null,
       recent: {},
-      topPlayers: null,
+      endMessages: null,
     });
   });
 

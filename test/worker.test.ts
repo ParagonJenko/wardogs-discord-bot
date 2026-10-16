@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestHarness, type TestHarness } from 'wrangler';
 import { createSession } from '../src/adminauth.ts';
 import { SEASON } from '../src/season.ts';
@@ -310,6 +310,16 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     it("answers a batch of Season 2's other events, with no deaths in it", async () => {
       const batch = { events: [{ type: 'player_joined', eventId: 'j1', playerSteamId: ASH, players: 1 }, { type: 'match_state', eventId: 's1', state: 'MatchState.Playing' }] };
       expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 2 } });
+    });
+
+    it('reads the server at once when the feed says a match ended, for the end-of-match messages', async () => {
+      rcon.requests.length = 0;
+      server.clearLogs();
+      const batch = { events: [{ type: 'match_ended', eventId: 'r1', eventTime: 4, players: 22, winningFaction: 'Valkyra', factionScores: [] }] };
+
+      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 1 } });
+      await vi.waitFor(() => expect(rcon.requests).toEqual(expect.arrayContaining(['GET /v1/status', 'GET /v1/players'])));
+      expect(errors()).toEqual([]);
     });
 
     it('takes it after whatever path the game was given', async () => {

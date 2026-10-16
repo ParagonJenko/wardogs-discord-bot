@@ -50,7 +50,7 @@ const config: Config = {
   matchMessages: null,
   seedingMessages: null,
   welcomeMessages: null,
-  topPlayerMessages: null,
+  matchEndMessages: null,
   roundups: null,
   rotationHour: 5,
 };
