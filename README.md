@@ -516,8 +516,9 @@ when the rotation changes, and goes to the next slot in the new list, whatever m
 rotation with its first map in that slot and the rest after it in order. That is also how each day's rotation starts
 from the top, even when it is the same as the day before. If the map being played is the rotation's first map, it plays
 twice in a row. The list in `ServerSettings.ini` can start part-way round, so a server restart starts from where the
-list starts; the next day's rotation then starts from the first map again. The Rotations tab and `/rotations save` show
-and save the server's list in the saved rotation's order.
+list starts; the next day's rotation then starts from the first map again. If the server doesn't say which slot it is
+on, the bot writes the rotation as it is, in place of the server's, so the next map is whichever is in the slot after
+the server's. The Rotations tab and `/rotations save` show and save the server's list in the saved rotation's order.
 
 | Command                 | What                                                                                     |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
@@ -550,8 +551,8 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
   has no maps left: the bot never leaves the server without a rotation.
 - In `add`, anything left out is the map's own: its first game mode, infantry only and hardcore off, and the map's own
   lighting and zones. A map can be in a rotation more than once, such as Bakurani by day and at dusk.
-- If the server can't take the rotation (it is not answering, doesn't say where it is in its rotation, or the settings
-  file is read-only), the reply says why, and the bot tries again at every check until the server has it.
+- If the server can't take the rotation (it is not answering, or the settings file is read-only), the reply says why,
+  and the bot tries again at every check until the server has it.
 - Changes made by hand on the server stay until the bot next puts a rotation on: the start of the next day, or a staff
   change. `/rotation` (for everyone) shows what the server is playing either way.
 

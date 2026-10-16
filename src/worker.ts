@@ -1161,7 +1161,7 @@ export class Watcher extends DurableObject<Env> {
     try {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
-      const changed = await putRotation(
+      const put = await putRotation(
         {
           ...this.settingsFile({ config, http }),
           slot: async () =>
@@ -1170,14 +1170,19 @@ export class Watcher extends DurableObject<Env> {
         rotation.entries,
       );
       // The live status reads the new rotation at the next check.
-      if (changed) await this.ctx.storage.delete('boardRotation');
+      if (put.written) await this.ctx.storage.delete('boardRotation');
       await this.ctx.storage.put('rotations', done);
+      const next = !put.written
+        ? ''
+        : put.next === null
+          ? ", as it is, as the server didn't say which slot it is on"
+          : `, starting with ${put.next.map} at the next map change`;
       console.info(
-        changed
-          ? `Map rotation: put ${JSON.stringify(rotation.name)} (${rotation.entries.length} maps) on the server for ${applied.day}, chosen by ${who}, starting with ${rotation.entries[0]?.map} at the next map change`
+        put.written
+          ? `Map rotation: put ${JSON.stringify(rotation.name)} (${rotation.entries.length} maps) on the server for ${applied.day}, chosen by ${who}${next}`
           : `Map rotation: the server already has ${JSON.stringify(rotation.name)}`,
       );
-      return { book: done, server: { outcome: changed ? 'updated' : 'unchanged' } };
+      return { book: done, server: { outcome: put.written ? 'updated' : 'unchanged' } };
     } catch (error) {
       console.error(`Map rotation: couldn't put ${JSON.stringify(rotation.name)} on the server, trying again next check: ${errorText(error)}`);
       return { book, server: { outcome: 'failed', reason: errorText(error) } };
