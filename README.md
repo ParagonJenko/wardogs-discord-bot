@@ -1365,8 +1365,8 @@ When a match ends, the top 5 players on its scoreboard (`TOP_PLAYER_MESSAGES`) e
 - **After the map change:** players reconnect while the next map loads, so the bot holds each message until the check
   after the match ended, and then sends it the first time that player is in game. One who isn't back within 5 minutes of
   the match ending doesn't get it.
-- **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none. They keep their place,
-  so the others are told the place the match summary gives them.
+- **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none, even one made private
+  while their message waits. They keep their place, so the others are told the place the match summary gives them.
 - Only for a match the bot saw go live, like the match summary.
 - The line is picked at random from the top player lines, passing over the ones used lately so players mostly get
   different ones; staff change them on the [Lines tab](#lines-tab) (Top players). `{place}` ("2nd"), `{kills}`

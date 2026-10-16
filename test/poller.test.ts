@@ -3,7 +3,15 @@ import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import { DEFAULT_LINES, type Lines } from '../src/lines.ts';
 import type { OutageEvent } from '../src/outages.ts';
-import { createJoinCheck, createPoller, memoryStore, parseState, type BotState, type StatsSink } from '../src/poller.ts';
+import {
+  createJoinCheck,
+  createPoller,
+  memoryStore,
+  parseState,
+  type BotState,
+  type StateStore,
+  type StatsSink,
+} from '../src/poller.ts';
 import type { SeedCredit } from '../src/players.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
 import type { Observation } from '../src/stats.ts';
@@ -922,16 +930,16 @@ describe("top players' messages", () => {
   const topPoller = (
     snapshots: Snapshot[],
     overrides: Partial<Config> = {},
-    options: { lines?: () => Promise<Lines>; privateProfiles?: () => Promise<ReadonlySet<string>> } = {},
+    options: { lines?: () => Promise<Lines>; privateProfiles?: () => Promise<ReadonlySet<string>>; store?: StateStore; from?: number } = {},
   ) => {
+    const { store = memoryStore(), from = 0, ...deps } = options;
     const queue = [...snapshots];
-    let clock = 0;
+    let clock = from * 60_000;
     const sent: [minute: number, steamId: string, text: string][] = [];
     const messagePlayer = vi.fn(async (steamId: string, message: string) => {
       sent.push([clock / 60_000, steamId, message]);
     });
     const log = { info: vi.fn(), error: vi.fn() };
-    const store = memoryStore();
     const tick = createPoller({
       config: { ...config, topPlayerMessages: top, ...overrides },
       fetchSnapshot: async () => queue.shift() ?? snapshot([]),
@@ -941,7 +949,7 @@ describe("top players' messages", () => {
       store,
       messagePlayer,
       random: () => 0,
-      ...options,
+      ...deps,
     });
     const run = async (times: number) => {
       for (let i = 0; i < times; i++) await tick();
@@ -986,6 +994,32 @@ describe("top players' messages", () => {
       [5, 'b', fill(line0, '2nd', '4 kills')],
       [5, 'c', fill(line1, '3rd', '2 kills')],
     ]);
+  });
+
+  it('skips a top player made private while their message waited', async () => {
+    let hidden = new Set<string>();
+    const { run, sent } = topPoller([...match, next([ash(0), bo(0), cy(0)])], {}, { privateProfiles: async () => hidden });
+
+    await run(4);
+    hidden = new Set(['a']);
+    await run(1);
+
+    expect(sent).toEqual([
+      [5, 'b', fill(line1, '2nd', '4 kills')],
+      [5, 'c', fill(line2, '3rd', '2 kills')],
+    ]);
+  });
+
+  it('sends none that were waiting when they are turned off', async () => {
+    const store = memoryStore();
+    await topPoller(match, {}, { store }).run(4);
+    expect((await store.load())?.topPlayers?.waiting).toHaveLength(3);
+
+    const { run, messagePlayer } = topPoller([next([ash(0), bo(0), cy(0)])], { topPlayerMessages: null }, { store, from: 4 });
+    await run(1);
+
+    expect(messagePlayer).not.toHaveBeenCalled();
+    expect((await store.load())?.topPlayers).toBeNull();
   });
 
   it("says staff's lines", async () => {

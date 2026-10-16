@@ -103,7 +103,8 @@ type PollerDeps = {
   // Staff's Steam IDs: they are never named as top seeders (see staffprofiles.ts). Only asked when the server goes live.
   staff?: () => Promise<ReadonlySet<string>>;
   // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
-  // players: the live alert's top seeders and the match summary.
+  // players: the live alert's top seeders and the match summary; and while top players' messages wait, as private
+  // profiles get none.
   privateProfiles?: () => Promise<ReadonlySet<string>>;
   // An outage confirmed or over, for the moderation log. Told once: one that fails is logged, not retried.
   outage?: (event: OutageEvent) => Promise<void>;
@@ -309,7 +310,8 @@ export const createPoller = ({
 
   // The top players' messages from the last match that are due, privately to each player now in game. One that fails
   // is not tried again. When a match just ended, its top players' messages wait for the next check (see
-  // TOP_PLAYER_WAIT_MS). Gives back what still waits, and the lines used lately.
+  // TOP_PLAYER_WAIT_MS). While they are off, none go out and none wait, even ones saved before they were turned off.
+  // Gives back what still waits, and the lines used lately.
   const congratulate = async (
     previous: TopPlayerWatch | null,
     finished: MatchState | null,
@@ -319,9 +321,11 @@ export const createPoller = ({
     wording: Lines,
     recent: Recent,
   ): Promise<{ watch: TopPlayerWatch | null; recent: Recent }> => {
-    if (messagePlayer === undefined) return { watch: null, recent };
+    const rule = config.topPlayerMessages;
+    if (rule === null || messagePlayer === undefined) return { watch: null, recent };
     const { due, watch } = topPlayersDue(previous, new Set(steamIds(players)), time);
-    for (const { steamId, name, text } of due) {
+    // A player made private since the match ended has no player page any more.
+    for (const { steamId, name, text } of due.filter((m) => !hidden.has(m.steamId))) {
       const who = `${JSON.stringify(name)} (${steamId})`;
       try {
         await messagePlayer(steamId, text);
@@ -330,8 +334,7 @@ export const createPoller = ({
         log.error(`Top player message to ${who} failed: ${errorText(error)}`);
       }
     }
-    const rule = config.topPlayerMessages;
-    if (finished === null || rule === null) return { watch, recent };
+    if (finished === null) return { watch, recent };
     const top = topPlayerMessages(finished, hidden, rule, random, wording, recent);
     return { watch: top.messages.length === 0 ? null : { at: time, waiting: top.messages }, recent: top.recent };
   };
@@ -430,7 +433,8 @@ export const createPoller = ({
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
     // Not caught, like the seed below: nothing has been saved yet, so the next check tries again.
     const staffIds = wentLive && staff !== undefined ? await staff() : new Set<string>();
-    const naming = wentLive || finished !== null || state.unsentSummary !== null;
+    // A top player's message may be waiting for them, so a player made private since their match ended is skipped too.
+    const naming = wentLive || finished !== null || state.unsentSummary !== null || state.topPlayers !== null;
     const hidden = naming && privateProfiles !== undefined ? await privateProfiles() : new Set<string>();
     const seeders = wentLive
       ? topSeeders(publicNamesBySteamId(state.seeding, hidden), TOP_SEEDERS, staffIds).map((s) => ({
