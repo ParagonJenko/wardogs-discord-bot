@@ -13,10 +13,11 @@ export const isModifier = (id: string): boolean => MODIFIERS.some((m) => m.patte
 
 // Experiences a game update retired, by lower-case id, with what took their place. Season 2 (15 October 2026) made
 // Bakurani's King of the Hill Bakurani_KOTH_02, and the host said to replace Bakurani_KOTH_01 in rotations with it.
-const RETIRED: Record<string, string> = { bakurani_koth_01: 'Bakurani_KOTH_02' };
+// A Map, so an id such as "constructor" finds nothing rather than what every object has.
+const RETIRED = new Map([['bakurani_koth_01', 'Bakurani_KOTH_02']]);
 
 // The experience as the game has it now: a retired one's replacement, or the same.
-export const currentExperience = (id: string): string => RETIRED[id.toLowerCase()] ?? id;
+export const currentExperience = (id: string): string => RETIRED.get(id.toLowerCase()) ?? id;
 
 // What the server's catalogue knows, for checking what staff typed and for names. Null when it could not be read,
 // and then what staff typed is sent as it is.

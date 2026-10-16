@@ -104,6 +104,8 @@ describe('currentExperience', () => {
     expect(currentExperience('bakurani_koth_01')).toBe('Bakurani_KOTH_02');
     expect(currentExperience('Bakurani_KOTH_02')).toBe('Bakurani_KOTH_02');
     expect(currentExperience('Madrid_KOTH_01')).toBe('Madrid_KOTH_01');
+    expect(currentExperience('constructor')).toBe('constructor');
+    expect(currentExperience('__proto__')).toBe('__proto__');
   });
 
   it('plays a map the rotation still has with a retired mode with its replacement', () => {
