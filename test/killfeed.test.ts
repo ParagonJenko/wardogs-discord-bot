@@ -435,10 +435,10 @@ describe('headshotRows', () => {
       kept.filter((d) => d.day === '2026-10-04' || d.steamId === ASH),
       kept,
     );
-    expect(rows[0]).toMatchObject({ steamId: ASH, name: 'Ash', kills: 35, headshots: 26, days: 2, flaggedDays: 2, weapon: 'AK74' });
+    expect(rows[0]).toMatchObject({ steamId: ASH, name: 'Ash', kills: 35, headshots: 26, days: 2, flaggedDays: 2, lastFlaggedDay: '2026-10-04', weapon: 'AK74' });
     expect(rows[0]?.chance).toBeLessThan(1e-6);
     expect(rows[0]?.expected).toBeGreaterThan(8);
-    expect(rows[1]).toMatchObject({ steamId: BO, flaggedDays: 0 });
+    expect(rows[1]).toMatchObject({ steamId: BO, flaggedDays: 0, lastFlaggedDay: null });
     expect(rows.some((r) => r.steamId === CY)).toBe(false);
     expect(rows).toHaveLength(42);
   });

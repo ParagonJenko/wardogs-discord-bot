@@ -292,6 +292,15 @@ describe('griefing records', () => {
     expect(rows[0]?.mostKilledTeammate).toEqual({ steamId: BO, name: 'Bo', kills: 4 });
     expect(rows.find((r) => r.steamId === BO)?.teamKilled).toBe(7);
     expect(rows.find((r) => r.steamId === DEE)?.suicides).toBe(1);
+    // Without the days' names, nobody has a latest flagged day; with them, each has the latest of theirs.
+    expect(rows.map((r) => r.lastFlaggedDay)).toEqual([null, null, null, null]);
+    const named = griefRows(days, ['2026-10-01', '2026-10-02', '2026-10-03']);
+    expect(named.map((r) => [r.name, r.lastFlaggedDay])).toEqual([
+      ['Cy', '2026-10-02'],
+      ['Ash', '2026-10-01'],
+      ['Dee', null],
+      ['Bo', null],
+    ]);
   });
 
   it("gives one player's day for /player: counts, flags, teammates killed and the incidents by them or on them", () => {

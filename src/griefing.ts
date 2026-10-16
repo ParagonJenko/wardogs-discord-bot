@@ -279,23 +279,24 @@ export const dayFlags = (t: GriefTotals): Flag[] => [
 ];
 
 // A player over the days the staff page shows: their totals, the teammate they killed most, and the flags their days
-// earned, with how many days earned any.
+// earned, with how many days earned any and the latest that did ('2026-10-16'), or null.
 export type GriefRow = Omit<GriefTotals, 'victims'> & {
   steamId: string;
   mostKilledTeammate: { steamId: string; name: string; kills: number } | null;
   flags: Flag[];
   flaggedDays: number;
+  lastFlaggedDay: string | null;
 };
 
 const FLAG_ORDER: Flag[] = ['teamKills', 'sameTeammate', 'vehicleSuicides', 'suicides'];
 
 // Everyone in the days who team killed, was team killed or killed themselves. Most flagged days first, then most team
-// kills, vehicle suicides and suicides.
-export const griefRows = (days: GriefDay[]): GriefRow[] => {
-  const rows = new Map<string, GriefTotals & { flags: Set<Flag>; flaggedDays: number }>();
-  for (const day of days) {
+// kills, vehicle suicides and suicides. `dayNames` are the days' UTC days, in the same order, for the latest flagged.
+export const griefRows = (days: GriefDay[], dayNames: string[] = []): GriefRow[] => {
+  const rows = new Map<string, GriefTotals & { flags: Set<Flag>; flaggedDays: number; lastFlaggedDay: string | null }>();
+  for (const [i, day] of days.entries()) {
     for (const [steamId, t] of Object.entries(day.players)) {
-      const row = rows.get(steamId) ?? { ...blank(t.name), flags: new Set<Flag>(), flaggedDays: 0 };
+      const row = rows.get(steamId) ?? { ...blank(t.name), flags: new Set<Flag>(), flaggedDays: 0, lastFlaggedDay: null };
       row.name = t.name || row.name;
       row.teamKills += t.teamKills;
       row.vehicleTeamKills += t.vehicleTeamKills;
@@ -306,7 +307,11 @@ export const griefRows = (days: GriefDay[]): GriefRow[] => {
       for (const [victim, n] of Object.entries(t.victims)) row.victims[victim] = (row.victims[victim] ?? 0) + n;
       const flags = dayFlags(t);
       for (const flag of flags) row.flags.add(flag);
-      if (flags.length > 0) row.flaggedDays += 1;
+      if (flags.length > 0) {
+        row.flaggedDays += 1;
+        const name = dayNames[i] ?? null;
+        if (name !== null && (row.lastFlaggedDay === null || name > row.lastFlaggedDay)) row.lastFlaggedDay = name;
+      }
       rows.set(steamId, row);
     }
   }

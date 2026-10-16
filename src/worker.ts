@@ -11,11 +11,13 @@ import {
   adminStaffIds,
   adminSteamIds,
   buildAdminOverview,
+  buildAdminPlayerRecord,
   riskySteamIds,
   staffFor,
   STEAM_ACCOUNTS_LISTED,
   steamPlayers,
   type AdminOverview,
+  type AdminPlayerRecord,
   type AdminSteamSources,
 } from './admin.ts';
 import {
@@ -250,6 +252,7 @@ import {
   type PrivateProfiles,
 } from './privacy.ts';
 import { applyCheck, CHECKED_KEY, checkedToday, readCheckAction, type CheckAction, type Check } from './checked.ts';
+import { applyDealt, DEALT_KEY, dealtLately, readDealtAction, type Dealt, type DealtAction } from './dealt.ts';
 import {
   linkSteam,
   parseStaffProfiles,
@@ -262,6 +265,7 @@ import {
 } from './staffprofiles.ts';
 import {
   banKickReason,
+  lookUpPlayer,
   PROFILE_DAYS,
   rulesNote,
   type BanRequest,
@@ -494,7 +498,8 @@ const oneAtATime = () => {
 // 'weaponRules' (the weapons staff don't allow, and what the bot does about them; see weaponrules.ts), 'ruleBreaks'
 // (today's kills with them), 'killFeed' (the server's latest kills, for the staff page), 'joinLog' (who joined and left
 // the server, for the staff page; see joinlog.ts), 'headshotsAlerted' (who had a headshot alert today), 'checked' (the players staff
-// checked today and found nothing to act on; see checked.ts), and for the alert review (see review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's
+// checked today and found nothing to act on; see checked.ts), 'dealt' (the players staff dealt with on the Queue in the
+// last 30 days; see dealt.ts), and for the alert review (see review.ts), 'alertLog' (the alerts posted each day) and 'outageLog' (the outages). Each player's
 // kills by day, for the staff page and the roundups' awards, are in the SQLite database's kill_days table (see
 // killfeed.ts), and each player's times on the server, for their history, in its sessions table.
 export class Watcher extends DurableObject<Env> {
@@ -2300,6 +2305,7 @@ export class Watcher extends DurableObject<Env> {
         STAFF_NAMES_KEY,
         STAFF_PROFILES_KEY,
         CHECKED_KEY,
+        DEALT_KEY,
       ]),
       this.recentDays(now),
       this.ctx.storage.list({ prefix: 'mod:' }),
@@ -2373,6 +2379,7 @@ export class Watcher extends DurableObject<Env> {
       headshots: this.headshotsToday(now, online?.players.map((p) => p.steamId) ?? []),
       joins,
       checked: checkedToday(stored.get(CHECKED_KEY), now),
+      dealt: dealtLately(stored.get(DEALT_KEY), now),
     });
     const staffIds = adminStaffIds(overview);
     const found = await this.lookUpStaff(staffIds, staffNames, now);
@@ -2451,6 +2458,14 @@ export class Watcher extends DurableObject<Env> {
     const next = applyCheck(await this.ctx.storage.get(CHECKED_KEY), action, user, now);
     await this.ctx.storage.put(CHECKED_KEY, next);
     return { checked: next.players[action.steamId] ?? null };
+  }
+
+  // "Dealt with" on a player on the Queue, or undoing it, for the next 30 days (see dealt.ts). What is kept now, or null
+  // after undoing it.
+  async dealWith(action: DealtAction, user: { id: string; name: string }): Promise<{ dealt: Dealt | null }> {
+    const next = applyDealt(await this.ctx.storage.get(DEALT_KEY), action, user, Date.now());
+    await this.ctx.storage.put(DEALT_KEY, next);
+    return { dealt: next[action.steamId] ?? null };
   }
 
   // A staff member's name, as seen when they sign in to the staff page or use a staff command. Only written when it
@@ -2808,7 +2823,11 @@ const staffCallback = async (request: Request, vars: Record<string, string>, wat
 const commandTools = (
   vars: Record<string, string>,
   watcher: () => DurableObjectStub<Watcher>,
-): { run: (request: CommandRequest) => Promise<CommandReply>; suggest: (request: CommandRequest) => Promise<Choice[]> } => {
+): {
+  run: (request: CommandRequest) => Promise<CommandReply>;
+  suggest: (request: CommandRequest) => Promise<Choice[]>;
+  record: (steamId: string) => Promise<AdminPlayerRecord>;
+} => {
   const records: StaffRecords = {
     player: (steamId) => watcher().playerRecord(steamId),
     knownPlayers: () => watcher().knownPlayers(),
@@ -2845,6 +2864,9 @@ const commandTools = (
       http: socketHttp(connect, SUGGEST_TIMEOUT_MS),
       records,
     }),
+    // The staff page's player record: what /player shows.
+    record: async (steamId) =>
+      buildAdminPlayerRecord(await lookUpPlayer({ config: () => loadConfig(vars), http: socketHttp(connect), records, now: Date.now })(steamId)),
   };
 };
 
@@ -3024,6 +3046,31 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
       return Response.json(result, { headers });
     } catch (error) {
       console.error(`Staff page check failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
+    }
+  }
+  // A player's record, as /player gives it, as facts for the page to lay out.
+  if (route === 'GET /api/admin/player') {
+    const player = url.searchParams.get('player') ?? '';
+    if (!/^\d{17}$/.test(player)) return Response.json({ error: 'Not a Steam ID' }, { status: 400, headers });
+    try {
+      return Response.json(await commandTools(vars, watcher).record(player), { headers });
+    } catch (error) {
+      console.error(`Staff page player record failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't load their record just now." }, { status: 503, headers });
+    }
+  }
+  // "Dealt with" on a player on the Queue, or undoing it.
+  if (route === 'POST /api/admin/dealt') {
+    const action = await readDealtAction(request);
+    if (action === null) return Response.json({ error: 'Not a dealt-with request' }, { status: 400, headers });
+    try {
+      const result = await watcher().dealWith(action, { id: session.userId, name: session.name });
+      const what = action.action === 'deal' ? `dealt with ${action.steamId} (${action.reasons.join(', ') || 'no flags'})` : `undid dealing with ${action.steamId}`;
+      console.info(`Staff page: ${JSON.stringify(session.name)} (Discord user ${session.userId}) ${what}`);
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff page dealt-with failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
     }
   }

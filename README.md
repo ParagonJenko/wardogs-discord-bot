@@ -735,6 +735,11 @@ Admin tools: the page runs the staff commands through the bot, as the signed-in 
 
 - `GET /api/admin/commands` gives the page the staff commands as Discord has them, and it builds its forms from them, so
   they always match. `POST /api/admin/suggest` fills the pick-lists (players, teams, maps, modes, bans, the whitelist, recent matches) from the same suggestions Discord shows, and `POST /api/admin/command` runs one.
+- `GET /api/admin/player?player=<Steam ID>` gives a player's record, what `/player` says, as facts for the page to lay
+  out rather than a Discord message: in game now, their time and matches over 90 days, today's team kills, what Steam
+  says (`facts`, in words), VIP and their ban (the server's lists are the truth when they can be read, as in `/player`),
+  and what staff did through the bot, newest first. It reads the server's players, ban list and `ServerSettings.ini`
+  (three RCON requests).
 - A command is checked the way Discord checks one (its options only, required ones given, lengths, ranges and choices),
   then run by the same code as the slash command, so it does exactly the same: the same replies, the staff history,
   the [moderation log](#moderation-log) and the Worker logs, with the staff member's Discord user ID and name. Each is
@@ -803,6 +808,24 @@ and when:
   "teamKills": 4, "vehicleSuicides": 0}`, or `{"action": "uncheck", "steamId": "…"}`), and the overview gives each
   player in game `checked` (who, when, and what they were flagged for), or `null`. Each is logged
   (`Staff page: "<name>" (Discord user <ID>) checked <Steam ID> (griefing, steam)`).
+
+### Dealt with
+
+The staff page's Queue lists everyone the bot flagged in the period (headshots, a risky Steam account, possible
+griefing), in game or not. A staff member who has looked at a player, and acted or found nothing to act on, clicks
+**Dealt with**, and the Queue leaves them off for all staff, saying who dealt with them and when:
+
+- It lasts 30 days, the page's longest period, and works for players who have left. Only the last 30 days are kept,
+  the newest 300 (`dealt`).
+- Each keeps what the Queue showed then: the reasons, the latest day flagged for headshots and for griefing, and the
+  Steam account's risk score. The page puts them back when the bot flags a later day, a new reason comes up, or the
+  account gets riskier, saying they were dealt with before. So the headshots list and the griefers give each player
+  their latest flagged day (`lastFlaggedDay`, or null).
+- Anyone can undo it.
+- The page sends `POST /api/admin/dealt` (`{"action": "deal", "steamId": "…", "reasons": ["headshots"],
+  "headshotDay": "2026-10-15", "griefDay": null, "steamScore": null}`, or `{"action": "undo", "steamId": "…"}`), and
+  the overview gives `dealt` (by Steam ID: who, when, and what the Queue showed then). Each is logged
+  (`Staff page: "<name>" (Discord user <ID>) dealt with <Steam ID> (headshots)`).
 
 ### Staff Steam accounts
 

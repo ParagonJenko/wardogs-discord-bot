@@ -452,9 +452,11 @@ export type HeadshotRow = {
   // See HeadshotOdds; null while the server has too few kills to judge by.
   expected: number | null;
   chance: number | null;
-  // Their days in the period with kills, and how many were flagged (HEADSHOT_FLAG).
+  // Their days in the period with kills, how many were flagged (HEADSHOT_FLAG), and the latest that was ('2026-10-16'),
+  // or null.
   days: number;
   flaggedDays: number;
+  lastFlaggedDay: string | null;
   // Their weapon with the most kills.
   weapon: string | null;
 };
@@ -478,6 +480,7 @@ export const headshotRows = (period: KillDaySummary[], kept: KillDaySummary[]): 
       const named = new Map<string, number>();
       for (const [cause, w] of Object.entries(weapons)) named.set(weaponName(cause), (named.get(weaponName(cause)) ?? 0) + w.kills);
       const top = [...named].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))[0];
+      const flagged = days.filter((d) => flaggedDay(d.kills, headshotOdds(d.weapons, server, mine))).map((d) => d.day);
       return [
         {
           steamId,
@@ -487,7 +490,8 @@ export const headshotRows = (period: KillDaySummary[], kept: KillDaySummary[]): 
           expected: odds === null ? null : round1(odds.expected),
           chance: odds?.chance ?? null,
           days: days.length,
-          flaggedDays: days.filter((d) => flaggedDay(d.kills, headshotOdds(d.weapons, server, mine))).length,
+          flaggedDays: flagged.length,
+          lastFlaggedDay: flagged.sort().at(-1) ?? null,
           weapon: top?.[0] ?? null,
         },
       ];
