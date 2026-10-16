@@ -7,10 +7,13 @@ import {
   fillLine,
   HALFWAY_START,
   halfwayCall,
+  killCount,
   MAX_LENGTH,
+  MAX_TOP_PLAYERS,
   morePlayers,
   nearlyCall,
   nearlyScore,
+  ordinal,
   seedingReward,
   welcomeLinks,
 } from './messages.ts';
@@ -34,14 +37,20 @@ export type LinesContext = {
   vip: VipRule | null;
   scoreToWin: number;
   live: number;
-  // Whether the bot sends the match messages, the seeding messages and the welcomes.
+  // Whether the bot sends the match messages, the seeding messages, the welcomes and the top players' messages.
   match: boolean;
   seeding: boolean;
   welcome: boolean;
+  top: boolean;
 };
 
 export const linesContext = (config: Config): LinesContext => ({
-  siteHost: config.seedingMessages?.siteHost ?? config.matchMessages?.siteHost ?? config.welcomeMessages?.siteHost ?? null,
+  siteHost:
+    config.seedingMessages?.siteHost ??
+    config.matchMessages?.siteHost ??
+    config.welcomeMessages?.siteHost ??
+    config.topPlayerMessages?.siteHost ??
+    null,
   discord: config.inviteCode ? discordLink(config.inviteCode) : null,
   vip: config.vip,
   scoreToWin: config.scoreToWin,
@@ -49,6 +58,7 @@ export const linesContext = (config: Config): LinesContext => ({
   match: config.matchMessages !== null,
   seeding: config.seedingMessages !== null,
   welcome: config.welcomeMessages !== null,
+  top: config.topPlayerMessages !== null,
 });
 
 // A list's placeholders, each with the value the preview shows (`values`) and the longest it can be when the message
@@ -62,7 +72,7 @@ type ListDefinition = {
   name: string;
   // When it goes out, and what the bot adds to it.
   note: string;
-  kind: 'seeding' | 'match' | 'welcome';
+  kind: 'seeding' | 'match' | 'welcome' | 'top';
   get: (lines: Lines) => string[];
   set: (lines: Lines, list: string[]) => Lines;
   frame: (context: LinesContext) => Frame;
@@ -205,6 +215,22 @@ export const LISTS: ListDefinition[] = [
       after: nearlyAfter(context),
     }),
   },
+  {
+    id: 'topPlayer',
+    group: 'Top players',
+    name: 'Top players',
+    note: 'A private message to each of the top players on the scoreboard (TOP_PLAYER_MESSAGES) when a match ends. The line is the whole message, so say where the website is.',
+    kind: 'top',
+    get: (lines) => lines.topPlayer,
+    set: (lines, topPlayer) => ({ ...lines, topPlayer }),
+    // Lines are checked with {place} at the most top players there can be, and {kills} at more than any match has.
+    frame: (context) => ({
+      values: { place: ordinal(1), kills: killCount(25), site: site(context) },
+      longest: { place: ordinal(MAX_TOP_PLAYERS), kills: killCount(999), site: site(context) },
+      before: '',
+      after: '',
+    }),
+  },
 ];
 
 // A list staff changed: its lines, when, and who by (Discord user ID and name).
@@ -306,6 +332,7 @@ const OFF = {
   seeding: 'The bot is not sending seeding messages: SEEDING_MESSAGE_MINUTES is 0.',
   match: 'The bot is not sending match messages: MATCH_MESSAGES is off, or SITE_URL is not set.',
   welcome: 'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
+  top: "The bot is not sending top players' messages: TOP_PLAYER_MESSAGES is 0, or SITE_URL is not set.",
 };
 
 export const buildLinesPage = (saved: SavedLines, context: LinesContext): LinesPage => {

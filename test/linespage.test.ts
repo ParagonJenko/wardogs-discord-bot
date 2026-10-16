@@ -12,7 +12,7 @@ import {
   type LinesContext,
   type SavedLines,
 } from '../src/linespage.ts';
-import { fillLine, milestones, seedingMessage, welcomeMessage } from '../src/messages.ts';
+import { fillLine, milestones, seedingMessage, topPlayerMessages, welcomeMessage } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
@@ -25,6 +25,7 @@ const context: LinesContext = {
   match: true,
   seeding: true,
   welcome: true,
+  top: true,
 };
 const who = { by: '42', byName: 'Sarge', now: 1_000 };
 
@@ -96,6 +97,16 @@ describe('editLines', () => {
     expect(save({}, 'welcome', ['x'.repeat(room)])).toHaveProperty('saved');
     expect(save({}, 'welcome', ['x'.repeat(room + 1)])).toEqual({
       problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.',
+    });
+  });
+
+  it('checks top player lines with {place} and {kills} at the longest they can be', () => {
+    const fits = `${'x'.repeat(200 - ' 100th 999 kills gaminginit.com'.length)} {place} {kills} {site}`;
+
+    expect(save({}, 'topPlayer', [fits])).toHaveProperty('saved');
+    expect(save({}, 'topPlayer', [`x${fits}`])).toEqual({ problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.' });
+    expect(save({}, 'topPlayer', ['GG {team}'])).toEqual({
+      problem: "Line 1 has {team}, which the bot can't fill in. It can fill in {place}, {kills} and {site}.",
     });
   });
 
@@ -202,6 +213,9 @@ describe('buildLinesPage', () => {
     expect(buildLinesPage({}, { ...context, welcome: false }).lists.find((l) => l.id === 'welcome')?.off).toBe(
       'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
     );
+    expect(buildLinesPage({}, { ...context, top: false }).lists.find((l) => l.id === 'topPlayer')?.off).toBe(
+      "The bot is not sending top players' messages: TOP_PLAYER_MESSAGES is 0, or SITE_URL is not set.",
+    );
   });
 
   it('shows each message as the bot sends it', () => {
@@ -238,6 +252,10 @@ describe('buildLinesPage', () => {
     expect(seedingMessage(1, 20, { everyMs: 1, siteHost: 'gaminginit.com' }, vip, first)).toBe(shown('seeding', DEFAULT_LINES.seeding[0] ?? ''));
     expect(welcomeMessage({ afterMs: 1, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' }, first)).toBe(
       shown('welcome', DEFAULT_LINES.welcome[0] ?? ''),
+    );
+    const winner = { ...match([]), players: { a: { name: 'Ash', kills: 25, deaths: 0, lastKills: 25, lastDeaths: 0 } } };
+    expect(topPlayerMessages(winner, new Set(), { count: 5, siteHost: 'gaminginit.com' }, first).messages[0]?.text).toBe(
+      shown('topPlayer', DEFAULT_LINES.topPlayer[0] ?? ''),
     );
   });
 
