@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isModifier, modesFor, planSetup, setupLabels, type SetupCatalog } from '../src/matchsetup.ts';
+import { currentExperience, isModifier, modesFor, planSetup, setupLabels, type SetupCatalog } from '../src/matchsetup.ts';
 
 const catalog: SetupCatalog = {
   rotation: {
@@ -95,6 +95,26 @@ describe('planSetup', () => {
       labels: ['Europe_KOTH_01', 'Hardcore', 'DayClear'],
     });
     expect(planSetup('Europe', {}, unknown)).toEqual({ setup: {}, labels: [] });
+  });
+});
+
+describe('currentExperience', () => {
+  it('swaps an experience Season 2 retired for its replacement, and leaves the rest', () => {
+    expect(currentExperience('Bakurani_KOTH_01')).toBe('Bakurani_KOTH_02');
+    expect(currentExperience('bakurani_koth_01')).toBe('Bakurani_KOTH_02');
+    expect(currentExperience('Bakurani_KOTH_02')).toBe('Bakurani_KOTH_02');
+    expect(currentExperience('Madrid_KOTH_01')).toBe('Madrid_KOTH_01');
+  });
+
+  it('plays a map the rotation still has with a retired mode with its replacement', () => {
+    const unread: SetupCatalog = {
+      rotation: { enabled: true, mode: 'ordered', entries: [{ map: 'Kavkazi', status: 'next', experiences: ['Bakurani_KOTH_01'] }] },
+      mapExperiences: null,
+      experiences: null,
+      lightings: null,
+      zones: null,
+    };
+    expect(planSetup('Kavkazi', {}, unread)).toEqual({ setup: { experiences: ['Bakurani_KOTH_02'] }, labels: ['Bakurani_KOTH_02'] });
   });
 });
 
