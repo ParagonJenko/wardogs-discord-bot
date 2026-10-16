@@ -362,7 +362,7 @@ describe('putRotation', () => {
 
   it('checks the new file, then writes it against the revision it read', async () => {
     const server = file();
-    await expect(putRotation(server, [ZESTAFONA])).resolves.toBe(true);
+    await expect(putRotation(server, [ZESTAFONA])).resolves.toEqual({ written: true, next: ZESTAFONA });
     const text = setRotationEntries(settings, [ZESTAFONA]);
     expect(server.validate).toHaveBeenCalledWith(text);
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
@@ -371,20 +371,20 @@ describe('putRotation', () => {
   it('starts from the first map: it goes in the slot after the one the server is on', async () => {
     // Bakurani is on, from the first slot. Written from the top, the second slot would send the server back to it.
     const server = file({}, ok, 0);
-    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toBe(true);
+    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toEqual({ written: true, next: OZETI });
     const text = setRotationEntries(settings, [ZESTAFONA, OZETI, BAKURANI]);
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text });
   });
 
   it('writes nothing when the server already goes to the first map next', async () => {
     const server = file({}, ok, 1);
-    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toBe(false);
+    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toEqual({ written: false });
     expect(server.put).not.toHaveBeenCalled();
   });
 
   it('starts the same maps again from the first when the server is part-way round them', async () => {
     const server = file({}, ok, 0);
-    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toBe(true);
+    await expect(putRotation(server, [BAKURANI, OZETI])).resolves.toEqual({ written: true, next: BAKURANI });
     expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text: setRotationEntries(settings, [OZETI, BAKURANI]) });
   });
 
@@ -397,9 +397,15 @@ describe('putRotation', () => {
     expect(server.fetchConfig).not.toHaveBeenCalled();
   });
 
-  it('writes nothing when it cannot tell which slot the server is on, so it is tried again', async () => {
+  it('replaces the server\'s rotation as it is when the server doesn\'t say which slot it is on', async () => {
     const server = file({}, ok, null);
-    await expect(putRotation(server, [ZESTAFONA])).rejects.toThrow(/didn't say which slot/);
+    await expect(putRotation(server, [OZETI, BAKURANI, ZESTAFONA])).resolves.toEqual({ written: true, next: null });
+    expect(server.put).toHaveBeenCalledWith({ revision: '7', writable: true, text: setRotationEntries(settings, [OZETI, BAKURANI, ZESTAFONA]) });
+    await expect(putRotation(file({}, ok, null), [BAKURANI, OZETI])).resolves.toEqual({ written: false });
+  });
+
+  it('writes nothing when the slot cannot be read, so it is tried again', async () => {
+    const server = file();
     server.slot.mockRejectedValueOnce(new Error('RCON timed out'));
     await expect(putRotation(server, [ZESTAFONA])).rejects.toThrow(/timed out/);
     expect(server.put).not.toHaveBeenCalled();
@@ -412,6 +418,8 @@ describe('fromTheStart', () => {
     expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 1)).toEqual([BAKURANI, ZESTAFONA, OZETI]);
     // On the last slot, the next is the first: the rotation as it is.
     expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], 2)).toEqual([OZETI, BAKURANI, ZESTAFONA]);
+    // Without a slot: as it is.
+    expect(fromTheStart([OZETI, BAKURANI, ZESTAFONA], null)).toEqual([OZETI, BAKURANI, ZESTAFONA]);
   });
 
   it('counts a slot past the end of the new list on round it', () => {
