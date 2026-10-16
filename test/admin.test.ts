@@ -96,6 +96,8 @@ describe('buildAdminOverview', () => {
         mostKilledTeammate: { steamId: BO, name: 'Bo', kills: 4 },
         flags: ['teamKills', 'sameTeammate'],
         flaggedDays: 1,
+        // Yesterday, when the team kills were.
+        lastFlaggedDay: '2026-10-02',
         matches: 3,
         kills: 50,
         deaths: 40,
@@ -433,6 +435,16 @@ describe('the server list on the staff page', () => {
     expect(page.online?.players.find((p) => p.steamId === ASH)?.checked).toEqual(check);
     expect(page.online?.players.find((p) => p.steamId === DEE)?.checked).toBeNull();
     expect(page.staff[sarge]).toEqual({ name: 'Sarge', username: 'sarge_gi' });
+  });
+
+  it('gives who dealt with each player on the Queue lately, and names them', () => {
+    const kestrel = '100000000000000002';
+    const dealt = { by: kestrel, byName: 'Kestrel', at: NOW - 3 * DAY, reasons: ['headshots' as const], headshotDay: '2026-09-30', griefDay: null, steamScore: null };
+    const page = overview({ dealt: { [CY]: dealt }, staffNames: { [kestrel]: { name: 'Kestrel', username: 'kestrel', at: NOW } } });
+
+    expect(page.dealt).toEqual({ [CY]: dealt });
+    expect(page.staff[kestrel]).toEqual({ name: 'Kestrel', username: 'kestrel' });
+    expect(overview().dealt).toEqual({});
   });
 
   it('says nothing about the whitelist it could not read, and has no list while the server is not answering', () => {

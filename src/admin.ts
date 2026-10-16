@@ -1,16 +1,18 @@
 import type { Check } from './checked.ts';
-import { mapName } from './discord.ts';
-import { dayFlags, FLAGS, griefRows, type Flag, type GriefDay } from './griefing.ts';
+import type { Dealt } from './dealt.ts';
+import { mapName, type PlayerProfile } from './discord.ts';
+import { dayFlags, FLAGS, griefRows, type Flag, type GriefDay, type Incident } from './griefing.ts';
 import { minutesOn, type JoinEvent } from './joinlog.ts';
 import type { HeadshotDay } from './killfeed.ts';
 import { isBotBan, type BanBook, type ModAction, type ModEntry } from './moderation.ts';
+import { playerBan, playerVip, type PlayerBan, type PlayerVip } from './playerrecord.ts';
 import { totals, type PlayerDay } from './players.ts';
 import type { DayRecords, OnlineSnapshot } from './profiles.ts';
 import type { Ban } from './rcon.ts';
 import { DISCORD_ID, type StaffNames } from './staffnames.ts';
 import type { StaffProfiles } from './staffprofiles.ts';
-import type { IdOf, ServerSnapshot } from './stats.ts';
-import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, type Risk, type SteamCheck, type SteamFlag, type TradeBan } from './steam.ts';
+import { dayOf, type IdOf, type ServerSnapshot } from './stats.ts';
+import { assess, RISK, STEAM_FLAGS, STEAM_MARKS, steamFacts, type Risk, type SteamCheck, type SteamFlag, type TradeBan } from './steam.ts';
 import type { ReservedListing, VipState } from './vip.ts';
 import { weaponKind, weaponName, type WeaponKind } from './weapons.ts';
 
@@ -24,6 +26,7 @@ export const ADMIN_DEFAULT_DAYS = 7;
 const PLAYERS_LISTED = 100;
 const INCIDENTS_LISTED = 300;
 const MOD_ENTRIES_LISTED = 200;
+const DAY_MS = 24 * 60 * 60_000;
 
 // A player as the page names them. `id` is their public page's id.
 export type AdminPlayer = { steamId: string; name: string; id?: string };
@@ -39,6 +42,8 @@ export type AdminGriefRow = AdminPlayer & {
   mostKilledTeammate: (AdminPlayer & { kills: number }) | null;
   flags: Flag[];
   flaggedDays: number;
+  // The latest of those days ('2026-10-16'), or null.
+  lastFlaggedDay: string | null;
   // From the scoreboards over the same days, for scale: matches, kills and deaths, and minutes on the server.
   matches: number;
   kills: number;
@@ -212,6 +217,8 @@ export type AdminOverview = {
   steam: AdminSteam | null;
   // Every staff member who linked their Steam account, by name.
   staffProfiles: AdminStaffProfile[];
+  // The players dealt with on the Queue in the last 30 days, by Steam ID, with what it showed for them then (see dealt.ts).
+  dealt: Record<string, Dealt>;
 };
 
 export type AdminSources = {
@@ -249,6 +256,8 @@ export type AdminSources = {
   joins: JoinEvent[];
   // Today's "Checked, they're fine", by Steam ID (see checked.ts).
   checked?: Record<string, Check>;
+  // The players dealt with on the Queue lately, by Steam ID (see dealt.ts).
+  dealt?: Record<string, Dealt>;
 };
 
 // The staff page lists at most this many risky accounts.
@@ -338,13 +347,16 @@ export const adminSteamIds = (
   ]),
 ];
 
-// The Discord user IDs the page names: who did each thing in the log, who made each of the bot's bans, and who checked
-// each player in game.
-export const adminStaffIds = (overview: Pick<AdminOverview, 'moderation' | 'bans'> & { online?: AdminOnline | null }): string[] => [
+// The Discord user IDs the page names: who did each thing in the log, who made each of the bot's bans, who checked each
+// player in game, and who dealt with each player on the Queue.
+export const adminStaffIds = (
+  overview: Pick<AdminOverview, 'moderation' | 'bans'> & { online?: AdminOnline | null; dealt?: Record<string, Dealt> },
+): string[] => [
   ...new Set([
     ...overview.moderation.map((e) => e.by),
     ...(overview.bans ?? []).flatMap((b) => (b.bot === null ? [] : [b.bot.by])),
     ...(overview.online?.players ?? []).flatMap((p) => (p.checked === null ? [] : [p.checked.by])),
+    ...Object.values(overview.dealt ?? {}).map((d) => d.by),
   ]),
 ].filter((id) => DISCORD_ID.test(id));
 
@@ -368,6 +380,20 @@ export const staffFor = (ids: string[], staffNames: StaffNames, modLogs: Map<str
   );
 };
 
+// A team kill or vehicle suicide as the page shows it, with the map and weapon by name. `ref` names a player.
+const adminIncident = (i: Incident, ref: (steamId: string, fallback?: string) => AdminPlayer): AdminIncident => ({
+  at: i.at,
+  kind: i.kind,
+  map: i.map === '' ? '' : mapName(i.map),
+  player: ref(i.steamId, i.name),
+  victim: i.victimSteamId === undefined ? null : ref(i.victimSteamId, i.victimName),
+  faction: i.faction,
+  weapon: i.cause === null ? null : weaponName(i.cause),
+  weaponKind: i.cause === null ? null : weaponKind(i.cause),
+  distance: i.distance === null ? null : Math.round(i.distance * 10) / 10,
+  tags: i.tags,
+});
+
 export const buildAdminOverview = (s: AdminSources): AdminOverview => {
   const ref = (steamId: string, fallback?: string): AdminPlayer => {
     const id = s.idOf(steamId);
@@ -383,7 +409,9 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
   const context = new Map(totals(s.playerDays).map((t) => [t.steamId, t]));
   // Those in game first, as the ones staff can still act on, so the limit never leaves them out.
   const online = new Set(s.online?.players.map((p) => p.steamId) ?? []);
-  const rows = griefRows(s.grief).sort((a, b) => Number(online.has(b.steamId)) - Number(online.has(a.steamId)));
+  // The period's days, oldest first and today last, as `grief` has them.
+  const griefDays = s.grief.map((_, i) => dayOf(s.now - (s.grief.length - 1 - i) * DAY_MS));
+  const rows = griefRows(s.grief, griefDays).sort((a, b) => Number(online.has(b.steamId)) - Number(online.has(a.steamId)));
   const players = rows.slice(0, PLAYERS_LISTED).map((r): AdminGriefRow => {
     const t = context.get(r.steamId);
     return {
@@ -398,6 +426,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
         r.mostKilledTeammate === null ? null : { ...ref(r.mostKilledTeammate.steamId, r.mostKilledTeammate.name), kills: r.mostKilledTeammate.kills },
       flags: r.flags,
       flaggedDays: r.flaggedDays,
+      lastFlaggedDay: r.lastFlaggedDay,
       matches: t?.matches ?? 0,
       kills: t?.kills ?? 0,
       deaths: t?.deaths ?? 0,
@@ -409,20 +438,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
     .flatMap((d) => d.incidents)
     .sort((a, b) => b.at - a.at)
     .slice(0, INCIDENTS_LISTED)
-    .map(
-      (i): AdminIncident => ({
-        at: i.at,
-        kind: i.kind,
-        map: i.map === '' ? '' : mapName(i.map),
-        player: ref(i.steamId, i.name),
-        victim: i.victimSteamId === undefined ? null : ref(i.victimSteamId, i.victimName),
-        faction: i.faction,
-        weapon: i.cause === null ? null : weaponName(i.cause),
-        weaponKind: i.cause === null ? null : weaponKind(i.cause),
-        distance: i.distance === null ? null : Math.round(i.distance * 10) / 10,
-        tags: i.tags,
-      }),
-    );
+    .map((i) => adminIncident(i, ref));
   const since = startOfDay(s.now - (s.days - 1) * 24 * 60 * 60_000);
   const moderation = [...s.modLogs]
     .flatMap(([steamId, log]) =>
@@ -535,7 +551,7 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
       .reverse(),
     feedSince: s.feedSince,
     flags: FLAGS,
-    staff: staffFor(adminStaffIds({ moderation, bans, online: inGameNow }), s.staffNames, s.modLogs),
+    staff: staffFor(adminStaffIds({ moderation, bans, online: inGameNow, dealt: s.dealt }), s.staffNames, s.modLogs),
     reserved:
       s.reserved === null
         ? null
@@ -575,5 +591,99 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
         seen: s.history.some((d) => d.players[p.steamId] !== undefined),
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
+    dealt: s.dealt ?? {},
+  };
+};
+
+// The staff page's player record (GET /api/admin/player): what /player says about a player, as facts for the page to lay
+// out rather than a Discord message.
+export type AdminPlayerRecord = {
+  steamId: string;
+  // The name they used most recently, or null when the bot has never seen them.
+  name: string | null;
+  // In game now: their side, and this match so far when the server says. Null when not in game.
+  inGame: { faction: string | null; kills: number | null; deaths: number | null } | null;
+  // The public sees them as PRIVATE_NAME (see privacy.ts).
+  privateProfile: boolean;
+  // Their time and matches over the last `days` UTC days, or null when they were not on the server in them.
+  days: number;
+  totals: { minutes: number; seedingMinutes: number; seedDays: number; matches: number; kills: number; deaths: number } | null;
+  // Their team kills and suicides today (UTC), from the kill feed: the flags the day earned, the teammates they killed
+  // other than in a crash (most first), and the day's latest incidents by them or team kills on them, newest first. Null
+  // when the bot has never had the feed.
+  grief: {
+    teamKills: number;
+    vehicleTeamKills: number;
+    crashTeamKills: number;
+    teamKilled: number;
+    suicides: number;
+    vehicleSuicides: number;
+    flags: Flag[];
+    victims: (AdminPlayer & { kills: number })[];
+    incidents: AdminIncident[];
+  } | null;
+  // What Steam says about their account, as `facts` in words: 'off' without STEAM_API_KEY, 'failed' when Steam could not
+  // be asked and nothing is saved, 'missing' when Steam has no such account.
+  steam:
+    | { status: 'off' | 'failed' }
+    | { status: 'missing'; checkedAt: number }
+    | { status: 'found'; risk: Risk; score: number; flags: SteamFlag[]; facts: string[]; checkedAt: number };
+  vip: PlayerVip;
+  ban: PlayerBan;
+  // What staff did to them through the bot, newest first.
+  log: Omit<AdminModEntry, 'player'>[];
+};
+
+// A record lists at most this many of the day's incidents, the newest.
+const RECORD_INCIDENTS = 20;
+
+export const buildAdminPlayerRecord = (profile: PlayerProfile): AdminPlayerRecord => {
+  const { steamId, record, online, steam, now } = profile;
+  const ref = (id: string, fallback?: string): AdminPlayer => ({ steamId: id, name: fallback || id });
+  const t = record.totals;
+  const grief = record.grief;
+  return {
+    steamId,
+    name: profile.name,
+    inGame: online === null ? null : { faction: online.faction ?? null, kills: online.kills, deaths: online.deaths },
+    privateProfile: record.privateProfile,
+    days: profile.days,
+    totals:
+      t === null
+        ? null
+        : {
+            minutes: t.seedingMinutes + t.liveMinutes,
+            seedingMinutes: t.seedingMinutes,
+            seedDays: t.seedDays,
+            matches: t.matches,
+            kills: t.kills,
+            deaths: t.deaths,
+          },
+    grief:
+      grief === null
+        ? null
+        : {
+            teamKills: grief.teamKills,
+            vehicleTeamKills: grief.vehicleTeamKills,
+            crashTeamKills: grief.crashTeamKills,
+            teamKilled: grief.teamKilled,
+            suicides: grief.suicides,
+            vehicleSuicides: grief.vehicleSuicides,
+            flags: grief.flags,
+            victims: grief.victims.map((v) => ({ ...ref(v.steamId, v.name), kills: v.kills })),
+            incidents: grief.incidents
+              .slice(-RECORD_INCIDENTS)
+              .reverse()
+              .map((i) => adminIncident(i, ref)),
+          },
+    steam:
+      steam === undefined || steam === 'off' || steam === 'failed'
+        ? { status: steam ?? 'off' }
+        : !steam.found
+          ? { status: 'missing', checkedAt: steam.at }
+          : { status: 'found', ...assess(steam, now), facts: steamFacts(steam, now), checkedAt: steam.at },
+    vip: playerVip(profile),
+    ban: playerBan(profile),
+    log: [...record.log].reverse().map(({ name: _name, ...e }) => e),
   };
 };

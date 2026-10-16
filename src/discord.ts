@@ -1,6 +1,6 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
-import { isBotBan, type BanRecord, type ModAction, type ModEntry } from './moderation.ts';
+import type { ModAction, ModEntry } from './moderation.ts';
 import type { Flag, GriefAlert, Incident, PlayerGrief } from './griefing.ts';
 import type { FeedWatchEvent } from './feedwatch.ts';
 import type { HeadshotAlert } from './killfeed.ts';
@@ -9,6 +9,7 @@ import type { Ban, FactionScore, Player, Rotation, ServerStatus, Snapshot } from
 import type { PlayerRecord } from './staff.ts';
 import type { MatchHighlight, RoleAward, Roundup, RoundupPlayer, TeamStanding } from './roundup.ts';
 import { WEEKDAYS as ROTATION_DAYS } from './rotations.ts';
+import { isBanned, playerBan, playerVip } from './playerrecord.ts';
 import { PRIVATE_NAME } from './privacy.ts';
 import type { RecentMatch } from './stats.ts';
 import { assess, RISK_LABELS, steamFacts, type Risk, type SteamAlert, type SteamCheck, type SteamLookup } from './steam.ts';
@@ -978,50 +979,38 @@ const when = (at: number, style: 'f' | 'd' | 'R'): string => `<t:${Math.floor(at
 
 const cut = (text: string): string => (text.length > MAX_REASON_SHOWN ? `${text.slice(0, MAX_REASON_SHOWN - 1)}…` : text);
 
-const vipText = ({ record, reserved, now }: PlayerProfile): string => {
-  // The whitelist is the truth when it can be read; otherwise the bot's record is shown as only that.
-  const lines = [
-    reserved === null
-      ? record.staffSpot
-        ? "🎖️ Staff spot: a whitelist slot while they are staff, by the bot's records\n(Couldn't check the whitelist.)"
-        : record.vip === null
-          ? "Couldn't read the whitelist"
-          : `🎖️ Whitelist slot until ${when(record.vip.expiresAt, 'f')}, by the bot's records\n(Couldn't check the whitelist.)`
-      : record.staffSpot
-        ? reserved
-          ? '🎖️ Staff spot: a whitelist slot while they are staff'
-          : '🎖️ Staff spot: on the whitelist from the next check'
-        : record.vip !== null && reserved
-          ? `🎖️ Whitelist slot until ${when(record.vip.expiresAt, 'f')}`
-          : reserved
-            ? '🎖️ Permanent whitelist slot, no end date'
-            : 'None',
-    ...(record.vipBlockedUntil !== null && record.vipBlockedUntil > now
-      ? [`Staff removed VIP: automatic VIP is off for them until ${when(record.vipBlockedUntil, 'f')}`]
-      : []),
-  ];
-  return lines.join('\n');
+// The whitelist is the truth when it can be read; otherwise the bot's record is shown as only that (see playerrecord.ts).
+const vipText = (profile: PlayerProfile): string => {
+  const vip = playerVip(profile);
+  const records = vip.checked ? '' : ", by the bot's records\n(Couldn't check the whitelist.)";
+  const slot =
+    vip.kind === 'staff'
+      ? vip.pending
+        ? '🎖️ Staff spot: on the whitelist from the next check'
+        : `🎖️ Staff spot: a whitelist slot while they are staff${records}`
+      : vip.kind === 'bot'
+        ? `🎖️ Whitelist slot until ${when(vip.until, 'f')}${records}`
+        : vip.kind === 'permanent'
+          ? '🎖️ Permanent whitelist slot, no end date'
+          : vip.kind === 'unknown'
+            ? "Couldn't read the whitelist"
+            : 'None';
+  const blocked = vip.blockedUntil === null ? [] : [`Staff removed VIP: automatic VIP is off for them until ${when(vip.blockedUntil, 'f')}`];
+  return [slot, ...blocked].join('\n');
 };
 
-const banText = ({ record, serverBan }: PlayerProfile): string => {
-  const ban = record.ban;
-  const bots = (b: BanRecord): string => {
-    const until = b.until === null ? 'permanently' : `until ${when(b.until, 'f')} (${when(b.until, 'R')})`;
-    return `🔨 Banned ${until} by <@${b.by}>: ${cut(b.reason)}`;
-  };
+// The server's ban list is the truth when it can be read (see playerrecord.ts).
+const banText = (profile: PlayerProfile): string => {
+  const ban = playerBan(profile);
+  if (ban.kind === 'none') return 'Not banned';
+  if (ban.kind === 'unknown') return "Couldn't read the ban list";
+  if (ban.kind === 'server') return `🔨 Banned on the server${ban.reason ? `: ${cut(ban.reason)}` : ''}`;
+  const until = ban.until === null ? 'permanently' : `until ${when(ban.until, 'f')} (${when(ban.until, 'R')})`;
+  const line = `🔨 Banned ${until} by <@${ban.by}>: ${cut(ban.reason)}`;
   // The game only bans players in game, so a ban made while they were away is not on the server until they join.
-  if (ban?.waiting && serverBan === null) return `${bots(ban)}\n(Not on the server yet: the bot bans them when they next join.)`;
-  // The server is the truth when it can be read: a ban lifted by hand is gone even if the bot still has a record, and
-  // a ban made some other way since is not described as the bot's.
-  if (serverBan === null) return 'Not banned';
-  if (serverBan === undefined) return ban === null ? "Couldn't read the ban list" : `${bots(ban)}\n(Couldn't check the server's ban list.)`;
-  if (ban !== null && isBotBan(serverBan.reason, ban)) return bots(ban);
-  return `🔨 Banned on the server${serverBan.reason ? `: ${cut(serverBan.reason)}` : ''}`;
+  if (ban.waiting) return `${line}\n(Not on the server yet: the bot bans them when they next join.)`;
+  return ban.checked ? line : `${line}\n(Couldn't check the server's ban list.)`;
 };
-
-// Red while the player is banned, as far as can be told.
-const isBanned = ({ record, serverBan }: PlayerProfile): boolean =>
-  serverBan === undefined ? record.ban !== null : serverBan !== null || record.ban?.waiting === true;
 
 // Who did something: a staff member as a Discord mention (which never pings with NO_PINGS), the bot, or someone outside
 // the bot, whose change the bot found on the server.

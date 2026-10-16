@@ -10,6 +10,7 @@ import {
   mapEmoji,
   mapName,
   playerName,
+  type PlayerProfile,
 } from './discord.ts';
 import type { PlayerGrief } from './griefing.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
@@ -585,33 +586,48 @@ export const runStaffCommand =
         : { content: `🎖️ Gave ${who(player)} a${days === null ? ' permanent' : ''} whitelist slot${until}. It starts after the server's next restart.` };
     }
 
-    // /player: what the bot knows, and what the server says now. The server's parts are left out if it cannot be read.
+    // /player: what the bot knows, and what the server says now.
     const { found, live } = await anyTarget('player');
     if ('problem' in found) return { content: found.problem };
-    const { player } = found;
-    const [record, serverConfig, bans, steam] = await Promise.all([
-      records.player(player.steamId),
-      optional(fetchConfig(rconUrl, rconPassword, http)),
-      optional(fetchBans(rconUrl, rconPassword, http)),
-      records.steam(player.steamId).catch((): SteamLookup => 'failed'),
-    ]);
-    const inGame = live.find((p) => p.steamId === player.steamId) ?? null;
-    return {
-      embeds: [
-        buildPlayerEmbed({
-          steamId: player.steamId,
-          name: inGame?.name ?? record.name ?? (player.name === player.steamId ? null : player.name),
-          record,
-          online: inGame,
-          reserved: serverConfig === null ? null : isReserved(serverConfig.text, player.steamId),
-          serverBan: bans === null ? undefined : (bans.find((b) => b.steamId === player.steamId) ?? null),
-          steam,
-          days: PROFILE_DAYS,
-          now: now(),
-          weapon: weaponName,
-        }),
-      ],
-    };
+    return { embeds: [buildPlayerEmbed(await playerProfile({ config, http, records, now }, found.player, live))] };
+  };
+
+// What /player shows about a player, and the staff page's player record: the bot's records, and what the server and
+// Steam say now. The server's parts are left out if it cannot be read. `live` is who is in game.
+export const playerProfile = async (
+  { config, http, records, now }: Pick<StaffDeps, 'config' | 'http' | 'records' | 'now'>,
+  player: Named,
+  live: Player[],
+): Promise<PlayerProfile> => {
+  const { rconUrl, rconPassword } = config();
+  const [record, serverConfig, bans, steam] = await Promise.all([
+    records.player(player.steamId),
+    optional(fetchConfig(rconUrl, rconPassword, http)),
+    optional(fetchBans(rconUrl, rconPassword, http)),
+    records.steam(player.steamId).catch((): SteamLookup => 'failed'),
+  ]);
+  const inGame = live.find((p) => p.steamId === player.steamId) ?? null;
+  return {
+    steamId: player.steamId,
+    name: inGame?.name ?? record.name ?? (player.name === player.steamId ? null : player.name),
+    record,
+    online: inGame,
+    reserved: serverConfig === null ? null : isReserved(serverConfig.text, player.steamId),
+    serverBan: bans === null ? undefined : (bans.find((b) => b.steamId === player.steamId) ?? null),
+    steam,
+    days: PROFILE_DAYS,
+    now: now(),
+    weapon: weaponName,
+  };
+};
+
+// The staff page's player record for a Steam ID: as /player, for whoever is in game now.
+export const lookUpPlayer =
+  (deps: Pick<StaffDeps, 'config' | 'http' | 'records' | 'now'>) =>
+  async (steamId: string): Promise<PlayerProfile> => {
+    const { rconUrl, rconPassword } = deps.config();
+    const live = await fetchPlayers(rconUrl, rconPassword, deps.http).catch((): Player[] => []);
+    return playerProfile(deps, { steamId, name: steamId }, live);
   };
 
 // /rotations: saved map rotations, the week's plan, and swapping the server's rotation (see rotations.ts).
