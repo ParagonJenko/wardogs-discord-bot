@@ -262,6 +262,8 @@ const NAMES: Record<string, string> = {
   // Not in Warcon's list, nor the pistols below. Staff matched them with the game's own kill feed.
   'Id.Item.SMG_03': 'PP-19 Vityaz',
   'Id.Item.WEPN_028': 'MP5',
+  // Not in Warcon's list. Staff matched it with the game's own kill feed (a Season 2 weapon).
+  'Id.Item.WEPN_031': 'PP-19 Bizon',
   'Id.Item.Vector': 'Super-45',
   'Id.Item.MP43': 'MP43',
   'Id.Item.M500': 'M500',
@@ -355,6 +357,8 @@ const NAMES: Record<string, string> = {
   'Id.Vehicle.WeaponExtension.WHL_07.MachineGun': 'Ural Defender M249',
   'Id.Vehicle.WeaponExtension.STN_01.MistralAA': 'Talon 9K-SAM',
   'Id.Vehicle.WeaponExtension.STN_03.MainBarrel': 'L81 mortar',
+  // Not in Warcon's list. The mounted machine gun emplacement, which staff think is the M2 Browning.
+  'Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun': 'M2 Browning',
 };
 
 const BY_TAG = new Map(Object.entries(NAMES).map(([cause, name]) => [cause.toLowerCase(), name]));
@@ -449,6 +453,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.MP9': 'assault',
   'Id.Item.SMG_03': 'assault',
   'Id.Item.WEPN_028': 'assault',
+  'Id.Item.WEPN_031': 'assault',
   'Id.Item.Vector': 'assault',
   'Id.Item.M500': 'assault',
   'Id.Item.M249': 'machine-gun',
