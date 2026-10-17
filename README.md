@@ -165,7 +165,10 @@ The next check posts the message, and every check after that edits it.
   shows the server as offline.
 - **Next map:** the rotation's next map, or the map staff set with `/setnextmap` or `/changemap` while this match
   is on. The bot reads the rotation again when the map changes, when it puts a rotation on the server itself, and at
-  least every 15 minutes, so a rotation changed in game shows within 15 minutes.
+  least every 15 minutes, so a rotation changed in game shows within 15 minutes. Once a [next-map vote](#next-map-vote)
+  picks a map, it shows here too.
+- **Vote for the next map:** while people can vote (the vote is open and no team has reached its close score), a link to the
+  vote message and the score that closes it.
 - **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
 
 It costs one Discord edit a minute, and one more RCON request (the rotation) for each map and at least every 15
@@ -591,12 +594,22 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
+   A second row of buttons votes on the **conditions** (time of day and weather): groups of the server's lightings such as
+   Day, Night and Rain, and 🎲 Random. Each person has one vote on the map and one on the conditions, each changed on its
+   own. The groups are matched from the names of the lightings the server lists (day, night, dusk, dawn, rain or storm,
+   fog, snow, overcast), at most four plus Random, and a group the server has no lighting for isn't offered. With fewer than
+   two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain. The
+   group with the most votes (a tie by chance) gives a random lighting from it, and Random picks from all of them. With no
+   votes on it, the lighting stays as the rotation has it. It is part of the same message, so nothing more is announced.
+   Nothing is sent to the server that its own catalogue (`/v1/catalog/...`) does not list: only maps that list a game mode
+   and infantry only themselves are offered, the infantry only id sent is that map's own, and every lighting is one the server
+   listed. If the catalogue can't confirm the winner, nothing is staged (the vote retries until the match ends).
 3. The vote stays open until a team reaches `MAP_VOTE_CLOSE_PERCENT` of `SCORE_TO_WIN` (default 95, so 95 of 100), or for
    `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). It is closed a little before the end so the
    winner can still be put on the server, which happens at the next check (within a minute). A match already at that score
    when the bot sees it gets no vote. The buttons go away and the message shows the result.
 4. The map with the most votes (a tie is settled by chance) is staged on the server, **infantry only**, the same as
-   `/setnextmap`: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
+   `/setnextmap`, with the lighting the conditions vote chose: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
    It tries again each check if the server can't be reached. Nothing is staged when nobody voted, when staff used
    `/setnextmap` or `/changemap` while the vote was open (their pick stands), or when the match ended first.
 
@@ -1530,6 +1543,13 @@ leaderboard, the Discord and seeding:
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
+- While the [next-map vote](#next-map-vote) runs (`MAP_VOTE` on, with the token and channel set) and can still be voted on
+  (this match's vote is open and no team has reached its close score), the halfway and 90-point messages send people to it
+  in place of the usual call to action, and say the usual thing once it is closed (with `MAP_VOTE_CLOSE_PERCENT` at 80, the
+  90-point message is the usual one), as a message has room for one: halfway says "Vote for
+  the next map in our Discord, it plays infantry only! Leaderboard at gaminginit.com" and 90 points says "Last call to
+  vote for the next map in our Discord! Leaderboard at gaminginit.com". The staff page's Lines tab shows these. The bot also
+  announces the vote when it opens, and the result when it is staged.
 - Each message's line is picked at random from its list, passing over the lines it used lately (up to half the list, so
   the same line doesn't come up game after game): the seeding lines, the 10-minute lines, and for halfway and
   90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any

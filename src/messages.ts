@@ -11,7 +11,9 @@ import type { MatchState } from './tracking.ts';
 // a welcome of their own, a private message with the basic rules, the Discord and the website. When a match is won, its
 // best players get a private message too (see matchend.ts).
 
-export type MessageRule = { siteHost: string; scoreToWin: number };
+// `vote` is true while the next-map vote runs each match (see mapvote.ts): the halfway and nearly messages then send people
+// to it. Missing means no.
+export type MessageRule = { siteHost: string; scoreToWin: number; vote?: boolean };
 
 // The seeding message goes out every `everyMs`, and points at the website when there is one.
 export type SeedingMessageRule = { everyMs: number; siteHost: string | null };
@@ -41,9 +43,16 @@ export const nearlyScore = (scoreToWin: number): number => Math.ceil(scoreToWin 
 
 // What the bot puts around the lines (see lines.ts). The staff page shows them too, so staff see the whole message.
 export const HALFWAY_START = 'Halfway there!';
-export const halfwayCall = (siteHost: string, vip: VipRule | null): string =>
-  vip ? `Seed on ${days(vip.seedDays)} in a week and get a whitelist slot. How at ${siteHost}` : `Check the leaderboard and join our Discord at ${siteHost}`;
-export const nearlyCall = (siteHost: string): string => `Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`;
+// While a vote runs, these send people to it instead: the vote is open from the start of the match until a team is close to
+// winning, and a message is one line of 200 characters, so there is room for one call to action.
+export const halfwayCall = (siteHost: string, vip: VipRule | null, vote = false): string =>
+  vote
+    ? `Vote for the next map in our Discord, it plays infantry only! Leaderboard at ${siteHost}`
+    : vip
+      ? `Seed on ${days(vip.seedDays)} in a week and get a whitelist slot. How at ${siteHost}`
+      : `Check the leaderboard and join our Discord at ${siteHost}`;
+export const nearlyCall = (siteHost: string, vote = false): string =>
+  vote ? `Last call to vote for the next map in our Discord! Leaderboard at ${siteHost}` : `Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`;
 
 // A line the bot chose: its message, which list it came from and the line as written (before placeholders).
 export type Picked = { text: string; list: string; line: string };
@@ -127,7 +136,7 @@ const reached = (
   lines: Lines = DEFAULT_LINES,
   recent: Recent,
 ): Reached[] => {
-  const { siteHost, scoreToWin } = rule;
+  const { siteHost, scoreToWin, vote = false } = rule;
   const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
   const top = Math.max(0, leader?.score ?? 0);
   const nearly = nearlyScore(scoreToWin);
@@ -139,12 +148,12 @@ const reached = (
   }
   if (top >= scoreToWin / 2) {
     const { text, pick } = halfwayLine(match.factionScores, lines, random, recent);
-    out.push({ key: 'halfway', text: `${text} ${halfwayCall(siteHost, vip)}`, pick: pick ?? { text, list: 'halfway', line: text } });
+    out.push({ key: 'halfway', text: `${text} ${halfwayCall(siteHost, vip, vote)}`, pick: pick ?? { text, list: 'halfway', line: text } });
   }
   // Once per match, for the first team to get there.
   if (leader && leader.score >= nearly) {
     const pick = teamLine('nearly', lines.nearly, lines.nearlyOther, leader, nearly, random, recent);
-    out.push({ key: 'nearly', text: `${pick.text} ${nearlyCall(siteHost)}`, pick });
+    out.push({ key: 'nearly', text: `${pick.text} ${nearlyCall(siteHost, vote)}`, pick });
   }
   return out.map((m) => ({ ...m, text: fit(m.text) }));
 };

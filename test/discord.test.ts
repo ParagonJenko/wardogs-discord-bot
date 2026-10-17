@@ -397,6 +397,16 @@ describe('buildLiveStatus', () => {
     });
   });
 
+  it('links to the next-map vote while one is open, and says when it closes', () => {
+    const fields = buildLiveStatus({ ...view, vote: { url: 'https://discord.com/channels/1/2/3', closeScore: 95 } }, rules).embeds[0]?.fields;
+    expect(fields).toContainEqual({
+      name: '🗳️ Vote for the next map',
+      value: '[Vote now](https://discord.com/channels/1/2/3) · closes when a team reaches 95',
+      inline: true,
+    });
+    expect(buildLiveStatus(view, rules).embeds[0]?.fields?.some((f) => f.name.includes('Vote'))).toBe(false);
+  });
+
   it("shows how to join with the server's ID, but not while the server is offline", () => {
     expect(embedOf(buildLiveStatus(view, rules, undefined, serverId))?.fields?.at(-1)).toEqual({ name: 'Join the server', value: join });
     expect(embedOf(buildLiveStatus({ ...view, snapshot: null }, rules, undefined, serverId))?.fields).toBeUndefined();

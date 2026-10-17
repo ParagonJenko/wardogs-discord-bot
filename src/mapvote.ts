@@ -10,6 +10,11 @@ import type { MapChoice } from './rotationspage.ts';
 //
 // One vote per person is one per Discord account: a ballot is the voter's Discord user ID, and pressing a button again
 // moves it. Only members of the server can press the buttons (checked in interactions.ts).
+//
+// A second row of buttons votes on the conditions (time of day and weather): groups of the server's lightings such as Day,
+// Night and Rain, and Random. Each person has one vote on the map and one on the conditions. The winning group gives a
+// random lighting from it; with no votes on it, the lighting is left as the rotation has it. It is part of the same
+// message, so it adds nothing for people to read.
 
 export const MAP_VOTE_KEY = 'mapVote';
 
@@ -30,8 +35,15 @@ export type MapVoteRule = { options: number; minutes: number; closePercent: numb
 
 export type VoteOption = { map: string; name: string };
 
-// `user` is the voter's Discord user ID. It is never sent to the website.
-export type Ballot = { user: string; map: string; at: number };
+// One of the server's lightings (times of day and weather, such as DayClear), by id and the name to show.
+export type Lighting = { id: string; name: string };
+
+// A choice on the conditions row: the lightings it covers (a group such as Night, or every one for Random).
+export type ConditionOption = { key: string; label: string; lightings: Lighting[] };
+
+// `user` is the voter's Discord user ID. It is never sent to the website. `map` and `light` are what they picked, each null
+// until they vote on it.
+export type Ballot = { user: string; map: string | null; light: string | null; at: number };
 
 // How a vote ended: the map the server was told to play next, or why it was not told.
 export type VoteOutcome = {
@@ -42,6 +54,9 @@ export type VoteOutcome = {
   pending: boolean;
   // Why nothing was staged, in words for the page.
   note?: string;
+  // The lighting the conditions vote chose, with its name, when it chose one.
+  lighting?: string | null;
+  lightingName?: string | null;
 };
 
 export type MapVote = {
@@ -55,6 +70,8 @@ export type MapVote = {
   // The score a team reaching closes the vote. 0 when unknown (a vote saved before this was kept): then only time closes it.
   closeScore: number;
   options: VoteOption[];
+  // The conditions row: empty when the server's lightings give fewer than two groups to choose between.
+  conditions: ConditionOption[];
   ballots: Ballot[];
   // The Discord message the vote is in, to update as votes come and when it ends.
   message: { channelId: string; messageId: string } | null;
@@ -69,10 +86,22 @@ const MapVoteSchema = z.object({
   closesAt: z.number(),
   closeScore: z.number().default(0),
   options: z.array(z.object({ map: z.string(), name: z.string() })),
-  ballots: z.array(z.object({ user: z.string(), map: z.string(), at: z.number() })),
+  conditions: z
+    .array(z.object({ key: z.string(), label: z.string(), lightings: z.array(z.object({ id: z.string(), name: z.string() })) }))
+    .default([]),
+  ballots: z.array(
+    z.object({ user: z.string(), map: z.string().nullable().default(null), light: z.string().nullable().default(null), at: z.number() }),
+  ),
   message: z.object({ channelId: z.string(), messageId: z.string() }).nullable().default(null),
   outcome: z
-    .object({ at: z.number(), winner: z.string().nullable(), pending: z.boolean(), note: z.string().optional() })
+    .object({
+      at: z.number(),
+      winner: z.string().nullable(),
+      pending: z.boolean(),
+      note: z.string().optional(),
+      lighting: z.string().nullable().optional(),
+      lightingName: z.string().nullable().optional(),
+    })
     .nullable()
     .default(null),
 });
@@ -107,7 +136,7 @@ export const parseRecentMaps = (raw: unknown): string[] => {
 export const withPlayed = (recent: readonly string[], playing: string): string[] =>
   [...recent.filter((m) => m !== playing), playing].slice(-RECENT_MAPS);
 
-// The maps a vote can offer: ones the server can play (with a game mode) that were not played lately, and never the one
+// The maps a vote can offer: ones the server can play (with a game mode and infantry only) that were not played lately, and never the one
 // being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
 // the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is no vote.
 export const pickOptions = (
@@ -117,7 +146,9 @@ export const pickOptions = (
   count: number,
   random: () => number,
 ): VoteOption[] => {
-  const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0);
+  // Only maps that list infantry only themselves: every winner is played with it, and the id sent must be one that map has
+  // (see applyVoteWinner), never one found on another map.
+  const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
   // Most recent first, so the oldest are the first let back in.
   const newestFirst = [...recent].reverse();
   const fresh = playable.filter((m) => !recent.includes(m.id));
@@ -131,6 +162,32 @@ export const pickOptions = (
   return sample(pool, count, random).map((m) => ({ map: m.id, name: m.name }));
 };
 
+// The groups the conditions row can offer, in the order they are kept when there are more than fit (a row holds five
+// buttons and Random is one). A lighting is in every group its id or name fits, so Night covers a rainy night too. The
+// names are matched, not listed, as the server's catalogue decides what lightings there are.
+const CONDITION_GROUPS = [
+  { key: 'day', label: 'Day', pattern: /day|noon|morning/i },
+  { key: 'night', label: 'Night', pattern: /night/i },
+  { key: 'rain', label: 'Rain', pattern: /rain|storm|thunder|shower/i },
+  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening/i },
+  { key: 'dawn', label: 'Dawn', pattern: /dawn|sunrise/i },
+  { key: 'fog', label: 'Fog', pattern: /fog|mist/i },
+  { key: 'snow', label: 'Snow', pattern: /snow/i },
+  { key: 'overcast', label: 'Overcast', pattern: /overcast|cloud/i },
+] as const;
+const MAX_CONDITION_GROUPS = 4;
+export const RANDOM_CONDITION = 'random';
+
+// The conditions row for a server's lightings: the groups it has, and Random across all of them. Nothing (no row) when
+// there are fewer than two groups to choose between.
+export const conditionOptions = (lightings: readonly Lighting[]): ConditionOption[] => {
+  const groups = CONDITION_GROUPS.flatMap((g) => {
+    const own = lightings.filter((l) => g.pattern.test(`${l.id} ${l.name}`));
+    return own.length > 0 ? [{ key: g.key, label: g.label, lightings: own }] : [];
+  }).slice(0, MAX_CONDITION_GROUPS);
+  return groups.length < 2 ? [] : [...groups, { key: RANDOM_CONDITION, label: 'Random', lightings: [...lightings] }];
+};
+
 export const openVote = (
   match: { startedAt: number },
   fromMap: string,
@@ -138,6 +195,7 @@ export const openVote = (
   rule: MapVoteRule,
   now: number,
   closeScore: number,
+  conditions: ConditionOption[] = [],
 ): MapVote => ({
   id: String(match.startedAt),
   matchStartedAt: match.startedAt,
@@ -146,6 +204,7 @@ export const openVote = (
   closesAt: now + rule.minutes * 60_000,
   closeScore,
   options,
+  conditions,
   ballots: [],
   message: null,
   outcome: null,
@@ -153,13 +212,19 @@ export const openVote = (
 
 export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
 
-// One ballot per Discord user: voting again moves their vote. A vote for the map they already chose changes nothing.
-export const castVote = (vote: MapVote, ballot: { user: string; map: string }, now: number): CastResult => {
+// One ballot per Discord user, with a vote on the map and one on the conditions: voting again moves that vote, and the
+// other stays. A vote for what they already chose changes nothing. `ballot` has the map or the conditions, not both.
+export const castVote = (vote: MapVote, ballot: { user: string; map?: string; light?: string }, now: number): CastResult => {
   if (!isOpen(vote, now)) return { result: 'closed' };
-  if (!vote.options.some((o) => o.map === ballot.map)) return { result: 'unknown-map' };
+  const { map, light } = ballot;
+  if ((map === undefined) === (light === undefined)) return { result: 'unknown-map' };
+  if (map !== undefined && !vote.options.some((o) => o.map === map)) return { result: 'unknown-map' };
+  if (light !== undefined && !vote.conditions.some((c) => c.key === light)) return { result: 'unknown-map' };
   const had = vote.ballots.find((b) => b.user === ballot.user);
   const others = vote.ballots.filter((b) => b.user !== ballot.user);
-  return { vote: { ...vote, ballots: [...others, { ...ballot, at: now }] }, result: had === undefined ? 'counted' : 'changed' };
+  const next: Ballot = { user: ballot.user, map: map ?? had?.map ?? null, light: light ?? had?.light ?? null, at: now };
+  const before = map !== undefined ? had?.map : had?.light;
+  return { vote: { ...vote, ballots: [...others, next] }, result: before == null ? 'counted' : 'changed' };
 };
 
 // Votes for each option, in the order they were offered.
@@ -178,6 +243,38 @@ export const chooseWinner = (vote: MapVote, random: () => number): string | null
   )[0]!.map;
 };
 
+// Votes for each choice on the conditions row, in the order they were offered.
+export const tallyConditions = (vote: MapVote): { key: string; label: string; votes: number }[] =>
+  vote.conditions.map((c) => ({ key: c.key, label: c.label, votes: vote.ballots.filter((b) => b.light === c.key).length }));
+
+// The lighting the conditions vote chose: a random one from the group with the most votes (a tie is settled by chance), or
+// null when nobody voted on it, and then the lighting stays as the rotation has it.
+export const chooseConditions = (vote: MapVote, random: () => number): Lighting | null => {
+  const counts = tallyConditions(vote);
+  const top = Math.max(0, ...counts.map((c) => c.votes));
+  if (top === 0) return null;
+  const group = sample(
+    counts.filter((c) => c.votes === top),
+    1,
+    random,
+  )[0]!;
+  return sample(vote.conditions.find((c) => c.key === group.key)?.lightings ?? [], 1, random)[0] ?? null;
+};
+
+// Whether people can vote on this match right now: the vote is for this match, which has not ended, its time has not run out
+// and no team has reached the close score (the check that closes it comes later in the same pass). What points people at the
+// vote, in game and on the live status, goes by this, so neither sends them to a vote that is closed or about to be.
+export const votingNow = (
+  vote: MapVote | null,
+  match: { startedAt: number; endedAt?: number | undefined; factionScores: readonly { score: number }[] } | null,
+  now: number,
+): boolean => {
+  if (vote === null || match === null) return false;
+  if (vote.matchStartedAt !== match.startedAt || match.endedAt !== undefined || !isOpen(vote, now)) return false;
+  const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
+  return !(vote.closeScore > 0 && leading >= vote.closeScore);
+};
+
 // Whether an open vote should close now: its time is up, or a team has reached its close score.
 export const closeDue = (vote: MapVote, now: number, leadingScore: number): boolean =>
   vote.outcome === null && (now >= vote.closesAt || (vote.closeScore > 0 && leadingScore >= vote.closeScore));
@@ -189,8 +286,16 @@ export type PublicVote = {
   fromMap: string;
   fromName: string;
   closesAt: number;
+  // The score a team reaching closes the vote, or 0 when only time does.
+  closeScore: number;
+  // When it ended, once it has, so the website shows the result for a while after.
+  closedAt: number | null;
   options: { map: string; name: string; votes: number }[];
   total: number;
+  // The conditions row with its votes; empty when there is none.
+  conditions: { key: string; label: string; votes: number }[];
+  // The lighting the conditions vote chose, once it has, such as "Night, rain".
+  lightingName: string | null;
   // The map that won and is on its way to the server, when the vote ended with one.
   winner: { map: string; name: string } | null;
   // Every winner is played infantry only; the page says so.
@@ -209,8 +314,12 @@ export const publicVote = (vote: MapVote, now: number): PublicVote => {
     fromMap: vote.fromMap,
     fromName: mapName(vote.fromMap),
     closesAt: vote.closesAt,
+    closeScore: vote.closeScore,
+    closedAt: vote.outcome?.at ?? null,
     options,
     total: options.reduce((sum, o) => sum + o.votes, 0),
+    conditions: tallyConditions(vote),
+    lightingName: vote.outcome?.lightingName ?? null,
     winner: winner === null ? null : { map: winner, name: options.find((o) => o.map === winner)?.name ?? mapName(winner) },
     infantryOnly: true,
     note: vote.outcome?.note ?? null,
@@ -229,6 +338,7 @@ export const NOTE = {
 // The Discord message for a vote: the counts as bars, and a button per map while it is open. Buttons are in rows of five,
 // the most Discord allows.
 export const VOTE_ID_PREFIX = 'mapvote';
+export const LIGHT_ID_PREFIX = 'maplight';
 const BAR_WIDTH = 12;
 const barOf = (votes: number, total: number): string => {
   const filled = total === 0 ? 0 : Math.round((votes / total) * BAR_WIDTH);
@@ -248,12 +358,12 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
   const closing = vote.closeScore > 0 ? `when a team reaches ${vote.closeScore} points, or ${at}, whichever is first.` : `${at}.`;
   const where = siteUrl === undefined ? '' : ` Results also on ${siteUrl.replace(/\/$/, '')}/vote.`;
   const description = shown.open
-    ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**. One vote each: press another map to change yours. ` +
-      `Closes ${closing} The winner plays next, **infantry only**.${where}`
+    ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**${shown.conditions.length > 0 ? ' and the conditions' : ''}. ` +
+      `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${where}`
     : shown.winner !== null
       ? shown.pending
         ? `**${shown.winner.name}** won. Putting it on the server…`
-        : `**${shown.winner.name}** won and plays next, **infantry only**.`
+        : `**${shown.winner.name}** won and plays next, **infantry only**${shown.lightingName ? `, **${shown.lightingName}**` : ''}.`
       : (shown.note ?? 'The vote has closed. Counting the votes…');
   const embed: Embed = {
     title: '🗺️ Vote for the next map',
@@ -264,6 +374,13 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
       value: `${barOf(o.votes, shown.total)} ${o.votes} ${o.votes === 1 ? 'vote' : 'votes'}`,
     })),
   };
+  // The conditions as one line, so the row adds a field and not a field each.
+  if (shown.conditions.length > 0 && (shown.open || shown.winner !== null)) {
+    embed.fields = [
+      ...(embed.fields ?? []),
+      { name: '🌤️ Conditions', value: shown.conditions.map((c) => `**${c.label}** ${c.votes}`).join(' · ') },
+    ];
+  }
   const buttons = shown.open
     ? shown.options.map((o) => ({
         type: 2,
@@ -272,10 +389,26 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
         custom_id: `${VOTE_ID_PREFIX}:${vote.id}:${o.map}`,
       }))
     : [];
-  const components = Array.from({ length: Math.ceil(buttons.length / BUTTONS_PER_ROW) }, (_, i) => ({
+  const rows = Array.from({ length: Math.ceil(buttons.length / BUTTONS_PER_ROW) }, (_, i) => ({
     type: 1,
     components: buttons.slice(i * BUTTONS_PER_ROW, (i + 1) * BUTTONS_PER_ROW),
   }));
+  // The conditions row: its own row, so it is clear it is a second vote.
+  const conditionButtons =
+    shown.open && vote.conditions.length > 0
+      ? [
+          {
+            type: 1,
+            components: vote.conditions.map((c) => ({
+              type: 2,
+              style: SECONDARY,
+              label: c.key === RANDOM_CONDITION ? '🎲 Random' : c.label,
+              custom_id: `${LIGHT_ID_PREFIX}:${vote.id}:${c.key}`,
+            })),
+          },
+        ]
+      : [];
+  const components = [...rows, ...conditionButtons];
   return { embeds: [embed], components, allowed_mentions: { parse: [] } };
 };
 
@@ -284,6 +417,18 @@ export const parseVoteButton = (customId: string | undefined): { poll: string; m
   const found = /^mapvote:(\d{1,20}):([A-Za-z0-9_]{1,64})$/.exec(customId ?? '');
   return found === null ? null : { poll: found[1]!, map: found[2]! };
 };
+
+// A conditions button's custom_id: "maplight:<vote id>:<group>". Null for anything else.
+export const parseLightButton = (customId: string | undefined): { poll: string; light: string } | null => {
+  const found = /^maplight:(\d{1,20}):([a-z]{1,16})$/.exec(customId ?? '');
+  return found === null ? null : { poll: found[1]!, light: found[2]! };
+};
+
+// The link to the vote's message in Discord, while it is open and was posted.
+export const voteLink = (vote: MapVote | null, guildId: string | undefined, now: number): string | null =>
+  vote !== null && vote.message !== null && guildId && isOpen(vote, now)
+    ? `https://discord.com/channels/${guildId}/${vote.message.channelId}/${vote.message.messageId}`
+    : null;
 
 const DISCORD_API = 'https://discord.com/api/v10';
 

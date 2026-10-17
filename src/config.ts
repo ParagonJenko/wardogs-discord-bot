@@ -257,7 +257,11 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
         : null,
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
-        ? { siteHost: new URL(e.SITE_URL).host, scoreToWin: e.SCORE_TO_WIN }
+        ? {
+            siteHost: new URL(e.SITE_URL).host,
+            scoreToWin: e.SCORE_TO_WIN,
+            ...(e.MAP_VOTE === 'on' && e.DISCORD_VOTE_CHANNEL_ID && e.DISCORD_BOT_TOKEN ? { vote: true } : {}),
+          }
         : null,
     seedingMessages:
       e.SEEDING_MESSAGE_MINUTES > 0

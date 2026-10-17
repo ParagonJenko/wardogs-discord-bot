@@ -114,6 +114,9 @@ type PollerDeps = {
   // heard from. With it, a match ends when the game says, with the game's scores, and nothing is worked out from the
   // scores the checks see.
   matchFeed?: () => Promise<MatchFeed | null>;
+  // Whether people can vote for the next map in this match right now (see votingNow). The halfway and 90-point messages only
+  // send people to the vote while they can, and say the usual thing after.
+  voting?: (match: MatchState) => Promise<boolean>;
   // An outage confirmed or over, for the moderation log. Told once: one that fails is logged, not retried.
   outage?: (event: OutageEvent) => Promise<void>;
 };
@@ -332,6 +335,7 @@ export const createPoller = ({
   privateProfiles,
   liveMatch,
   matchFeed,
+  voting,
   outage: tellOutage,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
@@ -488,9 +492,14 @@ export const createPoller = ({
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
     const wording = broadcast === undefined && !welcoming && ending === null ? DEFAULT_LINES : await readLines(lines, log);
+    // The vote wording only while there is a vote to send people to.
+    const matchRule =
+      config.matchMessages !== null && config.matchMessages.vote === true && !((await voting?.(match)) ?? false)
+        ? { ...config.matchMessages, vote: false }
+        : config.matchMessages;
     const { messages, send: milestone, used: milestoneLine } =
-      config.matchMessages !== null && broadcast !== undefined && status.players > 0
-        ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random, wording, state.recent)
+      matchRule !== null && broadcast !== undefined && status.players > 0
+        ? nextMessage(state.messages, match, time, matchRule, config.vip, random, wording, state.recent)
         : { messages: state.messages, send: null, used: null };
     const seedingRule = config.seedingMessages;
     const watched = watchJoins(state.joins, steamIds(players), time, canSeedMessage(seedingNow, status.players, config.rules.live));
