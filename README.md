@@ -593,12 +593,19 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
+   A second row of buttons votes on the **conditions** (time of day and weather): groups of the server's lightings such as
+   Day, Night and Rain, and 🎲 Random. Each person has one vote on the map and one on the conditions, each changed on its
+   own. The groups are matched from the names of the lightings the server lists (day, night, dusk, dawn, rain or storm,
+   fog, snow, overcast), at most four plus Random, and a group the server has no lighting for isn't offered. With fewer than
+   two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain. The
+   group with the most votes (a tie by chance) gives a random lighting from it, and Random picks from all of them. With no
+   votes on it, the lighting stays as the rotation has it. It is part of the same message, so nothing more is announced.
 3. The vote stays open until a team reaches `MAP_VOTE_CLOSE_PERCENT` of `SCORE_TO_WIN` (default 95, so 95 of 100), or for
    `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). It is closed a little before the end so the
    winner can still be put on the server, which happens at the next check (within a minute). A match already at that score
    when the bot sees it gets no vote. The buttons go away and the message shows the result.
 4. The map with the most votes (a tie is settled by chance) is staged on the server, **infantry only**, the same as
-   `/setnextmap`: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
+   `/setnextmap`, with the lighting the conditions vote chose: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
    It tries again each check if the server can't be reached. Nothing is staged when nobody voted, when staff used
    `/setnextmap` or `/changemap` while the vote was open (their pick stands), or when the match ended first.
 

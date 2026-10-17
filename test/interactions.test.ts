@@ -889,6 +889,15 @@ describe('a press of a vote button', () => {
     expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', { content: 'You voted for **Bakurani**.', allowed_mentions: { parse: [] } });
   });
 
+  it('counts a conditions button as a vote on the conditions', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Night**.' })) };
+    const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'maplight:42:night' } });
+
+    await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', light: 'night', userId: '9001' });
+  });
+
   it('tells only the voter when the vote did not change, such as after it closed', async () => {
     const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: null, reply: 'The vote has closed.' })) };
     const { body, signature, timestamp } = await signed(press());

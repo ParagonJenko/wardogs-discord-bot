@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
-import { parseVoteButton } from './mapvote.ts';
+import { parseLightButton, parseVoteButton } from './mapvote.ts';
 import { PRIVATE_NAME } from './privacy.ts';
 import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
@@ -416,7 +416,8 @@ type InteractionDeps = {
   adminRoleIds: string[];
   // A press of a next-map vote button (see mapvote.ts): what to do with the vote. `update` is the vote message with the new
   // counts, when the vote changed; `reply` is for the voter alone. Without it, buttons are not answered.
-  castVote?: (press: { poll: string; map: string; userId: string }) => Promise<{ update: unknown | null; reply: string }>;
+  // `map` is a map button, `light` a conditions button: one of them.
+  castVote?: (press: { poll: string; map?: string; light?: string; userId: string }) => Promise<{ update: unknown | null; reply: string }>;
   // The one server whose members may vote.
   voteGuildId?: string | undefined;
 };
@@ -575,7 +576,9 @@ const replyPrivately = async (
 // A press of a vote button. The message is updated with the new counts at once, and the voter is told privately what was
 // counted, so nobody else sees who voted for what.
 const handleVotePress = async (interaction: z.infer<typeof InteractionSchema>, deps: InteractionDeps): Promise<InteractionResult> => {
-  const press = parseVoteButton(interaction.data?.custom_id);
+  const map = parseVoteButton(interaction.data?.custom_id);
+  const light = map === null ? parseLightButton(interaction.data?.custom_id) : null;
+  const press = map !== null ? { poll: map.poll, map: map.map } : light !== null ? { poll: light.poll, light: light.light } : null;
   const userId = interaction.member?.user?.id;
   if (press === null || deps.castVote === undefined || userId === undefined || !interaction.token) {
     return { status: 200, body: privateMessage('Unknown button.') };

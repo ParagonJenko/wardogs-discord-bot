@@ -9,6 +9,11 @@ import {
   parseMapVote,
   parseVoteButton,
   voteLink,
+  chooseConditions,
+  conditionOptions,
+  parseLightButton,
+  tallyConditions,
+  type Lighting,
   voteMessage,
   editVoteMessage,
   postVoteMessage,
@@ -100,7 +105,7 @@ describe('castVote', () => {
 });
 
 describe('chooseWinner', () => {
-  const withVotes = (picks: string[]): MapVote => ({ ...vote(), ballots: picks.map((map, i) => ({ ...ballot(i, map), at: NOW })) });
+  const withVotes = (picks: string[]): MapVote => ({ ...vote(), ballots: picks.map((map, i) => ({ ...ballot(i, map), light: null, at: NOW })) });
 
   it('takes the map with the most votes', () => {
     expect(chooseWinner(withVotes(['A', 'B', 'B']), Math.random)).toBe('B');
@@ -147,7 +152,7 @@ describe('closeScoreFor', () => {
 
 describe('publicVote and storage', () => {
   it('shows votes and the winner but never who voted', () => {
-    const v: MapVote = { ...vote(), ballots: [{ ...ballot(1, 'A'), at: NOW }], outcome: { at: NOW, winner: 'A', pending: false } };
+    const v: MapVote = { ...vote(), ballots: [{ ...ballot(1, 'A'), light: null, at: NOW }], outcome: { at: NOW, winner: 'A', pending: false } };
     const shown = publicVote(v, NOW + 1);
     expect(shown).toMatchObject({ open: false, total: 1, winner: { map: 'A', name: 'Alpha' }, infantryOnly: true, pending: false, closeScore: 95, closedAt: NOW });
     expect(JSON.stringify(shown)).not.toContain('user1');
@@ -169,7 +174,7 @@ describe('publicVote and storage', () => {
 describe('voteMessage', () => {
   const cast = (v: MapVote, picks: [number, string][]): MapVote => ({
     ...v,
-    ballots: picks.map(([n, map]) => ({ ...ballot(n, map), at: NOW })),
+    ballots: picks.map(([n, map]) => ({ ...ballot(n, map), light: null, at: NOW })),
   });
 
   it('has a button per map while open, each carrying the vote and the map', () => {
@@ -243,5 +248,138 @@ describe('voteLink', () => {
     expect(voteLink(vote(), '11', NOW + 1)).toBeNull();
     expect(voteLink(posted, undefined, NOW + 1)).toBeNull();
     expect(voteLink(null, '11', NOW + 1)).toBeNull();
+  });
+});
+
+describe('conditionOptions', () => {
+  const lighting = (id: string, name = id): Lighting => ({ id, name });
+  const lightings = [
+    lighting('DayClear', 'Day, clear'),
+    lighting('DayRain', 'Day, rain'),
+    lighting('NightClear', 'Night, clear'),
+    lighting('NightStorm', 'Night, storm'),
+    lighting('Dusk', 'Dusk'),
+  ];
+
+  it('groups lightings by time of day and weather, with Random across all of them', () => {
+    const options = conditionOptions(lightings);
+    expect(options.map((o) => o.key)).toEqual(['day', 'night', 'rain', 'dusk', 'random']);
+    expect(options.find((o) => o.key === 'day')?.lightings.map((l) => l.id)).toEqual(['DayClear', 'DayRain']);
+    // A rainy night is in Night and in Rain.
+    expect(options.find((o) => o.key === 'rain')?.lightings.map((l) => l.id)).toEqual(['DayRain', 'NightStorm']);
+    expect(options.find((o) => o.key === 'random')?.lightings).toHaveLength(5);
+  });
+
+  it('leaves out groups the server has no lighting for, and keeps a row to five buttons', () => {
+    const many = [...lightings, lighting('Dawn'), lighting('Fog'), lighting('Snow'), lighting('Overcast')];
+    const options = conditionOptions(many);
+    expect(options).toHaveLength(5);
+    expect(options.at(-1)?.key).toBe('random');
+    expect(conditionOptions([lighting('DayClear'), lighting('DayRain')]).map((o) => o.key)).toEqual(['day', 'rain', 'random']);
+  });
+
+  it('offers no row when there is nothing to choose between', () => {
+    expect(conditionOptions([])).toEqual([]);
+    expect(conditionOptions([lighting('Sunny'), lighting('Other')])).toEqual([]);
+    expect(conditionOptions([lighting('DayClear')])).toEqual([]);
+  });
+});
+
+describe('the conditions vote', () => {
+  const conditions = conditionOptions([
+    { id: 'DayClear', name: 'Day, clear' },
+    { id: 'NightClear', name: 'Night, clear' },
+    { id: 'NightStorm', name: 'Night, storm' },
+  ]);
+  const withConditions = (): MapVote => ({ ...vote(), conditions });
+  const apply = (v: MapVote, ballotOf: { user: string; map?: string; light?: string }, at = NOW + 1): MapVote => {
+    const cast = castVote(v, ballotOf, at);
+    if (!('vote' in cast)) throw new Error(cast.result);
+    return cast.vote;
+  };
+
+  it('keeps one vote on the map and one on the conditions for each person, changed independently', () => {
+    let v = apply(withConditions(), { user: 'a', map: 'A' });
+    v = apply(v, { user: 'a', light: 'night' });
+    expect(v.ballots).toEqual([{ user: 'a', map: 'A', light: 'night', at: NOW + 1 }]);
+    v = apply(v, { user: 'a', light: 'day' });
+    expect(v.ballots[0]).toMatchObject({ map: 'A', light: 'day' });
+    v = apply(v, { user: 'a', map: 'B' });
+    expect(v.ballots[0]).toMatchObject({ map: 'B', light: 'day' });
+    expect(v.ballots).toHaveLength(1);
+  });
+
+  it('says whether a vote was new or moved, for each of the two', () => {
+    const v = apply(withConditions(), { user: 'a', map: 'A' });
+    expect(castVote(v, { user: 'a', light: 'day' }, NOW + 2).result).toBe('counted');
+    expect(castVote(v, { user: 'a', map: 'B' }, NOW + 2).result).toBe('changed');
+  });
+
+  it('refuses a choice that is not offered, both or neither at once, and any vote on a vote without the row', () => {
+    expect(castVote(withConditions(), { user: 'a', light: 'snow' }, NOW + 1).result).toBe('unknown-map');
+    expect(castVote(withConditions(), { user: 'a', map: 'A', light: 'day' }, NOW + 1).result).toBe('unknown-map');
+    expect(castVote(withConditions(), { user: 'a' }, NOW + 1).result).toBe('unknown-map');
+    expect(castVote(vote(), { user: 'a', light: 'day' }, NOW + 1).result).toBe('unknown-map');
+  });
+
+  it('chooses a random lighting from the group with the most votes, none when nobody voted', () => {
+    let v = withConditions();
+    expect(chooseConditions(v, Math.random)).toBeNull();
+    for (const [user, light] of [['a', 'night'], ['b', 'night'], ['c', 'day']] as const) v = apply(v, { user, light });
+    expect(tallyConditions(v).map((c) => c.votes)).toEqual([1, 2, 0, 0]);
+    for (const roll of [0, 0.5, 0.99]) expect(['NightClear', 'NightStorm']).toContain(chooseConditions(v, () => roll)?.id);
+  });
+
+  it('lets Random win across every lighting', () => {
+    const v = apply(withConditions(), { user: 'a', light: 'random' });
+    expect(new Set([0, 0.4, 0.99].map((roll) => chooseConditions(v, () => roll)?.id))).toEqual(new Set(['DayClear', 'NightClear', 'NightStorm']));
+  });
+
+  it('shows the counts on the website and the chosen lighting once it is on the server', () => {
+    let v = apply(withConditions(), { user: 'a', light: 'night' });
+    expect(publicVote(v, NOW + 2).conditions).toEqual([
+      { key: 'day', label: 'Day', votes: 0 },
+      { key: 'night', label: 'Night', votes: 1 },
+      { key: 'rain', label: 'Rain', votes: 0 },
+      { key: 'random', label: 'Random', votes: 0 },
+    ]);
+    v = { ...v, outcome: { at: NOW, winner: 'A', pending: false, lighting: 'NightStorm', lightingName: 'Night, storm' } };
+    expect(publicVote(v, NOW + 2).lightingName).toBe('Night, storm');
+  });
+
+  it('puts the conditions in the Discord message as a second row and a field, and names the lighting at the end', () => {
+    const message = voteMessage(withConditions(), NOW + 1);
+    expect(message.components).toHaveLength(2);
+    const row = (message.components[1] as { components: { label: string; custom_id: string }[] }).components;
+    expect(row.map((b) => b.label)).toEqual(['Day', 'Night', 'Rain', '🎲 Random']);
+    expect(row.map((b) => parseLightButton(b.custom_id))).toEqual([
+      { poll: '42', light: 'day' },
+      { poll: '42', light: 'night' },
+      { poll: '42', light: 'rain' },
+      { poll: '42', light: 'random' },
+    ]);
+    expect(message.embeds[0]?.fields?.at(-1)?.name).toContain('Conditions');
+    const done = voteMessage(
+      { ...withConditions(), outcome: { at: NOW, winner: 'B', pending: false, lighting: 'NightStorm', lightingName: 'Night, storm' } },
+      NOW + 1,
+    );
+    expect(done.components).toEqual([]);
+    expect(done.embeds[0]?.description).toContain('Bravo');
+    expect(done.embeds[0]?.description).toContain('Night, storm');
+  });
+
+  it('has no conditions row or field when the server gave too few groups', () => {
+    const message = voteMessage(vote(), NOW + 1);
+    expect(message.components).toHaveLength(1);
+    expect(message.embeds[0]?.fields?.some((f) => f.name.includes('Conditions'))).toBe(false);
+  });
+});
+
+describe('parseLightButton', () => {
+  it('reads only conditions buttons of this vote', () => {
+    expect(parseLightButton('maplight:42:night')).toEqual({ poll: '42', light: 'night' });
+    expect(parseLightButton('mapvote:42:Kavkazi')).toBeNull();
+    expect(parseLightButton('maplight:x:night')).toBeNull();
+    expect(parseLightButton(undefined)).toBeNull();
   });
 });

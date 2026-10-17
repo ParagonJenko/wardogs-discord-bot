@@ -5,8 +5,10 @@ import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import {
   castVote,
+  chooseConditions,
   chooseWinner,
   closeDue,
+  conditionOptions,
   closeScoreFor,
   editVoteMessage,
   MAP_VOTE_KEY,
@@ -1350,7 +1352,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // A press of a vote button: counts it and answers with the vote message as it is now, and what to tell the voter.
-  async castMapVote(press: { poll: string; map: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
+  async castMapVote(press: { poll: string; map?: string; light?: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
     const config = loadConfig(stringVars(this.env));
     return this.voting(async () => {
       const now = Date.now();
@@ -1358,15 +1360,22 @@ export class Watcher extends DurableObject<Env> {
       if (config.mapVote === null || vote === null || vote.id !== press.poll) {
         return { update: null, reply: 'That vote is over. A new one opens with the next match.' };
       }
-      const cast = castVote(vote, { user: press.userId, map: press.map }, now);
+      const cast = castVote(vote, { user: press.userId, ...(press.map === undefined ? {} : { map: press.map }), ...(press.light === undefined ? {} : { light: press.light }) }, now);
       if (!('vote' in cast)) {
-        return { update: null, reply: cast.result === 'closed' ? 'The vote has closed.' : 'That map is not in this vote.' };
+        return { update: null, reply: cast.result === 'closed' ? 'The vote has closed.' : 'That choice is not in this vote.' };
       }
       await this.ctx.storage.put(MAP_VOTE_KEY, cast.vote);
-      const name = cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map);
+      const name =
+        press.map !== undefined
+          ? (cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map))
+          : (cast.vote.conditions.find((c) => c.key === press.light)?.label ?? 'that');
+      const what = press.map !== undefined ? 'map' : 'conditions';
       return {
         update: voteMessage(cast.vote, now, config.siteUrl),
-        reply: cast.result === 'changed' ? `Your vote is now for **${name}**.` : `You voted for **${name}**. Press another map to change it.`,
+        reply:
+          cast.result === 'changed'
+            ? `Your ${what} vote is now for **${name}**.`
+            : `You voted for **${name}**. Press another ${what} to change it.`,
       };
     });
   }
@@ -1424,8 +1433,14 @@ export class Watcher extends DurableObject<Env> {
         const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
         if (!closeDue(vote, now, leading)) return;
         const winner = chooseWinner(vote, Math.random);
+        const lighting = chooseConditions(vote, Math.random);
         vote = await save(
-          ended(vote, winner === null ? { at: now, winner: null, pending: false, note: NOTE.nobody } : { at: now, winner, pending: true }),
+          ended(
+            vote,
+            winner === null
+              ? { at: now, winner: null, pending: false, note: NOTE.nobody }
+              : { at: now, winner, pending: true, ...(lighting === null ? {} : { lighting: lighting.id, lightingName: lighting.name }) },
+          ),
         );
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
         await this.showVote(config, rule, vote);
@@ -1452,7 +1467,7 @@ export class Watcher extends DurableObject<Env> {
     const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
     if (options.length === 0) return;
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
-    const opened = openVote(match, playing, options, rule, now, closeScore);
+    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []));
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
     await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
@@ -1478,7 +1493,8 @@ export class Watcher extends DurableObject<Env> {
       const http = socketHttp(connect);
       const [catalog, rotation] = await Promise.all([this.catalog(config), fetchRotation(rconUrl, rconPassword, http).catch(() => null)]);
       const choice = catalog?.maps.find((m) => m.id === winner);
-      const planned = planSetup(winner, VOTE_SETUP_OPTIONS, {
+      const lighting = vote.outcome?.lighting;
+      const planned = planSetup(winner, { ...VOTE_SETUP_OPTIONS, ...(lighting ? { lighting } : {}) }, {
         rotation,
         mapExperiences: choice === undefined ? null : [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
         experiences: catalog?.experiences ?? null,
@@ -1498,13 +1514,13 @@ export class Watcher extends DurableObject<Env> {
       console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
       const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
       const votes = vote.ballots.filter((b) => b.map === winner).length;
-      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only (${votes} votes).`, http).catch((error: unknown) =>
+      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${vote.outcome?.lightingName ? `, ${vote.outcome.lightingName}` : ''} (${votes} votes).`, http).catch((error: unknown) =>
         console.error(`Map vote result announcement failed: ${errorText(error)}`),
       );
-      return { at, winner, pending: false };
+      return { ...vote.outcome, at, winner, pending: false };
     } catch (error) {
       console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
-      return { at: vote.outcome?.at ?? at, winner, pending: true };
+      return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
     }
   }
 
