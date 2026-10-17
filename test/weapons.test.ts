@@ -6,6 +6,7 @@ import {
   feedKillsSince,
   feedAuthorized,
   isNamed,
+  isPlaying,
   MAX_FEED_EVENTS,
   parseFeed,
   parsePlayerWeapons,
@@ -80,7 +81,14 @@ describe('parseFeed', () => {
       tags: [],
     };
 
-    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({ events: [kill], kills: [kill], skipped: 0, unread: 0, ended: false });
+    expect(parseFeed({ serverId: 's1', serverName: 'UK #1', events: [event()] })).toEqual({
+      events: [kill],
+      kills: [kill],
+      presence: [],
+      match: [],
+      timeline: [kill],
+      unread: 0,
+    });
   });
 
   it('keeps suicides, falls and deaths with nobody to blame as deaths, not kills', () => {
@@ -99,37 +107,82 @@ describe('parseFeed', () => {
     expect(batch?.events[1]?.tags).toEqual(['Suicide']);
     expect(batch?.events[2]).toMatchObject({ killerSteamId: null, cause: null, tags: ['Falling'] });
     expect(batch?.kills[0]).toMatchObject({ headshot: false, tags: ['RoadKill'] });
-    expect(batch?.skipped).toBe(0);
+    expect(batch?.unread).toBe(0);
   });
 
-  it('skips other events and anything malformed', () => {
+  it('counts other events and anything malformed as unread', () => {
     const batch = parseFeed({
       events: [event({ eventId: 'other', type: 'spawned' }), event({ eventId: 'odd', distance: 'far' }), 'nonsense', event({ eventId: 'kept' })],
     });
 
     expect(batch?.events.map((e) => e.eventId)).toEqual(['kept']);
-    expect(batch?.skipped).toBe(3);
     expect(batch?.unread).toBe(3);
   });
 
-  it("leaves out Season 2's joins, leaves, match states and results without counting them unread", () => {
+  // As a host posted them on 15 October 2026, ids blanked.
+  it("reads Season 2's joins and leaves, the match's states and its result", () => {
+    const where = { matchId: 'm2', mapName: 'Kavkazi' };
     const batch = parseFeed({
       events: [
-        { type: 'player_joined', eventId: 'j1', eventTime: 1, playerName: 'Ash', playerSteamId: ASH, players: 42 },
-        { type: 'player_left', eventId: 'l1', eventTime: 2, playerName: 'Bo', playerSteamId: BO, players: 41 },
-        { type: 'match_state', eventId: 's1', eventTime: 3, state: 'MatchState.Playing.KOTH' },
-        { type: 'match_ended', eventId: 'r1', eventTime: 4, players: 98, winningFaction: 'Lonestar', factionScores: [] },
-        event({ eventId: 'kept' }),
+        { type: 'player_joined', eventId: 'j1', eventTime: 1, ...where, playerName: 'Ash', playerId: '-0000-000000000000', playerSteamId: ASH, players: 42 },
+        { type: 'player_left', eventId: 'l1', eventTime: 2, ...where, playerName: 'Bo', playerSteamId: BO, players: 41 },
+        { type: 'match_state', eventId: 's0', eventTime: 0, state: 'MatchState.PreMatch.WaitingForWorldLoad' },
+        { type: 'match_state', eventId: 's1', eventTime: 3, ...where, state: 'MatchState.Playing.KOTH' },
+        event({ eventId: 'k1' }),
+        {
+          type: 'match_ended',
+          eventId: 'r1',
+          eventTime: 7658.55,
+          ...where,
+          players: 98,
+          winningFaction: 'Lonestar',
+          factionScores: [
+            { faction: 'Lonestar', score: 100 },
+            { faction: 'Valkyra', score: 0 },
+            { faction: 'Manticore', score: 59 },
+          ],
+        },
       ],
     });
 
-    expect(batch?.events.map((e) => e.eventId)).toEqual(['kept']);
-    expect(batch).toMatchObject({ skipped: 4, unread: 0, ended: true });
+    expect(batch?.presence).toEqual([
+      { eventId: 'j1', type: 'joined', steamId: ASH, name: 'Ash', players: 42 },
+      { eventId: 'l1', type: 'left', steamId: BO, name: 'Bo', players: 41 },
+    ]);
+    const result = {
+      eventId: 'r1',
+      type: 'result',
+      time: 7658.55,
+      matchId: 'm2',
+      map: 'Kavkazi',
+      players: 98,
+      winner: 'Lonestar',
+      factionScores: [
+        { name: 'Lonestar', score: 100 },
+        { name: 'Valkyra', score: 0 },
+        { name: 'Manticore', score: 59 },
+      ],
+    };
+    expect(batch?.match).toEqual([
+      { eventId: 's0', type: 'state', state: 'MatchState.PreMatch.WaitingForWorldLoad', time: 0, matchId: '', map: '' },
+      { eventId: 's1', type: 'state', state: 'MatchState.Playing.KOTH', time: 3, matchId: 'm2', map: 'Kavkazi' },
+      result,
+    ]);
+    expect(batch?.timeline.map((e) => e.eventId)).toEqual(['s0', 's1', 'k1', 'r1']);
+    expect(batch?.unread).toBe(0);
   });
 
-  it('says a match ended only when the batch has its result', () => {
-    expect(parseFeed({ events: [event({ eventId: 'k1' }), { type: 'match_state', eventId: 's1', state: 'MatchState.Ended' }] })?.ended).toBe(false);
-    expect(parseFeed({ events: [{ type: 'match_ended', eventId: 'r1' }] })?.ended).toBe(true);
+  it('reads a result that names no winner, and leaves out a join with no Steam ID', () => {
+    const batch = parseFeed({
+      events: [
+        { type: 'match_ended', eventId: 'r1', winningFaction: '' },
+        { type: 'player_joined', eventId: 'j1', playerName: 'Ash' },
+      ],
+    });
+
+    expect(batch?.match).toEqual([{ eventId: 'r1', type: 'result', time: 0, matchId: '', map: '', players: null, winner: null, factionScores: [] }]);
+    expect(batch?.presence).toEqual([]);
+    expect(batch?.unread).toBe(1);
   });
 
   it('keeps a kill without a distance, as when a vehicle blows up', () => {
@@ -513,5 +566,12 @@ describe('feedKillsSince', () => {
 
     expect(feedKillsSince(record, '2026-10-01')).toEqual({ kills: 9, headshots: 3 });
     expect(feedKillsSince({}, '2026-10-01')).toEqual({ kills: 0, headshots: 0 });
+  });
+});
+
+describe('isPlaying', () => {
+  it('is the Playing state and the states under it', () => {
+    expect(['MatchState.Playing', 'MatchState.Playing.KOTH'].map(isPlaying)).toEqual([true, true]);
+    expect(['MatchState.PreMatch.WaitingForPlayers', 'MatchState.PostMatch', 'MatchState.PlayingSoon'].map(isPlaying)).toEqual([false, false, false]);
   });
 });

@@ -48,7 +48,8 @@ import {
   mapName,
   postWebhook,
 } from './discord.ts';
-import { FEED_WATCH_KEY, observeFeed, parseFeedWatch } from './feedwatch.ts';
+import { FEED_QUIET_MS, FEED_WATCH_KEY, observeFeed, parseFeedWatch } from './feedwatch.ts';
+import { MATCH_FEED_KEY, NO_MATCH_FEED, parseMatchFeed, recordMatchFeed, type MatchFeed } from './matchfeed.ts';
 import { TEAM_KILL_WARNING, griefDayKey, hasGrief, parseGriefDay, playerGrief, recordGrief, type GriefAlert } from './griefing.ts';
 import {
   ADMIN_COMMAND_DEFINITIONS,
@@ -73,6 +74,7 @@ import {
   playerSessions,
   pruneSessions,
   recordJoins,
+  recordPresence,
   SESSION_DAYS_KEPT,
   SESSIONS_PRUNED_KEY,
   writeSessions,
@@ -137,7 +139,8 @@ import {
 } from './linespage.ts';
 import type { OutageEvent } from './outages.ts';
 import { feedRecordOf } from './matchend.ts';
-import { createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
+import { createFeedJoins, createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
+import { JOIN_WAIT_MS } from './messages.ts';
 import {
   ALERT_LOG_KEY,
   buildReview,
@@ -342,6 +345,7 @@ import {
   feedAuthorized,
   feedKillsSince,
   isKill,
+  isMatchEvent,
   MAX_FEED_BYTES,
   MIN_FEED_TOKEN,
   parseFeed,
@@ -357,6 +361,8 @@ import {
   weaponName,
   type FeedEvent,
   type FeedKill,
+  type FeedMatchEvent,
+  type FeedPresence,
   type WeaponDay,
 } from './weapons.ts';
 import {
@@ -380,7 +386,7 @@ import {
   type RulesPage,
   type WeaponRule,
 } from './weaponrules.ts';
-import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveMatch, type LiveSnapshot } from './live.ts';
+import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot } from './live.ts';
 import {
   adminFeed,
   alertedOn,
@@ -436,7 +442,7 @@ const LEADERBOARD_SIZE = 10;
 // The weapons in /api/stats: the top this many over the leaderboard's days.
 const WEAPONS_LISTED = 10;
 // Kill feed events already counted, remembered so a batch the game sends again is not counted twice.
-const KILLS_REMEMBERED = 5_000;
+const EVENTS_REMEMBERED = 5_000;
 // Live pages open at once, at most. Each is one WebSocket to the Durable Object.
 const LIVE_VIEWERS = 500;
 // The staff page's live kill feed: its sockets are tagged apart from the live page's, and fewer may be open.
@@ -466,6 +472,9 @@ const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => res
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+// What the Worker hands the Durable Object of a kill feed batch (see parseFeed).
+type FeedRecord = { timeline: (FeedEvent | FeedMatchEvent)[]; presence: FeedPresence[] };
+
 // Runs work one at a time, in the order it was asked for. A failure does not hold up what comes after it.
 const oneAtATime = () => {
   let queue: Promise<unknown> = Promise.resolve();
@@ -488,7 +497,8 @@ const oneAtATime = () => {
 // and from the game's kill feed: 'weapons:<UTC date>' (every kill that day by weapon),
 // 'playerWeapons:<Steam ID>' (that player's kills by weapon for each of their last 90 days), 'killFeedSince' (the
 // UTC date of the first kill the feed sent), 'killFeedHeardAt' (when its last batch came), 'feedWatch' (whether it has
-// gone quiet on a live server; see feedwatch.ts), 'live' (the match going on now, for the live page) and 'grief:<UTC date>'
+// gone quiet on a live server; see feedwatch.ts), 'live' (the match going on now, for the live page), 'matchFeed' (the
+// match's latest state and result, as the game said them; see matchfeed.ts) and 'grief:<UTC date>'
 // (team kills and suicides that day, for the staff page), 'serverBans' (the server's ban list at the last reading, to
 // notice bans made or lifted outside the bot), 'bansReadAt' (when that was), 'boardRotation' (the server's rotation
 // for the live status's next map, and when it was read), 'staffNames' (staff's names on Discord, by user ID, for the
@@ -535,7 +545,7 @@ export class Watcher extends DurableObject<Env> {
   // Whether this instance has made sure the season roundup is kept (see keepSeason).
   private seasonLooked = false;
   // Kill feed event ids already counted, oldest first.
-  private killsSeen = new Set<string>();
+  private eventsSeen = new Set<string>();
   // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
   private weaponDayCache = new Map<string, WeaponDay>();
   // Steam checks once read, by Steam ID; null for a player with none. Every write goes through saveSteam, so it is never
@@ -736,21 +746,31 @@ export class Watcher extends DurableObject<Env> {
     };
   }
 
-  // While the server seeds, an alarm reads who is in game every few seconds between the checks, so the seeding message
-  // goes out 30 seconds after someone joins. The check starts them when it finds the server seeding, and they stop
-  // themselves once a check finds it is not.
+  // While the server seeds, the seeding message goes out 30 seconds after someone joins. With the kill feed, its joins
+  // set an alarm for then (see feedJoined). Without it, an alarm reads who is in game every few seconds between the
+  // checks: the check starts them when it finds the server seeding, and they stop themselves once a check finds it is not.
   private async startJoinChecks(config: Config): Promise<void> {
     if (config.seedingMessages === null) return;
     try {
       const storage = this.ctx.storage;
-      if (parseState(await storage.get('state'))?.alerts.phase !== 'seeding') return;
-      if ((await storage.getAlarm()) === null) await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
+      const state = parseState(await storage.get('state'));
+      if (state?.alerts.phase !== 'seeding') return;
+      const alarm = await storage.getAlarm();
+      if ((await this.matchFeed()) !== null) {
+        // A join the check saw, as of the player who starts the seed, which the feed said before the server was seeding.
+        const waiting = state.joins?.lastJoinAt ?? null;
+        const due = waiting === null ? null : Math.max(waiting + JOIN_WAIT_MS, Date.now() + 1_000);
+        if (due !== null && (alarm === null || alarm > due)) await storage.setAlarm(due);
+        return;
+      }
+      if (alarm === null) await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
     } catch (error) {
       console.error(`Starting join checks failed: ${errorText(error)}`);
     }
   }
 
-  // One quick join check. It runs with the alerts, so it never saves the state while a check is part-way through.
+  // One quick join check. It runs with the alerts, so it never saves the state while a check is part-way through. With the
+  // kill feed, the next is only for a seeding message still waiting, when it is due.
   async alarm(): Promise<void> {
     const { config, http } = this.rcon();
     const joinCheck = createJoinCheck({
@@ -762,7 +782,42 @@ export class Watcher extends DurableObject<Env> {
       store: this.stateStore(),
       lines: () => this.lines(),
     });
-    if (await this.alerting(joinCheck)) await this.ctx.storage.setAlarm(Date.now() + JOIN_CHECK_MS);
+    if (!(await this.alerting(joinCheck))) return;
+    const storage = this.ctx.storage;
+    if ((await this.matchFeed()) === null) {
+      await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
+      return;
+    }
+    const waiting = parseState(await storage.get('state'))?.joins?.lastJoinAt ?? null;
+    if (waiting !== null) await storage.setAlarm(Math.max(waiting + JOIN_WAIT_MS, Date.now() + 1_000));
+  }
+
+  // The kill feed's joins and leaves, while the server seeds (see createFeedJoins): the seeding message's alarm is set
+  // for 30 seconds after the last join. A failure is only logged: the checks still see who joined.
+  private async feedJoined(presence: FeedPresence[], at: number): Promise<void> {
+    try {
+      const { config } = this.rcon();
+      const noteJoins = createFeedJoins({ config, log: console, store: this.stateStore() });
+      const due = await this.alerting(() => noteJoins(presence, presence.at(-1)?.players ?? null, at));
+      if (due === null) return;
+      const alarm = await this.ctx.storage.getAlarm();
+      if (alarm === null || alarm > due) await this.ctx.storage.setAlarm(due);
+    } catch (error) {
+      console.error(`Kill feed joins failed: ${errorText(error)}`);
+    }
+  }
+
+  // The kill feed's word on the match (see matchfeed.ts) while it is heard from: null without KILL_FEED_TOKEN, or once it
+  // has sent nothing for FEED_QUIET_MS, as when it does not reach the bot. The checks then work out matches on their own.
+  private async matchFeed(): Promise<MatchFeed | null> {
+    const stored = await this.ctx.storage.get([MATCH_FEED_KEY, 'killFeedHeardAt']);
+    return this.heardFeed(stored.get(MATCH_FEED_KEY), stored.get('killFeedHeardAt'), Date.now());
+  }
+
+  // The same, from what was read of 'matchFeed' and 'killFeedHeardAt'.
+  private heardFeed(saved: unknown, heard: unknown, now: number): MatchFeed | null {
+    if ((stringVars(this.env)['KILL_FEED_TOKEN']?.trim() ?? '') === '') return null;
+    return typeof heard === 'number' && now - heard < FEED_QUIET_MS ? parseMatchFeed(saved) : null;
   }
 
   // The kill feed says a match ended: its end-of-match messages go out now, while players are still on the scoreboard
@@ -780,13 +835,14 @@ export class Watcher extends DurableObject<Env> {
       lines: () => this.lines(),
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
+      matchFeed: () => this.matchFeed(),
     });
     this.ctx.waitUntil(this.alerting(endCheck));
   }
 
   // The kill feed's record of a match, for its awards (see feedRecordOf).
   private async liveMatchOf(match: MatchState): Promise<LiveMatch | null> {
-    return feedRecordOf(parseLiveMatch(await this.ctx.storage.get('live')), match, Date.now());
+    return feedRecordOf(parseLiveMatch(await this.ctx.storage.get('live')), match);
   }
 
   private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {
@@ -939,6 +995,7 @@ export class Watcher extends DurableObject<Env> {
       staff: () => this.staffSteam(),
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
+      matchFeed: () => this.matchFeed(),
       outage: (event) => this.tellOutage(event),
       stats: {
         check: (observation) =>
@@ -1764,15 +1821,23 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // A batch from the game's kill feed: the day's weapon totals, each killer's, and the live match, in one write. Only
-  // storage is awaited, so no other batch is counted part-way through. Returns how many deaths were new.
-  async recordFeed(events: FeedEvent[]): Promise<number> {
-    const fresh = events.filter((e, i) => !this.killsSeen.has(e.eventId) && events.findIndex((o) => o.eventId === e.eventId) === i);
-    if (fresh.length === 0) return 0;
+  // A batch from the game's kill feed: the day's weapon totals, each killer's, the live match, the match's state and
+  // result, and the join log, in one write. Only storage is awaited, so no other batch is counted part-way through.
+  // Answers how many events were new, and whether a new one was a match's result.
+  async recordFeed({ timeline, presence }: FeedRecord): Promise<{ accepted: number; ended: boolean }> {
+    const unseen = <T extends { eventId: string }>(list: T[]): T[] =>
+      list.filter((e, i) => !this.eventsSeen.has(e.eventId) && list.findIndex((o) => o.eventId === e.eventId) === i);
+    const happened = unseen(timeline);
+    const came = unseen(presence);
+    const fresh = [...happened, ...came];
+    if (fresh.length === 0) return { accepted: 0, ended: false };
     const now = Date.now();
     const day = dayOf(now);
     const dayKey = weaponDayKey(now);
-    const kills = fresh.filter(isKill);
+    const events = happened.filter((e): e is FeedEvent => !isMatchEvent(e));
+    const matchEvents = happened.filter(isMatchEvent);
+    const ended = matchEvents.some((e) => e.type === 'result');
+    const kills = events.filter(isKill);
     const killers = [...new Set(kills.map((k) => k.killerSteamId))];
     const griefKey = griefDayKey(now);
     const stored = await this.ctx.storage.get([
@@ -1783,20 +1848,28 @@ export class Watcher extends DurableObject<Env> {
       'online',
       'state',
       KILL_FEED_KEY,
+      MATCH_FEED_KEY,
+      JOIN_LOG_KEY,
       ...killers.map(playerWeaponsKey),
     ]);
     const oldest = dayOf(now - (PROFILE_DAYS - 1) * DAY_MS);
-    const first = typeof stored.get('killFeedSince') !== 'string';
+    const first = events.length > 0 && typeof stored.get('killFeedSince') !== 'string';
     // The feed does not say who is on which side: the bot's last check does.
     const online = parseOnline(stored.get('online'));
     const tracked = parseState(stored.get('state'))?.match?.players ?? {};
     const factionOf = (steamId: string): string | null =>
       online?.players.find((p) => p.steamId === steamId)?.faction ?? tracked[steamId]?.faction ?? null;
-    const grief = hasGrief(fresh, factionOf) ? recordGrief(parseGriefDay(stored.get(griefKey)), fresh, now, factionOf) : null;
+    const grief = hasGrief(events, factionOf) ? recordGrief(parseGriefDay(stored.get(griefKey)), events, now, factionOf) : null;
     const staffKills = toStaffKills(kills, now, factionOf);
+    const before = parseMatchFeed(stored.get(MATCH_FEED_KEY));
+    const matchFeed = matchEvents.length === 0 ? before : recordMatchFeed(before, matchEvents, now);
+    const live = events.length > 0 || ended ? recordLive(parseLiveMatch(stored.get('live')), happened, now, factionOf, before) : null;
+    const joins = came.length === 0 ? null : recordPresence(parseJoinLog(stored.get(JOIN_LOG_KEY)), came, now);
     const write = this.ctx.storage.put({
-      live: recordLive(parseLiveMatch(stored.get('live')), fresh, now, factionOf),
       killFeedHeardAt: now,
+      ...(live === null ? {} : { live }),
+      ...(matchFeed === before ? {} : { [MATCH_FEED_KEY]: matchFeed }),
+      ...(joins === null || joins.log === null || joins.added.length === 0 ? {} : { [JOIN_LOG_KEY]: joins.log }),
       ...(grief === null ? {} : { [griefKey]: grief.day }),
       ...(first ? { killFeedSince: day } : {}),
       ...(kills.length === 0
@@ -1814,27 +1887,30 @@ export class Watcher extends DurableObject<Env> {
       ),
     });
     // Remembered as the write goes out, so a copy of this batch arriving now is not counted again.
-    for (const e of fresh) this.killsSeen.add(e.eventId);
-    for (const id of this.killsSeen) {
-      if (this.killsSeen.size <= KILLS_REMEMBERED) break;
-      this.killsSeen.delete(id);
+    for (const e of fresh) this.eventsSeen.add(e.eventId);
+    for (const id of this.eventsSeen) {
+      if (this.eventsSeen.size <= EVENTS_REMEMBERED) break;
+      this.eventsSeen.delete(id);
     }
     try {
       await write;
     } catch (error) {
-      for (const e of fresh) this.killsSeen.delete(e.eventId);
+      for (const e of fresh) this.eventsSeen.delete(e.eventId);
       throw error;
     }
     // Once the batch is counted, so a batch sent again after a failed write is not added twice.
     if (staffKills.length > 0) this.recordKillDays(day, now, staffKills);
+    if (joins !== null && joins.added.length > 0) this.recordSessions(joins.added, now);
     if (first) console.info(`Kill feed: first kills received. Weapon stats start today (${day}, UTC).`);
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
-    // The game waits for the reply, and the live pages are not part of it: they are updated once it has gone.
+    // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
+    // it has gone.
+    if (came.length > 0) this.ctx.waitUntil(this.feedJoined(came, now));
     this.ctx.waitUntil(this.broadcastLive());
-    return fresh.length;
+    return { accepted: fresh.length, ended };
   }
 
   // The SQLite database, with the staff page's kill_days table, which is made the first time.
@@ -1964,7 +2040,7 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // The kill feed going quiet while the server is live, and kills arriving again after (see feedwatch.ts), to the
+  // The kill feed going quiet while the server is live, and events arriving again after (see feedwatch.ts), to the
   // moderation log channel when FEED_ALERTS is on. Watched once the bot has had the feed, while KILL_FEED_TOKEN is set.
   // A failure never stops the rest of the check.
   private async watchFeed(config: Config, snapshot: Snapshot | null): Promise<void> {
@@ -1985,7 +2061,7 @@ export class Watcher extends DurableObject<Env> {
       console.info(
         event.type === 'quiet'
           ? `Kill feed quiet: no batch for ${Math.round((event.at - event.quietFrom) / 60_000)} minutes with ${event.players} players on`
-          : `Kill feed back: kills arriving again after ${Math.round((event.heardAt - event.quietFrom) / 60_000)} minutes quiet`,
+          : `Kill feed back: events arriving again after ${Math.round((event.heardAt - event.quietFrom) / 60_000)} minutes quiet`,
       );
       const { modLogWebhookUrl, feedAlerts, siteUrl } = config;
       if (modLogWebhookUrl === undefined || !feedAlerts) return;
@@ -2062,12 +2138,16 @@ export class Watcher extends DurableObject<Env> {
   // The live page: the server and its match from the last check, and the kill feed's match while it is the one on now.
   async live(): Promise<LiveSnapshot> {
     const now = Date.now();
-    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince', PRIVATE_PROFILES_KEY]);
+    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince', 'killFeedHeardAt', MATCH_FEED_KEY, PRIVATE_PROFILES_KEY]);
     const stats = parseStats(stored.get('stats'));
     const server = stats.server !== null && now - stats.server.seenAt < OFFLINE_AFTER_MS ? stats.server : null;
     const onServer = server === null ? null : stats.currentMatch;
+    // While the feed is quiet, what it last said may be out of date: the match is then judged on the checks alone.
+    const heard = this.heardFeed(stored.get(MATCH_FEED_KEY), stored.get('killFeedHeardAt'), now);
+    const feed = heard ?? NO_MATCH_FEED;
     const saved = parseLiveMatch(stored.get('live'));
-    const match = saved !== null && isCurrent(saved, onServer, now) ? saved : null;
+    const match = saved !== null && isCurrent(saved, feed, onServer, now) ? saved : null;
+    const phase = server === null || feed.state === null || feed.stateAt === null ? null : phaseOf(feed.state);
     const ids = await this.idsFor([
       ...liveSteamIds(match),
       ...(onServer?.top.flatMap((p) => (p.steamId === undefined ? [] : [p.steamId])) ?? []),
@@ -2078,6 +2158,7 @@ export class Watcher extends DurableObject<Env> {
       feed: typeof stored.get('killFeedSince') === 'string',
       server: stats.server,
       currentMatch: publicCurrentMatch(onServer, idOf),
+      phase: phase === null || feed.stateAt === null ? null : { phase, since: feed.stateAt },
       match: match === null ? null : liveStats(match, idOf),
     };
   }
@@ -3185,17 +3266,17 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
     // Not JSON: refused below.
   }
   if (batch === null) return Response.json({ error: 'Not a kill feed batch' }, { status: 400 });
+  const { timeline, presence, unread } = batch;
   // After a game update, this is how a feed sent in a new form shows: batches come, and nothing in them is read.
-  // Season 2's joins, leaves and match events are known, and left out without a word.
-  if (batch.events.length === 0 && batch.unread > 0 && Date.now() - unreadLoggedAt >= REFUSAL_LOG_MS) {
+  if (timeline.length + presence.length === 0 && unread > 0 && Date.now() - unreadLoggedAt >= REFUSAL_LOG_MS) {
     unreadLoggedAt = Date.now();
-    console.error(`Kill feed: a batch came with ${batch.unread} events, and none could be read. The game may send them in a new form.`);
+    console.error(`Kill feed: a batch came with ${unread} events, and none could be read. The game may send them in a new form.`);
   }
   try {
-    const accepted = batch.events.length === 0 ? 0 : await watcher().recordFeed(batch.events);
+    const { accepted, ended } = timeline.length + presence.length === 0 ? { accepted: 0, ended: false } : await watcher().recordFeed({ timeline, presence });
     // Once the batch's last kills are counted, so the awards have them.
-    if (batch.ended) await watcher().matchEnded();
-    return Response.json({ ok: true, accepted, skipped: batch.skipped });
+    if (ended) await watcher().matchEnded();
+    return Response.json({ ok: true, accepted, skipped: unread });
   } catch (error) {
     console.error(`Kill feed batch failed: ${errorText(error)}`);
     return Response.json({ error: 'Could not record the kills' }, { status: 503 });

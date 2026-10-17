@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
-// The kill feed going quiet, for the moderation log channel. The game posts its kills a second or two after they
-// happen, so a live server with no batch for FEED_QUIET_MS means the feed has stopped: most often a game update that
-// changed how the server is told where to send it (Season 2 did, on 15 October 2026), a token that no longer matches,
-// or the lines gone from ServerSettings.ini. Staff hear about it once, and again when kills arrive.
+// The kill feed going quiet, for the moderation log channel. The game posts its kills, joins, leaves and the match's
+// states a second or two after they happen, so a live server with no batch for FEED_QUIET_MS means the feed has
+// stopped: most often a game update that changed how the server is told where to send it (Season 2 did, on 15 October
+// 2026), a token that no longer matches, or the lines gone from ServerSettings.ini. Staff hear about it once, and again
+// when events arrive. The same mark says when the bot stops taking the feed's word on matches (see matchfeed.ts).
 
 export const FEED_WATCH_KEY = 'feedWatch';
 // Long enough for a map change, short enough that a match is not lost to it.
@@ -41,7 +42,7 @@ export type FeedCheck = {
   players: number | null;
   // LIVE_THRESHOLD.
   live: number;
-  // When the last kill feed batch came, or null when the bot has none on record.
+  // When the last kill feed batch with something new in it came, or null when the bot has none on record.
   heardAt: number | null;
 };
 

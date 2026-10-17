@@ -54,6 +54,8 @@ const live = (players: LivePlayer[]): LiveMatch => ({
   headshots: 0,
   teamKills: 0,
   otherDeaths: 0,
+  endedAt: null,
+  result: null,
 });
 
 // From the kill feed: d is the best at demolitions and the longest kill, a has the most headshots, f (not in the top 3)
@@ -151,17 +153,24 @@ describe('feedRecordOf', () => {
   const record = (startedAt: number, lastAt: number, map = 'Ozeti_KOTH_01'): LiveMatch => ({ ...live([]), map, startedAt, lastAt });
 
   it("takes the feed's record of this match, even one that began a little before the checks saw it start", () => {
-    expect(feedRecordOf(record(9 * MINUTE, 39 * MINUTE), round, 40 * MINUTE)).not.toBeNull();
+    expect(feedRecordOf(record(9 * MINUTE, 39 * MINUTE), round)).not.toBeNull();
   });
 
   it('leaves out the round before on the same map, as after a restart while the feed was down', () => {
-    expect(feedRecordOf(record(-20 * MINUTE, 9 * MINUTE), round, 40 * MINUTE)).toBeNull();
+    expect(feedRecordOf(record(-20 * MINUTE, 9 * MINUTE), round)).toBeNull();
   });
 
   it('leaves out the next match, another map, and no record at all', () => {
-    expect(feedRecordOf(record(41 * MINUTE, 42 * MINUTE), round, 42 * MINUTE)).toBeNull();
-    expect(feedRecordOf(record(11 * MINUTE, 39 * MINUTE, 'Bakurani_KOTH_01'), round, 40 * MINUTE)).toBeNull();
-    expect(feedRecordOf(null, round, 40 * MINUTE)).toBeNull();
+    expect(feedRecordOf(record(41 * MINUTE, 42 * MINUTE), round)).toBeNull();
+    expect(feedRecordOf(record(11 * MINUTE, 39 * MINUTE, 'Bakurani_KOTH_01'), round)).toBeNull();
+    expect(feedRecordOf(null, round)).toBeNull();
+  });
+
+  it('leaves out a record that began after the game ended the match', () => {
+    const ended: MatchState = { ...round, endedAt: 30 * MINUTE };
+
+    expect(feedRecordOf(record(31 * MINUTE, 39 * MINUTE), ended)).toBeNull();
+    expect(feedRecordOf(record(11 * MINUTE, 30 * MINUTE), ended)).not.toBeNull();
   });
 });
 

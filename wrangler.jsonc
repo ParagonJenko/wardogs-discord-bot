@@ -30,7 +30,8 @@
     "SERVER_ID": "2615de90-da95-4950-913a-246b1db49237",
     // In-game messages during a match (10 minutes in, halfway, a team near winning): "on" or "off".
     "MATCH_MESSAGES": "on",
-    // The score a team needs to win: halfway is half of it, "near winning" is 90% of it.
+    // The score a team needs to win: halfway is half of it, "near winning" is 90% of it. Without the kill feed, the bot
+    // also takes a team on it as having won.
     "SCORE_TO_WIN": "100",
     // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
     // after someone joins (below 20 players). "0" turns both off.

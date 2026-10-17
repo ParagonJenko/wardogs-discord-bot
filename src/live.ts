@@ -1,14 +1,16 @@
 import { z } from 'zod';
 import { factionKey, mapName } from './discord.ts';
+import { sameMap, type MatchFeed } from './matchfeed.ts';
 import { publicPlayer, type PublicIdOf } from './privacy.ts';
+import type { FactionScore } from './rcon.ts';
 import type { CurrentMatch, Public, ServerSnapshot } from './stats.ts';
 import type { RankedStats } from './tracking.ts';
-import { countsForLongest, isKill, weaponKind, weaponName, type FeedEvent, type WeaponKind } from './weapons.ts';
+import { countsForLongest, isKill, isMatchEvent, isPlaying, weaponKind, weaponName, type FeedEvent, type FeedMatchEvent, type WeaponKind } from './weapons.ts';
 
 // The match going on now, from the game's kill feed, for the website's live page: every death as it happens, each
 // player's kills, deaths and streaks, and the match's highlights. Kept in storage ('live') and sent to the page as
-// it changes. The feed has no "match ended": a new match is the match clock starting again, the game restarting, the
-// map changing, or a long quiet spell.
+// it changes. The game says when a match ends, with its result, and when the next starts being played (see matchfeed.ts):
+// the next death after either starts a new match, as does one on another map or in another of the game's matches.
 
 // The kill feed keeps this many deaths, and the page shows them all.
 export const LIVE_FEED_KEPT = 40;
@@ -23,10 +25,6 @@ const LIVE_WEAPONS_SHOWN = 5;
 // The live match is saved with each batch's other records, and storage takes at most 128 KiB in one value: a match that
 // grew past it would stop every batch being saved until it ended. Over this many bytes, it is trimmed (see trimLive).
 export const LIVE_BYTES = 90_000;
-// Kills this far apart are not the same match, however the clock reads.
-const QUIET_MS = 20 * 60_000;
-// The batches come in clock order, but a clock this little behind the last one is not a new match.
-const CLOCK_SLACK = 30;
 
 // Only a hand-held weapon's kill that did not lock on counts as a longest kill (see countsForLongest). A match saved
 // before that rule can have another's, such as a mine's or the 9K333 Verba's, which counts as none.
@@ -85,6 +83,10 @@ export type LiveMatch = {
   teamKills: number;
   // Deaths no other player made: suicides, falls, the world.
   otherDeaths: number;
+  // When the game said the match ended, and its result: the side it named as winning (null when none) and the final
+  // scores. Null while it goes on, and for matches saved before the game said.
+  endedAt: number | null;
+  result: { winner: string | null; factionScores: FactionScore[] } | null;
 };
 
 const count = z.number().int().nonnegative();
@@ -135,6 +137,14 @@ const LiveMatchSchema = z.object({
   headshots: count,
   teamKills: count,
   otherDeaths: count,
+  endedAt: z.number().nullable().default(null),
+  result: z
+    .object({
+      winner: z.string().nullable(),
+      factionScores: z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() })),
+    })
+    .nullable()
+    .default(null),
 });
 
 // Null when nothing was saved yet, or it is unrecognisable.
@@ -157,26 +167,45 @@ const fresh = (e: FeedEvent, at: number): LiveMatch => ({
   headshots: 0,
   teamKills: 0,
   otherDeaths: 0,
+  endedAt: null,
+  result: null,
 });
 
-// Whether a death belongs to a match after `match`.
-const isNewMatch = (match: LiveMatch, e: FeedEvent, at: number): boolean =>
+// Whether a death belongs to a match after `match`: the game ended that one, or has started one since its last death
+// (`playingAt`, see matchfeed.ts), or the death is in another of the game's matches or on another map.
+const isNewMatch = (match: LiveMatch, e: FeedEvent, playingAt: number | null): boolean =>
+  match.endedAt !== null ||
+  (playingAt !== null && playingAt > match.lastAt) ||
   (e.matchId !== '' && match.matchId !== '' && e.matchId !== match.matchId) ||
-  (e.map !== '' && match.map !== '' && e.map !== match.map) ||
-  e.time < match.lastTime - CLOCK_SLACK ||
-  at - match.lastAt > QUIET_MS;
+  (e.map !== '' && match.map !== '' && e.map !== match.map);
 
-// Adds a batch's deaths, in the order the game sent them. `factionOf` is the side the bot last saw a player on,
-// as the feed does not say: two players on the same side make a team kill.
+// Adds a batch's deaths, and the match's states and results, in the order the game sent them. `before` is the game's
+// word on the match before the batch (see matchfeed.ts). `factionOf` is the side the bot last saw a player on, as the
+// feed does not say: two players on the same side make a team kill. A result ends the match it is for, and a match
+// starting to be played makes the next death the first of a new one.
 export const recordLive = (
   match: LiveMatch | null,
-  events: FeedEvent[],
+  timeline: (FeedEvent | FeedMatchEvent)[],
   at: number,
   factionOf: (steamId: string) => string | null,
+  before: Pick<MatchFeed, 'state' | 'playingAt'> = { state: null, playingAt: null },
 ): LiveMatch | null => {
   let m = match === null ? null : { ...match, players: match.players.map((p) => ({ ...p, weapons: { ...p.weapons } })), pairs: { ...match.pairs }, feed: [...match.feed] };
-  for (const e of events) {
-    if (m === null || isNewMatch(m, e, at)) m = fresh(e, at);
+  let state = before.state;
+  // A match started being played in this batch, since the last death.
+  let begun = false;
+  for (const e of timeline) {
+    if (isMatchEvent(e)) {
+      if (e.type === 'state') {
+        begun ||= isPlaying(e.state) && (state === null || !isPlaying(state));
+        state = e.state;
+      } else if (m !== null && m.endedAt === null && sameMap(e.map, m.map)) {
+        m = { ...m, endedAt: at, result: { winner: e.winner, factionScores: e.factionScores } };
+      }
+      continue;
+    }
+    if (m === null || begun || isNewMatch(m, e, before.playingAt)) m = fresh(e, at);
+    begun = false;
     const live = m;
     const place = (steamId: string, name: string): number => {
       let index = live.players.findIndex((p) => p.steamId === steamId);
@@ -303,6 +332,9 @@ export type LiveStats = {
   map: string;
   startedAt: number;
   lastKillAt: number;
+  // When the game said the match ended, and its result (see LiveMatch); null while it goes on.
+  endedAt: number | null;
+  result: { winner: string | null; factionScores: FactionScore[] } | null;
   kills: number;
   headshots: number;
   teamKills: number;
@@ -453,6 +485,8 @@ export const liveStats = (match: LiveMatch, idOf: PublicIdOf): LiveStats => {
     map: mapName(match.map),
     startedAt: match.startedAt,
     lastKillAt: match.lastAt,
+    endedAt: match.endedAt,
+    result: match.result,
     kills: match.kills,
     headshots: match.headshots,
     teamKills: match.teamKills,
@@ -513,6 +547,19 @@ export const liveStats = (match: LiveMatch, idOf: PublicIdOf): LiveStats => {
   };
 };
 
+// Where the match on the server is, from the game's latest state (see matchfeed.ts): before it starts (loading,
+// waiting for players, counting down), being played, or over.
+export type LivePhase = 'pre-match' | 'playing' | 'post-match';
+
+export const phaseOf = (state: string): LivePhase | null =>
+  state.startsWith('MatchState.PreMatch')
+    ? 'pre-match'
+    : state.startsWith('MatchState.Playing')
+      ? 'playing'
+      : state.startsWith('MatchState.PostMatch')
+        ? 'post-match'
+        : null;
+
 // What the live page shows: the server and its match from the bot's checks, and the kill feed's match.
 export type LiveSnapshot = {
   generatedAt: number;
@@ -520,20 +567,25 @@ export type LiveSnapshot = {
   feed: boolean;
   server: ServerSnapshot | null;
   currentMatch: (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null;
+  // The game's word on where the match is, and since when; null without it, or while the server is not answering.
+  phase: { phase: LivePhase; since: number } | null;
   // Null before the match on now has a death in the feed.
   match: LiveStats | null;
 };
 
 // The bot sees a new match at the check after it starts, up to a minute late, and the feed's first kills can come
-// before that. A feed match whose last death is this long before the check's match started is an older match.
+// before that. A feed match whose last death (or end) is this long before the check's match started is an older match.
 const MATCH_SLACK_MS = 2 * 60_000;
-// With no match on the server, the feed's match stays up this long after its last death.
+// With no match on the server, the feed's match stays up this long after its last death, or after it ended.
 const AFTER_MATCH_MS = 10 * 60_000;
 
-// Whether the feed's match is the one on the server now: on the same map, and not over before it started. `onServer`
-// is the match the bot's checks see, null when the server is empty or not answering.
-export const isCurrent = (match: LiveMatch, onServer: { map: string; startedAt: number } | null, now: number): boolean => {
-  if (onServer === null) return now - match.lastAt <= AFTER_MATCH_MS;
-  const sameMap = onServer.map === '' || match.map === '' || onServer.map === mapName(match.map);
-  return sameMap && match.lastAt >= onServer.startedAt - MATCH_SLACK_MS;
+// Whether the feed's match is the one on the server now: on the same map, not over before the checks' match started (as
+// after a restart while the feed was down), and the game has not started a match since it ended, or since its last death
+// (see matchfeed.ts). An ended match stays up, with its result, until the next starts. `onServer` is the match the bot's
+// checks see, null when the server is empty or not answering.
+export const isCurrent = (match: LiveMatch, feed: MatchFeed, onServer: { map: string; startedAt: number } | null, now: number): boolean => {
+  const since = match.endedAt ?? match.lastAt;
+  if (onServer === null) return now - since <= AFTER_MATCH_MS;
+  const onMap = match.map === '' || sameMap(onServer.map, mapName(match.map));
+  return onMap && since >= onServer.startedAt - MATCH_SLACK_MS && !(feed.playingAt !== null && feed.playingAt > since);
 };

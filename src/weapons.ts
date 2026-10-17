@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { publicPlayer, type PublicIdOf } from './privacy.ts';
+import type { FactionScore } from './rcon.ts';
 import { dayOf } from './stats.ts';
 
 // Weapon stats from the game's kill feed. With an endpoint's `Url` and `Token` in +EventFeedEndpoints under
@@ -8,11 +9,12 @@ import { dayOf } from './stats.ts';
 // added /api/ingest/events to the Url itself.) Each kill names the killer and the victim by Steam ID, what killed them
 // (`cause`, a tag like Id.Item.AK74M), how far apart they were in centimetres, and tags such as a headshot. The bot
 // keeps each UTC day's totals by weapon, and each player's, for /api/stats and the player pages. Like the other player
-// records, the Steam IDs stay private.
+// records, the Steam IDs stay private. Since Season 2 (15 October 2026) the batches also say who joins and leaves, the
+// match's state as it changes, and each match's result (see FeedPresence, FeedState and FeedResult).
 
 // Where the game posts. Since Season 2 the Url names it; before, the game added it to the Url it was given.
 export const FEED_PATH = '/api/ingest/events';
-// The game sends at most ten kills in a batch; a body much bigger than that is not the game.
+// The game sends at most ten events in a batch; a body much bigger than that is not the game.
 export const MAX_FEED_BYTES = 65_536;
 // Each batch writes one key per killer, and storage takes at most 128 keys at once.
 export const MAX_FEED_EVENTS = 100;
@@ -48,28 +50,63 @@ export type FeedKill = FeedEvent & { killerSteamId: string; cause: string };
 export const isKill = (e: FeedEvent): e is FeedKill =>
   e.killerSteamId !== null && e.killerSteamId !== e.victimSteamId && e.cause !== null && !e.tags.includes('Suicide');
 
-// Every death in a batch, in the order the game sent them, the kills among them, how many of its events were something
-// else, and how many of those the bot does not know: neither a death it can read nor one of OTHER_TYPES. `ended` is
-// whether the batch says a match ended.
-export type FeedBatch = { events: FeedEvent[]; kills: FeedKill[]; skipped: number; unread: number; ended: boolean };
+// A player joining or leaving the server (player_joined, player_left). `players` is how many the game says are on, when
+// it says.
+export type FeedPresence = { eventId: string; type: 'joined' | 'left'; steamId: string; name: string; players: number | null };
 
-// What else the feed sends since Season 2 (15 October 2026): players joining and leaving, the match's state and its
-// result. The bot has these from its own checks, so it leaves them out, and they are not unread. Only the word that a
-// match ended is used: it sends the end-of-match messages at once (see matchend.ts).
-const OTHER_TYPES = ['player_joined', 'player_left', 'match_state', 'match_ended'];
-const typeOf = (raw: unknown): unknown => (typeof raw === 'object' && raw !== null && 'type' in raw ? raw.type : undefined);
+// The match moving to a new state (match_state), as the game names it: MatchState.PreMatch, .PreMatch.WaitingForWorldLoad,
+// .PreMatch.WaitingForPlayers, .PreMatch.WaitingForPlayers.PlayerCount, .Playing, .Playing.KOTH or .PostMatch. Pre-match
+// states before the world has loaded have no matchId.
+export type FeedState = { eventId: string; type: 'state'; state: string; time: number; matchId: string; map: string };
+
+// A match won (match_ended): the winning side as the game names it, null when it names none, and each side's final
+// score. `players` is how many were on.
+export type FeedResult = {
+  eventId: string;
+  type: 'result';
+  time: number;
+  matchId: string;
+  map: string;
+  players: number | null;
+  winner: string | null;
+  factionScores: FactionScore[];
+};
+
+export type FeedMatchEvent = FeedState | FeedResult;
+
+export const isMatchEvent = (e: FeedEvent | FeedMatchEvent): e is FeedMatchEvent => 'type' in e;
+
+// Whether a state is the match being played (MatchState.Playing and the states under it).
+export const isPlaying = (state: string): boolean => state === 'MatchState.Playing' || state.startsWith('MatchState.Playing.');
+
+// Everything in a batch the bot reads: the deaths and the kills among them, the joins and leaves, and the match's states
+// and results, each in the order the game sent them. `timeline` is the deaths and the match events together, in that
+// order, for the live match. `unread` is how many events were none of these, or malformed.
+export type FeedBatch = {
+  events: FeedEvent[];
+  kills: FeedKill[];
+  presence: FeedPresence[];
+  match: FeedMatchEvent[];
+  timeline: (FeedEvent | FeedMatchEvent)[];
+  unread: number;
+};
 
 const STEAM_ID = /^\d{17}$/;
 const TAG_PREFIXES = ['Meta.Progression.Context.Player.KillContext.', 'Meta.PlayerKillFlag.Player.'];
 // The tags kept: the rest (Local.Kill and Local.Death, on every event) say nothing.
 const TAGS = ['Headshot', 'RoadKill', 'Penetration', 'Ricochet', 'WeaponMelee', 'VehicleExplosion', 'Falling', 'Suicide'];
 
-const EventSchema = z.object({
+// What every event carries. The match clock, the match and the map are missing from some.
+const Common = {
   eventId: z.string().min(1).max(200),
-  type: z.literal('killed'),
   eventTime: z.number().nullish(),
   matchId: z.string().max(200).nullish(),
   mapName: z.string().max(200).nullish(),
+};
+
+const DeathSchema = z.object({
+  ...Common,
+  type: z.literal('killed'),
   killerSteamId: z.string().regex(STEAM_ID).nullish(),
   killerName: z.string().nullish(),
   victimSteamId: z.string().regex(STEAM_ID),
@@ -79,40 +116,92 @@ const EventSchema = z.object({
   contextTags: z.array(z.string()).nullish(),
 });
 
+const PresenceSchema = z.object({
+  ...Common,
+  type: z.enum(['player_joined', 'player_left']),
+  playerSteamId: z.string().regex(STEAM_ID),
+  playerName: z.string().nullish(),
+  players: z.number().int().nonnegative().nullish(),
+});
+
+const StateSchema = z.object({ ...Common, type: z.literal('match_state'), state: z.string().min(1).max(200) });
+
+const ResultSchema = z.object({
+  ...Common,
+  type: z.literal('match_ended'),
+  players: z.number().int().nonnegative().nullish(),
+  winningFaction: z.string().max(200).nullish(),
+  factionScores: z.array(z.object({ faction: z.string().min(1).max(200), score: z.number() })).max(10).nullish(),
+});
+
+const EventSchema = z.discriminatedUnion('type', [DeathSchema, PresenceSchema, StateSchema, ResultSchema]);
+
 const shortTag = (tag: string): string => TAG_PREFIXES.reduce((t, prefix) => (t.startsWith(prefix) ? t.slice(prefix.length) : t), tag);
 
-// A batch's deaths. Null when the body is not a batch at all.
+const nameOf = (name: string | null | undefined): string => (name ?? '').slice(0, 100);
+
+const death = (e: z.infer<typeof DeathSchema>): FeedEvent => {
+  const tags = [...new Set((e.contextTags ?? []).map(shortTag))].filter((t) => TAGS.includes(t));
+  return {
+    eventId: e.eventId,
+    time: e.eventTime ?? 0,
+    matchId: e.matchId ?? '',
+    map: e.mapName ?? '',
+    victimSteamId: e.victimSteamId,
+    victimName: nameOf(e.victimName),
+    killerSteamId: e.killerSteamId ?? null,
+    killerName: nameOf(e.killerName),
+    cause: e.cause ?? null,
+    // Unreal units are centimetres.
+    distance: e.distance == null ? null : Math.round(e.distance) / 100,
+    headshot: tags.includes('Headshot'),
+    tags: tags.filter((t) => t !== 'Headshot'),
+  };
+};
+
+// A batch's events. Null when the body is not a batch at all.
 export const parseFeed = (body: unknown): FeedBatch | null => {
   const batch = z.object({ events: z.array(z.unknown()).max(MAX_FEED_EVENTS) }).safeParse(body);
   if (!batch.success) return null;
-  const events: FeedEvent[] = [];
-  let unread = 0;
+  const read: FeedBatch = { events: [], kills: [], presence: [], match: [], timeline: [], unread: 0 };
   for (const raw of batch.data.events) {
     const parsed = EventSchema.safeParse(raw);
     if (!parsed.success) {
-      if (!OTHER_TYPES.includes(String(typeOf(raw)))) unread++;
+      read.unread++;
       continue;
     }
     const e = parsed.data;
-    const tags = [...new Set((e.contextTags ?? []).map(shortTag))].filter((t) => TAGS.includes(t));
-    events.push({
-      eventId: e.eventId,
-      time: e.eventTime ?? 0,
-      matchId: e.matchId ?? '',
-      map: e.mapName ?? '',
-      victimSteamId: e.victimSteamId,
-      victimName: (e.victimName ?? '').slice(0, 100),
-      killerSteamId: e.killerSteamId ?? null,
-      killerName: (e.killerName ?? '').slice(0, 100),
-      cause: e.cause ?? null,
-      // Unreal units are centimetres.
-      distance: e.distance == null ? null : Math.round(e.distance) / 100,
-      headshot: tags.includes('Headshot'),
-      tags: tags.filter((t) => t !== 'Headshot'),
-    });
+    const where = { time: e.eventTime ?? 0, matchId: e.matchId ?? '', map: e.mapName ?? '' };
+    if (e.type === 'killed') {
+      const d = death(e);
+      read.events.push(d);
+      if (isKill(d)) read.kills.push(d);
+      read.timeline.push(d);
+    } else if (e.type === 'match_state' || e.type === 'match_ended') {
+      const m: FeedMatchEvent =
+        e.type === 'match_state'
+          ? { eventId: e.eventId, type: 'state', state: e.state, ...where }
+          : {
+              eventId: e.eventId,
+              type: 'result',
+              ...where,
+              players: e.players ?? null,
+              winner: e.winningFaction || null,
+              factionScores: (e.factionScores ?? []).map((s) => ({ name: s.faction, score: s.score })),
+            };
+      read.match.push(m);
+      read.timeline.push(m);
+    } else {
+      read.presence.push({
+        eventId: e.eventId,
+        type: e.type === 'player_joined' ? 'joined' : 'left',
+        steamId: e.playerSteamId,
+        name: nameOf(e.playerName),
+        players: e.players ?? null,
+      });
+    }
   }
-  const ended = batch.data.events.some((raw) => typeOf(raw) === 'match_ended');
-  return { events, kills: events.filter(isKill), skipped: batch.data.events.length - events.length, unread, ended };
+  return read;
 };
 
 const sha256 = async (text: string): Promise<Uint8Array> =>
