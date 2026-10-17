@@ -50,6 +50,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, MAP_VOTE: 'on', MAP_VOTE_OPTIONS: '1' })).toThrow(/MAP_VOTE_OPTIONS/);
   });
 
+  it('has the match messages send people to the vote only when a vote can run', () => {
+    const on = { ...required, SITE_URL: 'https://gaminginit.com', MAP_VOTE: 'on' };
+    expect(loadConfig(on).matchMessages?.vote).toBeUndefined();
+    expect(loadConfig({ ...on, DISCORD_VOTE_CHANNEL_ID: '555', DISCORD_BOT_TOKEN: 'abc' }).matchMessages?.vote).toBe(true);
+    expect(loadConfig({ ...on, MAP_VOTE: 'off', DISCORD_VOTE_CHANNEL_ID: '555', DISCORD_BOT_TOKEN: 'abc' }).matchMessages?.vote).toBeUndefined();
+  });
+
   it('starts each day\'s map rotation at ROTATION_HOUR (UTC)', () => {
     expect(loadConfig({ ...required, ROTATION_HOUR: '0' }).rotationHour).toBe(0);
     expect(() => loadConfig({ ...required, ROTATION_HOUR: '24' })).toThrow(/ROTATION_HOUR/);

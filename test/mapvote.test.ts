@@ -8,6 +8,7 @@ import {
   openVote,
   parseMapVote,
   parseVoteButton,
+  voteLink,
   voteMessage,
   editVoteMessage,
   postVoteMessage,
@@ -227,5 +228,20 @@ describe('Discord messages', () => {
     const answer = (status: number) => (async () => new Response('no', { status })) as unknown as typeof fetch;
     await expect(editVoteMessage('tok', '1', '2', voteMessage(vote(), NOW), answer(404))).resolves.toBeUndefined();
     await expect(editVoteMessage('tok', '1', '2', voteMessage(vote(), NOW), answer(403))).rejects.toThrow(/403/);
+  });
+});
+
+describe('voteLink', () => {
+  const posted = { ...vote(), message: { channelId: '22', messageId: '33' } };
+
+  it('links to the vote message while the vote is open', () => {
+    expect(voteLink(posted, '11', NOW + 1)).toBe('https://discord.com/channels/11/22/33');
+  });
+
+  it('has no link once the vote closes, before it is posted, or without the server', () => {
+    expect(voteLink(posted, '11', NOW + 15 * 60_000)).toBeNull();
+    expect(voteLink(vote(), '11', NOW + 1)).toBeNull();
+    expect(voteLink(posted, undefined, NOW + 1)).toBeNull();
+    expect(voteLink(null, '11', NOW + 1)).toBeNull();
   });
 });

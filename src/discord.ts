@@ -402,6 +402,8 @@ export type LiveView = {
   lastSeen: { name: string; at: number } | null;
   match: MatchState | null;
   nextMap: string | null;
+  // The link to the open next-map vote and the score that closes it, or null with no vote open.
+  vote?: { url: string; closeScore: number } | null;
   now: number;
 };
 
@@ -461,6 +463,15 @@ export const buildLiveStatus = (view: LiveView, rules: AlertRules, siteUrl?: str
     { name: 'Players', value: population(status.players, status.maxPlayers, phase) },
     ...(status.map ? [{ name: 'Map', value: mapTitle(status.map), inline: true }] : []),
     ...(view.nextMap ? [{ name: 'Next map', value: mapTitle(view.nextMap), inline: true }] : []),
+    ...(view.vote
+      ? [
+          {
+            name: '🗳️ Vote for the next map',
+            value: `[Vote now](${view.vote.url})${view.vote.closeScore > 0 ? ` · closes when a team reaches ${view.vote.closeScore}` : ''}`,
+            inline: true,
+          },
+        ]
+      : []),
     ...(started !== null
       ? [{ name: match?.liveAt ? 'Match started' : 'Seeding since', value: when(started, 'R'), inline: true }]
       : []),

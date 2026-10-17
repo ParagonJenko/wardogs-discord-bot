@@ -65,6 +65,24 @@ describe('milestones', () => {
     expect(milestones(match({ liveAt: null }), 30 * MINUTE, rule, null)).toEqual([]);
   });
 
+  it('sends people to the next-map vote at halfway and when a team is close to winning, while a vote runs', () => {
+    const voting = { ...rule, vote: true };
+    const [halfway] = milestones(match({ factionScores: [{ name: 'Valkyra', score: 50 }] }), 0, voting, vip, () => 0);
+    expect(halfway?.text).toContain('Vote for the next map in our Discord, it plays infantry only! Leaderboard at gaminginit.com');
+    expect(halfway?.text).not.toContain('whitelist');
+    const nearly = milestones(match({ factionScores: [{ name: 'Valkyra', score: 92 }] }), 0, voting, null, () => 0).find((m) => m.key === 'nearly');
+    expect(nearly?.text).toContain('Last call to vote for the next map in our Discord!');
+  });
+
+  it('keeps every vote message within the game\'s line', () => {
+    for (const vipRule of [null, vip]) {
+      for (const m of milestones(match({ factionScores: [{ name: 'Manticore', score: 95 }] }), 11 * MINUTE, { ...rule, vote: true }, vipRule, () => 0.99)) {
+        expect(m.text.length).toBeLessThanOrEqual(MAX_LENGTH);
+        expect(m.text.endsWith('…')).toBe(false);
+      }
+    }
+  });
+
   it('reaches halfway when a team has half the winning score, and mentions seeding when VIP is on', () => {
     expect(milestones(match(scores(49, 20)), 0, rule, null)).toEqual([]);
     expect(milestones(match(scores(50, 20)), 0, rule, null, first)).toEqual([

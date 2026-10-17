@@ -285,6 +285,12 @@ export const parseVoteButton = (customId: string | undefined): { poll: string; m
   return found === null ? null : { poll: found[1]!, map: found[2]! };
 };
 
+// The link to the vote's message in Discord, while it is open and was posted.
+export const voteLink = (vote: MapVote | null, guildId: string | undefined, now: number): string | null =>
+  vote !== null && vote.message !== null && guildId && isOpen(vote, now)
+    ? `https://discord.com/channels/${guildId}/${vote.message.channelId}/${vote.message.messageId}`
+    : null;
+
 const DISCORD_API = 'https://discord.com/api/v10';
 
 // Posts the vote to its channel, and answers the message's ID.

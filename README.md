@@ -165,7 +165,9 @@ The next check posts the message, and every check after that edits it.
   shows the server as offline.
 - **Next map:** the rotation's next map, or the map staff set with `/setnextmap` or `/changemap` while this match
   is on. The bot reads the rotation again when the map changes, when it puts a rotation on the server itself, and at
-  least every 15 minutes, so a rotation changed in game shows within 15 minutes.
+  least every 15 minutes, so a rotation changed in game shows within 15 minutes. Once a [next-map vote](#next-map-vote)
+  picks a map, it shows here too.
+- **Vote for the next map:** while a next-map vote is open, a link to the vote message and the score that closes it.
 - **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
 
 It costs one Discord edit a minute, and one more RCON request (the rotation) for each map and at least every 15
@@ -1530,6 +1532,11 @@ leaderboard, the Discord and seeding:
 | A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
 | The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
 
+- While the [next-map vote](#next-map-vote) runs (`MAP_VOTE` on, with the token and channel set), the halfway and 90-point
+  messages send people to it in place of the usual call to action, as a message has room for one: halfway says "Vote for
+  the next map in our Discord, it plays infantry only! Leaderboard at gaminginit.com" and 90 points says "Last call to
+  vote for the next map in our Discord! Leaderboard at gaminginit.com". The staff page's Lines tab shows these. The bot also
+  announces the vote when it opens, and the result when it is staged.
 - Each message's line is picked at random from its list, passing over the lines it used lately (up to half the list, so
   the same line doesn't come up game after game): the seeding lines, the 10-minute lines, and for halfway and
   90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any

@@ -19,6 +19,7 @@ import {
   publicVote,
   RECENT_MAPS_KEY,
   VOTE_SETUP_OPTIONS,
+  voteLink,
   voteMessage,
   withPlayed,
   type MapVote,
@@ -1202,7 +1203,7 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const now = Date.now();
     try {
-      const stored = await storage.get(['board', 'state', 'stats', 'nextMap', 'boardRotation', PRIVATE_PROFILES_KEY]);
+      const stored = await storage.get(['board', 'state', 'stats', 'nextMap', 'boardRotation', MAP_VOTE_KEY, PRIVATE_PROFILES_KEY]);
       const server = parseStats(stored.get('stats')).server;
       if (snapshot === null && server !== null && now - server.seenAt < OFFLINE_AFTER_MS) return;
       const hidden = privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY)));
@@ -1218,8 +1219,17 @@ export class Watcher extends DurableObject<Env> {
               await this.serverRotation(config, snapshot, parseReadRotation(stored.get('boardRotation')), now),
               now,
             );
+      const vote = parseMapVote(stored.get(MAP_VOTE_KEY));
+      const voteUrl = config.mapVote === null ? null : voteLink(vote, stringVars(this.env)['DISCORD_GUILD_ID']?.trim(), now);
       const message = buildLiveStatus(
-        { snapshot, lastSeen: server === null ? null : { name: server.name, at: server.seenAt }, match, nextMap: next, now },
+        {
+          snapshot,
+          lastSeen: server === null ? null : { name: server.name, at: server.seenAt },
+          match,
+          nextMap: next,
+          vote: voteUrl === null || vote === null ? null : { url: voteUrl, closeScore: vote.closeScore },
+          now,
+        },
         config.rules,
         config.siteUrl,
         config.serverId,

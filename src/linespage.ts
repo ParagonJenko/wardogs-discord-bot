@@ -33,6 +33,8 @@ export type LinesContext = {
   // The Discord invite for the welcome ("discord.gg/abc123"), or null without one (DISCORD_INVITE).
   discord: string | null;
   vip: VipRule | null;
+  // Whether the next-map vote runs each match, so the halfway and nearly messages send people to it.
+  vote?: boolean;
   scoreToWin: number;
   live: number;
   // Whether the bot sends the match messages, the seeding messages, the welcomes and the end-of-match messages.
@@ -51,6 +53,7 @@ export const linesContext = (config: Config): LinesContext => ({
     null,
   discord: config.inviteCode ? discordLink(config.inviteCode) : null,
   vip: config.vip,
+  vote: config.matchMessages?.vote ?? false,
   scoreToWin: config.scoreToWin,
   live: config.rules.live,
   match: config.matchMessages !== null,
@@ -103,8 +106,8 @@ const nearlyValues = (team: string, context: LinesContext) =>
 
 // Placeholders whose value is the same in the preview and in game.
 const exact = (values: Record<string, string>) => ({ values, longest: values });
-const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vip)}`;
-const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context))}`;
+const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vip, context.vote)}`;
+const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context), context.vote)}`;
 
 // Every list, in the order the page shows them.
 export const LISTS: ListDefinition[] = [
