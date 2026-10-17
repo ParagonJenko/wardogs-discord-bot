@@ -1540,8 +1540,8 @@ leaderboard, the Discord and seeding:
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
 | 10 minutes after the match went live             | 10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com |
-| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com (without VIP: the leaderboard and Discord) |
-| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com |
+| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com |
+| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com |
 
 - While the [next-map vote](#next-map-vote) runs (`MAP_VOTE` on, with the token and channel set) and can still be voted on
   (this match's vote is open and no team has reached its close score), the halfway and 90-point messages send people to it

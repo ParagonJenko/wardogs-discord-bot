@@ -106,7 +106,7 @@ const nearlyValues = (team: string, context: LinesContext) =>
 
 // Placeholders whose value is the same in the preview and in game.
 const exact = (values: Record<string, string>) => ({ values, longest: values });
-const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vip, context.vote)}`;
+const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vote)}`;
 const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context), context.vote)}`;
 
 // Every list, in the order the page shows them.
@@ -151,7 +151,7 @@ export const LISTS: ListDefinition[] = [
       id: `halfway.${faction.key}`,
       group: 'Halfway',
       name: faction.name,
-      note: `When ${faction.name} is in front at half the winning score. "${HALFWAY_START}" goes before it, and seeding or the Discord after it.`,
+      note: `When ${faction.name} is in front at half the winning score. "${HALFWAY_START}" goes before it, and the leaderboard after it.`,
       kind: 'match',
       get: (lines) => lines.halfway[faction.key] ?? [],
       set: (lines, list) => ({ ...lines, halfway: { ...lines.halfway, [faction.key]: list } }),
@@ -166,7 +166,7 @@ export const LISTS: ListDefinition[] = [
     id: 'halfwayLevel',
     group: 'Halfway',
     name: 'Level scores',
-    note: `At half the winning score when the top teams are level. These go in place of "${HALFWAY_START}", with seeding or the Discord after them.`,
+    note: `At half the winning score when the top teams are level. These go in place of "${HALFWAY_START}", with the leaderboard after them.`,
     kind: 'match',
     get: (lines) => lines.halfwayLevel,
     set: (lines, halfwayLevel) => ({ ...lines, halfwayLevel }),
@@ -176,7 +176,7 @@ export const LISTS: ListDefinition[] = [
     id: 'halfwayOther',
     group: 'Halfway',
     name: 'Any other team',
-    note: `When a team without a list of its own is in front at half the winning score. "${HALFWAY_START}" goes before it, and seeding or the Discord after it.`,
+    note: `When a team without a list of its own is in front at half the winning score. "${HALFWAY_START}" goes before it, and the leaderboard after it.`,
     kind: 'match',
     get: (lines) => lines.halfwayOther,
     set: (lines, halfwayOther) => ({ ...lines, halfwayOther }),

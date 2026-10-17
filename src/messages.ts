@@ -35,6 +35,14 @@ export const MAX_LENGTH = 200;
 
 export const fit = (text: string): string => (text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text);
 
+// A line followed by its call to action. When both don't fit, the line is cut short and the call stays whole: the call
+// is the key message, the line is flavour.
+export const fitWithCall = (line: string, call: string): string => {
+  if (line.length + 1 + call.length <= MAX_LENGTH) return `${line} ${call}`;
+  const room = MAX_LENGTH - call.length - 1;
+  return room < 2 ? fit(call) : `${line.slice(0, room - 1)}… ${call}`;
+};
+
 const days = (count: number): string => `${count} day${count === 1 ? '' : 's'}`;
 export const morePlayers = (count: number): string => `${count} more player${count === 1 ? '' : 's'}`;
 
@@ -45,14 +53,10 @@ export const nearlyScore = (scoreToWin: number): number => Math.ceil(scoreToWin 
 export const HALFWAY_START = 'Halfway there!';
 // While a vote runs, these send people to it instead: the vote is open from the start of the match until a team is close to
 // winning, and a message is one line of 200 characters, so there is room for one call to action.
-export const halfwayCall = (siteHost: string, vip: VipRule | null, vote = false): string =>
-  vote
-    ? `Vote for the next map in our Discord, it plays infantry only! Leaderboard at ${siteHost}`
-    : vip
-      ? `Seed on ${days(vip.seedDays)} in a week and get a whitelist slot. How at ${siteHost}`
-      : `Check the leaderboard and join our Discord at ${siteHost}`;
+export const halfwayCall = (siteHost: string, vote = false): string =>
+  vote ? `Vote for the next map in our Discord, it plays infantry only! Leaderboard at ${siteHost}` : `Check the leaderboard and stats at ${siteHost}`;
 export const nearlyCall = (siteHost: string, vote = false): string =>
-  vote ? `Last call to vote for the next map in our Discord! Leaderboard at ${siteHost}` : `Where do you rank? Leaderboard, Discord and seeding at ${siteHost}`;
+  vote ? `Last call to vote for the next map in our Discord! Leaderboard at ${siteHost}` : `Where do you rank? Leaderboard and stats at ${siteHost}`;
 
 // A line the bot chose: its message, which list it came from and the line as written (before placeholders).
 export type Picked = { text: string; list: string; line: string };
@@ -148,12 +152,12 @@ const reached = (
   }
   if (top >= scoreToWin / 2) {
     const { text, pick } = halfwayLine(match.factionScores, lines, random, recent);
-    out.push({ key: 'halfway', text: `${text} ${halfwayCall(siteHost, vip, vote)}`, pick: pick ?? { text, list: 'halfway', line: text } });
+    out.push({ key: 'halfway', text: fitWithCall(text, halfwayCall(siteHost, vote)), pick: pick ?? { text, list: 'halfway', line: text } });
   }
   // Once per match, for the first team to get there.
   if (leader && leader.score >= nearly) {
     const pick = teamLine('nearly', lines.nearly, lines.nearlyOther, leader, nearly, random, recent);
-    out.push({ key: 'nearly', text: `${pick.text} ${nearlyCall(siteHost, vote)}`, pick });
+    out.push({ key: 'nearly', text: fitWithCall(pick.text, nearlyCall(siteHost, vote)), pick });
   }
   return out.map((m) => ({ ...m, text: fit(m.text) }));
 };
