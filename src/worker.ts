@@ -1497,13 +1497,18 @@ export class Watcher extends DurableObject<Env> {
       const http = socketHttp(connect);
       const [catalog, rotation] = await Promise.all([this.catalog(config), fetchRotation(rconUrl, rconPassword, http).catch(() => null)]);
       const choice = catalog?.maps.find((m) => m.id === winner);
+      // Nothing is sent that the server's own catalogue does not confirm for this map: its game modes and its infantry only
+      // modifier. Otherwise the vote waits (and is retried) rather than sending an id guessed from another map.
+      if (choice === undefined || choice.modes.length === 0 || !choice.modifiers.some((m) => m.key === 'infantry_only')) {
+        throw new Error(`the server's catalogue does not list ${winner} with infantry only`);
+      }
       const lighting = vote.outcome?.lighting;
       const planned = planSetup(winner, { ...VOTE_SETUP_OPTIONS, ...(lighting ? { lighting } : {}) }, {
         rotation,
-        mapExperiences: choice === undefined ? null : [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
+        mapExperiences: [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
         experiences: catalog?.experiences ?? null,
         lightings: catalog?.lightings ?? null,
-        zones: choice?.zones ?? null,
+        zones: choice.zones,
       });
       if ('problem' in planned) throw new Error(planned.problem);
       // Checked as late as possible, right before the server is told, so a pick staff made while the catalogue was being

@@ -601,6 +601,9 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain. The
    group with the most votes (a tie by chance) gives a random lighting from it, and Random picks from all of them. With no
    votes on it, the lighting stays as the rotation has it. It is part of the same message, so nothing more is announced.
+   Nothing is sent to the server that its own catalogue (`/v1/catalog/...`) does not list: only maps that list a game mode
+   and infantry only themselves are offered, the infantry only id sent is that map's own, and every lighting is one the server
+   listed. If the catalogue can't confirm the winner, nothing is staged (the vote retries until the match ends).
 3. The vote stays open until a team reaches `MAP_VOTE_CLOSE_PERCENT` of `SCORE_TO_WIN` (default 95, so 95 of 100), or for
    `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). It is closed a little before the end so the
    winner can still be put on the server, which happens at the next check (within a minute). A match already at that score

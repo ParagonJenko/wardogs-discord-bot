@@ -25,11 +25,11 @@ import {
 } from '../src/mapvote.ts';
 import type { MapChoice } from '../src/rotationspage.ts';
 
-const choice = (id: string, modes = 1): MapChoice => ({
+const choice = (id: string, modes = 1, infantry = true): MapChoice => ({
   id,
   name: id,
   modes: Array.from({ length: modes }, (_, i) => ({ id: `${id}_${i}`, name: `Mode ${i}` })),
-  modifiers: [],
+  modifiers: infantry ? [{ key: 'infantry_only', name: 'Infantry only', id: `${id}_InfantryOnly` }] : [],
   zones: [],
 });
 
@@ -59,6 +59,11 @@ describe('pickOptions', () => {
     const maps = ['Now', 'Oldest', 'Older', 'Newer', 'A'].map((id) => choice(id));
     const offered = pickOptions(maps, 'Now', ['Oldest', 'Older', 'Newer', 'Now'], 4, () => 0).map((o) => o.map);
     expect(offered.sort()).toEqual(['A', 'Oldest']);
+  });
+
+  it('does not offer a map that has no infantry only of its own, so the id sent is always one that map lists', () => {
+    const maps = [choice('Now'), choice('A'), choice('B'), choice('Plain', 1, false)];
+    expect(pickOptions(maps, 'Now', ['Now'], 4, () => 0).map((o) => o.map).sort()).toEqual(['A', 'B']);
   });
 
   it('offers nothing when fewer than two maps could be voted on', () => {

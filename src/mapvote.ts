@@ -136,7 +136,7 @@ export const parseRecentMaps = (raw: unknown): string[] => {
 export const withPlayed = (recent: readonly string[], playing: string): string[] =>
   [...recent.filter((m) => m !== playing), playing].slice(-RECENT_MAPS);
 
-// The maps a vote can offer: ones the server can play (with a game mode) that were not played lately, and never the one
+// The maps a vote can offer: ones the server can play (with a game mode and infantry only) that were not played lately, and never the one
 // being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
 // the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is no vote.
 export const pickOptions = (
@@ -146,7 +146,9 @@ export const pickOptions = (
   count: number,
   random: () => number,
 ): VoteOption[] => {
-  const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0);
+  // Only maps that list infantry only themselves: every winner is played with it, and the id sent must be one that map has
+  // (see applyVoteWinner), never one found on another map.
+  const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
   // Most recent first, so the oldest are the first let back in.
   const newestFirst = [...recent].reverse();
   const fresh = playable.filter((m) => !recent.includes(m.id));
