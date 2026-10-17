@@ -38,7 +38,16 @@ describe('loadConfig', () => {
       matchEndMessages: null,
       roundups: { hour: 17, webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123' },
       rotationHour: 5,
+      mapVote: null,
     });
+  });
+
+  it('turns the map vote on with MAP_VOTE, with its options and minutes', () => {
+    expect(loadConfig({ ...required, MAP_VOTE: 'on' }).mapVote).toEqual({ options: 4, minutes: 15, channelId: undefined, botToken: undefined });
+    expect(
+      loadConfig({ ...required, MAP_VOTE: 'on', MAP_VOTE_OPTIONS: '3', MAP_VOTE_MINUTES: '10', DISCORD_VOTE_CHANNEL_ID: '555', DISCORD_BOT_TOKEN: 'abc' }).mapVote,
+    ).toEqual({ options: 3, minutes: 10, channelId: '555', botToken: 'abc' });
+    expect(() => loadConfig({ ...required, MAP_VOTE: 'on', MAP_VOTE_OPTIONS: '1' })).toThrow(/MAP_VOTE_OPTIONS/);
   });
 
   it('starts each day\'s map rotation at ROTATION_HOUR (UTC)', () => {

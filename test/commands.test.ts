@@ -53,6 +53,7 @@ const config: Config = {
   matchEndMessages: null,
   roundups: null,
   rotationHour: 5,
+  mapVote: null,
 };
 
 // A fake RCON server keyed by path; records what was sent.

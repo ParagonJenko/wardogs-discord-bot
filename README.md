@@ -581,6 +581,39 @@ modifiers, lighting and zone layouts, kept for 10 minutes) and sends changes to 
 (`save`, with `from` to rename; `use`; `schedule`; `delete`), with the same rules as `/rotations`. Each change is logged
 as `Staff page: rotations <action> "<name>" by "<staff>" (Discord user <ID>)`.
 
+## Next-map vote
+
+With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one channel.
+
+1. When a match goes live, the bot posts a message in `DISCORD_VOTE_CHANNEL_ID` with a button for each of `MAP_VOTE_OPTIONS`
+   random maps (2 to 6, default 4; only maps with a game mode, and never the map being played, or one of the 4 played before it,
+   so the same map doesn't come round again; a server with so few maps that fewer than two are left offers the ones played
+   longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
+2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
+   updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
+3. The vote closes after `MAP_VOTE_MINUTES` (default 15), or earlier when a team reaches 75% of `SCORE_TO_WIN`, so it is
+   always over while the match can still be told where to go next. The buttons go away and the message shows the result.
+4. The map with the most votes (a tie is settled by chance) is staged on the server, **infantry only**, the same as
+   `/setnextmap`: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
+   It tries again each check if the server can't be reached. Nothing is staged when nobody voted, when staff used
+   `/setnextmap` or `/changemap` while the vote was open (their pick stands), or when the match ended first.
+
+Set up (Cloudflare):
+
+1. Give the bot access to the channel: **View Channel**, **Send Messages** and **Embed Links**.
+2. `DISCORD_VOTE_CHANNEL_ID` (under `vars` in `wrangler.jsonc`, already set) is the channel's ID: Discord → Settings →
+   Advanced → Developer Mode, then right-click the channel → Copy Channel ID.
+3. Add the bot's token as a secret: `npx wrangler secret put DISCORD_BOT_TOKEN` (Developer Portal → Bot → Reset Token).
+   This is the same optional secret the staff page uses to name staff. A webhook can't carry buttons, so posting the vote
+   needs the bot itself.
+
+No new Developer Portal setting: button presses arrive at the same Interactions Endpoint URL as the slash commands. While
+`MAP_VOTE` is on and the token or channel is missing, no vote opens and the logs say why.
+
+The website's `/vote` page shows the same counts, refreshed every few seconds, with a link to the channel. It cannot vote:
+`GET /api/vote` gives the options, votes, result and the channel link, never who voted. The vote is in the Durable Object
+under `mapVote`; the code is in `src/mapvote.ts`.
+
 ## Moderation log
 
 A staff-only Discord channel where the bot posts, as they happen:

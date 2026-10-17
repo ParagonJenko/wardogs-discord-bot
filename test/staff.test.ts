@@ -44,6 +44,7 @@ const config: Config = {
   matchEndMessages: null,
   roundups: null,
   rotationHour: 5,
+  mapVote: null,
 };
 
 const NOW = Date.UTC(2026, 8, 30, 12);

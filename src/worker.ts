@@ -3,6 +3,28 @@ import { z } from 'zod';
 import { DurableObject } from 'cloudflare:workers';
 import { withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
+import {
+  castVote,
+  chooseWinner,
+  closeDue,
+  editVoteMessage,
+  MAP_VOTE_KEY,
+  NOTE,
+  openVote,
+  parseMapVote,
+  parseRecentMaps,
+  pickOptions,
+  postVoteMessage,
+  publicVote,
+  RECENT_MAPS_KEY,
+  VOTE_SETUP_OPTIONS,
+  voteMessage,
+  withPlayed,
+  type MapVote,
+  type PublicVote,
+  type VoteOutcome,
+} from './mapvote.ts';
+import { planSetup } from './matchsetup.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseReadRotation, parseStagedMap, rotationReadDue, showBoard, type ReadRotation, type StagedMap } from './board.ts';
 import {
@@ -140,7 +162,7 @@ import {
 import type { OutageEvent } from './outages.ts';
 import { feedRecordOf } from './matchend.ts';
 import { createFeedJoins, createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
-import { JOIN_WAIT_MS } from './messages.ts';
+import { discordLink, JOIN_WAIT_MS } from './messages.ts';
 import {
   ALERT_LOG_KEY,
   buildReview,
@@ -183,6 +205,7 @@ import {
   kickPlayer,
   messagePlayer,
   putConfig,
+  queueMap,
   RconError,
   removeBan,
   sendBroadcast,
@@ -1013,6 +1036,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
     await this.serial(() => this.updateRotation(config, seen.snapshot));
+    await this.updateMapVote(config, seen.snapshot);
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
     await this.checkHeadshots(seen.snapshot);
     await this.watchFeed(config, seen.snapshot);
@@ -1296,6 +1320,176 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put('rotations', book);
     console.info(`Map rotation: saved the server's rotation as ${DEFAULT_ROTATION} (${entries.length} maps)`);
     return book;
+  }
+
+  // The next-map vote (see mapvote.ts) takes one step at a time, so a ballot never overwrites the vote closing.
+  private voting = oneAtATime();
+
+  // The vote for the website, or null while there is none (or the vote is off), and the Discord channel to vote in.
+  async mapVote(): Promise<{ vote: PublicVote | null; discord: string | null }> {
+    const vars = stringVars(this.env);
+    const rule = loadConfig(vars).mapVote;
+    if (rule === null) return { vote: null, discord: null };
+    const guild = vars['DISCORD_GUILD_ID']?.trim();
+    const discord = guild && rule.channelId ? `https://discord.com/channels/${guild}/${rule.channelId}` : null;
+    const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
+    return { vote: vote === null ? null : publicVote(vote, Date.now()), discord };
+  }
+
+  // A press of a vote button: counts it and answers with the vote message as it is now, and what to tell the voter.
+  async castMapVote(press: { poll: string; map: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
+    const config = loadConfig(stringVars(this.env));
+    return this.voting(async () => {
+      const now = Date.now();
+      const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
+      if (config.mapVote === null || vote === null || vote.id !== press.poll) {
+        return { update: null, reply: 'That vote is over. A new one opens with the next match.' };
+      }
+      const cast = castVote(vote, { user: press.userId, map: press.map }, now);
+      if (!('vote' in cast)) {
+        return { update: null, reply: cast.result === 'closed' ? 'The vote has closed.' : 'That map is not in this vote.' };
+      }
+      await this.ctx.storage.put(MAP_VOTE_KEY, cast.vote);
+      const name = cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map);
+      return {
+        update: voteMessage(cast.vote, now, config.siteUrl),
+        reply: cast.result === 'changed' ? `Your vote is now for **${name}**.` : `You voted for **${name}**. Press another map to change it.`,
+      };
+    });
+  }
+
+  // Updates the vote's Discord message to the vote as it is. A failure is logged: the message is only the view of the vote.
+  private async showVote(config: Config, rule: NonNullable<Config['mapVote']>, vote: MapVote): Promise<void> {
+    if (vote.message === null || !rule.botToken) return;
+    try {
+      await editVoteMessage(rule.botToken, vote.message.channelId, vote.message.messageId, voteMessage(vote, Date.now(), config.siteUrl));
+    } catch (error) {
+      console.error(`Map vote: could not update the Discord message: ${errorText(error)}`);
+    }
+  }
+
+  // Opens a vote when a match goes live, closes it when its time is up or a team is close to winning, and puts the winner
+  // on the server as the next map. A failure is logged; it never stops what comes after it.
+  private async updateMapVote(config: Config, snapshot: Snapshot | null): Promise<void> {
+    const rule = config.mapVote;
+    if (rule === null || snapshot === null || snapshot.status.map === '') return;
+    try {
+      await this.voting(() => this.stepMapVote(config, rule, snapshot.status.map));
+    } catch (error) {
+      console.error(`Map vote failed: ${errorText(error)}`);
+    }
+  }
+
+  private async stepMapVote(config: Config, rule: NonNullable<Config['mapVote']>, playing: string): Promise<void> {
+    const storage = this.ctx.storage;
+    const now = Date.now();
+    const match = parseState(await storage.get('state'))?.match ?? null;
+    // Every map played is remembered, whether or not it had a vote.
+    const played = parseRecentMaps(await storage.get(RECENT_MAPS_KEY));
+    const recent = withPlayed(played, playing);
+    if (recent.join() !== played.join()) await storage.put(RECENT_MAPS_KEY, recent);
+    let vote = parseMapVote(await storage.get(MAP_VOTE_KEY));
+    const save = async (next: MapVote): Promise<MapVote> => {
+      await storage.put(MAP_VOTE_KEY, next);
+      return next;
+    };
+    const ended = (v: MapVote, outcome: VoteOutcome): MapVote => ({ ...v, outcome });
+
+    // A vote for an earlier match: too late to put anything on the server.
+    // A match the game has ended stays in the state until the next one starts, so it counts as over too.
+    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt || match.endedAt !== undefined)) {
+      if (vote.outcome === null || vote.outcome.pending) {
+        vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
+        console.info(`Map vote: the match ended before the vote could be applied`);
+        await this.showVote(config, rule, vote);
+      }
+      vote = null;
+    }
+
+    if (vote !== null && match !== null) {
+      if (vote.outcome === null) {
+        const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
+        if (!closeDue(vote, now, leading, config.scoreToWin)) return;
+        const winner = chooseWinner(vote, Math.random);
+        vote = await save(
+          ended(vote, winner === null ? { at: now, winner: null, pending: false, note: NOTE.nobody } : { at: now, winner, pending: true }),
+        );
+        console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
+        await this.showVote(config, rule, vote);
+      }
+      if (vote.outcome?.pending) {
+        const outcome = await this.applyVoteWinner(config, vote, playing);
+        const next = await save(ended(vote, outcome));
+        // The message changes when the winner is on the server, or when it can't be; a retry still waiting says the same.
+        if (!outcome.pending) await this.showVote(config, rule, next);
+      }
+      return;
+    }
+
+    // A match that is live and has no vote yet.
+    if (match === null || match.liveAt === null || match.endedAt !== undefined) return;
+    if (!rule.botToken || !rule.channelId) {
+      console.error('Map vote: MAP_VOTE is on, but DISCORD_BOT_TOKEN and DISCORD_VOTE_CHANNEL_ID are not both set, so no vote opens.');
+      return;
+    }
+    const catalog = await this.catalog(config);
+    const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
+    if (options.length === 0) return;
+    // Posted first: a vote nobody can see is not opened, and the next check tries again.
+    const opened = openVote(match, playing, options, rule, now);
+    const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
+    await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
+    console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
+    if (config.inviteCode) {
+      await sendBroadcast(
+        config.rconUrl,
+        config.rconPassword,
+        `Vote for the next map in our Discord: ${discordLink(config.inviteCode)} - it plays infantry only. Open for ${rule.minutes} minutes.`,
+        socketHttp(connect),
+      ).catch((error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`));
+    }
+  }
+
+  // Stages the winner, infantry only, as /setnextmap does. A failure keeps the outcome pending, and the next check tries
+  // again until the match ends.
+  private async applyVoteWinner(config: Config, vote: MapVote, playing: string): Promise<VoteOutcome> {
+    const at = Date.now();
+    const winner = vote.outcome?.winner ?? null;
+    if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
+    if (playing !== vote.fromMap) return { at, winner: null, pending: false, note: NOTE.late };
+    try {
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [catalog, rotation] = await Promise.all([this.catalog(config), fetchRotation(rconUrl, rconPassword, http).catch(() => null)]);
+      const choice = catalog?.maps.find((m) => m.id === winner);
+      const planned = planSetup(winner, VOTE_SETUP_OPTIONS, {
+        rotation,
+        mapExperiences: choice === undefined ? null : [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
+        experiences: catalog?.experiences ?? null,
+        lightings: catalog?.lightings ?? null,
+        zones: choice?.zones ?? null,
+      });
+      if ('problem' in planned) throw new Error(planned.problem);
+      // Checked as late as possible, right before the server is told, so a pick staff made while the catalogue was being
+      // read still stands. Staff commands don't run through this queue, so this leaves only the moments between this read
+      // and the request.
+      const staged = parseStagedMap(await this.ctx.storage.get('nextMap'));
+      if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
+        return { at, winner: null, pending: false, note: NOTE.staff };
+      }
+      await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
+      await this.stageNextMap(winner, playing);
+      console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
+      const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
+      const votes = vote.ballots.filter((b) => b.map === winner).length;
+      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only (${votes} votes).`, http).catch((error: unknown) =>
+        console.error(`Map vote result announcement failed: ${errorText(error)}`),
+      );
+      return { at, winner, pending: false };
+    } catch (error) {
+      console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
+      return { at: vote.outcome?.at ?? at, winner, pending: true };
+    }
   }
 
   // The saved rotations, for /rotations.
@@ -2865,6 +3059,7 @@ const publicRoute = (
   if (url.pathname === '/api/stats') return { key: 'stats', load: () => watcher().stats() };
   if (url.pathname === '/api/live') return { key: 'live', load: () => watcher().live(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
+  if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
@@ -3344,6 +3539,8 @@ export default {
         log: console,
         now: Date.now,
         adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
+        voteGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
+        castVote: (press) => watcher().castMapVote(press),
         adminRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
           .split(',')
           .map((id) => id.trim())
