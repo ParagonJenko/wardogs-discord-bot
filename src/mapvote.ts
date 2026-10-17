@@ -13,16 +13,20 @@ import type { MapChoice } from './rotationspage.ts';
 
 export const MAP_VOTE_KEY = 'mapVote';
 
-// A vote closes at the first of its time running out and the leading team reaching this share of the winning score, so
-// it is always over while the match can still be told where to go next.
-export const CLOSE_SCORE_SHARE = 0.75;
+// A vote closes at the first of its time running out and the leading team reaching its close score (MAP_VOTE_CLOSE_PERCENT
+// of the winning score, 95% by default), so it is over while the match can still be told where to go next. The time is
+// only a backstop: a match lasts about 50 minutes, so the score is what normally closes it.
+// Always at least a point short of the winning score, however small SCORE_TO_WIN or high the percent: rounding up must not
+// leave the vote open until the match is won.
+export const closeScoreFor = (scoreToWin: number, percent: number): number =>
+  Math.max(1, Math.min(scoreToWin - 1, Math.ceil((scoreToWin * percent) / 100)));
 
 // How every winner is set up: infantry only (see MODIFIERS in matchsetup.ts), whatever the rotation plays that map with.
 export const VOTE_SETUP_OPTIONS = { infantry_only: 'true' };
 
 // `channelId` is where the vote is posted and `botToken` the bot's, which posting and editing a message with buttons need
 // (a webhook can't carry them). The vote does not run without both.
-export type MapVoteRule = { options: number; minutes: number; channelId: string | undefined; botToken: string | undefined };
+export type MapVoteRule = { options: number; minutes: number; closePercent: number; channelId: string | undefined; botToken: string | undefined };
 
 export type VoteOption = { map: string; name: string };
 
@@ -48,6 +52,8 @@ export type MapVote = {
   fromMap: string;
   openedAt: number;
   closesAt: number;
+  // The score a team reaching closes the vote. 0 when unknown (a vote saved before this was kept): then only time closes it.
+  closeScore: number;
   options: VoteOption[];
   ballots: Ballot[];
   // The Discord message the vote is in, to update as votes come and when it ends.
@@ -61,6 +67,7 @@ const MapVoteSchema = z.object({
   fromMap: z.string(),
   openedAt: z.number(),
   closesAt: z.number(),
+  closeScore: z.number().default(0),
   options: z.array(z.object({ map: z.string(), name: z.string() })),
   ballots: z.array(z.object({ user: z.string(), map: z.string(), at: z.number() })),
   message: z.object({ channelId: z.string(), messageId: z.string() }).nullable().default(null),
@@ -130,12 +137,14 @@ export const openVote = (
   options: VoteOption[],
   rule: MapVoteRule,
   now: number,
+  closeScore: number,
 ): MapVote => ({
   id: String(match.startedAt),
   matchStartedAt: match.startedAt,
   fromMap,
   openedAt: now,
   closesAt: now + rule.minutes * 60_000,
+  closeScore,
   options,
   ballots: [],
   message: null,
@@ -169,9 +178,9 @@ export const chooseWinner = (vote: MapVote, random: () => number): string | null
   )[0]!.map;
 };
 
-// Whether an open vote should close now: its time is up, or a team is close to winning the match.
-export const closeDue = (vote: MapVote, now: number, leadingScore: number, scoreToWin: number): boolean =>
-  vote.outcome === null && (now >= vote.closesAt || leadingScore >= scoreToWin * CLOSE_SCORE_SHARE);
+// Whether an open vote should close now: its time is up, or a team has reached its close score.
+export const closeDue = (vote: MapVote, now: number, leadingScore: number): boolean =>
+  vote.outcome === null && (now >= vote.closesAt || (vote.closeScore > 0 && leadingScore >= vote.closeScore));
 
 // What the website gets: the options with their votes, never the ballots or who cast them.
 export type PublicVote = {
@@ -235,10 +244,12 @@ export type VoteMessage = { embeds: Embed[]; components: unknown[]; allowed_ment
 
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
   const shown = publicVote(vote, now);
+  const at = `<t:${Math.floor(vote.closesAt / 1000)}:R>`;
+  const closing = vote.closeScore > 0 ? `when a team reaches ${vote.closeScore} points, or ${at}, whichever is first.` : `${at}.`;
   const where = siteUrl === undefined ? '' : ` Results also on ${siteUrl.replace(/\/$/, '')}/vote.`;
   const description = shown.open
     ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**. One vote each: press another map to change yours. ` +
-      `Closes <t:${Math.floor(vote.closesAt / 1000)}:R>. The winner plays next, **infantry only**.${where}`
+      `Closes ${closing} The winner plays next, **infantry only**.${where}`
     : shown.winner !== null
       ? shown.pending
         ? `**${shown.winner.name}** won. Putting it on the server…`

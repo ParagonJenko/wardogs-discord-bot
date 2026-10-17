@@ -7,6 +7,7 @@ import {
   castVote,
   chooseWinner,
   closeDue,
+  closeScoreFor,
   editVoteMessage,
   MAP_VOTE_KEY,
   NOTE,
@@ -1411,7 +1412,7 @@ export class Watcher extends DurableObject<Env> {
     if (vote !== null && match !== null) {
       if (vote.outcome === null) {
         const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
-        if (!closeDue(vote, now, leading, config.scoreToWin)) return;
+        if (!closeDue(vote, now, leading)) return;
         const winner = chooseWinner(vote, Math.random);
         vote = await save(
           ended(vote, winner === null ? { at: now, winner: null, pending: false, note: NOTE.nobody } : { at: now, winner, pending: true }),
@@ -1435,10 +1436,13 @@ export class Watcher extends DurableObject<Env> {
       return;
     }
     const catalog = await this.catalog(config);
+    // A match already at its close score is nearly over: a vote would close at once, so none opens.
+    const closeScore = closeScoreFor(config.scoreToWin, rule.closePercent);
+    if (Math.max(0, ...match.factionScores.map((f) => f.score)) >= closeScore) return;
     const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
     if (options.length === 0) return;
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
-    const opened = openVote(match, playing, options, rule, now);
+    const opened = openVote(match, playing, options, rule, now, closeScore);
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
     await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);

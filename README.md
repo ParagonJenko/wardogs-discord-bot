@@ -591,8 +591,10 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
-3. The vote closes after `MAP_VOTE_MINUTES` (default 15), or earlier when a team reaches 75% of `SCORE_TO_WIN`, so it is
-   always over while the match can still be told where to go next. The buttons go away and the message shows the result.
+3. The vote stays open until a team reaches `MAP_VOTE_CLOSE_PERCENT` of `SCORE_TO_WIN` (default 95, so 95 of 100), or for
+   `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). It is closed a little before the end so the
+   winner can still be put on the server, which happens at the next check (within a minute). A match already at that score
+   when the bot sees it gets no vote. The buttons go away and the message shows the result.
 4. The map with the most votes (a tie is settled by chance) is staged on the server, **infantry only**, the same as
    `/setnextmap`: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
    It tries again each check if the server can't be reached. Nothing is staged when nobody voted, when staff used

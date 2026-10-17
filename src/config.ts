@@ -128,14 +128,16 @@ const EnvSchema = z
     // kills arrive again: "on" or "off".
     FEED_ALERTS: z.enum(['on', 'off']).default('on'),
     // The next-map vote on the website: when a match goes live, a vote between MAP_VOTE_OPTIONS maps, open for
-    // MAP_VOTE_MINUTES (or until a team has 75% of SCORE_TO_WIN). The winner is put on the server as the next map. "on" or "off".
+    // MAP_VOTE_MINUTES (or until a team has MAP_VOTE_CLOSE_PERCENT of SCORE_TO_WIN). The winner is put on the server as the next map. "on" or "off".
     MAP_VOTE: z.enum(['on', 'off']).default('off'),
     // The channel the vote is posted in, and the bot's token to post it with (a webhook can't carry buttons). The bot
     // needs View Channel, Send Messages and Embed Links there.
     DISCORD_VOTE_CHANNEL_ID: numericId.optional(),
     DISCORD_BOT_TOKEN: z.string().trim().optional(),
     MAP_VOTE_OPTIONS: z.coerce.number().int().min(2).max(6).default(4),
-    MAP_VOTE_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
+    // A backstop: a match lasts about 50 minutes, and the vote normally closes when a team reaches the close percent.
+    MAP_VOTE_MINUTES: z.coerce.number().int().min(1).max(120).default(60),
+    MAP_VOTE_CLOSE_PERCENT: z.coerce.number().int().min(50).max(99).default(95),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -278,7 +280,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     rotationHour: e.ROTATION_HOUR,
     mapVote:
       e.MAP_VOTE === 'on'
-        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN }
+        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, closePercent: e.MAP_VOTE_CLOSE_PERCENT, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN }
         : null,
   };
 };
