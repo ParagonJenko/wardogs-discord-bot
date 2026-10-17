@@ -87,8 +87,8 @@ const sample = <T>(items: readonly T[], count: number, random: () => number): T[
   return pool.slice(0, count);
 };
 
-// Maps played lately that a vote does not offer again: the one being played and the ones before it.
-export const RECENT_MAPS = 4;
+// Maps played lately that a vote does not offer again: the one being played and the four before it.
+export const RECENT_MAPS = 5;
 export const RECENT_MAPS_KEY = 'mapVoteRecent';
 
 export const parseRecentMaps = (raw: unknown): string[] => {
@@ -101,8 +101,8 @@ export const withPlayed = (recent: readonly string[], playing: string): string[]
   [...recent.filter((m) => m !== playing), playing].slice(-RECENT_MAPS);
 
 // The maps a vote can offer: ones the server can play (with a game mode) that were not played lately, and never the one
-// being played, so the same map is not played twice in a row. When that leaves fewer than two, the older recent maps are
-// offered again before the vote is given up on. Fewer than two even then is no vote.
+// being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
+// the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is no vote.
 export const pickOptions = (
   maps: readonly MapChoice[],
   playing: string,

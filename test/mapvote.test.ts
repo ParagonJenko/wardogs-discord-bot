@@ -59,9 +59,11 @@ describe('pickOptions', () => {
 });
 
 describe('withPlayed', () => {
-  it('puts the map last once, and keeps only the latest few', () => {
+  it('puts the map last once, and keeps the current map and the four before it', () => {
     expect(withPlayed(['A', 'B'], 'A')).toEqual(['B', 'A']);
-    expect(withPlayed(['A', 'B', 'C', 'D'], 'E')).toEqual(['B', 'C', 'D', 'E']);
+    expect(withPlayed([], 'A')).toEqual(['A']);
+    expect(withPlayed(['A', 'B', 'C', 'D'], 'E')).toEqual(['A', 'B', 'C', 'D', 'E']);
+    expect(withPlayed(['A', 'B', 'C', 'D', 'E'], 'F')).toEqual(['B', 'C', 'D', 'E', 'F']);
   });
 });
 

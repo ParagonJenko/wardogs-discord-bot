@@ -586,8 +586,9 @@ as `Staff page: rotations <action> "<name>" by "<staff>" (Discord user <ID>)`.
 With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one channel.
 
 1. When a match goes live, the bot posts a message in `DISCORD_VOTE_CHANNEL_ID` with a button for each of `MAP_VOTE_OPTIONS`
-   random maps (2 to 6, default 4; only maps with a game mode, and never the map being played or one of the last 4 played, so
-   the same map doesn't come round again). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
+   random maps (2 to 6, default 4; only maps with a game mode, and never the map being played, or one of the 4 played before it,
+   so the same map doesn't come round again; a server with so few maps that fewer than two are left offers the ones played
+   longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
 3. The vote closes after `MAP_VOTE_MINUTES` (default 15), or earlier when a team reaches 75% of `SCORE_TO_WIN`, so it is

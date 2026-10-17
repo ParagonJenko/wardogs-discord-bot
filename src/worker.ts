@@ -1384,6 +1384,10 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const now = Date.now();
     const match = parseState(await storage.get('state'))?.match ?? null;
+    // Every map played is remembered, whether or not it had a vote.
+    const played = parseRecentMaps(await storage.get(RECENT_MAPS_KEY));
+    const recent = withPlayed(played, playing);
+    if (recent.join() !== played.join()) await storage.put(RECENT_MAPS_KEY, recent);
     let vote = parseMapVote(await storage.get(MAP_VOTE_KEY));
     const save = async (next: MapVote): Promise<MapVote> => {
       await storage.put(MAP_VOTE_KEY, next);
@@ -1392,7 +1396,8 @@ export class Watcher extends DurableObject<Env> {
     const ended = (v: MapVote, outcome: VoteOutcome): MapVote => ({ ...v, outcome });
 
     // A vote for an earlier match: too late to put anything on the server.
-    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt)) {
+    // A match the game has ended stays in the state until the next one starts, so it counts as over too.
+    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt || match.endedAt !== undefined)) {
       if (vote.outcome === null || vote.outcome.pending) {
         vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
         console.info(`Map vote: the match ended before the vote could be applied`);
@@ -1428,14 +1433,12 @@ export class Watcher extends DurableObject<Env> {
       return;
     }
     const catalog = await this.catalog(config);
-    // The maps played lately are not offered again, and this one joins them.
-    const recent = withPlayed(parseRecentMaps(await storage.get(RECENT_MAPS_KEY)), playing);
     const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
     if (options.length === 0) return;
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     const opened = openVote(match, playing, options, rule, now);
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
-    await storage.put({ [RECENT_MAPS_KEY]: recent, [MAP_VOTE_KEY]: { ...opened, message: { channelId: rule.channelId, messageId } } });
+    await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
     if (config.inviteCode) {
       await sendBroadcast(
@@ -1454,10 +1457,6 @@ export class Watcher extends DurableObject<Env> {
     const winner = vote.outcome?.winner ?? null;
     if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
     if (playing !== vote.fromMap) return { at, winner: null, pending: false, note: NOTE.late };
-    const staged = parseStagedMap(await this.ctx.storage.get('nextMap'));
-    if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
-      return { at, winner: null, pending: false, note: NOTE.staff };
-    }
     try {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
@@ -1471,6 +1470,13 @@ export class Watcher extends DurableObject<Env> {
         zones: choice?.zones ?? null,
       });
       if ('problem' in planned) throw new Error(planned.problem);
+      // Checked as late as possible, right before the server is told, so a pick staff made while the catalogue was being
+      // read still stands. Staff commands don't run through this queue, so this leaves only the moments between this read
+      // and the request.
+      const staged = parseStagedMap(await this.ctx.storage.get('nextMap'));
+      if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
+        return { at, winner: null, pending: false, note: NOTE.staff };
+      }
       await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
       await this.stageNextMap(winner, playing);
       console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
