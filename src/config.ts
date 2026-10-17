@@ -149,6 +149,10 @@ const EnvSchema = z
     // A backstop: a match lasts about 50 minutes, and the vote normally closes when a team reaches the close percent.
     MAP_VOTE_MINUTES: z.coerce.number().int().min(1).max(120).default(60),
     MAP_VOTE_CLOSE_PERCENT: z.coerce.number().int().min(50).max(99).default(95),
+    // How the winner is put on the server: "rotation" writes it into the rotation as the next map, which can be done as soon as
+    // the vote closes, and writes the rotation back once it is playing; "queue" stages it (POST /v1/match/map) once the match is
+    // over, which the server travels to when the end screen finishes.
+    MAP_VOTE_STAGING: z.enum(['rotation', 'queue']).default('rotation'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -303,7 +307,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     rotationHour: e.ROTATION_HOUR,
     mapVote:
       e.MAP_VOTE === 'on'
-        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, closePercent: e.MAP_VOTE_CLOSE_PERCENT, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN }
+        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, closePercent: e.MAP_VOTE_CLOSE_PERCENT, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN, staging: e.MAP_VOTE_STAGING }
         : null,
   };
 };

@@ -9,6 +9,7 @@ import {
   chooseWinner,
   closeDue,
   isOpen as isOpenVote,
+  matchIsOver,
   conditionOptions,
   closeScoreFor,
   editVoteMessage,
@@ -359,7 +360,9 @@ import {
   type RotationEdit,
   type RotationEditResult,
   type RotationServer,
+  type RotationEntry,
 } from './rotations.ts';
+import { parseVoteInsert, planInsert, stillInserted, VOTE_INSERT_KEY, type VoteInsert } from './voteinsert.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -906,6 +909,18 @@ export class Watcher extends DurableObject<Env> {
     this.ctx.waitUntil(this.alerting(endCheck));
   }
 
+  // The kill feed says the match is over (its end screen, or its result): the map vote's winner is put on the server now,
+  // not at the next check, as the end screen only lasts about a minute. In the background, so the game has its reply at once.
+  async voteMatchOver(): Promise<void> {
+    const { config, http } = this.rcon();
+    if (config.mapVote === null) return;
+    this.ctx.waitUntil(
+      fetchStatus(config.rconUrl, config.rconPassword, http)
+        .then((status) => this.updateMapVote(config, { status, players: [] }))
+        .catch((error: unknown) => console.error(`Map vote at the end of the match failed: ${errorText(error)}`)),
+    );
+  }
+
   // The kill feed's record of a match, for its awards (see feedRecordOf).
   private async liveMatchOf(match: MatchState): Promise<LiveMatch | null> {
     return feedRecordOf(parseLiveMatch(await this.ctx.storage.get('live')), match);
@@ -1436,7 +1451,12 @@ export class Watcher extends DurableObject<Env> {
   // on the server as the next map. A failure is logged; it never stops what comes after it.
   private async updateMapVote(config: Config, snapshot: Snapshot | null): Promise<void> {
     const rule = config.mapVote;
-    if (rule === null || snapshot === null || snapshot.status.map === '') return;
+    if (snapshot === null || snapshot.status.map === '') return;
+    // Whether or not there is a vote now: a winner put in the rotation is taken out once it is playing.
+    await this.voting(() => this.restoreVoteInsert(config, snapshot.status.map)).catch((error: unknown) =>
+      console.error(`Map vote: restoring the rotation failed: ${errorText(error)}`),
+    );
+    if (rule === null) return;
     try {
       await this.voting(() => this.stepMapVote(config, rule, snapshot.status.map));
     } catch (error) {
@@ -1459,9 +1479,9 @@ export class Watcher extends DurableObject<Env> {
     };
     const ended = (v: MapVote, outcome: VoteOutcome): MapVote => ({ ...v, outcome });
 
-    // A vote for an earlier match: too late to put anything on the server.
-    // A match the game has ended stays in the state until the next one starts, so it counts as over too.
-    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt || match.endedAt !== undefined)) {
+    // A vote for an earlier match: too late to put anything on the server. A match that has ended is not: its winner is put
+    // on the server while the end screen shows, and applyVoteWinner refuses once the server has moved to another map.
+    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt)) {
       if (vote.outcome === null || vote.outcome.pending) {
         vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
         console.info(`Map vote: the match ended before the vote could be applied`);
@@ -1471,9 +1491,10 @@ export class Watcher extends DurableObject<Env> {
     }
 
     if (vote !== null && match !== null) {
+      const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
+      const over = matchIsOver(vote, await this.matchFeed(), leading, config.scoreToWin);
       if (vote.outcome === null) {
-        const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
-        if (!closeDue(vote, now, leading)) return;
+        if (!closeDue(vote, now, leading) && !over) return;
         const winner = chooseWinner(vote, Math.random);
         const lighting = chooseConditions(vote, Math.random);
         vote = await save(
@@ -1487,8 +1508,9 @@ export class Watcher extends DurableObject<Env> {
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
         await this.showVote(config, rule, vote);
       }
-      if (vote.outcome?.pending) {
-        const outcome = await this.applyVoteWinner(config, vote, playing);
+      // The queued winner waits for the end of the match: the server ended a match early when it was queued with a team on 95.
+      if (vote.outcome?.pending && (rule.staging === 'rotation' || over)) {
+        const outcome = await this.applyVoteWinner(config, vote, playing, rule.staging, over);
         const next = await save(ended(vote, outcome));
         // The message changes when the winner is on the server, or when it can't be; a retry still waiting says the same.
         if (!outcome.pending) await this.showVote(config, rule, next);
@@ -1537,9 +1559,11 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Stages the winner, infantry only, as /setnextmap does. A failure keeps the outcome pending, and the next check tries
-  // again until the match ends.
-  private async applyVoteWinner(config: Config, vote: MapVote, playing: string): Promise<VoteOutcome> {
+  // Puts the winner on the server, infantry only. With staging "rotation" it goes into the server's rotation as the next map
+  // (see insertVoteWinner), which can be done as soon as the vote closes; "queue" stages it as /setnextmap does, which waits
+  // for `over` (the match is over). A failure keeps the outcome pending, and the next
+  // check tries again until the match ends.
+  private async applyVoteWinner(config: Config, vote: MapVote, playing: string, staging: 'rotation' | 'queue', over: boolean): Promise<VoteOutcome> {
     const at = Date.now();
     const winner = vote.outcome?.winner ?? null;
     if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
@@ -1570,9 +1594,16 @@ export class Watcher extends DurableObject<Env> {
       if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
         return { at, winner: null, pending: false, note: NOTE.staff };
       }
-      await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
+      const inserted = staging === 'rotation' && (await this.insertVoteWinner(config, vote, { map: winner, ...planned.setup }, rotation));
+      if (!inserted) {
+        // The queue is only for staging "queue": a rotation that cannot take the winner is retried, never queued instead.
+        if (staging === 'rotation') throw new Error('the rotation cannot take it: it is off or random, or the server did not say which slot it is on');
+        // Not before the match is over: the server ended a match early when this was sent with a team on 95.
+        if (!over) return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
+        await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
+      }
       await this.stageNextMap(winner, playing);
-      console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
+      console.info(`Map vote: ${winner} staged as the next map ${inserted ? 'in the rotation' : 'in the queue'}, ${JSON.stringify(planned.setup)}`);
       const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
       const votes = vote.ballots.filter((b) => b.map === winner).length;
       await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${vote.outcome?.lightingName ? `, ${vote.outcome.lightingName}` : ''} (${votes} votes).`, http).catch((error: unknown) =>
@@ -1582,6 +1613,53 @@ export class Watcher extends DurableObject<Env> {
     } catch (error) {
       console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
       return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
+    }
+  }
+
+  // Writes the winner into the server's rotation as the next map, and remembers how to take it out (see voteinsert.ts). False
+  // when the rotation can't take it: it was not read, is off or random, or the server did not say which slot it is on. The
+  // server keeps playing the match on now, as when the daily rotation is put on.
+  private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null): Promise<boolean> {
+    if (rotation === null) return false;
+    const { rconUrl, rconPassword } = config;
+    const http = socketHttp(connect);
+    const storage = this.ctx.storage;
+    // Written already, by an earlier check that went on to fail: not written twice.
+    const written = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
+    if (written !== null && written.voteId === vote.id && stillInserted(rotation, written)) return true;
+    const slot = rotationSlot(rotation, await fetchStatus(rconUrl, rconPassword, http));
+    const plan = planInsert(rotation, slot, winner);
+    if (plan === null) return false;
+    const insert: VoteInsert = { voteId: vote.id, fromMap: vote.fromMap, map: winner.map, restore: plan.restore, length: plan.staged.length, at: Date.now() };
+    // Kept first: if the write goes through and this check then fails, the rotation is still put back.
+    await storage.put(VOTE_INSERT_KEY, insert);
+    await putRotation({ ...this.settingsFile({ config, http }), slot: async () => slot }, plan.staged);
+    // The live status reads the new rotation at the next check.
+    await storage.delete('boardRotation');
+    return true;
+  }
+
+  // Once the server has moved on from the map the vote was for, the rotation is written back as it was, from the map that
+  // would have come next, if it is still the one that was written (staff or the daily rotation may have changed it since).
+  private async restoreVoteInsert(config: Config, playing: string): Promise<void> {
+    const storage = this.ctx.storage;
+    const insert = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
+    if (insert === null || playing === insert.fromMap) return;
+    try {
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
+      if (stillInserted(rotation, insert)) {
+        const slot = rotationSlot(rotation, status);
+        await putRotation({ ...this.settingsFile({ config, http }), slot: async () => slot }, insert.restore);
+        await storage.delete('boardRotation');
+        console.info(`Map vote: the server is on ${playing}; the rotation is back as it was, from ${insert.restore[0]?.map ?? 'its start'}`);
+      } else {
+        console.info(`Map vote: the rotation has changed since ${insert.map} was put in it, so it is left as it is`);
+      }
+      await storage.delete(VOTE_INSERT_KEY);
+    } catch (error) {
+      console.error(`Map vote: could not put the rotation back, trying again next check: ${errorText(error)}`);
     }
   }
 
@@ -2111,19 +2189,21 @@ export class Watcher extends DurableObject<Env> {
   // A batch from the game's kill feed: the day's weapon totals, each killer's, the live match, the match's state and
   // result, and the join log, in one write. Only storage is awaited, so no other batch is counted part-way through.
   // Answers how many events were new, and whether a new one was a match's result.
-  async recordFeed({ timeline, presence }: FeedRecord): Promise<{ accepted: number; ended: boolean }> {
+  async recordFeed({ timeline, presence }: FeedRecord): Promise<{ accepted: number; ended: boolean; over: boolean }> {
     const unseen = <T extends { eventId: string }>(list: T[]): T[] =>
       list.filter((e, i) => !this.eventsSeen.has(e.eventId) && list.findIndex((o) => o.eventId === e.eventId) === i);
     const happened = unseen(timeline);
     const came = unseen(presence);
     const fresh = [...happened, ...came];
-    if (fresh.length === 0) return { accepted: 0, ended: false };
+    if (fresh.length === 0) return { accepted: 0, ended: false, over: false };
     const now = Date.now();
     const day = dayOf(now);
     const dayKey = weaponDayKey(now);
     const events = happened.filter((e): e is FeedEvent => !isMatchEvent(e));
     const matchEvents = happened.filter(isMatchEvent);
     const ended = matchEvents.some((e) => e.type === 'result');
+    // The match is over for the map vote at its end screen, or at its result if that comes first.
+    const over = matchEvents.some((e) => e.type === 'result' || e.state.startsWith('MatchState.PostMatch'));
     const kills = events.filter(isKill);
     const killers = [...new Set(kills.map((k) => k.killerSteamId))];
     const griefKey = griefDayKey(now);
@@ -2197,7 +2277,7 @@ export class Watcher extends DurableObject<Env> {
     // it has gone.
     if (came.length > 0) this.ctx.waitUntil(this.feedJoined(came, now));
     this.ctx.waitUntil(this.broadcastLive());
-    return { accepted: fresh.length, ended };
+    return { accepted: fresh.length, ended, over };
   }
 
   // The SQLite database, with the staff page's kill_days table, which is made the first time.
@@ -3985,9 +4065,12 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
     console.error(`Kill feed: a batch came with ${unread} events, and none could be read. The game may send them in a new form.`);
   }
   try {
-    const { accepted, ended } = timeline.length + presence.length === 0 ? { accepted: 0, ended: false } : await watcher().recordFeed({ timeline, presence });
+    const { accepted, ended, over } =
+      timeline.length + presence.length === 0 ? { accepted: 0, ended: false, over: false } : await watcher().recordFeed({ timeline, presence });
     // Once the batch's last kills are counted, so the awards have them.
     if (ended) await watcher().matchEnded();
+    // Once the state is saved, as the vote reads it.
+    if (over) await watcher().voteMatchOver();
     return Response.json({ ok: true, accepted, skipped: unread });
   } catch (error) {
     console.error(`Kill feed batch failed: ${errorText(error)}`);
