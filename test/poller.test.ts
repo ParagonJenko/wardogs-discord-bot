@@ -1867,6 +1867,15 @@ describe("the kill feed's joins while seeding", () => {
     expect(await feedJoins([presence('joined', 'a', 3)], 3, 110_000)).toBe(140_000);
   });
 
+  it('takes them in the order the game sent them: leaving and coming back is a join, joining and leaving is not', async () => {
+    const { feedJoins, store } = await seeding();
+
+    expect(await feedJoins([presence('joined', 'd', 4), presence('left', 'd', 3)], 3, 100_000)).toBeNull();
+    expect((await store.load())?.joins).toEqual({ online: ['a', 'b', 'c'], lastJoinAt: null });
+    expect(await feedJoins([presence('left', 'a', 2), presence('joined', 'a', 3)], 3, 110_000)).toBe(140_000);
+    expect((await store.load())?.joins).toEqual({ online: ['b', 'c', 'a'], lastJoinAt: 110_000 });
+  });
+
   it('waits for nothing when the join takes the server live, or it is not seeding, or seeding messages are off', async () => {
     const full = await seeding();
     expect(await full.feedJoins([presence('joined', 'd', 20)], 20, 100_000)).toBeNull();

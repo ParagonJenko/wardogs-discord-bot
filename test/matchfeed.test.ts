@@ -34,6 +34,15 @@ describe('recordMatchFeed', () => {
     expect(next.playingAt).toBe(NOW + 120_000);
   });
 
+  it('takes a match started after a result in the same batch as after it, and one started before as before it', () => {
+    const post = recordMatchFeed(NO_MATCH_FEED, [state('MatchState.PostMatch')], NOW - 60_000);
+
+    const after = recordMatchFeed(post, [ended, state('MatchState.PreMatch.WaitingForWorldLoad'), state('MatchState.Playing.KOTH')], NOW);
+    expect([after.result?.at, after.playingAt]).toEqual([NOW, NOW + 1]);
+    const before = recordMatchFeed(post, [state('MatchState.Playing.KOTH'), ended], NOW);
+    expect([before.result?.at, before.playingAt]).toEqual([NOW, NOW]);
+  });
+
   it("keeps the latest result, with when the bot got it, and leaves the state as it was", () => {
     const playing = recordMatchFeed(NO_MATCH_FEED, [state('MatchState.Playing.KOTH')], NOW);
 

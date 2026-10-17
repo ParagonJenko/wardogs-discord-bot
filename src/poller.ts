@@ -660,12 +660,20 @@ export const createFeedJoins =
     try {
       const state = await store.load();
       if (config.seedingMessages === null || state === null || state.joins === null || state.alerts.phase !== 'seeding') return null;
-      const left = new Set(presence.filter((p) => p.type === 'left').map((p) => p.steamId));
-      const online = state.joins.online.filter((id) => !left.has(id));
-      const joined = [...new Set(presence.filter((p) => p.type === 'joined' && !online.includes(p.steamId)).map((p) => p.steamId))];
-      const count = players ?? online.length + joined.length;
-      const watched = watchJoins(state.joins, [...online, ...joined], at, canSeedMessage(true, count, config.rules.live));
-      const changed = joined.length > 0 || online.length < state.joins.online.length || watched.lastJoinAt !== state.joins.lastJoinAt;
+      // In the order the game sent them, so someone who leaves and comes back has joined, and one who joins and leaves is gone.
+      let online = state.joins.online;
+      const joiners = new Set<string>();
+      for (const p of presence) {
+        if (p.type === 'left') online = online.filter((id) => id !== p.steamId);
+        else if (!online.includes(p.steamId)) {
+          online = [...online, p.steamId];
+          joiners.add(p.steamId);
+        }
+      }
+      const joined = online.some((id) => joiners.has(id));
+      const seeding = canSeedMessage(true, players ?? online.length, config.rules.live);
+      const watched: JoinWatch = { online, lastJoinAt: !seeding ? null : joined ? at : state.joins.lastJoinAt };
+      const changed = online !== state.joins.online || watched.lastJoinAt !== state.joins.lastJoinAt;
       if (changed) await store.save({ ...state, joins: watched });
       return watched.lastJoinAt === null ? null : watched.lastJoinAt + JOIN_WAIT_MS;
     } catch (error) {

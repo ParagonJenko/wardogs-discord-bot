@@ -325,6 +325,15 @@ describe("match tracking with the game's result", () => {
     expect(match.endedAt).toBeUndefined();
   });
 
+  it("keeps a reading taken after the next match started on the same map for that match's", () => {
+    const next = won({}, { state: 'MatchState.Playing.KOTH', stateAt: 170_000, playingAt: 170_000 });
+    const { match, finished } = observeMatch(start(), seen, [player('a', 12)], true, 180_000, next);
+
+    expect(finished).toMatchObject({ endedAt: 150_000, players: { a: { kills: 9 } } });
+    expect(match).toMatchObject({ startedAt: 180_000, players: { a: { kills: 12 } } });
+    expect(match.endedAt).toBeUndefined();
+  });
+
   it("keeps a reading taken after the map changed for the next match's", () => {
     const { match, finished } = observeMatch(start(), status({ map: 'Europe', factionScores: [] }), [player('a', 1)], true, 180_000, won());
 

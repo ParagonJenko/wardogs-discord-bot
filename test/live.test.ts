@@ -60,8 +60,18 @@ const ended = (overrides: Partial<FeedMatchEvent> = {}): FeedMatchEvent => ({
   ...overrides,
 } as FeedMatchEvent);
 
-const play = (events: (FeedEvent | FeedMatchEvent)[], match: LiveMatch | null = null, at = NOW, playingAt: number | null = null): LiveMatch => {
-  const result = recordLive(match, events, at, factionOf, playingAt);
+// The game's state as it changed.
+const state = (value: string): FeedMatchEvent => ({ eventId: `s${next++}`, type: 'state', state: value, time: 0, matchId: 'm1', map: 'Kavkazi' });
+// Before the batch, the game had said a match started being played at `playingAt`.
+const playing = (playingAt: number | null) => ({ state: 'MatchState.Playing.KOTH', playingAt });
+
+const play = (
+  events: (FeedEvent | FeedMatchEvent)[],
+  match: LiveMatch | null = null,
+  at = NOW,
+  before = playing(null),
+): LiveMatch => {
+  const result = recordLive(match, events, at, factionOf, before);
   if (result === null) throw new Error('no match');
   return result;
 };
@@ -137,13 +147,28 @@ describe('recordLive', () => {
 
     expect(play([death(BO, ASH, 520)], first, NOW + 60_000).feed).toHaveLength(2);
     expect(play([death(BO, ASH, 12)], play([ended()], first, NOW + 30_000), NOW + 60_000).feed).toHaveLength(1);
-    expect(play([death(BO, ASH, 12)], first, NOW + 60_000, NOW + 50_000).feed).toHaveLength(1);
+    expect(play([death(BO, ASH, 12)], first, NOW + 60_000, playing(NOW + 50_000)).feed).toHaveLength(1);
     expect(play([death(BO, ASH, 600, { map: 'Ozeti' })], first).map).toBe('Ozeti');
     expect(play([death(BO, ASH, 600, { matchId: 'm2' })], first).feed).toHaveLength(1);
     // Neither the match clock nor a quiet spell decides: only what the game says.
     expect(play([death(BO, ASH, 12)], first, NOW + 21 * 60_000).feed).toHaveLength(2);
     // The match started being played before its first death.
-    expect(play([death(BO, ASH, 520)], play([death(ASH, BO, 500)], null, NOW, NOW - 60_000), NOW + 60_000, NOW - 60_000).feed).toHaveLength(2);
+    expect(play([death(BO, ASH, 520)], play([death(ASH, BO, 500)], null, NOW, playing(NOW - 60_000)), NOW + 60_000, playing(NOW - 60_000)).feed).toHaveLength(2);
+  });
+
+  it('takes the match starting in the order the game sent it, in the same batch as deaths', () => {
+    const first = play([death(ASH, BO, 500)]);
+    const before = { state: 'MatchState.Playing.KOTH', playingAt: NOW - 60_000 };
+
+    // The last death, the result and the next match starting, in one batch: the last death is the ended match's.
+    const over = play([death(BO, ASH, 2990), ended(), state('MatchState.PostMatch'), state('MatchState.Playing.KOTH')], first, NOW + 60_000, before);
+    expect(over).toMatchObject({ endedAt: NOW + 60_000, kills: 2 });
+    // Without a result, the deaths after the next match starts are its own.
+    const next = play([death(BO, ASH, 2990), state('MatchState.PostMatch'), state('MatchState.Playing.KOTH'), death(ASH, CY, 3)], first, NOW + 60_000, before);
+    expect(next).toMatchObject({ kills: 1, feed: [expect.objectContaining({ victim: 0, killer: 1 })] });
+    expect(next.players.map((p) => p.steamId)).toEqual([CY, ASH]);
+    // A state under Playing is the same match going on.
+    expect(play([state('MatchState.Playing.KOTH'), death(ASH, CY, 520)], first, NOW + 60_000, before).kills).toBe(2);
   });
 
   it("ends the match with the game's result, in the order the game sent it", () => {
@@ -282,19 +307,26 @@ describe('liveStats', () => {
 describe('isCurrent', () => {
   const match = play([death(ASH, BO, 10)]);
   const over = play([ended()], match, NOW + 60_000);
-  const playing = (at: number) => ({ ...NO_MATCH_FEED, state: 'MatchState.Playing.KOTH', stateAt: at, playingAt: at });
+  const playingAt = (at: number) => ({ ...NO_MATCH_FEED, state: 'MatchState.Playing.KOTH', stateAt: at, playingAt: at });
+  // The checks' match on Bakurani (Kavkazi), started half an hour before.
+  const bakurani = { map: 'Bakurani', startedAt: NOW - 30 * 60_000 };
 
   it('is the match on the server when it is on the same map and the game has started none since', () => {
-    // The bot's checks name the map as players know it: Kavkazi is Bakurani.
-    expect(isCurrent(match, NO_MATCH_FEED, { map: 'Bakurani' }, NOW)).toBe(true);
-    expect(isCurrent(match, playing(NOW - 60_000), { map: 'Bakurani' }, NOW)).toBe(true);
-    expect(isCurrent(match, playing(NOW + 60_000), { map: 'Bakurani' }, NOW + 60_000)).toBe(false);
-    expect(isCurrent(match, NO_MATCH_FEED, { map: 'Ozeti' }, NOW)).toBe(false);
+    expect(isCurrent(match, NO_MATCH_FEED, bakurani, NOW)).toBe(true);
+    expect(isCurrent(match, playingAt(NOW - 60_000), bakurani, NOW)).toBe(true);
+    expect(isCurrent(match, playingAt(NOW + 60_000), bakurani, NOW + 60_000)).toBe(false);
+    expect(isCurrent(match, NO_MATCH_FEED, { ...bakurani, map: 'Ozeti' }, NOW)).toBe(false);
+  });
+
+  it('is not a match over before the checks saw the one on now start, as after a restart while the feed was down', () => {
+    // The first kills of a match can come before the check that sees it start.
+    expect(isCurrent(match, NO_MATCH_FEED, { map: 'Bakurani', startedAt: NOW + 60_000 }, NOW + 60_000)).toBe(true);
+    expect(isCurrent(match, NO_MATCH_FEED, { map: 'Bakurani', startedAt: NOW + 5 * 60_000 }, NOW + 5 * 60_000)).toBe(false);
   });
 
   it('keeps a match the game ended, with its result, until the next starts', () => {
-    expect(isCurrent(over, NO_MATCH_FEED, { map: 'Bakurani' }, NOW + 30 * 60_000)).toBe(true);
-    expect(isCurrent(over, playing(NOW + 2 * 60_000), { map: 'Bakurani' }, NOW + 2 * 60_000)).toBe(false);
+    expect(isCurrent(over, NO_MATCH_FEED, bakurani, NOW + 30 * 60_000)).toBe(true);
+    expect(isCurrent(over, playingAt(NOW + 2 * 60_000), bakurani, NOW + 2 * 60_000)).toBe(false);
   });
 
   it('stays up a while after the server empties', () => {

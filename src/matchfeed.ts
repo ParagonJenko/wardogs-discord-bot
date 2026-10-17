@@ -55,16 +55,23 @@ export const parseMatchFeed = (raw: unknown): MatchFeed => {
   return parsed.success ? parsed.data : NO_MATCH_FEED;
 };
 
-// A batch's states and results, in the order the game sent them, all got at `at`.
-export const recordMatchFeed = (feed: MatchFeed, events: FeedMatchEvent[], at: number): MatchFeed =>
-  events.reduce<MatchFeed>((f, e) => {
+// A batch's states and results, in the order the game sent them, all got at `at`. A match that starts being played after
+// a result in the same batch is taken to start a millisecond later, so it still comes after it.
+export const recordMatchFeed = (feed: MatchFeed, events: FeedMatchEvent[], at: number): MatchFeed => {
+  let f = feed;
+  let resulted = false;
+  for (const e of events) {
     if (e.type === 'result') {
       const { map, matchId, winner, factionScores, players } = e;
-      return { ...f, result: { at, map, matchId, winner, factionScores, players } };
+      f = { ...f, result: { at, map, matchId, winner, factionScores, players } };
+      resulted = true;
+      continue;
     }
     const started = isPlaying(e.state) && (f.state === null || !isPlaying(f.state));
-    return { ...f, state: e.state, stateAt: at, playingAt: started ? at : f.playingAt };
-  }, feed);
+    f = { ...f, state: e.state, stateAt: at, playingAt: started ? at + (resulted ? 1 : 0) : f.playingAt };
+  }
+  return f;
+};
 
 // The same side, however the game and RCON write its name.
 const sideKey = (name: string): string => name.toLowerCase().replace(/[^a-z]/g, '');

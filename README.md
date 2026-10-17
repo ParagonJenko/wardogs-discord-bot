@@ -1249,7 +1249,7 @@ It has:
 | `feed`         | Whether the bot has ever had the kill feed                                                  |
 | `server`       | As in [`/api/stats`](#website-stats): name, players, map, phase, score, `seenAt`            |
 | `currentMatch` | As in `/api/stats`: the match on the server, with the top 5 by kills from its scoreboard. Null when the server is empty or not answering |
-| `phase`        | Where the match is, as the game last said: `{ phase, since }`, `phase` being `pre-match`, `playing` or `post-match`. Null without the kill feed, or while the server is not answering |
+| `phase`        | Where the match is, as the game last said: `{ phase, since }`, `phase` being `pre-match`, `playing` or `post-match`. Null without the kill feed, while it is quiet, or while the server is not answering |
 | `match`        | The kill feed's match, or null before it has a death. See below                             |
 
 `match` has the map, when its first and latest deaths came in (`startedAt`, `lastKillAt`), the kills, headshots, team
@@ -1268,10 +1268,11 @@ kills and other deaths (`otherDeaths`: suicides and falls), and:
 - **A new match.** The game says when a match ends, with the winning side and the final scores (`endedAt` and
   `result`: `winner` and `factionScores`), and when the next starts being played. The first death after either starts
   a new match, as does one on another map or in another of the game's matches. The page shows the feed's match while
-  it is the one on the server: on the same map, and with no match started since; a match that ended stays up, with its
-  result, until the next starts. With nobody on, it stays up for 10 minutes after its last death, or after it ended.
+  it is the one on the server: on the same map, not over before the bot's checks saw the server's match start, and
+  with no match started since; a match that ended stays up, with its result, until the next starts. With nobody on, it stays up for 10 minutes after its last death, or after it ended.
 - **Where the match is.** `phase` is the game's latest word on it, while the server answers: `pre-match` (loading,
-  waiting for players or counting down), `playing` or `post-match`, and `since` when. Null without the kill feed.
+  waiting for players or counting down), `playing` or `post-match`, and `since` when. Null without the kill feed, and
+  while it is quiet (10 minutes with nothing from it), as what it last said may be out of date.
 - **Cost.** A page opening its WebSocket is one Worker request, and so is reconnecting. The updates it is sent are not
   requests, and pings are answered without waking the Durable Object, so a page left open all evening costs one
   request. While a page cannot connect, it loads `/api/live` every 15 seconds instead. At most 500 pages can be

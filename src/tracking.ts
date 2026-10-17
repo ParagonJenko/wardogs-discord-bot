@@ -206,10 +206,11 @@ export const observeMatch = (
   const summarisable = (m: MatchState): MatchState | null => (m.summarisable && m.liveAt !== null ? m : null);
   const result = resultFor(previous, feed);
   if (result !== null) {
-    // The reading is the new match's when the map already changed; otherwise it is the scoreboard at the end.
-    const last = isNew ? previous : withReading(previous, status, players, live, now);
+    // The reading is the new match's when the next has begun already; otherwise it is the scoreboard at the end.
+    const begun = isNew || (feed?.playingAt != null && feed.playingAt > result.at);
+    const last = begun ? previous : withReading(previous, status, players, live, now);
     const ended: MatchState = { ...last, lastSeenAt: result.at, factionScores: resultScores(result, last.factionScores), endedAt: result.at };
-    return { match: isNew ? fresh(true) : ended, finished: summarisable(ended) };
+    return { match: begun ? fresh(true) : ended, finished: summarisable(ended) };
   }
   if (isNew) return { match: fresh(true), finished: summarisable(previous) };
   return { match: withReading(previous, status, players, live, now), finished: null };

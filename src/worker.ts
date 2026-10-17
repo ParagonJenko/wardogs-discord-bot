@@ -49,7 +49,7 @@ import {
   postWebhook,
 } from './discord.ts';
 import { FEED_QUIET_MS, FEED_WATCH_KEY, observeFeed, parseFeedWatch } from './feedwatch.ts';
-import { MATCH_FEED_KEY, parseMatchFeed, recordMatchFeed, type MatchFeed } from './matchfeed.ts';
+import { MATCH_FEED_KEY, NO_MATCH_FEED, parseMatchFeed, recordMatchFeed, type MatchFeed } from './matchfeed.ts';
 import { TEAM_KILL_WARNING, griefDayKey, hasGrief, parseGriefDay, playerGrief, recordGrief, type GriefAlert } from './griefing.ts';
 import {
   ADMIN_COMMAND_DEFINITIONS,
@@ -752,10 +752,18 @@ export class Watcher extends DurableObject<Env> {
   private async startJoinChecks(config: Config): Promise<void> {
     if (config.seedingMessages === null) return;
     try {
-      if ((await this.matchFeed()) !== null) return;
       const storage = this.ctx.storage;
-      if (parseState(await storage.get('state'))?.alerts.phase !== 'seeding') return;
-      if ((await storage.getAlarm()) === null) await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
+      const state = parseState(await storage.get('state'));
+      if (state?.alerts.phase !== 'seeding') return;
+      const alarm = await storage.getAlarm();
+      if ((await this.matchFeed()) !== null) {
+        // A join the check saw, as of the player who starts the seed, which the feed said before the server was seeding.
+        const waiting = state.joins?.lastJoinAt ?? null;
+        const due = waiting === null ? null : Math.max(waiting + JOIN_WAIT_MS, Date.now() + 1_000);
+        if (due !== null && (alarm === null || alarm > due)) await storage.setAlarm(due);
+        return;
+      }
+      if (alarm === null) await storage.setAlarm(Date.now() + JOIN_CHECK_MS);
     } catch (error) {
       console.error(`Starting join checks failed: ${errorText(error)}`);
     }
@@ -802,10 +810,14 @@ export class Watcher extends DurableObject<Env> {
   // The kill feed's word on the match (see matchfeed.ts) while it is heard from: null without KILL_FEED_TOKEN, or once it
   // has sent nothing for FEED_QUIET_MS, as when it does not reach the bot. The checks then work out matches on their own.
   private async matchFeed(): Promise<MatchFeed | null> {
-    if ((stringVars(this.env)['KILL_FEED_TOKEN']?.trim() ?? '') === '') return null;
     const stored = await this.ctx.storage.get([MATCH_FEED_KEY, 'killFeedHeardAt']);
-    const heard = stored.get('killFeedHeardAt');
-    return typeof heard === 'number' && Date.now() - heard < FEED_QUIET_MS ? parseMatchFeed(stored.get(MATCH_FEED_KEY)) : null;
+    return this.heardFeed(stored.get(MATCH_FEED_KEY), stored.get('killFeedHeardAt'), Date.now());
+  }
+
+  // The same, from what was read of 'matchFeed' and 'killFeedHeardAt'.
+  private heardFeed(saved: unknown, heard: unknown, now: number): MatchFeed | null {
+    if ((stringVars(this.env)['KILL_FEED_TOKEN']?.trim() ?? '') === '') return null;
+    return typeof heard === 'number' && now - heard < FEED_QUIET_MS ? parseMatchFeed(saved) : null;
   }
 
   // The kill feed says a match ended: its end-of-match messages go out now, while players are still on the scoreboard
@@ -1851,7 +1863,7 @@ export class Watcher extends DurableObject<Env> {
     const staffKills = toStaffKills(kills, now, factionOf);
     const before = parseMatchFeed(stored.get(MATCH_FEED_KEY));
     const matchFeed = matchEvents.length === 0 ? before : recordMatchFeed(before, matchEvents, now);
-    const live = events.length > 0 || ended ? recordLive(parseLiveMatch(stored.get('live')), happened, now, factionOf, matchFeed.playingAt) : null;
+    const live = events.length > 0 || ended ? recordLive(parseLiveMatch(stored.get('live')), happened, now, factionOf, before) : null;
     const joins = came.length === 0 ? null : recordPresence(parseJoinLog(stored.get(JOIN_LOG_KEY)), came, now);
     const write = this.ctx.storage.put({
       killFeedHeardAt: now,
@@ -2126,11 +2138,13 @@ export class Watcher extends DurableObject<Env> {
   // The live page: the server and its match from the last check, and the kill feed's match while it is the one on now.
   async live(): Promise<LiveSnapshot> {
     const now = Date.now();
-    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince', MATCH_FEED_KEY, PRIVATE_PROFILES_KEY]);
+    const stored = await this.ctx.storage.get(['stats', 'live', 'killFeedSince', 'killFeedHeardAt', MATCH_FEED_KEY, PRIVATE_PROFILES_KEY]);
     const stats = parseStats(stored.get('stats'));
     const server = stats.server !== null && now - stats.server.seenAt < OFFLINE_AFTER_MS ? stats.server : null;
     const onServer = server === null ? null : stats.currentMatch;
-    const feed = parseMatchFeed(stored.get(MATCH_FEED_KEY));
+    // While the feed is quiet, what it last said may be out of date: the match is then judged on the checks alone.
+    const heard = this.heardFeed(stored.get(MATCH_FEED_KEY), stored.get('killFeedHeardAt'), now);
+    const feed = heard ?? NO_MATCH_FEED;
     const saved = parseLiveMatch(stored.get('live'));
     const match = saved !== null && isCurrent(saved, feed, onServer, now) ? saved : null;
     const phase = server === null || feed.state === null || feed.stateAt === null ? null : phaseOf(feed.state);
