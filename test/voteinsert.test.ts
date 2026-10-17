@@ -52,23 +52,30 @@ describe('planInsert', () => {
     }
   });
 
-  it('is not done for a rotation that is off or random, an unknown slot, or no maps', () => {
+  it('is not done for a rotation that is off or random, or has no maps', () => {
     expect(planInsert(rotation(['A', 'B'], 0, { enabled: false }), 0, voted)).toBeNull();
     expect(planInsert(rotation(['A', 'B'], 0, { mode: 'Random' }), 0, voted)).toBeNull();
-    expect(planInsert(rotation(['A', 'B'], 0), null, voted)).toBeNull();
-    expect(planInsert(rotation(['A', 'B'], 0), 5, voted)).toBeNull();
     expect(planInsert(rotation([], 0), 0, voted)).toBeNull();
+  });
+
+  it('puts the winner in every slot when the slot is not known, and the rotation back as it is', () => {
+    for (const slot of [null, 5]) {
+      const plan = planInsert(rotation(['A', 'B', 'C'], -1), slot, voted)!;
+      expect(plan.asIs).toBe(true);
+      expect(plan.staged).toEqual([voted, voted, voted]);
+      expect(plan.restore.map((e) => e.map)).toEqual(['A', 'B', 'C']);
+      // Whichever slot the server is on, it goes to the winner next.
+      for (const on of [0, 1, 2]) expect(nextAfter(fromTheStart(plan.staged, null), on)).toBe('V');
+    }
   });
 });
 
 describe('whyNoInsert', () => {
   it('names what keeps the winner out of the rotation, and is null when it can go in', () => {
-    expect(whyNoInsert(rotation(['A', 'B'], 0), 0)).toBeNull();
-    expect(whyNoInsert(rotation(['A', 'B'], 0, { enabled: false }), 0)).toMatch(/off/);
-    expect(whyNoInsert(rotation(['A', 'B'], 0, { mode: 'Random' }), 0)).toMatch(/random/);
-    expect(whyNoInsert(rotation([], 0), 0)).toMatch(/no maps/);
-    expect(whyNoInsert(rotation(['A', 'B'], 0), null)).toMatch(/did not say which rotation slot/);
-    expect(whyNoInsert(rotation(['A', 'B'], 0), 5)).toMatch(/slot 5 is not in its rotation of 2/);
+    expect(whyNoInsert(rotation(['A', 'B'], 0))).toBeNull();
+    expect(whyNoInsert(rotation(['A', 'B'], 0, { enabled: false }))).toMatch(/off/);
+    expect(whyNoInsert(rotation(['A', 'B'], 0, { mode: 'Random' }))).toMatch(/random/);
+    expect(whyNoInsert(rotation([], 0))).toMatch(/no maps/);
   });
 });
 
@@ -97,6 +104,7 @@ describe('parseVoteInsert', () => {
   it('reads what was saved, and nothing else', () => {
     const saved = { voteId: '1', fromMap: 'B', map: 'V', restore: [{ map: 'C', lighting: 'X' }], length: 2, at: 5 };
     expect(parseVoteInsert(saved)).toEqual(saved);
+    expect(parseVoteInsert({ ...saved, asIs: true })).toEqual({ ...saved, asIs: true });
     expect(parseVoteInsert({ voteId: 1 })).toBeNull();
     expect(parseVoteInsert(undefined)).toBeNull();
   });
