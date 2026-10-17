@@ -46,11 +46,22 @@ const entryOf = (entry: Rotation['entries'][number]): RotationEntry => ({
 
 export type InsertPlan = { staged: RotationEntry[]; restore: RotationEntry[] };
 
-// The rotation with `winner` next, and the rotation as it was to put back. Null when this cannot be done safely: the
-// rotation is off or random (then the server does not go to a next slot), has no maps, or the slot it is on is not known.
+// Why the winner cannot be put in this rotation, or null when it can: the rotation is off or random (then the server does
+// not go to a next slot), has no maps, or the slot it is on is not known.
+export const whyNoInsert = (rotation: Rotation, slot: number | null): string | null => {
+  if (!rotation.enabled) return 'the server\'s rotation is off';
+  if (rotation.mode.toLowerCase() === 'random') return 'the server\'s rotation is random';
+  if (rotation.entries.length === 0) return 'the server\'s rotation has no maps';
+  if (slot === null) return 'the server did not say which rotation slot it is on';
+  if (slot >= rotation.entries.length) return `the server's slot ${slot} is not in its rotation of ${rotation.entries.length} maps`;
+  return null;
+};
+
+// The rotation with `winner` next, and the rotation as it was to put back. Null when this cannot be done safely (see
+// whyNoInsert).
 export const planInsert = (rotation: Rotation, slot: number | null, winner: RotationEntry): InsertPlan | null => {
+  if (slot === null || whyNoInsert(rotation, slot) !== null) return null;
   const entries = rotation.entries.map(entryOf);
-  if (!rotation.enabled || rotation.mode.toLowerCase() === 'random' || slot === null || slot >= entries.length) return null;
   const restore = [...entries.slice(slot + 1), ...entries.slice(0, slot + 1)];
   return { staged: [winner, ...restore], restore };
 };

@@ -362,7 +362,7 @@ import {
   type RotationServer,
   type RotationEntry,
 } from './rotations.ts';
-import { parseVoteInsert, planInsert, stillInserted, VOTE_INSERT_KEY, type VoteInsert } from './voteinsert.ts';
+import { parseVoteInsert, planInsert, stillInserted, VOTE_INSERT_KEY, whyNoInsert, type VoteInsert } from './voteinsert.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -1571,7 +1571,14 @@ export class Watcher extends DurableObject<Env> {
     try {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
-      const [catalog, rotation] = await Promise.all([this.catalog(config), fetchRotation(rconUrl, rconPassword, http).catch(() => null)]);
+      let rotationProblem = 'the server\'s rotation could not be read';
+      const [catalog, rotation] = await Promise.all([
+        this.catalog(config),
+        fetchRotation(rconUrl, rconPassword, http).catch((error: unknown) => {
+          rotationProblem = `the server's rotation could not be read (${errorText(error)})`;
+          return null;
+        }),
+      ]);
       const choice = catalog?.maps.find((m) => m.id === winner);
       // Nothing is sent that the server's own catalogue does not confirm for this map: its game modes and its infantry only
       // modifier. Otherwise the vote waits (and is retried) rather than sending an id guessed from another map.
@@ -1594,16 +1601,16 @@ export class Watcher extends DurableObject<Env> {
       if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
         return { at, winner: null, pending: false, note: NOTE.staff };
       }
-      const inserted = staging === 'rotation' && (await this.insertVoteWinner(config, vote, { map: winner, ...planned.setup }, rotation));
-      if (!inserted) {
+      const inserted = staging === 'rotation' ? await this.insertVoteWinner(config, vote, { map: winner, ...planned.setup }, rotation, rotationProblem) : null;
+      if (inserted !== true) {
         // The queue is only for staging "queue": a rotation that cannot take the winner is retried, never queued instead.
-        if (staging === 'rotation') throw new Error('the rotation cannot take it: it is off or random, or the server did not say which slot it is on');
+        if (staging === 'rotation') throw new Error(`the rotation cannot take it: ${inserted}`);
         // Not before the match is over: the server ended a match early when this was sent with a team on 95.
         if (!over) return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
         await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
       }
       await this.stageNextMap(winner, playing);
-      console.info(`Map vote: ${winner} staged as the next map ${inserted ? 'in the rotation' : 'in the queue'}, ${JSON.stringify(planned.setup)}`);
+      console.info(`Map vote: ${winner} staged as the next map ${inserted === true ? 'in the rotation' : 'in the queue'}, ${JSON.stringify(planned.setup)}`);
       const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
       const votes = vote.ballots.filter((b) => b.map === winner).length;
       await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${vote.outcome?.lightingName ? `, ${vote.outcome.lightingName}` : ''} (${votes} votes).`, http).catch((error: unknown) =>
@@ -1616,11 +1623,11 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Writes the winner into the server's rotation as the next map, and remembers how to take it out (see voteinsert.ts). False
-  // when the rotation can't take it: it was not read, is off or random, or the server did not say which slot it is on. The
-  // server keeps playing the match on now, as when the daily rotation is put on.
-  private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null): Promise<boolean> {
-    if (rotation === null) return false;
+  // Writes the winner into the server's rotation as the next map, and remembers how to take it out (see voteinsert.ts). The
+  // reason, as text, when the rotation can't take it: it was not read, is off or random, or the server did not say which
+  // slot it is on. The server keeps playing the match on now, as when the daily rotation is put on.
+  private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null, notRead: string): Promise<true | string> {
+    if (rotation === null) return notRead;
     const { rconUrl, rconPassword } = config;
     const http = socketHttp(connect);
     const storage = this.ctx.storage;
@@ -1629,7 +1636,7 @@ export class Watcher extends DurableObject<Env> {
     if (written !== null && written.voteId === vote.id && stillInserted(rotation, written)) return true;
     const slot = rotationSlot(rotation, await fetchStatus(rconUrl, rconPassword, http));
     const plan = planInsert(rotation, slot, winner);
-    if (plan === null) return false;
+    if (plan === null) return whyNoInsert(rotation, slot) ?? 'it cannot be planned';
     const insert: VoteInsert = { voteId: vote.id, fromMap: vote.fromMap, map: winner.map, restore: plan.restore, length: plan.staged.length, at: Date.now() };
     // Kept first: if the write goes through and this check then fails, the rotation is still put back.
     await storage.put(VOTE_INSERT_KEY, insert);
