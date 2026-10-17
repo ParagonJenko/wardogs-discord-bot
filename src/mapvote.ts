@@ -259,6 +259,20 @@ export const chooseConditions = (vote: MapVote, random: () => number): Lighting 
   return sample(vote.conditions.find((c) => c.key === group.key)?.lightings ?? [], 1, random)[0] ?? null;
 };
 
+// Whether people can vote on this match right now: the vote is for this match, which has not ended, its time has not run out
+// and no team has reached the close score (the check that closes it comes later in the same pass). What points people at the
+// vote, in game and on the live status, goes by this, so neither sends them to a vote that is closed or about to be.
+export const votingNow = (
+  vote: MapVote | null,
+  match: { startedAt: number; endedAt?: number | undefined; factionScores: readonly { score: number }[] } | null,
+  now: number,
+): boolean => {
+  if (vote === null || match === null) return false;
+  if (vote.matchStartedAt !== match.startedAt || match.endedAt !== undefined || !isOpen(vote, now)) return false;
+  const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
+  return !(vote.closeScore > 0 && leading >= vote.closeScore);
+};
+
 // Whether an open vote should close now: its time is up, or a team has reached its close score.
 export const closeDue = (vote: MapVote, now: number, leadingScore: number): boolean =>
   vote.outcome === null && (now >= vote.closesAt || (vote.closeScore > 0 && leadingScore >= vote.closeScore));

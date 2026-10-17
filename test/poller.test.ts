@@ -1453,8 +1453,9 @@ describe('in-game messages', () => {
   const messagesPoller = (
     snapshots: Snapshot[],
     broadcast = vi.fn(async (_message: string) => {}),
-    matchMessages: typeof on | null = on,
+    matchMessages: (typeof on & { vote?: boolean }) | null = on,
     lines?: () => Promise<Lines>,
+    voting?: () => Promise<boolean>,
   ) => {
     const queue = [...snapshots];
     const log = { info: vi.fn(), error: vi.fn() };
@@ -1471,6 +1472,7 @@ describe('in-game messages', () => {
       // The first line of every list, so the texts are known.
       random: () => 0,
       ...(lines === undefined ? {} : { lines }),
+      ...(voting === undefined ? {} : { voting }),
     });
     return { run: async (times: number) => { for (let i = 0; i < times; i++) await tick(); }, broadcast, log };
   };
@@ -1506,6 +1508,23 @@ describe('in-game messages', () => {
     expect(log.info).toHaveBeenCalledWith(
       'Sent in game: Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
     );
+  });
+
+  it('sends people to the vote at halfway and last call only while they can vote', async () => {
+    const sent = async (voting: boolean) => {
+      const { run, broadcast } = messagesPoller(matchSnapshots(), undefined, { ...on, vote: true }, undefined, async () => voting);
+      await run(7);
+      return broadcast.mock.calls.map(([m]) => m);
+    };
+
+    const open = await sent(true);
+    expect(open[1]).toContain('Vote for the next map in our Discord, it plays infantry only!');
+    expect(open[2]).toContain('Last call to vote for the next map in our Discord!');
+
+    // A vote that has closed, or never opened: the usual call to action.
+    const closed = await sent(false);
+    expect(closed[1]).toContain('Check the leaderboard and join our Discord at gaminginit.com');
+    expect(closed[2]).toContain('Where do you rank? Leaderboard, Discord and seeding at gaminginit.com');
   });
 
   it('logs a failed message and does not send it again', async () => {

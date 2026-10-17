@@ -9,6 +9,7 @@ import {
   parseMapVote,
   parseVoteButton,
   voteLink,
+  votingNow,
   chooseConditions,
   conditionOptions,
   parseLightButton,
@@ -381,5 +382,36 @@ describe('parseLightButton', () => {
     expect(parseLightButton('mapvote:42:Kavkazi')).toBeNull();
     expect(parseLightButton('maplight:x:night')).toBeNull();
     expect(parseLightButton(undefined)).toBeNull();
+  });
+});
+
+describe('votingNow', () => {
+  const match = (leading: number, extra: { endedAt?: number } = {}) => ({
+    startedAt: 42,
+    factionScores: [{ score: leading }, { score: 3 }],
+    ...extra,
+  });
+
+  it('is true while the vote is open for this match and no team has reached the close score', () => {
+    expect(votingNow(vote(), match(50), NOW + 1)).toBe(true);
+    expect(votingNow(vote(), match(94), NOW + 1)).toBe(true);
+  });
+
+  it('is false once a team has reached the close score, even before the check that closes the vote', () => {
+    expect(votingNow(vote(), match(95), NOW + 1)).toBe(false);
+    expect(votingNow({ ...vote(), closeScore: 80 }, match(85), NOW + 1)).toBe(false);
+  });
+
+  it('is false when time is up, the vote is closed, the match has ended or it is another match, or there is no vote', () => {
+    expect(votingNow(vote(), match(10), NOW + 15 * 60_000)).toBe(false);
+    expect(votingNow({ ...vote(), outcome: { at: NOW, winner: null, pending: false } }, match(10), NOW + 1)).toBe(false);
+    expect(votingNow(vote(), match(10, { endedAt: NOW }), NOW + 1)).toBe(false);
+    expect(votingNow(vote(), { ...match(10), startedAt: 43 }, NOW + 1)).toBe(false);
+    expect(votingNow(vote(), null, NOW + 1)).toBe(false);
+    expect(votingNow(null, match(10), NOW + 1)).toBe(false);
+  });
+
+  it('is open on time alone for a vote saved without a close score', () => {
+    expect(votingNow({ ...vote(), closeScore: 0 }, match(99), NOW + 1)).toBe(true);
   });
 });

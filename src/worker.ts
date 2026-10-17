@@ -22,6 +22,7 @@ import {
   RECENT_MAPS_KEY,
   VOTE_SETUP_OPTIONS,
   voteLink,
+  votingNow,
   voteMessage,
   withPlayed,
   type MapVote,
@@ -1025,6 +1026,7 @@ export class Watcher extends DurableObject<Env> {
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
       matchFeed: () => this.matchFeed(),
+      voting: async (match) => votingNow(parseMapVote(await storage.get(MAP_VOTE_KEY)), match, Date.now()),
       outage: (event) => this.tellOutage(event),
       stats: {
         check: (observation) =>
@@ -1222,7 +1224,9 @@ export class Watcher extends DurableObject<Env> {
               now,
             );
       const vote = parseMapVote(stored.get(MAP_VOTE_KEY));
-      const voteUrl = config.mapVote === null ? null : voteLink(vote, stringVars(this.env)['DISCORD_GUILD_ID']?.trim(), now);
+      // Only while people can still vote: a vote is closed by a later step of the check, and the link must not outlive it.
+      const voteUrl =
+        config.mapVote === null || !votingNow(vote, tracked, now) ? null : voteLink(vote, stringVars(this.env)['DISCORD_GUILD_ID']?.trim(), now);
       const message = buildLiveStatus(
         {
           snapshot,
