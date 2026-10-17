@@ -89,11 +89,13 @@
     // The hour (UTC, 0 to 23) on Mondays, and on the 1st of the month, when the roundups go out. 17 is 6pm in the UK in
     // summer, 5pm in winter.
     "ROUNDUP_HOUR": "17",
-    // The next-map vote on the website (/vote): when a match goes live, a vote between this many maps, open for this many
-    // minutes or until a team has 75% of SCORE_TO_WIN. The winner is put on the server as the next map, infantry only,
-    // like /setnextmap. One vote per browser and per network, no sign-in. "on" or "off".
+    // The next-map vote in Discord: when a match goes live, a message with a button per map in one channel, open for this
+    // many minutes or until a team has 75% of SCORE_TO_WIN. The winner is put on the server as the next map, infantry only,
+    // like /setnextmap. It does nothing until DISCORD_VOTE_CHANNEL_ID (the channel's ID, a var here) and DISCORD_BOT_TOKEN
+    // (a secret) are set: see the README, "Next-map vote". "on" or "off".
     "MAP_VOTE": "on",
     "MAP_VOTE_OPTIONS": "4",
     "MAP_VOTE_MINUTES": "15"
+    // , "DISCORD_VOTE_CHANNEL_ID": "…"
   }
 }

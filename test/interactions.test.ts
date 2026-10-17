@@ -866,3 +866,63 @@ describe('staff commands from the staff page', () => {
     expect(failureText('players', new Error('x'))).toBe("Couldn't get that right now. Try again in a minute.");
   });
 });
+
+describe('a press of a vote button', () => {
+  const press = (guild = '777') => ({
+    type: 3,
+    application_id: '111',
+    token: 'tok',
+    guild_id: guild,
+    data: { custom_id: 'mapvote:42:Kavkazi' },
+    member: { user: { id: '9001' } },
+  });
+
+  it('updates the vote message and tells the voter privately what was counted', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Bakurani**.' })) };
+    const { body, signature, timestamp } = await signed(press());
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', map: 'Kavkazi', userId: '9001' });
+    expect(result.body).toEqual({ type: 7, data: { embeds: [embed] } });
+    await result.followUp?.();
+    expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', { content: 'You voted for **Bakurani**.', allowed_mentions: { parse: [] } });
+  });
+
+  it('tells only the voter when the vote did not change, such as after it closed', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: null, reply: 'The vote has closed.' })) };
+    const { body, signature, timestamp } = await signed(press());
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(result.body).toEqual({ type: 4, data: { content: 'The vote has closed.', flags: 64 } });
+    expect(result.followUp).toBeUndefined();
+  });
+
+  it('refuses people from another server', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: null, reply: '' })) };
+    const { body, signature, timestamp } = await signed(press('888'));
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.body)).toContain('Only members');
+  });
+
+  it('answers a button that is not a vote, or when votes are off, without counting anything', async () => {
+    const other = await signed({ ...press(), data: { custom_id: 'something:else' } });
+    expect(JSON.stringify((await handleInteraction(other.body, other.signature, other.timestamp, deps())).body)).toContain('Unknown button');
+    const off = await signed(press());
+    expect(JSON.stringify((await handleInteraction(off.body, off.signature, off.timestamp, deps())).body)).toContain('Unknown button');
+  });
+
+  it('says so, without a stack trace, when counting the vote fails', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => Promise.reject(new Error('storage down'))) };
+    const { body, signature, timestamp } = await signed(press());
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+
+    expect(JSON.stringify(result.body)).toContain('could not be counted');
+    expect(d.log.error).toHaveBeenCalled();
+  });
+});

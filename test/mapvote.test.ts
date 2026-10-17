@@ -4,10 +4,12 @@ import {
   chooseWinner,
   closeDue,
   isOpen,
-  MAX_BALLOTS,
-  networkMark,
   openVote,
   parseMapVote,
+  parseVoteButton,
+  voteMessage,
+  editVoteMessage,
+  postVoteMessage,
   pickOptions,
   publicVote,
   withPlayed,
@@ -25,8 +27,8 @@ const choice = (id: string, modes = 1): MapChoice => ({
 
 const NOW = 1_000_000;
 const vote = (): MapVote =>
-  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15 }, NOW);
-const ballot = (n: number, map: string) => ({ ip: `ip${n}`, token: `token${n}`, map });
+  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, channelId: '1', botToken: 't' }, NOW);
+const ballot = (n: number, map: string) => ({ user: `user${n}`, map });
 
 describe('pickOptions', () => {
   it('offers playable maps other than the one being played, up to the count', () => {
@@ -64,24 +66,15 @@ describe('withPlayed', () => {
 });
 
 describe('castVote', () => {
-  it('counts a ballot, and a second from the same browser replaces it', () => {
+  it('counts a ballot, and a second from the same Discord user moves it', () => {
     const first = castVote(vote(), ballot(1, 'A'), NOW + 1);
     expect(first.result).toBe('counted');
     if (!('vote' in first)) throw new Error('no vote');
-    const second = castVote(first.vote, { ...ballot(1, 'B'), ip: 'elsewhere' }, NOW + 2);
+    const second = castVote(first.vote, ballot(1, 'B'), NOW + 2);
     expect(second.result).toBe('changed');
     if (!('vote' in second)) throw new Error('no vote');
     expect(second.vote.ballots).toHaveLength(1);
     expect(second.vote.ballots[0]?.map).toBe('B');
-  });
-
-  it('counts one ballot per network, whatever browser it comes from', () => {
-    const first = castVote(vote(), ballot(1, 'A'), NOW + 1);
-    if (!('vote' in first)) throw new Error('no vote');
-    const second = castVote(first.vote, { ip: 'ip1', token: 'a-private-window', map: 'C' }, NOW + 2);
-    if (!('vote' in second)) throw new Error('no vote');
-    expect(second.result).toBe('changed');
-    expect(second.vote.ballots).toHaveLength(1);
   });
 
   it('counts different people separately', () => {
@@ -99,12 +92,6 @@ describe('castVote', () => {
     expect(castVote(vote(), ballot(1, 'Z'), NOW + 1).result).toBe('unknown-map');
     expect(castVote(vote(), ballot(1, 'A'), NOW + 15 * 60_000).result).toBe('closed');
     expect(castVote({ ...vote(), outcome: { at: NOW, winner: null, pending: false } }, ballot(1, 'A'), NOW + 1).result).toBe('closed');
-  });
-
-  it('stops taking new voters at the limit but still lets a voter change theirs', () => {
-    const full: MapVote = { ...vote(), ballots: Array.from({ length: MAX_BALLOTS }, (_, i) => ({ ...ballot(i, 'A'), at: NOW })) };
-    expect(castVote(full, ballot(MAX_BALLOTS + 1, 'A'), NOW + 1).result).toBe('full');
-    expect(castVote(full, ballot(0, 'B'), NOW + 1).result).toBe('changed');
   });
 });
 
@@ -135,12 +122,11 @@ describe('closeDue', () => {
 });
 
 describe('publicVote and storage', () => {
-  it('shows votes and the winner but never the ballots or salt', () => {
+  it('shows votes and the winner but never who voted', () => {
     const v: MapVote = { ...vote(), ballots: [{ ...ballot(1, 'A'), at: NOW }], outcome: { at: NOW, winner: 'A', pending: false } };
     const shown = publicVote(v, NOW + 1);
     expect(shown).toMatchObject({ open: false, total: 1, winner: { map: 'A', name: 'Alpha' }, infantryOnly: true, pending: false });
-    expect(JSON.stringify(shown)).not.toContain(v.salt);
-    expect(JSON.stringify(shown)).not.toContain('token1');
+    expect(JSON.stringify(shown)).not.toContain('user1');
   });
 
   it('is open until it closes', () => {
@@ -154,12 +140,68 @@ describe('publicVote and storage', () => {
     expect(parseMapVote({ nope: true })).toBeNull();
     expect(parseMapVote(null)).toBeNull();
   });
+});
 
-  it('marks a network differently in each vote, the same within one', async () => {
-    const a = vote();
-    const b = vote();
-    expect(await networkMark(a, '1.2.3.4')).toBe(await networkMark(a, '1.2.3.4'));
-    expect(await networkMark(a, '1.2.3.4')).not.toBe(await networkMark(b, '1.2.3.4'));
-    expect(await networkMark(a, '1.2.3.4')).not.toContain('1.2.3.4');
+describe('voteMessage', () => {
+  const cast = (v: MapVote, picks: [number, string][]): MapVote => ({
+    ...v,
+    ballots: picks.map(([n, map]) => ({ ...ballot(n, map), at: NOW })),
+  });
+
+  it('has a button per map while open, each carrying the vote and the map', () => {
+    const message = voteMessage(cast(vote(), [[1, 'A'], [2, 'A'], [3, 'B']]), NOW + 1, 'https://gaminginit.com/');
+    const buttons = (message.components[0] as { components: { label: string; custom_id: string }[] }).components;
+    expect(buttons.map((b) => b.custom_id)).toEqual(['mapvote:42:A', 'mapvote:42:B', 'mapvote:42:C']);
+    expect(buttons.map((b) => parseVoteButton(b.custom_id))).toEqual([
+      { poll: '42', map: 'A' },
+      { poll: '42', map: 'B' },
+      { poll: '42', map: 'C' },
+    ]);
+    expect(message.embeds[0]?.fields?.map((f) => f.value.endsWith('votes') || f.value.endsWith('vote'))).toEqual([true, true, true]);
+    expect(message.embeds[0]?.fields?.[0]?.value).toContain('2 votes');
+    expect(message.embeds[0]?.description).toContain('infantry only');
+    expect(message.embeds[0]?.description).toContain('https://gaminginit.com/vote');
+    expect(message.allowed_mentions).toEqual({ parse: [] });
+  });
+
+  it('splits more than five buttons into rows', () => {
+    const many = { ...vote(), options: ['A', 'B', 'C', 'D', 'E', 'F'].map((map) => ({ map, name: map })) };
+    expect(voteMessage(many, NOW + 1).components).toHaveLength(2);
+  });
+
+  it('takes the buttons away and names the winner once closed', () => {
+    const closed = { ...cast(vote(), [[1, 'B']]), outcome: { at: NOW, winner: 'B', pending: false } };
+    const message = voteMessage(closed, NOW + 1);
+    expect(message.components).toEqual([]);
+    expect(message.embeds[0]?.description).toContain('Bravo');
+    expect(message.embeds[0]?.fields?.[1]?.name).toContain('✅');
+  });
+});
+
+describe('parseVoteButton', () => {
+  it('reads only buttons of this vote', () => {
+    expect(parseVoteButton('mapvote:42:Kavkazi')).toEqual({ poll: '42', map: 'Kavkazi' });
+    expect(parseVoteButton('mapvote:x:Kavkazi')).toBeNull();
+    expect(parseVoteButton('other:42:A')).toBeNull();
+    expect(parseVoteButton(undefined)).toBeNull();
+  });
+});
+
+describe('Discord messages', () => {
+  it('posts as the bot and answers the message id', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return Response.json({ id: '999' });
+    }) as unknown as typeof fetch;
+    expect(await postVoteMessage('tok', '123', voteMessage(vote(), NOW), fetchFn)).toBe('999');
+    expect(calls[0]?.url).toBe('https://discord.com/api/v10/channels/123/messages');
+    expect((calls[0]?.init.headers as Record<string, string>)['authorization']).toBe('Bot tok');
+  });
+
+  it('edits the message, tolerates one that was deleted, and fails on other refusals', async () => {
+    const answer = (status: number) => (async () => new Response('no', { status })) as unknown as typeof fetch;
+    await expect(editVoteMessage('tok', '1', '2', voteMessage(vote(), NOW), answer(404))).resolves.toBeUndefined();
+    await expect(editVoteMessage('tok', '1', '2', voteMessage(vote(), NOW), answer(403))).rejects.toThrow(/403/);
   });
 });

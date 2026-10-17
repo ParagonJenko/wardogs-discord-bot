@@ -1,16 +1,15 @@
 import { z } from 'zod';
-import { mapName } from './discord.ts';
+import { mapEmoji, mapName, type Embed } from './discord.ts';
 import type { MapChoice } from './rotationspage.ts';
 
-// The next-map vote on the website. While a match is live the bot opens a vote between a few maps; anyone on the site
-// can vote once; when it closes the winning map is staged on the server, the same as staff's /setnextmap, and plays when
-// this match ends. Nothing here touches the server or storage: the Watcher opens, closes and applies the vote (see
-// updateMapVote in worker.ts), and the Worker's /api/vote routes read and cast it.
+// The next-map vote. While a match is live the bot posts a message with a button for each of a few maps in one Discord
+// channel; members vote by pressing one. When the vote closes the winning map is staged on the server, the same as staff's
+// /setnextmap, and plays when this match ends. The website's /vote page shows the same counts and sends people to the
+// channel. Nothing here touches the server or storage: the Watcher opens, closes and applies the vote (see updateMapVote
+// in worker.ts), and the interaction handler passes in the button presses.
 //
-// One vote per person without a sign-in: a ballot is tied to the browser (a random token the page keeps) and to the
-// network (a hash of the IP, salted for this vote so it can't be linked to any other). A new ballot from a browser or a
-// network that already voted replaces that ballot, so a refresh, a private window or another device on the same network
-// changes the vote and never adds one. People sharing a network share a vote; that is what it costs not to sign in.
+// One vote per person is one per Discord account: a ballot is the voter's Discord user ID, and pressing a button again
+// moves it. Only members of the server can press the buttons (checked in interactions.ts).
 
 export const MAP_VOTE_KEY = 'mapVote';
 
@@ -18,18 +17,17 @@ export const MAP_VOTE_KEY = 'mapVote';
 // it is always over while the match can still be told where to go next.
 export const CLOSE_SCORE_SHARE = 0.75;
 
-// Ballots kept per vote, so a flood of requests from many networks can't fill storage.
-export const MAX_BALLOTS = 5000;
-
 // How every winner is set up: infantry only (see MODIFIERS in matchsetup.ts), whatever the rotation plays that map with.
 export const VOTE_SETUP_OPTIONS = { infantry_only: 'true' };
 
-export type MapVoteRule = { options: number; minutes: number };
+// `channelId` is where the vote is posted and `botToken` the bot's, which posting and editing a message with buttons need
+// (a webhook can't carry them). The vote does not run without both.
+export type MapVoteRule = { options: number; minutes: number; channelId: string | undefined; botToken: string | undefined };
 
 export type VoteOption = { map: string; name: string };
 
-// `ip` is the salted hash, `token` the browser's own random one.
-export type Ballot = { ip: string; token: string; map: string; at: number };
+// `user` is the voter's Discord user ID. It is never sent to the website.
+export type Ballot = { user: string; map: string; at: number };
 
 // How a vote ended: the map the server was told to play next, or why it was not told.
 export type VoteOutcome = {
@@ -52,8 +50,8 @@ export type MapVote = {
   closesAt: number;
   options: VoteOption[];
   ballots: Ballot[];
-  // Random for this vote, kept to hash networks with. Never sent to the page.
-  salt: string;
+  // The Discord message the vote is in, to update as votes come and when it ends.
+  message: { channelId: string; messageId: string } | null;
   outcome: VoteOutcome | null;
 };
 
@@ -64,8 +62,8 @@ const MapVoteSchema = z.object({
   openedAt: z.number(),
   closesAt: z.number(),
   options: z.array(z.object({ map: z.string(), name: z.string() })),
-  ballots: z.array(z.object({ ip: z.string(), token: z.string(), map: z.string(), at: z.number() })),
-  salt: z.string(),
+  ballots: z.array(z.object({ user: z.string(), map: z.string(), at: z.number() })),
+  message: z.object({ channelId: z.string(), messageId: z.string() }).nullable().default(null),
   outcome: z
     .object({ at: z.number(), winner: z.string().nullable(), pending: z.boolean(), note: z.string().optional() })
     .nullable()
@@ -126,9 +124,6 @@ export const pickOptions = (
   return sample(pool, count, random).map((m) => ({ map: m.id, name: m.name }));
 };
 
-const randomHex = (bytes: number): string =>
-  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
-
 export const openVote = (
   match: { startedAt: number },
   fromMap: string,
@@ -143,28 +138,19 @@ export const openVote = (
   closesAt: now + rule.minutes * 60_000,
   options,
   ballots: [],
-  salt: randomHex(16),
+  message: null,
   outcome: null,
 });
 
-// A network's mark for this vote only: the first 16 hex characters of SHA-256(salt + IP).
-export const networkMark = async (vote: MapVote, ip: string): Promise<string> => {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${vote.salt}:${ip}`));
-  return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
-};
+export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
 
-export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' | 'full' };
-
-// One ballot per browser and per network: a vote from either one already seen replaces that ballot.
-export const castVote = (vote: MapVote, ballot: { ip: string; token: string; map: string }, now: number): CastResult => {
+// One ballot per Discord user: voting again moves their vote. A vote for the map they already chose changes nothing.
+export const castVote = (vote: MapVote, ballot: { user: string; map: string }, now: number): CastResult => {
   if (!isOpen(vote, now)) return { result: 'closed' };
   if (!vote.options.some((o) => o.map === ballot.map)) return { result: 'unknown-map' };
-  const own = (b: Ballot): boolean => b.token === ballot.token || b.ip === ballot.ip;
-  const replaced = vote.ballots.some(own);
-  if (!replaced && vote.ballots.length >= MAX_BALLOTS) return { result: 'full' };
-  // A browser that voted from two networks, or a network with two browsers, keeps one ballot: the newest.
-  const others = vote.ballots.filter((b) => !own(b));
-  return { vote: { ...vote, ballots: [...others, { ...ballot, at: now }] }, result: replaced ? 'changed' : 'counted' };
+  const had = vote.ballots.find((b) => b.user === ballot.user);
+  const others = vote.ballots.filter((b) => b.user !== ballot.user);
+  return { vote: { ...vote, ballots: [...others, { ...ballot, at: now }] }, result: had === undefined ? 'counted' : 'changed' };
 };
 
 // Votes for each option, in the order they were offered.
@@ -187,7 +173,7 @@ export const chooseWinner = (vote: MapVote, random: () => number): string | null
 export const closeDue = (vote: MapVote, now: number, leadingScore: number, scoreToWin: number): boolean =>
   vote.outcome === null && (now >= vote.closesAt || leadingScore >= scoreToWin * CLOSE_SCORE_SHARE);
 
-// What the website gets: the options with their votes, never the ballots or the salt.
+// What the website gets: the options with their votes, never the ballots or who cast them.
 export type PublicVote = {
   id: string;
   open: boolean;
@@ -230,3 +216,96 @@ export const NOTE = {
   late: 'The match ended before the winner could be put on the server.',
   failed: 'The winner could not be put on the server.',
 } as const;
+
+// The Discord message for a vote: the counts as bars, and a button per map while it is open. Buttons are in rows of five,
+// the most Discord allows.
+export const VOTE_ID_PREFIX = 'mapvote';
+const BAR_WIDTH = 12;
+const barOf = (votes: number, total: number): string => {
+  const filled = total === 0 ? 0 : Math.round((votes / total) * BAR_WIDTH);
+  return '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+};
+const BUTTONS_PER_ROW = 5;
+const SECONDARY = 2;
+const OPEN_COLOUR = 0x4fd6cc;
+const WON_COLOUR = 0x2ecc71;
+const OVER_COLOUR = 0x8a94a3;
+
+export type VoteMessage = { embeds: Embed[]; components: unknown[]; allowed_mentions: { parse: never[] } };
+
+export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
+  const shown = publicVote(vote, now);
+  const where = siteUrl === undefined ? '' : ` Results also on ${siteUrl.replace(/\/$/, '')}/vote.`;
+  const description = shown.open
+    ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**. One vote each: press another map to change yours. ` +
+      `Closes <t:${Math.floor(vote.closesAt / 1000)}:R>. The winner plays next, **infantry only**.${where}`
+    : shown.winner !== null
+      ? shown.pending
+        ? `**${shown.winner.name}** won. Putting it on the server…`
+        : `**${shown.winner.name}** won and plays next, **infantry only**.`
+      : (shown.note ?? 'The vote has closed. Counting the votes…');
+  const embed: Embed = {
+    title: '🗺️ Vote for the next map',
+    description,
+    color: shown.open ? OPEN_COLOUR : shown.winner !== null ? WON_COLOUR : OVER_COLOUR,
+    fields: shown.options.map((o) => ({
+      name: `${mapEmoji(o.map)}${o.name}${shown.winner?.map === o.map ? ' ✅' : ''}`,
+      value: `${barOf(o.votes, shown.total)} ${o.votes} ${o.votes === 1 ? 'vote' : 'votes'}`,
+    })),
+  };
+  const buttons = shown.open
+    ? shown.options.map((o) => ({
+        type: 2,
+        style: SECONDARY,
+        label: o.name.slice(0, 80),
+        custom_id: `${VOTE_ID_PREFIX}:${vote.id}:${o.map}`,
+      }))
+    : [];
+  const components = Array.from({ length: Math.ceil(buttons.length / BUTTONS_PER_ROW) }, (_, i) => ({
+    type: 1,
+    components: buttons.slice(i * BUTTONS_PER_ROW, (i + 1) * BUTTONS_PER_ROW),
+  }));
+  return { embeds: [embed], components, allowed_mentions: { parse: [] } };
+};
+
+// A button's custom_id: "mapvote:<vote id>:<map id>". Null for anything else.
+export const parseVoteButton = (customId: string | undefined): { poll: string; map: string } | null => {
+  const found = /^mapvote:(\d{1,20}):([A-Za-z0-9_]{1,64})$/.exec(customId ?? '');
+  return found === null ? null : { poll: found[1]!, map: found[2]! };
+};
+
+const DISCORD_API = 'https://discord.com/api/v10';
+
+// Posts the vote to its channel, and answers the message's ID.
+export const postVoteMessage = async (
+  botToken: string,
+  channelId: string,
+  message: VoteMessage,
+  fetchFn: typeof fetch = fetch,
+): Promise<string> => {
+  const response = await fetchFn(`${DISCORD_API}/channels/${channelId}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bot ${botToken}` },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) throw new Error(`Discord refused the vote message: ${response.status} ${await response.text()}`);
+  return z.object({ id: z.string() }).parse(await response.json()).id;
+};
+
+export const editVoteMessage = async (
+  botToken: string,
+  channelId: string,
+  messageId: string,
+  message: VoteMessage,
+  fetchFn: typeof fetch = fetch,
+): Promise<void> => {
+  const response = await fetchFn(`${DISCORD_API}/channels/${channelId}/messages/${messageId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bot ${botToken}` },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(8_000),
+  });
+  // A message staff deleted has nothing to update.
+  if (!response.ok && response.status !== 404) throw new Error(`Discord refused the vote update: ${response.status} ${await response.text()}`);
+};

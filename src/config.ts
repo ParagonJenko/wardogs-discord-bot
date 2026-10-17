@@ -130,6 +130,10 @@ const EnvSchema = z
     // The next-map vote on the website: when a match goes live, a vote between MAP_VOTE_OPTIONS maps, open for
     // MAP_VOTE_MINUTES (or until a team has 75% of SCORE_TO_WIN). The winner is put on the server as the next map. "on" or "off".
     MAP_VOTE: z.enum(['on', 'off']).default('off'),
+    // The channel the vote is posted in, and the bot's token to post it with (a webhook can't carry buttons). The bot
+    // needs View Channel, Send Messages and Embed Links there.
+    DISCORD_VOTE_CHANNEL_ID: numericId.optional(),
+    DISCORD_BOT_TOKEN: z.string().trim().optional(),
     MAP_VOTE_OPTIONS: z.coerce.number().int().min(2).max(6).default(4),
     MAP_VOTE_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
   })
@@ -272,6 +276,9 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     roundups:
       e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,
     rotationHour: e.ROTATION_HOUR,
-    mapVote: e.MAP_VOTE === 'on' ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES } : null,
+    mapVote:
+      e.MAP_VOTE === 'on'
+        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN }
+        : null,
   };
 };

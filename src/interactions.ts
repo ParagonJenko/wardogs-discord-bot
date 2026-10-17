@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
+import { parseVoteButton } from './mapvote.ts';
 import { PRIVATE_NAME } from './privacy.ts';
 import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
@@ -340,9 +341,11 @@ export const COMMANDS = [
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
+const MESSAGE_COMPONENT = 3;
 const AUTOCOMPLETE = 4;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
+const UPDATE_MESSAGE = 7;
 const DEFERRED_CHANNEL_MESSAGE = 5;
 const AUTOCOMPLETE_RESULT = 8;
 const EPHEMERAL = 64;
@@ -360,7 +363,9 @@ const InteractionSchema = z.object({
   token: z.string().optional(),
   data: z
     .object({
-      name: z.string(),
+      // A button has a custom_id instead.
+      name: z.string().optional(),
+      custom_id: z.string().optional(),
       // A subcommand, such as /vip add, arrives as an option holding its own options.
       options: z.array(OptionSchema.extend({ options: z.array(OptionSchema).optional() })).optional(),
     })
@@ -409,6 +414,11 @@ type InteractionDeps = {
   adminGuildId: string | undefined;
   // Roles in that server whose members may use admin commands without being Administrators, such as Staff.
   adminRoleIds: string[];
+  // A press of a next-map vote button (see mapvote.ts): what to do with the vote. `update` is the vote message with the new
+  // counts, when the vote changed; `reply` is for the voter alone. Without it, buttons are not answered.
+  castVote?: (press: { poll: string; map: string; userId: string }) => Promise<{ update: unknown | null; reply: string }>;
+  // The one server whose members may vote.
+  voteGuildId?: string | undefined;
 };
 
 export type InteractionResult = { status: number; body: unknown; followUp?: () => Promise<void> };
@@ -562,6 +572,32 @@ const replyPrivately = async (
   }
 };
 
+// A press of a vote button. The message is updated with the new counts at once, and the voter is told privately what was
+// counted, so nobody else sees who voted for what.
+const handleVotePress = async (interaction: z.infer<typeof InteractionSchema>, deps: InteractionDeps): Promise<InteractionResult> => {
+  const press = parseVoteButton(interaction.data?.custom_id);
+  const userId = interaction.member?.user?.id;
+  if (press === null || deps.castVote === undefined || userId === undefined || !interaction.token) {
+    return { status: 200, body: privateMessage('Unknown button.') };
+  }
+  if (deps.voteGuildId !== undefined && interaction.guild_id !== deps.voteGuildId) {
+    return { status: 200, body: privateMessage('Only members of the Discord server can vote.') };
+  }
+  const token = interaction.token;
+  try {
+    const { update, reply } = await deps.castVote({ ...press, userId });
+    if (update === null) return { status: 200, body: privateMessage(reply) };
+    return {
+      status: 200,
+      body: { type: UPDATE_MESSAGE, data: update },
+      followUp: () => deps.privateFollowUp(interaction.application_id, token, { content: reply, allowed_mentions: { parse: [] } }),
+    };
+  } catch (error) {
+    deps.log.error(`A vote press failed: ${errorText(error)}`);
+    return { status: 200, body: privateMessage('Your vote could not be counted. Try again.') };
+  }
+};
+
 export const handleInteraction = async (
   body: string,
   signature: string | null,
@@ -618,6 +654,8 @@ export const handleInteraction = async (
       : [];
     return { status: 200, body: { type: AUTOCOMPLETE_RESULT, data: { choices } } };
   }
+
+  if (interaction.type === MESSAGE_COMPONENT) return handleVotePress(interaction, deps);
 
   if (interaction.type !== APPLICATION_COMMAND || !isCommandName(name) || !interaction.token) {
     return { status: 200, body: privateMessage('Unknown command.') };

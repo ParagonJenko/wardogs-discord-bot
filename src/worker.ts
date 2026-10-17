@@ -2,24 +2,24 @@ import { connect } from 'cloudflare:sockets';
 import { z } from 'zod';
 import { DurableObject } from 'cloudflare:workers';
 import { withSeedCall } from './alerts.ts';
-import { readJsonBody } from './body.ts';
 import { loadConfig } from './config.ts';
 import {
   castVote,
   chooseWinner,
   closeDue,
+  editVoteMessage,
   MAP_VOTE_KEY,
-  networkMark,
   NOTE,
   openVote,
   parseMapVote,
   parseRecentMaps,
   pickOptions,
+  postVoteMessage,
   publicVote,
   RECENT_MAPS_KEY,
   VOTE_SETUP_OPTIONS,
+  voteMessage,
   withPlayed,
-  type CastResult,
   type MapVote,
   type PublicVote,
   type VoteOutcome,
@@ -162,7 +162,7 @@ import {
 import type { OutageEvent } from './outages.ts';
 import { feedRecordOf } from './matchend.ts';
 import { createFeedJoins, createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
-import { JOIN_WAIT_MS } from './messages.ts';
+import { discordLink, JOIN_WAIT_MS } from './messages.ts';
 import {
   ALERT_LOG_KEY,
   buildReview,
@@ -1325,25 +1325,47 @@ export class Watcher extends DurableObject<Env> {
   // The next-map vote (see mapvote.ts) takes one step at a time, so a ballot never overwrites the vote closing.
   private voting = oneAtATime();
 
-  // The vote for the website, or null while there is none (or the vote is off).
-  async mapVote(): Promise<{ vote: PublicVote | null }> {
-    if (loadConfig(stringVars(this.env)).mapVote === null) return { vote: null };
+  // The vote for the website, or null while there is none (or the vote is off), and the Discord channel to vote in.
+  async mapVote(): Promise<{ vote: PublicVote | null; discord: string | null }> {
+    const vars = stringVars(this.env);
+    const rule = loadConfig(vars).mapVote;
+    if (rule === null) return { vote: null, discord: null };
+    const guild = vars['DISCORD_GUILD_ID']?.trim();
+    const discord = guild && rule.channelId ? `https://discord.com/channels/${guild}/${rule.channelId}` : null;
     const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
-    return { vote: vote === null ? null : publicVote(vote, Date.now()) };
+    return { vote: vote === null ? null : publicVote(vote, Date.now()), discord };
   }
 
-  // A ballot from the website. The result says what became of it; the vote is the page's view of it afterwards.
-  async castMapVote(ballot: { poll: string; map: string; token: string; ip: string }): Promise<{ result: CastResult['result'] | 'none'; vote: PublicVote | null }> {
-    if (loadConfig(stringVars(this.env)).mapVote === null) return { result: 'none', vote: null };
+  // A press of a vote button: counts it and answers with the vote message as it is now, and what to tell the voter.
+  async castMapVote(press: { poll: string; map: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
+    const config = loadConfig(stringVars(this.env));
     return this.voting(async () => {
       const now = Date.now();
       const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
-      if (vote === null || vote.id !== ballot.poll) return { result: 'none', vote: vote === null ? null : publicVote(vote, now) };
-      const cast = castVote(vote, { ip: await networkMark(vote, ballot.ip), token: ballot.token, map: ballot.map }, now);
-      if (!('vote' in cast)) return { result: cast.result, vote: publicVote(vote, now) };
+      if (config.mapVote === null || vote === null || vote.id !== press.poll) {
+        return { update: null, reply: 'That vote is over. A new one opens with the next match.' };
+      }
+      const cast = castVote(vote, { user: press.userId, map: press.map }, now);
+      if (!('vote' in cast)) {
+        return { update: null, reply: cast.result === 'closed' ? 'The vote has closed.' : 'That map is not in this vote.' };
+      }
       await this.ctx.storage.put(MAP_VOTE_KEY, cast.vote);
-      return { result: cast.result, vote: publicVote(cast.vote, now) };
+      const name = cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map);
+      return {
+        update: voteMessage(cast.vote, now, config.siteUrl),
+        reply: cast.result === 'changed' ? `Your vote is now for **${name}**.` : `You voted for **${name}**. Press another map to change it.`,
+      };
     });
+  }
+
+  // Updates the vote's Discord message to the vote as it is. A failure is logged: the message is only the view of the vote.
+  private async showVote(config: Config, rule: NonNullable<Config['mapVote']>, vote: MapVote): Promise<void> {
+    if (vote.message === null || !rule.botToken) return;
+    try {
+      await editVoteMessage(rule.botToken, vote.message.channelId, vote.message.messageId, voteMessage(vote, Date.now(), config.siteUrl));
+    } catch (error) {
+      console.error(`Map vote: could not update the Discord message: ${errorText(error)}`);
+    }
   }
 
   // Opens a vote when a match goes live, closes it when its time is up or a team is close to winning, and puts the winner
@@ -1374,6 +1396,7 @@ export class Watcher extends DurableObject<Env> {
       if (vote.outcome === null || vote.outcome.pending) {
         vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
         console.info(`Map vote: the match ended before the vote could be applied`);
+        await this.showVote(config, rule, vote);
       }
       vote = null;
     }
@@ -1387,26 +1410,40 @@ export class Watcher extends DurableObject<Env> {
           ended(vote, winner === null ? { at: now, winner: null, pending: false, note: NOTE.nobody } : { at: now, winner, pending: true }),
         );
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
+        await this.showVote(config, rule, vote);
       }
-      if (vote.outcome?.pending) await save(ended(vote, await this.applyVoteWinner(config, vote, playing)));
+      if (vote.outcome?.pending) {
+        const outcome = await this.applyVoteWinner(config, vote, playing);
+        const next = await save(ended(vote, outcome));
+        // The message changes when the winner is on the server, or when it can't be; a retry still waiting says the same.
+        if (!outcome.pending) await this.showVote(config, rule, next);
+      }
       return;
     }
 
     // A match that is live and has no vote yet.
     if (match === null || match.liveAt === null || match.endedAt !== undefined) return;
+    if (!rule.botToken || !rule.channelId) {
+      console.error('Map vote: MAP_VOTE is on, but DISCORD_BOT_TOKEN and DISCORD_VOTE_CHANNEL_ID are not both set, so no vote opens.');
+      return;
+    }
     const catalog = await this.catalog(config);
     // The maps played lately are not offered again, and this one joins them.
     const recent = withPlayed(parseRecentMaps(await storage.get(RECENT_MAPS_KEY)), playing);
     const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
     if (options.length === 0) return;
-    await storage.put(RECENT_MAPS_KEY, recent);
-    const opened = await save(openVote(match, playing, options, rule, now));
+    // Posted first: a vote nobody can see is not opened, and the next check tries again.
+    const opened = openVote(match, playing, options, rule, now);
+    const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
+    await storage.put({ [RECENT_MAPS_KEY]: recent, [MAP_VOTE_KEY]: { ...opened, message: { channelId: rule.channelId, messageId } } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
-    if (config.siteUrl) {
-      const host = new URL(config.siteUrl).host;
-      await sendBroadcast(config.rconUrl, config.rconPassword, `Vote for the next map at ${host}/vote - it plays infantry only. Open for ${rule.minutes} minutes.`, socketHttp(connect)).catch(
-        (error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`),
-      );
+    if (config.inviteCode) {
+      await sendBroadcast(
+        config.rconUrl,
+        config.rconPassword,
+        `Vote for the next map in our Discord: ${discordLink(config.inviteCode)} - it plays infantry only. Open for ${rule.minutes} minutes.`,
+        socketHttp(connect),
+      ).catch((error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`));
     }
   }
 
@@ -1437,13 +1474,11 @@ export class Watcher extends DurableObject<Env> {
       await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
       await this.stageNextMap(winner, playing);
       console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
-      if (config.siteUrl) {
-        const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
-        const votes = vote.ballots.filter((b) => b.map === winner).length;
-        await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only (${votes} votes).`, http).catch((error: unknown) =>
-          console.error(`Map vote result announcement failed: ${errorText(error)}`),
-        );
-      }
+      const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
+      const votes = vote.ballots.filter((b) => b.map === winner).length;
+      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only (${votes} votes).`, http).catch((error: unknown) =>
+        console.error(`Map vote result announcement failed: ${errorText(error)}`),
+      );
       return { at, winner, pending: false };
     } catch (error) {
       console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
@@ -3025,41 +3060,6 @@ const publicRoute = (
   return null;
 };
 
-// The vote page's ballots. Only the website may send one from a browser, and a request that names another origin is
-// refused here too. One vote per browser and per network is kept in the Durable Object (see mapvote.ts).
-const BallotSchema = z.object({
-  poll: z.string().max(40),
-  map: z.string().regex(/^[A-Za-z0-9_]{1,64}$/),
-  token: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
-});
-const BALLOT_BYTES = 1024;
-
-const voteApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
-  const siteOrigin = siteOriginOf(vars);
-  const headers = {
-    'access-control-allow-origin': siteOrigin ?? '*',
-    'access-control-allow-headers': 'content-type',
-    'access-control-allow-methods': 'POST, OPTIONS',
-    'access-control-max-age': '600',
-    'cache-control': 'no-store',
-    vary: 'origin',
-  };
-  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-  if (request.method !== 'POST') return Response.json({ error: 'Not found' }, { status: 404, headers });
-  const origin = request.headers.get('origin');
-  if (siteOrigin !== null && origin !== null && origin !== siteOrigin) return Response.json({ error: 'Not the website' }, { status: 403, headers });
-  const body = BallotSchema.safeParse(await readJsonBody(request, BALLOT_BYTES));
-  if (!body.success) return Response.json({ error: 'Not a ballot' }, { status: 400, headers });
-  try {
-    const { result, vote } = await watcher().castMapVote({ ...body.data, ip: request.headers.get('cf-connecting-ip') ?? '' });
-    const status = result === 'counted' || result === 'changed' ? 200 : result === 'closed' || result === 'none' ? 409 : result === 'full' ? 429 : 400;
-    return Response.json({ result, vote }, { status, headers });
-  } catch (error) {
-    console.error(`Vote failed: ${errorText(error)}`);
-    return Response.json({ error: 'The vote is unavailable' }, { status: 503, headers });
-  }
-};
-
 // The staff page's sign-in (see adminauth.ts): Discord sends the browser back to CALLBACK_PATH on this Worker, which must
 // be listed under OAuth2 → Redirects in the Discord Developer Portal.
 const callbackUrl = (request: Request): string => `${new URL(request.url).origin}${CALLBACK_PATH}`;
@@ -3487,7 +3487,6 @@ export default {
     if (request.method === 'GET' && url.pathname === '/auth/login') return staffLogin(request, stringVars(env));
     if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env), watcher);
     if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
-    if (url.pathname === '/api/vote' && request.method !== 'GET') return voteApi(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname === '/api/review') return reviewApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.
     if (request.method === 'GET' && url.pathname === '/api/live/socket') return watcher().fetch(request);
@@ -3534,6 +3533,8 @@ export default {
         log: console,
         now: Date.now,
         adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
+        voteGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
+        castVote: (press) => watcher().castMapVote(press),
         adminRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
           .split(',')
           .map((id) => id.trim())
