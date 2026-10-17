@@ -1502,11 +1502,11 @@ describe('in-game messages', () => {
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
       '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com',
-      'Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
-      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      'Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com',
     ]);
     expect(log.info).toHaveBeenCalledWith(
-      'Sent in game: Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
+      'Sent in game: Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
     );
   });
 
@@ -1523,8 +1523,8 @@ describe('in-game messages', () => {
 
     // A vote that has closed, or never opened: the usual call to action.
     const closed = await sent(false);
-    expect(closed[1]).toContain('Check the leaderboard and join our Discord at gaminginit.com');
-    expect(closed[2]).toContain('Where do you rank? Leaderboard, Discord and seeding at gaminginit.com');
+    expect(closed[1]).toContain('Check the leaderboard and stats at gaminginit.com');
+    expect(closed[2]).toContain('Where do you rank? Leaderboard and stats at gaminginit.com');
   });
 
   it('logs a failed message and does not send it again', async () => {
@@ -1556,9 +1556,9 @@ describe('in-game messages', () => {
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
       'Ten minutes in. Rules at gaminginit.com',
-      'Halfway there! Valkyra on 52, comrades. Check the leaderboard and join our Discord at gaminginit.com',
+      'Halfway there! Valkyra on 52, comrades. Check the leaderboard and stats at gaminginit.com',
       // Valkyra's 90-point lines are still the bot's.
-      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com',
     ]);
   });
 

@@ -3,6 +3,7 @@ import * as lines from '../src/lines.ts';
 import {
   joinMessageDue,
   markWelcomed,
+  fitWithCall,
   MAX_LENGTH,
   milestones,
   nextMessage,
@@ -83,16 +84,16 @@ describe('milestones', () => {
     }
   });
 
-  it('reaches halfway when a team has half the winning score, and mentions seeding when VIP is on', () => {
+  it('reaches halfway when a team has half the winning score, and sends people to the leaderboard rather than seeding', () => {
     expect(milestones(match(scores(49, 20)), 0, rule, null)).toEqual([]);
     expect(milestones(match(scores(50, 20)), 0, rule, null, first)).toEqual([
       {
         key: 'halfway',
-        text: 'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and join our Discord at gaminginit.com',
+        text: 'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
       },
     ]);
     expect(milestones(match(scores(50, 20)), 0, rule, vip, first)[0]?.text).toBe(
-      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Seed on 3 days in a week and get a whitelist slot. How at gaminginit.com',
+      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
     );
   });
 
@@ -119,10 +120,10 @@ describe('milestones', () => {
   it('reaches "nearly there" once per match, for the team in front, at 90% of the winning score', () => {
     expect(milestones(match(scores(92, 90, 60)), 0, rule, null).map((m) => m.key)).toEqual(['halfway', 'nearly']);
     expect(milestones(match(scores(90, 94, 60)), 0, rule, null, first)[1]?.text).toBe(
-      'Kharr has 90 points! Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      'Kharr has 90 points! Where do you rank? Leaderboard and stats at gaminginit.com',
     );
     expect(milestones(match(scores(92, 20)), 0, rule, null, first)[1]?.text).toBe(
-      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard, Discord and seeding at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com',
     );
     expect(milestones(match(scores(135, 20)), 0, { ...rule, scoreToWin: 150 }, null)[1]?.key).toBe('nearly');
   });
@@ -187,6 +188,15 @@ describe('the lines', () => {
     ]);
 
     expect(texts.every((m) => m.text.length <= 200 && !m.text.endsWith('…'))).toBe(true);
+  });
+});
+
+describe('fitWithCall', () => {
+  it('cuts the line, never the call to action', () => {
+    expect(fitWithCall('Short line.', 'See gaminginit.com')).toBe('Short line. See gaminginit.com');
+    const text = fitWithCall('x'.repeat(300), 'See gaminginit.com');
+    expect(text).toHaveLength(MAX_LENGTH);
+    expect(text.endsWith('… See gaminginit.com')).toBe(true);
   });
 });
 
