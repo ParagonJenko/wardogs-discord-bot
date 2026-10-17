@@ -3,6 +3,7 @@ import {
   castVote,
   chooseWinner,
   closeDue,
+  closeScoreFor,
   isOpen,
   openVote,
   parseMapVote,
@@ -27,7 +28,7 @@ const choice = (id: string, modes = 1): MapChoice => ({
 
 const NOW = 1_000_000;
 const vote = (): MapVote =>
-  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, channelId: '1', botToken: 't' }, NOW);
+  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, closePercent: 95, channelId: '1', botToken: 't' }, NOW, 95);
 const ballot = (n: number, map: string) => ({ user: `user${n}`, map });
 
 describe('pickOptions', () => {
@@ -115,11 +116,25 @@ describe('chooseWinner', () => {
 });
 
 describe('closeDue', () => {
-  it('closes when time is up or a team is close to winning, and only once', () => {
-    expect(closeDue(vote(), NOW + 1, 10, 100)).toBe(false);
-    expect(closeDue(vote(), NOW + 15 * 60_000, 10, 100)).toBe(true);
-    expect(closeDue(vote(), NOW + 1, 75, 100)).toBe(true);
-    expect(closeDue({ ...vote(), outcome: { at: NOW, winner: null, pending: false } }, NOW + 1, 99, 100)).toBe(false);
+  it('closes when time is up or a team reaches the close score, and only once', () => {
+    expect(closeDue(vote(), NOW + 1, 10)).toBe(false);
+    expect(closeDue(vote(), NOW + 1, 94)).toBe(false);
+    expect(closeDue(vote(), NOW + 15 * 60_000, 10)).toBe(true);
+    expect(closeDue(vote(), NOW + 1, 95)).toBe(true);
+    expect(closeDue({ ...vote(), outcome: { at: NOW, winner: null, pending: false } }, NOW + 1, 99)).toBe(false);
+  });
+
+  it('closes on time alone for a vote saved without a close score', () => {
+    const old = { ...vote(), closeScore: 0 };
+    expect(closeDue(old, NOW + 1, 99)).toBe(false);
+    expect(closeDue(old, NOW + 15 * 60_000, 0)).toBe(true);
+  });
+});
+
+describe('closeScoreFor', () => {
+  it('is the share of the winning score, rounded up', () => {
+    expect(closeScoreFor(100, 95)).toBe(95);
+    expect(closeScoreFor(150, 95)).toBe(143);
   });
 });
 
@@ -162,6 +177,7 @@ describe('voteMessage', () => {
     expect(message.embeds[0]?.fields?.map((f) => f.value.endsWith('votes') || f.value.endsWith('vote'))).toEqual([true, true, true]);
     expect(message.embeds[0]?.fields?.[0]?.value).toContain('2 votes');
     expect(message.embeds[0]?.description).toContain('infantry only');
+    expect(message.embeds[0]?.description).toContain('reaches 95 points');
     expect(message.embeds[0]?.description).toContain('https://gaminginit.com/vote');
     expect(message.allowed_mentions).toEqual({ parse: [] });
   });
