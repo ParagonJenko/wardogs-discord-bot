@@ -136,6 +136,12 @@ describe('closeScoreFor', () => {
     expect(closeScoreFor(100, 95)).toBe(95);
     expect(closeScoreFor(150, 95)).toBe(143);
   });
+
+  it('stays below the winning score, whatever the settings', () => {
+    expect(closeScoreFor(10, 95)).toBe(9);
+    expect(closeScoreFor(50, 99)).toBe(49);
+    expect(closeScoreFor(2, 99)).toBe(1);
+  });
 });
 
 describe('publicVote and storage', () => {

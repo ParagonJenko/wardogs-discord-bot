@@ -16,7 +16,10 @@ export const MAP_VOTE_KEY = 'mapVote';
 // A vote closes at the first of its time running out and the leading team reaching its close score (MAP_VOTE_CLOSE_PERCENT
 // of the winning score, 95% by default), so it is over while the match can still be told where to go next. The time is
 // only a backstop: a match lasts about 50 minutes, so the score is what normally closes it.
-export const closeScoreFor = (scoreToWin: number, percent: number): number => Math.ceil((scoreToWin * percent) / 100);
+// Always at least a point short of the winning score, however small SCORE_TO_WIN or high the percent: rounding up must not
+// leave the vote open until the match is won.
+export const closeScoreFor = (scoreToWin: number, percent: number): number =>
+  Math.max(1, Math.min(scoreToWin - 1, Math.ceil((scoreToWin * percent) / 100)));
 
 // How every winner is set up: infantry only (see MODIFIERS in matchsetup.ts), whatever the rotation plays that map with.
 export const VOTE_SETUP_OPTIONS = { infantry_only: 'true' };
