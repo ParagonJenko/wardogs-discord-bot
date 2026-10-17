@@ -92,7 +92,7 @@ describe('planSetup', () => {
 
     expect(planSetup('Europe', { mode: 'Europe_KOTH_01', lighting: 'DayClear', hardcore: 'true' }, unknown)).toEqual({
       setup: { experiences: ['Europe_KOTH_01', 'KOTH_Hardcore'], lighting: 'DayClear' },
-      labels: ['Europe_KOTH_01', 'Hardcore', 'DayClear'],
+      labels: ['Europe_KOTH_01', 'Hardcore', 'Day, clear'],
     });
     expect(planSetup('Europe', {}, unknown)).toEqual({ setup: {}, labels: [] });
   });
@@ -137,7 +137,7 @@ describe('setupLabels', () => {
     expect(setupLabels(setup, { experiences: [{ id: 'Kavkazi_KOTH_01', name: 'King of the Hill' }], lightings: null, zones: null })).toEqual([
       'King of the Hill',
       'Hardcore',
-      'DayClear',
+      'Day, clear',
       'Circle zones',
     ]);
     expect(setupLabels({}, { experiences: null, lightings: null, zones: null })).toEqual([]);

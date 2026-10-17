@@ -323,6 +323,35 @@ describe('staff actions', () => {
     expect(isNotInGame(new Error('player_not_found'))).toBe(false);
   });
 
+  it('names lightings and zone layouts from their ids when the server gives no name, and keeps the names it gives', async () => {
+    const { http } = server(
+      [200, { lightings: [{ id: 'DayStartClear' }, { id: 'DayLateRain', displayName: 'DayLateRain' }, { id: 'DayClear', displayName: 'Clear day' }] }],
+      [
+        200,
+        {
+          map: 'Kavkazi',
+          alternators: [
+            { index: 0, tag: 'ZoneAlternator.Bakurani.Default.Circle' },
+            { index: 1, tag: 'ZoneAlternator.Bakurani.Default.NorthSouthLine', displayName: 'ZoneAlternator.Bakurani.Default.NorthSouthLine' },
+            { index: 2, tag: 'ZoneAlternator.Bakurani.Default.Factory', displayName: 'The factory' },
+          ],
+          count: 3,
+        },
+      ],
+    );
+
+    await expect(fetchLightings(RCON, 'secret', http)).resolves.toEqual([
+      { id: 'DayStartClear', name: 'Dawn, clear' },
+      { id: 'DayLateRain', name: 'Afternoon, rain' },
+      { id: 'DayClear', name: 'Clear day' },
+    ]);
+    await expect(fetchZones(RCON, 'secret', 'Kavkazi', http)).resolves.toEqual([
+      { id: 'ZoneAlternator.Bakurani.Default.Circle', name: 'Circle' },
+      { id: 'ZoneAlternator.Bakurani.Default.NorthSouthLine', name: 'North South Line' },
+      { id: 'ZoneAlternator.Bakurani.Default.Factory', name: 'The factory' },
+    ]);
+  });
+
   it('still throws when removing a ban fails for another reason', async () => {
     const { http } = server([500, { error: 'boom' }]);
 

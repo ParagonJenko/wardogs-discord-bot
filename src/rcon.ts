@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { lightingName, zoneLayoutName } from './names.ts';
 
 // WARDOGS RCON is a plain HTTP/JSON API (default port 7776). Only the fields the bot uses are checked;
 // fields that live builds have been seen to omit are optional.
@@ -269,9 +270,15 @@ export const fetchMaps = (rconUrl: string, password: string, http: HttpClient): 
 export const fetchExperiences = (rconUrl: string, password: string, http: HttpClient): Promise<CatalogItem[]> =>
   fetchCatalog(rconUrl, password, '/v1/catalog/experiences', 'experiences', http);
 
-// Times of day and weather, such as DayClear.
-export const fetchLightings = (rconUrl: string, password: string, http: HttpClient): Promise<CatalogItem[]> =>
-  fetchCatalog(rconUrl, password, '/v1/catalog/lightings', 'lightings', http);
+// A name the server gave, or one made from the id when it gave none (or only the id again).
+const named = (id: string, name: string, fallback: (id: string) => string): string => (name === id ? fallback(id) : name);
+
+// Times of day and weather, such as DayClear, named as "Day, clear" when the server gives no name.
+export const fetchLightings = async (rconUrl: string, password: string, http: HttpClient): Promise<CatalogItem[]> =>
+  (await fetchCatalog(rconUrl, password, '/v1/catalog/lightings', 'lightings', http)).map((l) => ({
+    id: l.id,
+    name: named(l.id, l.name, lightingName),
+  }));
 
 // Map ids go in the path, so anything else is refused before a request is made.
 const mapPath = (map: string, what: string): string => {
@@ -291,7 +298,7 @@ const ZonesSchema = z.object({ alternators: z.array(z.object({ tag: z.string(), 
 export const fetchZones = async (rconUrl: string, password: string, map: string, http: HttpClient): Promise<CatalogItem[]> =>
   ZonesSchema.parse(await rconRequest(rconUrl, password, mapPath(map, 'alternators'), http)).alternators.map((z) => ({
     id: z.tag,
-    name: z.displayName ?? z.tag,
+    name: named(z.tag, z.displayName ?? z.tag, zoneLayoutName),
   }));
 
 // Stages the map the server travels to when the current match ends, with its setup. The rotation is not changed.
