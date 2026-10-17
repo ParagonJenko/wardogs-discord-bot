@@ -2,7 +2,26 @@ import { connect } from 'cloudflare:sockets';
 import { z } from 'zod';
 import { DurableObject } from 'cloudflare:workers';
 import { withSeedCall } from './alerts.ts';
+import { readJsonBody } from './body.ts';
 import { loadConfig } from './config.ts';
+import {
+  castVote,
+  chooseWinner,
+  closeDue,
+  MAP_VOTE_KEY,
+  networkMark,
+  NOTE,
+  openVote,
+  parseMapVote,
+  pickOptions,
+  publicVote,
+  VOTE_SETUP_OPTIONS,
+  type CastResult,
+  type MapVote,
+  type PublicVote,
+  type VoteOutcome,
+} from './mapvote.ts';
+import { planSetup } from './matchsetup.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseReadRotation, parseStagedMap, rotationReadDue, showBoard, type ReadRotation, type StagedMap } from './board.ts';
 import {
@@ -183,6 +202,7 @@ import {
   kickPlayer,
   messagePlayer,
   putConfig,
+  queueMap,
   RconError,
   removeBan,
   sendBroadcast,
@@ -1013,6 +1033,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
     await this.serial(() => this.updateRotation(config, seen.snapshot));
+    await this.updateMapVote(config, seen.snapshot);
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
     await this.checkHeadshots(seen.snapshot);
     await this.watchFeed(config, seen.snapshot);
@@ -1296,6 +1317,132 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put('rotations', book);
     console.info(`Map rotation: saved the server's rotation as ${DEFAULT_ROTATION} (${entries.length} maps)`);
     return book;
+  }
+
+  // The next-map vote (see mapvote.ts) takes one step at a time, so a ballot never overwrites the vote closing.
+  private voting = oneAtATime();
+
+  // The vote for the website, or null while there is none (or the vote is off).
+  async mapVote(): Promise<{ vote: PublicVote | null }> {
+    if (loadConfig(stringVars(this.env)).mapVote === null) return { vote: null };
+    const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
+    return { vote: vote === null ? null : publicVote(vote, Date.now()) };
+  }
+
+  // A ballot from the website. The result says what became of it; the vote is the page's view of it afterwards.
+  async castMapVote(ballot: { poll: string; map: string; token: string; ip: string }): Promise<{ result: CastResult['result'] | 'none'; vote: PublicVote | null }> {
+    if (loadConfig(stringVars(this.env)).mapVote === null) return { result: 'none', vote: null };
+    return this.voting(async () => {
+      const now = Date.now();
+      const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
+      if (vote === null || vote.id !== ballot.poll) return { result: 'none', vote: vote === null ? null : publicVote(vote, now) };
+      const cast = castVote(vote, { ip: await networkMark(vote, ballot.ip), token: ballot.token, map: ballot.map }, now);
+      if (!('vote' in cast)) return { result: cast.result, vote: publicVote(vote, now) };
+      await this.ctx.storage.put(MAP_VOTE_KEY, cast.vote);
+      return { result: cast.result, vote: publicVote(cast.vote, now) };
+    });
+  }
+
+  // Opens a vote when a match goes live, closes it when its time is up or a team is close to winning, and puts the winner
+  // on the server as the next map. A failure is logged; it never stops what comes after it.
+  private async updateMapVote(config: Config, snapshot: Snapshot | null): Promise<void> {
+    const rule = config.mapVote;
+    if (rule === null || snapshot === null || snapshot.status.map === '') return;
+    try {
+      await this.voting(() => this.stepMapVote(config, rule, snapshot.status.map));
+    } catch (error) {
+      console.error(`Map vote failed: ${errorText(error)}`);
+    }
+  }
+
+  private async stepMapVote(config: Config, rule: NonNullable<Config['mapVote']>, playing: string): Promise<void> {
+    const storage = this.ctx.storage;
+    const now = Date.now();
+    const match = parseState(await storage.get('state'))?.match ?? null;
+    let vote = parseMapVote(await storage.get(MAP_VOTE_KEY));
+    const save = async (next: MapVote): Promise<MapVote> => {
+      await storage.put(MAP_VOTE_KEY, next);
+      return next;
+    };
+    const ended = (v: MapVote, outcome: VoteOutcome): MapVote => ({ ...v, outcome });
+
+    // A vote for an earlier match: too late to put anything on the server.
+    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt)) {
+      if (vote.outcome === null || vote.outcome.pending) {
+        vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
+        console.info(`Map vote: the match ended before the vote could be applied`);
+      }
+      vote = null;
+    }
+
+    if (vote !== null && match !== null) {
+      if (vote.outcome === null) {
+        const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
+        if (!closeDue(vote, now, leading, config.scoreToWin)) return;
+        const winner = chooseWinner(vote, Math.random);
+        vote = await save(
+          ended(vote, winner === null ? { at: now, winner: null, pending: false, note: NOTE.nobody } : { at: now, winner, pending: true }),
+        );
+        console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
+      }
+      if (vote.outcome?.pending) await save(ended(vote, await this.applyVoteWinner(config, vote, playing)));
+      return;
+    }
+
+    // A match that is live and has no vote yet.
+    if (match === null || match.liveAt === null || match.endedAt !== undefined) return;
+    const catalog = await this.catalog(config);
+    const options = catalog === null ? [] : pickOptions(catalog.maps, playing, rule.options, Math.random);
+    if (options.length === 0) return;
+    const opened = await save(openVote(match, playing, options, rule, now));
+    console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
+    if (config.siteUrl) {
+      const host = new URL(config.siteUrl).host;
+      await sendBroadcast(config.rconUrl, config.rconPassword, `Vote for the next map at ${host}/vote - it plays infantry only. Open for ${rule.minutes} minutes.`, socketHttp(connect)).catch(
+        (error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`),
+      );
+    }
+  }
+
+  // Stages the winner, infantry only, as /setnextmap does. A failure keeps the outcome pending, and the next check tries
+  // again until the match ends.
+  private async applyVoteWinner(config: Config, vote: MapVote, playing: string): Promise<VoteOutcome> {
+    const at = Date.now();
+    const winner = vote.outcome?.winner ?? null;
+    if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
+    if (playing !== vote.fromMap) return { at, winner: null, pending: false, note: NOTE.late };
+    const staged = parseStagedMap(await this.ctx.storage.get('nextMap'));
+    if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
+      return { at, winner: null, pending: false, note: NOTE.staff };
+    }
+    try {
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [catalog, rotation] = await Promise.all([this.catalog(config), fetchRotation(rconUrl, rconPassword, http).catch(() => null)]);
+      const choice = catalog?.maps.find((m) => m.id === winner);
+      const planned = planSetup(winner, VOTE_SETUP_OPTIONS, {
+        rotation,
+        mapExperiences: choice === undefined ? null : [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
+        experiences: catalog?.experiences ?? null,
+        lightings: catalog?.lightings ?? null,
+        zones: choice?.zones ?? null,
+      });
+      if ('problem' in planned) throw new Error(planned.problem);
+      await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
+      await this.stageNextMap(winner, playing);
+      console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
+      if (config.siteUrl) {
+        const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
+        const votes = vote.ballots.filter((b) => b.map === winner).length;
+        await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only (${votes} votes).`, http).catch((error: unknown) =>
+          console.error(`Map vote result announcement failed: ${errorText(error)}`),
+        );
+      }
+      return { at, winner, pending: false };
+    } catch (error) {
+      console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
+      return { at: vote.outcome?.at ?? at, winner, pending: true };
+    }
   }
 
   // The saved rotations, for /rotations.
@@ -2865,10 +3012,46 @@ const publicRoute = (
   if (url.pathname === '/api/stats') return { key: 'stats', load: () => watcher().stats() };
   if (url.pathname === '/api/live') return { key: 'live', load: () => watcher().live(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
+  if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
   return null;
+};
+
+// The vote page's ballots. Only the website may send one from a browser, and a request that names another origin is
+// refused here too. One vote per browser and per network is kept in the Durable Object (see mapvote.ts).
+const BallotSchema = z.object({
+  poll: z.string().max(40),
+  map: z.string().regex(/^[A-Za-z0-9_]{1,64}$/),
+  token: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
+});
+const BALLOT_BYTES = 1024;
+
+const voteApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
+  const siteOrigin = siteOriginOf(vars);
+  const headers = {
+    'access-control-allow-origin': siteOrigin ?? '*',
+    'access-control-allow-headers': 'content-type',
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-max-age': '600',
+    'cache-control': 'no-store',
+    vary: 'origin',
+  };
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  if (request.method !== 'POST') return Response.json({ error: 'Not found' }, { status: 404, headers });
+  const origin = request.headers.get('origin');
+  if (siteOrigin !== null && origin !== null && origin !== siteOrigin) return Response.json({ error: 'Not the website' }, { status: 403, headers });
+  const body = BallotSchema.safeParse(await readJsonBody(request, BALLOT_BYTES));
+  if (!body.success) return Response.json({ error: 'Not a ballot' }, { status: 400, headers });
+  try {
+    const { result, vote } = await watcher().castMapVote({ ...body.data, ip: request.headers.get('cf-connecting-ip') ?? '' });
+    const status = result === 'counted' || result === 'changed' ? 200 : result === 'closed' || result === 'none' ? 409 : result === 'full' ? 429 : 400;
+    return Response.json({ result, vote }, { status, headers });
+  } catch (error) {
+    console.error(`Vote failed: ${errorText(error)}`);
+    return Response.json({ error: 'The vote is unavailable' }, { status: 503, headers });
+  }
 };
 
 // The staff page's sign-in (see adminauth.ts): Discord sends the browser back to CALLBACK_PATH on this Worker, which must
@@ -3298,6 +3481,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/auth/login') return staffLogin(request, stringVars(env));
     if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env), watcher);
     if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
+    if (url.pathname === '/api/vote' && request.method !== 'GET') return voteApi(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname === '/api/review') return reviewApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.
     if (request.method === 'GET' && url.pathname === '/api/live/socket') return watcher().fetch(request);

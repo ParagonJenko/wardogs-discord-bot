@@ -581,6 +581,28 @@ modifiers, lighting and zone layouts, kept for 10 minutes) and sends changes to 
 (`save`, with `from` to rename; `use`; `schedule`; `delete`), with the same rules as `/rotations`. Each change is logged
 as `Staff page: rotations <action> "<name>" by "<staff>" (Discord user <ID>)`.
 
+## Next-map vote
+
+With `MAP_VOTE` set to `on`, the website's `/vote` page lets visitors pick the next map.
+
+1. When a match goes live, the bot opens a vote between `MAP_VOTE_OPTIONS` random maps (2 to 6, default 4; never the map
+   being played, and only maps with a game mode) and tells the server in game where to vote.
+2. The vote closes after `MAP_VOTE_MINUTES` (default 15), or earlier when a team reaches 75% of `SCORE_TO_WIN`, so it is
+   always over while the match can still be told where to go next.
+3. The map with the most votes (a tie is settled by chance) is staged on the server, **infantry only**, the same as
+   `/setnextmap`: the rotation is unchanged, and the server goes there when the match ends. The result is announced in game.
+   It tries again each check if the server can't be reached. Nothing is staged when nobody voted, when staff used
+   `/setnextmap` or `/changemap` while the vote was open (their pick stands), or when the match ended first.
+
+There is no sign-in, so **one vote per person** is kept per browser (a random token the page keeps) and per network (a
+SHA-256 of the IP, salted per vote and never sent to the page). A vote from a browser or network that already voted
+replaces that vote. People on one connection share a vote, and someone with many networks (a VPN) can vote more than once;
+for a vote that decides a live server's map, that is the cost of no sign-in. Ballots are capped at 5000 a vote.
+
+Routes: `GET /api/vote` (the options, votes and result, never the ballots) and `POST /api/vote` with
+`{ "poll", "map", "token" }`, accepted from `SITE_URL` only. The vote is in the Durable Object under `mapVote`; the code is
+in `src/mapvote.ts`.
+
 ## Moderation log
 
 A staff-only Discord channel where the bot posts, as they happen:

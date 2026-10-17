@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AlertRules, QuietHours } from './alerts.ts';
 import { MAX_TOP_PLAYERS, type MatchEndRule } from './matchend.ts';
+import type { MapVoteRule } from './mapvote.ts';
 import { discordLink, type MessageRule, type SeedingMessageRule, type WelcomeRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
@@ -126,6 +127,11 @@ const EnvSchema = z
     // Posts to the moderation log when the server is live and the kill feed has sent nothing for 10 minutes, and when
     // kills arrive again: "on" or "off".
     FEED_ALERTS: z.enum(['on', 'off']).default('on'),
+    // The next-map vote on the website: when a match goes live, a vote between MAP_VOTE_OPTIONS maps, open for
+    // MAP_VOTE_MINUTES (or until a team has 75% of SCORE_TO_WIN). The winner is put on the server as the next map. "on" or "off".
+    MAP_VOTE: z.enum(['on', 'off']).default('off'),
+    MAP_VOTE_OPTIONS: z.coerce.number().int().min(2).max(6).default(4),
+    MAP_VOTE_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -190,6 +196,8 @@ export type Config = {
   roundups: RoundupRule | null;
   // The hour (UTC) each day's map rotation starts.
   rotationHour: number;
+  // Null when MAP_VOTE is off.
+  mapVote: MapVoteRule | null;
 };
 
 export type RoundupRule = { hour: number; webhookUrl: string };
@@ -264,5 +272,6 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     roundups:
       e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,
     rotationHour: e.ROTATION_HOUR,
+    mapVote: e.MAP_VOTE === 'on' ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES } : null,
   };
 };

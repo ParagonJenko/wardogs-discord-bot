@@ -88,6 +88,12 @@
     "ROUNDUPS": "on",
     // The hour (UTC, 0 to 23) on Mondays, and on the 1st of the month, when the roundups go out. 17 is 6pm in the UK in
     // summer, 5pm in winter.
-    "ROUNDUP_HOUR": "17"
+    "ROUNDUP_HOUR": "17",
+    // The next-map vote on the website (/vote): when a match goes live, a vote between this many maps, open for this many
+    // minutes or until a team has 75% of SCORE_TO_WIN. The winner is put on the server as the next map, infantry only,
+    // like /setnextmap. One vote per browser and per network, no sign-in. "on" or "off".
+    "MAP_VOTE": "on",
+    "MAP_VOTE_OPTIONS": "4",
+    "MAP_VOTE_MINUTES": "15"
   }
 }
