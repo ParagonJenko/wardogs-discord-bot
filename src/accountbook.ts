@@ -61,14 +61,14 @@ export const PER_PASS = 15;
 // The most accounts read for the staff page's numbers.
 const COUNTED = 20_000;
 
-// Who has this Steam account: a player's account, or a staff profile (which staff typed in, and nothing proved). Null for
-// nobody.
+// Who has this Steam account: a staff profile (which staff typed in, and nothing proved), or a player's account. Null for
+// nobody. A staff profile comes first: a staff member can have both, and the staff one is the one a claim must not take.
 const steamOwner = async (storage: BookStorage, steamId: string): Promise<{ kind: 'player' | 'staff'; userId: string } | null> => {
   const got = await storage.get([steamLinkKey(steamId), STAFF_PROFILES_KEY]);
-  const link = parseSteamLink(got.get(steamLinkKey(steamId)));
-  if (link !== null) return { kind: 'player', userId: link.u };
   const staff = Object.entries(parseStaffProfiles(got.get(STAFF_PROFILES_KEY))).find(([, p]) => p.steamId === steamId)?.[0];
-  return staff === undefined ? null : { kind: 'staff', userId: staff };
+  if (staff !== undefined) return { kind: 'staff', userId: staff };
+  const link = parseSteamLink(got.get(steamLinkKey(steamId)));
+  return link === null ? null : { kind: 'player', userId: link.u };
 };
 
 // Links a Steam account to a player who has just proved they own it: with the connection on their Discord profile, or by
@@ -119,14 +119,31 @@ export type SignInResult = { steam: 'linked' | 'none' | 'taken' };
 export const recordSignIn = async (
   deps: BookDeps,
   user: { id: string; name: string },
-  login: { member: boolean; joined: boolean; steamId: string | null },
+  login: { member: boolean; joined: boolean; steamId: string | null; roles?: string[] | null },
   vip: VipState,
 ): Promise<SignInResult> => {
   const { storage, now } = deps;
   const before = parseAccount((await storage.get([accountKey(user.id)])).get(accountKey(user.id)));
   let account = signedIn(before, user, { member: login.member, joined: login.joined }, now);
+  // Discord takes a member's roles when they leave, and the bot only knows what it last did: what Discord says now is true.
+  // Someone not in the server has none, and one just added has none; the pass gives them back.
+  const seen = login.roles ?? null;
+  const { linked: linkedRole, vip: vipRole } = deps.rule.roles;
+  if (!login.member) account = { ...account, roles: { linked: false, vip: false } };
+  else if (seen !== null) {
+    account = {
+      ...account,
+      roles: {
+        linked: linkedRole === undefined ? account.roles.linked : seen.includes(linkedRole),
+        vip: vipRole === undefined ? account.roles.vip : seen.includes(vipRole),
+      },
+    };
+  }
   let steam: SignInResult['steam'] = account.steamId === null ? 'none' : 'linked';
-  if (login.steamId !== null && login.steamId !== account.steamId) {
+  // A Steam account they linked with Steam's own sign-in stays theirs: the Steam account on their Discord profile is only taken
+  // when they have none, or it came from Discord before (and so follows it).
+  const explicit = account.steamId !== null && account.via === 'steam';
+  if (login.steamId !== null && login.steamId !== account.steamId && !explicit) {
     const linked = await claim(deps, account, user.id, login.steamId, 'discord', vip);
     if ('problem' in linked) {
       steam = 'taken';
@@ -196,18 +213,20 @@ export const setPrivate = async (
   const profiles = parsePrivateProfiles(got.get(PRIVATE_PROFILES_KEY));
   const current = profiles[account.steamId];
   if (on) {
-    const next = makePrivate(profiles, { steamId: account.steamId, name: (await playerName(account.steamId)) ?? account.name }, userId, account.name, now);
+    const next = makePrivate(profiles, { steamId: account.steamId, name: (await playerName(account.steamId)) ?? account.name }, userId, account.name, now, true);
     if (next !== null) await storage.put({ [PRIVATE_PROFILES_KEY]: next });
     return { ok: true };
   }
   if (current === undefined) return { ok: true };
-  if (current.by !== userId) return { problem: 'Staff made this profile private. Ask them in Discord to change it.' };
+  // One the player made themselves is theirs to undo, from whichever Discord account now owns the Steam account.
+  if (current.by !== userId && current.self !== true) return { problem: 'Staff made this profile private. Ask them in Discord to change it.' };
   const next = makePublic(profiles, account.steamId);
   if (next !== null) await storage.put({ [PRIVATE_PROFILES_KEY]: next });
   return { ok: true };
 };
 
-// Forgets an account, and takes the roles the bot gave it. The profile stays as it is, private or not.
+// Forgets an account, and takes the roles the bot gave it. When a role cannot be taken (Discord refused or is down) nothing is
+// deleted: the roles would stay on someone nothing remembers. They are told to try again. The profile stays as it is, private or not.
 export const forget = async (deps: BookDeps, userId: string): Promise<ActionResult> => {
   const { storage, rule, discord } = deps;
   const before = parseAccount((await storage.get([accountKey(userId)])).get(accountKey(userId)));
@@ -219,7 +238,8 @@ export const forget = async (deps: BookDeps, userId: string): Promise<ActionResu
       try {
         await discord.setRole(userId, roleId, false);
       } catch (error) {
-        deps.log.error(`Player account: taking ${role} role from ${userId} failed: ${errorText(error)}`);
+        deps.log.error(`Player account: taking ${role} role from ${userId} failed, so the account is kept: ${errorText(error)}`);
+        return { problem: "Couldn't take your Discord roles just now, so nothing was deleted. Try again in a minute." };
       }
     }
   }
@@ -265,7 +285,7 @@ export const view = async (deps: ViewDeps, userId: string, vip: VipState): Promi
     playerId: account.steamId === null || profile !== undefined ? null : await deps.playerPage(account.steamId),
     vip: grant !== undefined && grant.expiresAt > now ? { until: grant.expiresAt, source: grant.source === 'staff' ? 'staff' : 'seeding' } : null,
     alerts: account.alerts,
-    private: { on: profile !== undefined, byYou: profile?.by === userId },
+    private: { on: profile !== undefined, byYou: profile?.by === userId || profile?.self === true },
     ballot: await deps.ballotOf(userId),
     perks: {
       role: rule.roles.linked !== undefined && discord !== null,
@@ -283,9 +303,10 @@ export const isMemberNow = async (deps: BookDeps, userId: string): Promise<boole
   if (account === null) return false;
   if (discord === null) return account.member === true;
   if (account.member === true && now - account.memberAt <= MEMBER_FRESH_MS) return true;
-  const member = (await discord.isMember(userId).catch(() => null)) ?? account.member === true;
-  if (member !== account.member) await save(storage, userId, { ...account, member, memberAt: now }, account.steamId);
-  return member;
+  const looked = await discord.isMember(userId).catch(() => null);
+  // Remembered after every answer, so the next votes in the next minutes do not each ask Discord; not when Discord could not say.
+  if (looked !== null) await save(storage, userId, { ...account, member: looked, memberAt: now }, account.steamId);
+  return looked ?? account.member === true;
 };
 
 // Steam accounts of players who are in the server and linked: their welcome in game has no invite in it.
@@ -309,14 +330,18 @@ export const syncAccounts = async (deps: BookDeps, vip: VipState, force: boolean
     const got = await storage.get(granted.slice(i, i + 100).map(steamLinkKey));
     for (const value of got.values()) {
       const link = parseSteamLink(value);
-      if (link !== null) owners.add(link.u);
+      // Not someone known to be out of the server: asking Discord about them every pass would only get a 404, until they sign in.
+      if (link !== null && link.m) owners.add(link.u);
     }
   }
   const candidates = [...new Set([...work, ...owners])];
   const looked = candidates.slice(0, PER_PASS);
   const accounts = await storage.get(looked.map(accountKey));
   let calls = 0;
-  const stillWorking = new Set(candidates.slice(PER_PASS).filter((id) => work.includes(id)));
+  // Looked at and still to do. Everything not looked at this pass (the rest of the work list, and the owners of VIP found
+  // above) goes to the front of the list, so the next pass starts with them: otherwise accounts that stay "working" for days,
+  // such as those with VIP, would hold the first places and starve the rest.
+  const stillWorking: string[] = [];
   const gone = new Set<string>();
   for (const userId of looked) {
     const found = parseAccount(accounts.get(accountKey(userId)));
@@ -325,14 +350,14 @@ export const syncAccounts = async (deps: BookDeps, vip: VipState, force: boolean
       continue;
     }
     if (!force && found.retryAt > now) {
-      stillWorking.add(userId);
+      stillWorking.push(userId);
       continue;
     }
     const grant = found.steamId === null ? undefined : vip.granted[found.steamId];
     const plan = planAccount(found, grant, now, rule);
     const cost = plan.add.length + plan.remove.length + plan.dms.length * 2;
     if (calls + cost > CALL_BUDGET) {
-      stillWorking.add(userId);
+      stillWorking.push(userId);
       continue;
     }
     let account = plan.next;
@@ -376,10 +401,11 @@ export const syncAccounts = async (deps: BookDeps, vip: VipState, force: boolean
     }
     await save(storage, userId, account, found.steamId);
     const working = notMember ? false : failed || planAccount(account, grant, now, rule).working;
-    if (working) stillWorking.add(userId);
+    if (working) stillWorking.push(userId);
     else gone.add(userId);
   }
-  await setWork(storage, { remove: [...gone], add: [...stillWorking] });
+  const next = [...new Set([...candidates.slice(PER_PASS), ...stillWorking])].filter((id) => !gone.has(id));
+  if (next.length !== work.length || next.some((id, i) => id !== work[i])) await storage.put({ [ACCOUNT_WORK_KEY]: next });
 };
 
 export type Growth = {

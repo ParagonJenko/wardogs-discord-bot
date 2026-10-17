@@ -2930,7 +2930,7 @@ export class Watcher extends DurableObject<Env> {
   // A player signed in with Discord on the website. `login.steamId` is the Steam account on their Discord profile.
   async accountSignIn(
     user: { id: string; name: string },
-    login: { member: boolean; joined: boolean; steamId: string | null },
+    login: { member: boolean; joined: boolean; steamId: string | null; roles: string[] | null },
   ): Promise<SignInResult> {
     const config = loadConfig(stringVars(this.env));
     const result = await this.accounting(async () =>
@@ -3464,7 +3464,7 @@ const playerCallback = async (
     const { user } = login;
     const result = await watcher().accountSignIn(
       { id: user.id, name: user.name },
-      { member: login.member, joined: login.join === 'added', steamId: login.steamId },
+      { member: login.member, joined: login.join === 'added', steamId: login.steamId, roles: login.roles },
     );
     console.info(`Player signed in: Discord user ${user.id} (member ${login.member}, join ${login.join ?? 'not asked'}, steam ${result.steam})`);
     const session = await createPlayerSession(config.clientSecret, user, Date.now());
@@ -3487,27 +3487,48 @@ const playerLogin = async (request: Request, vars: Record<string, string>): Prom
 
 const STEAM_CALLBACK_PATH = '/auth/steam/callback';
 
+// The cookie that ties a Steam sign-in to the browser that started it, as the Discord sign-in's does (LOGIN_COOKIE): its value is
+// in the address Steam sends the browser back to (`n`, which Steam signs), and only the browser with the cookie is taken.
+const STEAM_COOKIE = 'wardogs_steam';
+const STEAM_COOKIE_SECONDS = 10 * 60;
+
 // GET /auth/steam: sends the browser to Steam to sign in, to prove which Steam account is theirs.
 const steamLogin = (request: Request, vars: Record<string, string>): Response => {
   const origin = siteOriginOf(vars);
   if (origin === null) return notSetUp(['SITE_URL']);
   const returnTo = returnAddress(new URL(request.url).searchParams.get('return'), origin, ACCOUNT_PAGE);
+  const mark = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   const callback = new URL(STEAM_CALLBACK_PATH, request.url);
   callback.searchParams.set('return', returnTo);
+  callback.searchParams.set('n', mark);
   return new Response(null, {
     status: 302,
-    headers: { location: steamLoginUrl(callback.href, new URL(request.url).origin), 'cache-control': 'no-store' },
+    headers: {
+      location: steamLoginUrl(callback.href, new URL(request.url).origin),
+      'set-cookie': `${STEAM_COOKIE}=${mark}; Path=/auth; Max-Age=${STEAM_COOKIE_SECONDS}; HttpOnly; Secure; SameSite=Lax`,
+      'cache-control': 'no-store',
+    },
   });
 };
 
+const CLEAR_STEAM_COOKIE = `${STEAM_COOKIE}=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+
 // GET /auth/steam/callback: Steam sends the browser back. What Steam vouches for goes to the website as a proof, which the
-// player's own session turns into a link (the proof names no Discord user, so it is no use to anyone else).
+// player's own session turns into a link (the proof names no Discord user, so it is no use to anyone else). Only for the
+// browser that went to Steam: an address someone else got Steam to make cannot be used to link an account for a visitor.
 const steamCallback = async (request: Request, vars: Record<string, string>): Promise<Response> => {
   const config = adminAuthConfig(vars);
   if ('missing' in config) return notSetUp(config.missing);
-  const returnTo = returnAddress(new URL(request.url).searchParams.get('return'), config.siteOrigin, ACCOUNT_PAGE);
+  const params = new URL(request.url).searchParams;
+  const returnTo = returnAddress(params.get('return'), config.siteOrigin, ACCOUNT_PAGE);
   const to = (fragment: string): Response =>
-    new Response(null, { status: 302, headers: { location: `${returnTo}#${fragment}`, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+    new Response(null, {
+      status: 302,
+      headers: { location: `${returnTo}#${fragment}`, 'set-cookie': CLEAR_STEAM_COOKIE, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+    });
+  const cookie = /(?:^|;\s*)wardogs_steam=([0-9a-f]{32})(?:;|$)/.exec(request.headers.get('cookie') ?? '')?.[1];
+  const mark = params.get('n');
+  if (cookie === undefined || mark === null || cookie !== mark) return to('error=expired');
   try {
     const steamId = await verifySteamClaim(request.url);
     if (steamId === null) return to('error=steam');

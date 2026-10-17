@@ -33,7 +33,7 @@ export const withClick = (clicks: Clicks, src: string, day: string): Clicks => {
     .filter((d, i, all) => all.indexOf(d) === i)
     .sort()
     .slice(-CLICK_DAYS_KEPT);
-  return Object.fromEntries(kept.map((d) => [d, d === day ? { ...today, [place]: (today[place] ?? 0) + 1 } : (clicks[d] ?? {})]));
+  return Object.fromEntries(kept.map((d) => [d, d === day ? { ...today, [place]: (Object.hasOwn(today, place) ? (today[place] ?? 0) : 0) + 1 } : (clicks[d] ?? {})]));
 };
 
 export type ClickSummary = { days: number; total: number; places: { src: string; clicks: number }[] };

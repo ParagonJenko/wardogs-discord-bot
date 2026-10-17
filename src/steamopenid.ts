@@ -32,6 +32,10 @@ export const returnedTo = (requestUrl: string): string => {
 export const verifySteamClaim = async (requestUrl: string, fetchFn: typeof fetch = fetch): Promise<string | null> => {
   const url = new URL(requestUrl);
   const claim = url.searchParams;
+  // A parameter given twice is read one way here and another by Steam (the first, the last): someone could put another
+  // player's ID first and have Steam confirm the real one. Steam never sends one twice, so such a claim is refused.
+  const names = [...claim.keys()].filter((key) => key.startsWith('openid.'));
+  if (new Set(names).size !== names.length) return null;
   if (claim.get('openid.mode') !== 'id_res' || claim.get('openid.op_endpoint') !== STEAM_OPENID) return null;
   if (claim.get('openid.return_to') !== returnedTo(requestUrl)) return null;
   const claimed = claim.get('openid.claimed_id') ?? '';

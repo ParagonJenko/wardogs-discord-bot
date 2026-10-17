@@ -341,6 +341,8 @@ export type PlayerLogin = {
   user: { id: string; name: string; username: string };
   // Whether they are in the server now, counting an add that just worked.
   member: boolean;
+  // The roles they have in the server now: none for someone just added, and null for someone who is not in it.
+  roles: string[] | null;
   // Set when they pressed "Sign in and join": what happened.
   join: JoinOutcome | null;
   // The Steam account on their Discord profile, when it has one.
@@ -373,8 +375,10 @@ export const finishPlayerLogin = async (
   // No connections is not a failure: they are linked with Steam's own sign-in instead.
   const steamId = connectionsResponse.ok ? steamFromConnections(await connectionsResponse.json().catch(() => null)) : null;
   const named = { id: user.id, name: member?.nick || user.global_name || user.username, username: user.username };
-  if (member !== null) return { user: named, member: true, join: join ? 'already' : null, steamId };
-  if (!join) return { user: named, member: false, join: null, steamId };
+  if (member !== null) return { user: named, member: true, roles: member.roles, join: join ? 'already' : null, steamId };
+  if (!join) return { user: named, member: false, roles: null, join: null, steamId };
   const outcome = await addMember(user.id, accessToken);
-  return { user: named, member: outcome === 'added' || outcome === 'already', join: outcome, steamId };
+  const nowMember = outcome === 'added' || outcome === 'already';
+  // Added just now: they have no roles (a member who was already in has theirs, which this did not read).
+  return { user: named, member: nowMember, roles: outcome === 'added' ? [] : null, join: outcome, steamId };
 };

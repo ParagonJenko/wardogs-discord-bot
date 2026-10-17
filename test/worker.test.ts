@@ -507,10 +507,25 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       const returnTo = new URL(to.searchParams.get('openid.return_to') ?? '');
       expect(returnTo.pathname).toBe('/auth/steam/callback');
       expect(returnTo.searchParams.get('return')).toBe(`${SITE}/account`);
+      // The sign-in is tied to this browser: a cookie, and the same value in the address Steam sends it back to.
+      const cookie = /^wardogs_steam=([0-9a-f]{32});/.exec(login.headers.get('set-cookie') ?? '')?.[1];
+      expect(cookie).toBeDefined();
+      expect(returnTo.searchParams.get('n')).toBe(cookie);
 
-      const forged = await server.fetch('/auth/steam/callback?openid.mode=id_res', { redirect: 'manual' });
+      const callback = (query: string, cookieHeader?: string) =>
+        server.fetch(`/auth/steam/callback?return=${encodeURIComponent(`${SITE}/account`)}&n=${cookie}${query}`, {
+          redirect: 'manual',
+          ...(cookieHeader === undefined ? {} : { headers: { cookie: cookieHeader } }),
+        });
+      // From this browser, but not a claim Steam made.
+      const forged = await callback('&openid.mode=id_res', `wardogs_steam=${cookie}`);
       expect(forged.status).toBe(302);
       expect(forged.headers.get('location')).toBe(`${SITE}/account#error=steam`);
+      // From another browser: an address someone else got Steam to make.
+      for (const other of [undefined, 'wardogs_steam=' + '0'.repeat(32)]) {
+        const elsewhere = await callback('&openid.mode=id_res', other);
+        expect(elsewhere.headers.get('location')).toBe(`${SITE}/account#error=expired`);
+      }
     });
 
     it('has no Discord link to count clicks for until the invite is set', async () => {

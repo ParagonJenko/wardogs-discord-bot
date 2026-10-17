@@ -429,3 +429,155 @@ describe('the staff numbers', () => {
     await expect(growth(storage)).resolves.toEqual({ accounts: 2, linked: 1, members: 1, joinedOnSite: 1, withVipRole: 0 });
   });
 });
+
+describe('what the review asked for', () => {
+  it('does not let a claim take a Steam account a staff member has, even when they also signed in as a player', async () => {
+    const storage = memory();
+    storage.data.set('staffProfiles', { [ME]: { steamId: STEAM, name: 'Mod', at: 1 } });
+    await recordSignIn(deps(storage), { id: ME, name: 'Mod' }, { member: true, joined: false, steamId: STEAM }, noVip);
+    expect(storage.data.get(steamLinkKey(STEAM))).toEqual({ u: ME, m: true });
+
+    await expect(recordSignIn(deps(storage), { id: YOU, name: 'Other' }, { member: true, joined: false, steamId: STEAM }, noVip)).resolves.toEqual({
+      steam: 'taken',
+    });
+    await expect(linkWithProof(deps(storage), YOU, STEAM, noVip)).resolves.toEqual({ problem: 'steam-taken' });
+    expect(accountOf(storage, ME)).toMatchObject({ steamId: STEAM });
+  });
+
+  it('keeps a Steam account linked with Steam when the Discord profile has another, and still follows Discord when it came from there', async () => {
+    const storage = memory();
+    await recordSignIn(deps(storage), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: null }, noVip);
+    await linkWithProof(deps(storage), ME, OTHER_STEAM, noVip);
+
+    await recordSignIn(deps(storage), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM }, noVip);
+    expect(accountOf(storage, ME)).toMatchObject({ steamId: OTHER_STEAM, via: 'steam' });
+    expect(storage.data.get(steamLinkKey(OTHER_STEAM))).toEqual({ u: ME, m: true });
+
+    // From Discord before: a changed connection is followed.
+    const again = memory();
+    await recordSignIn(deps(again), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM }, noVip);
+    await recordSignIn(deps(again), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: OTHER_STEAM }, noVip);
+    expect(accountOf(again, ME)).toMatchObject({ steamId: OTHER_STEAM, via: 'discord' });
+    expect(again.data.has(steamLinkKey(STEAM))).toBe(false);
+  });
+
+  it('takes the roles Discord says they have, so a member who left and came back is given them again', async () => {
+    const storage = memory();
+    const discord = pretend();
+    await recordSignIn(deps(storage, discord), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM, roles: [] }, noVip);
+    await syncAccounts(deps(storage, discord), noVip, true);
+    expect(accountOf(storage, ME)?.roles).toEqual({ linked: true, vip: false });
+    discord.calls.length = 0;
+
+    // They left (Discord took the roles) and joined with the website's button: no roles.
+    await recordSignIn(deps(storage, discord), { id: ME, name: 'Sarge' }, { member: true, joined: true, steamId: STEAM, roles: [] }, noVip);
+    expect(accountOf(storage, ME)?.roles).toEqual({ linked: false, vip: false });
+    await syncAccounts(deps(storage, discord), noVip, true);
+    expect(discord.calls).toEqual([`give 900 ${ME}`]);
+
+    // Not in the server: none. In it with one of them: that one.
+    await recordSignIn(deps(storage, discord), { id: ME, name: 'Sarge' }, { member: false, joined: false, steamId: STEAM, roles: null }, noVip);
+    expect(accountOf(storage, ME)?.roles).toEqual({ linked: false, vip: false });
+    await recordSignIn(deps(storage, discord), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM, roles: ['900'] }, noVip);
+    expect(accountOf(storage, ME)?.roles).toEqual({ linked: true, vip: false });
+    // A role the server has no ID for is left as the bot had it.
+    const noVipRole = { ...deps(storage, discord), rule: { ...rule, roles: { linked: '900' } } };
+    await recordSignIn(noVipRole, { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM, roles: [] }, noVip);
+    expect(accountOf(storage, ME)?.roles).toEqual({ linked: false, vip: false });
+  });
+
+  it('keeps an account whose roles could not be taken, and says so', async () => {
+    const storage = memory();
+    const discord = pretend();
+    await recordSignIn(deps(storage, discord), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM }, noVip);
+    await syncAccounts(deps(storage, discord), noVip, true);
+    const failing = pretend({ setRole: vi.fn(async () => { throw new Error('Missing Permissions'); }) });
+
+    await expect(forget(deps(storage, failing), ME)).resolves.toEqual({
+      problem: "Couldn't take your Discord roles just now, so nothing was deleted. Try again in a minute.",
+    });
+    expect(accountOf(storage, ME)).toMatchObject({ steamId: STEAM, roles: { linked: true } });
+    expect(storage.data.get(steamLinkKey(STEAM))).toEqual({ u: ME, m: true });
+
+    await expect(forget(deps(storage, discord), ME)).resolves.toEqual({ ok: true });
+    expect(storage.data.has(accountKey(ME))).toBe(false);
+  });
+
+  it('does not ask Discord about someone it knows is not in the server, every pass', async () => {
+    const storage = memory();
+    const gone = pretend({ setRole: vi.fn(async () => 'gone' as const) });
+    await recordSignIn(deps(storage, gone), { id: ME, name: 'Sarge' }, { member: true, joined: false, steamId: STEAM }, vipFor(STEAM));
+    await syncAccounts(deps(storage, gone), vipFor(STEAM), true);
+    expect(gone.setRole).toHaveBeenCalledTimes(1);
+
+    await syncAccounts(deps(storage, gone, NOW + 5 * 60_000), vipFor(STEAM), false);
+    await syncAccounts(deps(storage, gone, NOW + 10 * 60_000), vipFor(STEAM), false);
+    expect(gone.setRole).toHaveBeenCalledTimes(1);
+  });
+
+  it('gets to every account in turn, even when more than a pass can look at keep needing work', async () => {
+    const storage = memory();
+    const discord = pretend();
+    const count = PER_PASS * 2 + 3;
+    const ids = Array.from({ length: count }, (_, i) => String(300000000000000000n + BigInt(i)));
+    const granted: VipState['granted'] = {};
+    for (const [i, id] of ids.entries()) {
+      const steamId = `7656119800001${String(1000 + i)}`;
+      granted[steamId] = { name: `p${i}`, grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY, source: 'seeding' };
+      await recordSignIn(deps(storage, discord), { id, name: `p${i}` }, { member: true, joined: false, steamId }, { ...noVip, granted });
+    }
+    const vip = { ...noVip, granted };
+    const seen = new Set<string>();
+    // Every one of them has VIP that runs for days, so they all stay "working": each still has to be looked at.
+    for (let pass = 0; pass < 4; pass++) {
+      const before = discord.calls.length;
+      await syncAccounts(deps(storage, discord, NOW + pass * 60_000), vip, true);
+      for (const call of discord.calls.slice(before)) seen.add(call.split(' ')[2] ?? '');
+    }
+    expect(seen.size).toBe(count);
+    // And the ones with nothing more to give them (all of it applied) do not take places from new ones.
+    const late = String(399999999999999999n);
+    const lateSteam = '76561198000099999';
+    const withLate = { ...vip, granted: { ...granted, [lateSteam]: { name: 'late', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'seeding' as const } } };
+    await recordSignIn(deps(storage, discord), { id: late, name: 'late' }, { member: true, joined: false, steamId: lateSteam }, withLate);
+    discord.calls.length = 0;
+    for (let pass = 0; pass < 4; pass++) await syncAccounts(deps(storage, discord, NOW + (10 + pass) * 60_000), withLate, true);
+    expect(discord.calls.some((c) => c.includes(late))).toBe(true);
+  });
+
+  it('remembers a membership answer even when it has not changed, so votes do not each ask Discord', async () => {
+    const storage = memory();
+    const discord = pretend({ isMember: vi.fn(async () => true) });
+    await recordSignIn(deps(storage, discord), { id: ME, name: 'In' }, { member: true, joined: false, steamId: null }, noVip);
+
+    await expect(isMemberNow(deps(storage, discord, NOW + 10 * 60_000), ME)).resolves.toBe(true);
+    await expect(isMemberNow(deps(storage, discord, NOW + 11 * 60_000), ME)).resolves.toBe(true);
+    await expect(isMemberNow(deps(storage, discord, NOW + 12 * 60_000), ME)).resolves.toBe(true);
+    expect(discord.isMember).toHaveBeenCalledTimes(1);
+    expect(accountOf(storage, ME)?.memberAt).toBe(NOW + 10 * 60_000);
+
+    // When Discord cannot say, the last answer stands and the time is kept, so the next vote asks again.
+    const down = pretend({ isMember: vi.fn(async () => { throw new Error('down'); }) });
+    await expect(isMemberNow(deps(storage, down, NOW + DAY), ME)).resolves.toBe(true);
+    expect(accountOf(storage, ME)?.memberAt).toBe(NOW + 10 * 60_000);
+  });
+
+  it('lets whoever now owns the Steam account undo a profile the player made private, but not a staff one', async () => {
+    const storage = memory();
+    const name = async () => 'InGameName';
+    await recordSignIn(deps(storage), { id: ME, name: 'Old account' }, { member: true, joined: false, steamId: STEAM }, noVip);
+    await setPrivate(deps(storage), ME, true, name);
+    // They lost the account and prove the Steam account from a new one.
+    await recordSignIn(deps(storage), { id: YOU, name: 'New account' }, { member: true, joined: false, steamId: STEAM }, noVip);
+
+    const shown = await view({ ...deps(storage), canJoin: false, playerPage: async () => null, ballotOf: async () => null }, YOU, noVip);
+    expect(shown?.private).toEqual({ on: true, byYou: true });
+    await expect(setPrivate(deps(storage), YOU, false, name)).resolves.toEqual({ ok: true });
+    expect(storage.data.get('privateProfiles')).toEqual({});
+
+    storage.data.set('privateProfiles', { [STEAM]: { name: 'InGameName', at: 1, by: ME } });
+    await expect(setPrivate(deps(storage), YOU, false, name)).resolves.toEqual({
+      problem: 'Staff made this profile private. Ask them in Discord to change it.',
+    });
+  });
+});

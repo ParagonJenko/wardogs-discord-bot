@@ -73,6 +73,24 @@ describe('checking what Steam says', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it('refuses a claim with a parameter given twice, which this and Steam would read differently', async () => {
+    const fetchFn = steamSays('is_valid:true');
+    // Another player's ID put first, in front of a real assertion for the Steam ID that follows.
+    const victim = '76561198000000099';
+    const doubled = new URL(claimUrl());
+    const first = new URLSearchParams([
+      ['openid.claimed_id', `https://steamcommunity.com/openid/id/${victim}`],
+      ['openid.identity', `https://steamcommunity.com/openid/id/${victim}`],
+    ]);
+    doubled.search = `${first.toString()}&${doubled.searchParams.toString()}`;
+
+    await expect(verifySteamClaim(doubled.href, fetchFn)).resolves.toBeNull();
+    const twice = new URL(claimUrl());
+    twice.searchParams.append('openid.sig', 'other');
+    await expect(verifySteamClaim(twice.href, fetchFn)).resolves.toBeNull();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it('fails when Steam cannot be asked', async () => {
     await expect(verifySteamClaim(claimUrl(), steamSays('down', 503))).rejects.toThrow('Steam did not check the sign-in: 503');
   });

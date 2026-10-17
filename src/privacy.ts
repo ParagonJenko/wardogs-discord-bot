@@ -9,14 +9,16 @@ export const PRIVATE_NAME = '[private profile]';
 
 // `name`: what they went by when they were made private. `by`: the Discord user ID of who did it, with `byName`, the
 // name they go by in the server.
-export type PrivateProfile = { name: string; at: number; by: string; byName?: string };
+// `self`: the player made it private themselves (on the website's account page), so whoever owns the Steam account may make it
+// public again, whichever Discord account that is now; staff keep control of the rest.
+export type PrivateProfile = { name: string; at: number; by: string; byName?: string; self?: boolean };
 export type PrivateProfiles = Record<string, PrivateProfile>;
 
 export const PRIVATE_PROFILES_KEY = 'privateProfiles';
 
 const PrivateProfilesSchema = z.record(
   z.string(),
-  z.object({ name: z.string(), at: z.number(), by: z.string(), byName: z.string().optional() }),
+  z.object({ name: z.string(), at: z.number(), by: z.string(), byName: z.string().optional(), self: z.boolean().optional() }),
 );
 
 export const parsePrivateProfiles = (raw: unknown): PrivateProfiles => {
@@ -33,9 +35,10 @@ export const makePrivate = (
   by: string,
   byName: string | undefined,
   now: number,
+  self = false,
 ): PrivateProfiles | null => {
   if (profiles[player.steamId] !== undefined) return null;
-  return { ...profiles, [player.steamId]: { name: player.name, at: now, by, ...(byName === undefined ? {} : { byName }) } };
+  return { ...profiles, [player.steamId]: { name: player.name, at: now, by, ...(byName === undefined ? {} : { byName }), ...(self ? { self } : {}) } };
 };
 
 // Makes a profile public again. Null when it was not private.

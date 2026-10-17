@@ -13,6 +13,13 @@ describe('clicks on the Discord invite', () => {
     expect(sourceOf('')).toBe('other');
   });
 
+  it('counts a place named like something every object has', () => {
+    let clicks = withClick({}, 'constructor', '2026-10-17');
+    clicks = withClick(clicks, 'constructor', '2026-10-17');
+    expect(clicks).toEqual({ '2026-10-17': { constructor: 2 } });
+    expect(parseClicks(JSON.parse(JSON.stringify(clicks)))).toEqual(clicks);
+  });
+
   it('counts a click for its place on its day', () => {
     let clicks = withClick({}, 'hero', '2026-10-17');
     clicks = withClick(clicks, 'hero', '2026-10-17');

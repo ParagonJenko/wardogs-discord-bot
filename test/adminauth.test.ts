@@ -265,10 +265,28 @@ describe('finishPlayerLogin', () => {
     await expect(finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, discord())).resolves.toEqual({
       user: { id: '42', name: 'Sarge', username: 'paragon' },
       member: true,
+      roles: [],
       join: null,
       steamId: '76561198000000001',
     });
     expect(noJoin).not.toHaveBeenCalled();
+  });
+
+  it('gives the roles a member has now, and none for someone who is not in the server or was just added', async () => {
+    const withRoles = discord({ member: Response.json({ roles: ['900', '555'], nick: null }) });
+    const notMember = () => discord({ member: new Response('Unknown Guild', { status: 404 }) });
+
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, withRoles)).resolves.toMatchObject({ roles: ['900', '555'] });
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, notMember())).resolves.toMatchObject({ member: false, roles: null });
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, true, vi.fn(async () => 'added' as const), notMember())).resolves.toMatchObject({
+      member: true,
+      roles: [],
+    });
+    // Already in when the add was tried: their roles were not read, so they are not guessed.
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, true, vi.fn(async () => 'already' as const), notMember())).resolves.toMatchObject({
+      member: true,
+      roles: null,
+    });
   });
 
   it('lets someone in who is not a member sign in, without adding them unless they asked to join', async () => {
