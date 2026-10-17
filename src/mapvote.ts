@@ -316,15 +316,18 @@ export const tallyConditions = (vote: MapVote): { key: string; label: string; vo
 export const tallyWeather = (vote: MapVote): { key: string; label: string; votes: number }[] =>
   vote.weather.map((c) => ({ key: c.key, label: c.label, votes: vote.ballots.filter((b) => b.weather === c.key).length }));
 
-// The choice on a row with the most votes (a tie is settled by chance), or null when nobody voted on it.
-const leader = (options: readonly ConditionOption[], votes: readonly { key: string; votes: number }[], random: () => number): ConditionOption | null => {
+// The choice on a row with the most votes, or null when nobody voted on it. A tie is settled by chance, or with `safest` for
+// the choice that comes first on the row (the row lists the safest weather first, so rain never wins a tie on luck).
+const leader = (
+  options: readonly ConditionOption[],
+  votes: readonly { key: string; votes: number }[],
+  random: () => number,
+  safest = false,
+): ConditionOption | null => {
   const top = Math.max(0, ...votes.map((v) => v.votes));
   if (top === 0) return null;
-  const won = sample(
-    votes.filter((v) => v.votes === top),
-    1,
-    random,
-  )[0]!;
+  const tied = votes.filter((v) => v.votes === top);
+  const won = safest ? tied[0]! : sample(tied, 1, random)[0]!;
   return options.find((o) => o.key === won.key) ?? null;
 };
 
@@ -341,10 +344,12 @@ const nearestTime = (lightings: readonly Lighting[], time: string): Lighting[] =
 
 // The lighting the time of day and weather votes chose, or null when nobody voted on either, and then the lighting stays as
 // the rotation has it. The winning time and weather give a lighting that has both. When none does the weather wins, with the
-// time nearest the one chosen. With only a time, the lighting is a clear one when that time has one; with only weather, any time.
+// time nearest the one chosen. With only a time, the lighting is a clear one when that time has one; with only weather, any
+// time. Rain is liked by some and hated by others, so it wins only by having the most votes: a tie in the weather goes to the
+// safest (Clear, then Fog, then Rain), not to chance.
 export const chooseConditions = (vote: MapVote, random: () => number): Lighting | null => {
   const time = leader(vote.conditions, tallyConditions(vote), random);
-  const weather = leader(vote.weather, tallyWeather(vote), random);
+  const weather = leader(vote.weather, tallyWeather(vote), random, true);
   const pick = (lightings: readonly Lighting[]): Lighting | null => sample(lightings, 1, random)[0] ?? null;
   if (time !== null && weather !== null) {
     const ids = new Set(weather.lightings.map((l) => l.id));

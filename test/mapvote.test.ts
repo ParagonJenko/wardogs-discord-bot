@@ -16,6 +16,7 @@ import {
   parseLightButton,
   tallyConditions,
   weatherOptions,
+  weatherOf,
   parseWeatherButton,
   type Lighting,
   voteMessage,
@@ -371,6 +372,18 @@ describe('the time of day and weather votes', () => {
     expect(new Set([0, 0.4, 0.99].map((roll) => chosen(voted({ weather: 'fog' }), roll)))).toEqual(new Set(['DayEarlyFog', 'DayLateGrayFog']));
     // The afternoon has rain and fog too, but nobody asked for them.
     for (const roll of [0, 0.5, 0.99]) expect(['DayLateClear', 'DayLateGray']).toContain(chosen(voted({ light: 'afternoon' }), roll));
+  });
+
+  it('gives rain to the weather with the most votes, and a tie to the safest weather rather than to chance', () => {
+    // More want rain than clear: rain.
+    expect(chosen(voted({ weather: 'rain' }, { weather: 'rain' }, { weather: 'clear' }))).toBe('DayLateRain');
+    // Fewer: clear.
+    for (const roll of [0, 0.5, 0.99]) {
+      expect(chosen(voted({ weather: 'rain' }, { weather: 'clear' }, { weather: 'clear' }), roll)).not.toBe('DayLateRain');
+      // Tied: clear, whatever the roll.
+      expect(weatherOf(chooseConditions(voted({ weather: 'rain' }, { weather: 'clear' }), () => roll)!)).toBe('clear');
+      expect(weatherOf(chooseConditions(voted({ weather: 'rain' }, { weather: 'fog' }), () => roll)!)).toBe('fog');
+    }
   });
 
   it('counts the most votes on each row on its own, and lets Random win across every lighting', () => {

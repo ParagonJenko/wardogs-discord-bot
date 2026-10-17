@@ -602,7 +602,9 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    Day and say the time after it (DayStart… and DayEarly… are Morning, DayLate… is Afternoon, DayEnd… is Dusk), and
    …Rain…, …Fog… and …Snow… are the weather, with everything else, overcast (…Gray…) included, Clear. A group the server has
    no lighting for isn't offered, at most four plus Random, and with fewer than two groups on a row there is no such row.
-   The winning time and weather (each a tie by chance) give a random lighting that has both. When none does, the weather
+   The winning time (a tie by chance) and weather give a random lighting that has both. Rain is liked by some and hated by
+   others, so it wins only by having the most weather votes, and a tie in the weather goes to the safest: Clear, then Fog,
+   then Rain. When none does, the weather
    wins: the lighting is one with that weather and the time nearest the one chosen (Dusk and Rain gives the afternoon rain).
    With only a time voted on, it is a clear lighting at that time when there is one; with only weather, any time. Random
    picks from all lightings. With no votes on either, the lighting stays as the rotation has it. It is part of the same
