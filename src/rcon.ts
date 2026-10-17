@@ -10,7 +10,7 @@ const StatusSchema = z.object({
     max: z.number().int(),
   }),
   factionScores: z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().nullish() })).nullish(),
-  rotation: z.object({ nowIndex: z.number().int().nullish() }).nullish(),
+  rotation: z.object({ nowIndex: z.number().int().nullish(), nextIndex: z.number().int().nullish() }).nullish(),
 });
 
 const PlayersSchema = z.object({
@@ -34,6 +34,8 @@ export type ServerStatus = {
   maxPlayers: number;
   map: string;
   rotationIndex: number | null;
+  // The rotation slot the server goes to next, when it says.
+  rotationNextIndex?: number;
   factionScores: FactionScore[];
 };
 
@@ -150,6 +152,7 @@ export const fetchStatus = async (rconUrl: string, password: string, get: HttpCl
     maxPlayers: status.players.max,
     map: status.map ?? '',
     rotationIndex: status.rotation?.nowIndex ?? null,
+    ...(typeof status.rotation?.nextIndex === 'number' ? { rotationNextIndex: status.rotation.nextIndex } : {}),
     factionScores: (status.factionScores ?? []).map(({ name, score, colorHex }) => ({ name, score, ...(colorHex ? { colorHex } : {}) })),
   };
 };

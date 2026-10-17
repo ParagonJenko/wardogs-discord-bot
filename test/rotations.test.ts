@@ -464,6 +464,23 @@ describe('rotationSlot', () => {
     expect(rotationSlot(plain, { rotationIndex: 3 })).toBe(3);
     expect(rotationSlot(plain, { rotationIndex: null })).toBeNull();
   });
+
+  it('reads the slot before the next one when only the next is known, in a rotation played in order', () => {
+    const next = rotation([
+      { ...OZETI, status: null },
+      { ...BAKURANI, status: null },
+      { ...ZESTAFONA, status: 'next' },
+    ]);
+    expect(rotationSlot(next, { rotationIndex: null })).toBe(1);
+    const first = rotation([{ ...OZETI, status: 'next' }, { ...BAKURANI, status: null }]);
+    expect(rotationSlot(first, { rotationIndex: null })).toBe(1);
+    const plain = rotation([{ ...OZETI, status: null }, { ...BAKURANI, status: null }]);
+    expect(rotationSlot(plain, { rotationIndex: null, rotationNextIndex: 1 })).toBe(0);
+    expect(rotationSlot(plain, { rotationIndex: null, rotationNextIndex: 0 })).toBe(1);
+    expect(rotationSlot(plain, { rotationIndex: null, rotationNextIndex: 5 })).toBeNull();
+    // In random order the next map says nothing about the slot.
+    expect(rotationSlot({ ...next, mode: 'random' }, { rotationIndex: null })).toBeNull();
+  });
 });
 
 describe('inSavedOrder', () => {

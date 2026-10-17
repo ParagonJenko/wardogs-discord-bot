@@ -57,6 +57,7 @@ describe('fetchStatus', () => {
       maxPlayers: 98,
       map: 'Kavkazi',
       rotationIndex: 0,
+      rotationNextIndex: 1,
       factionScores: [
         { name: 'Valkyra', score: 412, colorHex: '#3366ff' },
         { name: 'Kharr', score: 388, colorHex: '#ff3333' },

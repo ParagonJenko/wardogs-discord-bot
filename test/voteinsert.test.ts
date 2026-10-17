@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Rotation } from '../src/rcon.ts';
 import { fromTheStart } from '../src/rotations.ts';
-import { parseVoteInsert, planInsert, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
+import { parseVoteInsert, planInsert, rotationFacts, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
 
 const rotation = (maps: string[], now: number, over: Partial<Rotation> = {}): Rotation => ({
   enabled: true,
@@ -69,6 +69,14 @@ describe('whyNoInsert', () => {
     expect(whyNoInsert(rotation([], 0), 0)).toMatch(/no maps/);
     expect(whyNoInsert(rotation(['A', 'B'], 0), null)).toMatch(/did not say which rotation slot/);
     expect(whyNoInsert(rotation(['A', 'B'], 0), 5)).toMatch(/slot 5 is not in its rotation of 2/);
+  });
+});
+
+describe('rotationFacts', () => {
+  it('says what the server said about its rotation', () => {
+    expect(rotationFacts(rotation(['A', 'B', 'C'], 1), { rotationIndex: null, rotationNextIndex: 2 })).toBe(
+      'rotation on, mode "ordered", 3 maps, marked now: 1, marked next: none; status nowIndex: none, nextIndex: 2',
+    );
   });
 });
 

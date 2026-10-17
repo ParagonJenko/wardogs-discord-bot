@@ -57,6 +57,18 @@ export const whyNoInsert = (rotation: Rotation, slot: number | null): string | n
   return null;
 };
 
+// What the server said about its rotation, for the logs when the winner cannot go in.
+export const rotationFacts = (rotation: Rotation, status: { rotationIndex: number | null; rotationNextIndex?: number }): string => {
+  const at = (marker: string): string => {
+    const i = rotation.entries.findIndex((e) => e.status === marker);
+    return i === -1 ? 'none' : String(i);
+  };
+  return (
+    `rotation ${rotation.enabled ? 'on' : 'off'}, mode ${JSON.stringify(rotation.mode)}, ${rotation.entries.length} maps, ` +
+    `marked now: ${at('now')}, marked next: ${at('next')}; status nowIndex: ${status.rotationIndex ?? 'none'}, nextIndex: ${status.rotationNextIndex ?? 'none'}`
+  );
+};
+
 // The rotation with `winner` next, and the rotation as it was to put back. Null when this cannot be done safely (see
 // whyNoInsert).
 export const planInsert = (rotation: Rotation, slot: number | null, winner: RotationEntry): InsertPlan | null => {

@@ -362,7 +362,7 @@ import {
   type RotationServer,
   type RotationEntry,
 } from './rotations.ts';
-import { parseVoteInsert, planInsert, stillInserted, VOTE_INSERT_KEY, whyNoInsert, type VoteInsert } from './voteinsert.ts';
+import { parseVoteInsert, planInsert, rotationFacts, stillInserted, VOTE_INSERT_KEY, whyNoInsert, type VoteInsert } from './voteinsert.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -1634,9 +1634,10 @@ export class Watcher extends DurableObject<Env> {
     // Written already, by an earlier check that went on to fail: not written twice.
     const written = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
     if (written !== null && written.voteId === vote.id && stillInserted(rotation, written)) return true;
-    const slot = rotationSlot(rotation, await fetchStatus(rconUrl, rconPassword, http));
+    const status = await fetchStatus(rconUrl, rconPassword, http);
+    const slot = rotationSlot(rotation, status);
     const plan = planInsert(rotation, slot, winner);
-    if (plan === null) return whyNoInsert(rotation, slot) ?? 'it cannot be planned';
+    if (plan === null) return `${whyNoInsert(rotation, slot) ?? 'it cannot be planned'} (${rotationFacts(rotation, status)})`;
     const insert: VoteInsert = { voteId: vote.id, fromMap: vote.fromMap, map: winner.map, restore: plan.restore, length: plan.staged.length, at: Date.now() };
     // Kept first: if the write goes through and this check then fails, the rotation is still put back.
     await storage.put(VOTE_INSERT_KEY, insert);
