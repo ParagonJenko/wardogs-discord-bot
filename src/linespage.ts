@@ -2,18 +2,16 @@ import { z } from 'zod';
 import { readJsonBody } from './body.ts';
 import type { Config, VipRule } from './config.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
+import { killCount, LONGEST_EARNED } from './matchend.ts';
 import {
   discordLink,
   fillLine,
   HALFWAY_START,
   halfwayCall,
-  killCount,
   MAX_LENGTH,
-  MAX_TOP_PLAYERS,
   morePlayers,
   nearlyCall,
   nearlyScore,
-  ordinal,
   seedingReward,
   welcomeLinks,
 } from './messages.ts';
@@ -37,11 +35,11 @@ export type LinesContext = {
   vip: VipRule | null;
   scoreToWin: number;
   live: number;
-  // Whether the bot sends the match messages, the seeding messages, the welcomes and the top players' messages.
+  // Whether the bot sends the match messages, the seeding messages, the welcomes and the end-of-match messages.
   match: boolean;
   seeding: boolean;
   welcome: boolean;
-  top: boolean;
+  end: boolean;
 };
 
 export const linesContext = (config: Config): LinesContext => ({
@@ -49,7 +47,7 @@ export const linesContext = (config: Config): LinesContext => ({
     config.seedingMessages?.siteHost ??
     config.matchMessages?.siteHost ??
     config.welcomeMessages?.siteHost ??
-    config.topPlayerMessages?.siteHost ??
+    config.matchEndMessages?.siteHost ??
     null,
   discord: config.inviteCode ? discordLink(config.inviteCode) : null,
   vip: config.vip,
@@ -58,7 +56,7 @@ export const linesContext = (config: Config): LinesContext => ({
   match: config.matchMessages !== null,
   seeding: config.seedingMessages !== null,
   welcome: config.welcomeMessages !== null,
-  top: config.topPlayerMessages !== null,
+  end: config.matchEndMessages !== null,
 });
 
 // A list's placeholders, each with the value the preview shows (`values`) and the longest it can be when the message
@@ -72,7 +70,7 @@ type ListDefinition = {
   name: string;
   // When it goes out, and what the bot adds to it.
   note: string;
-  kind: 'seeding' | 'match' | 'welcome' | 'top';
+  kind: 'seeding' | 'match' | 'welcome' | 'end';
   get: (lines: Lines) => string[];
   set: (lines: Lines, list: string[]) => Lines;
   frame: (context: LinesContext) => Frame;
@@ -216,17 +214,17 @@ export const LISTS: ListDefinition[] = [
     }),
   },
   {
-    id: 'topPlayer',
-    group: 'Top players',
-    name: 'Top players',
-    note: 'A private message to each of the top players on the scoreboard (TOP_PLAYER_MESSAGES) when a match ends. The line is the whole message, so say where the website is.',
-    kind: 'top',
-    get: (lines) => lines.topPlayer,
-    set: (lines, topPlayer) => ({ ...lines, topPlayer }),
-    // Lines are checked with {place} at the most top players there can be, and {kills} at more than any match has.
+    id: 'matchEnd',
+    group: 'End of match',
+    name: 'End of match',
+    note: "A private message to each of the match's best players the moment a team wins: the top on the scoreboard (TOP_PLAYER_MESSAGES) and the award winners (AWARD_MESSAGES). The line is the whole message, so say where the website is.",
+    kind: 'end',
+    get: (lines) => lines.matchEnd,
+    set: (lines, matchEnd) => ({ ...lines, matchEnd }),
+    // Lines are checked with {earned} at the longest it can be: a place and two awards, with more kills than any match has.
     frame: (context) => ({
-      values: { place: ordinal(1), kills: killCount(25), site: site(context) },
-      longest: { place: ordinal(MAX_TOP_PLAYERS), kills: killCount(999), site: site(context) },
+      values: { earned: listOf([`1st on the scoreboard (${killCount(25)})`, `best demolitions (${killCount(8)})`]), site: site(context) },
+      longest: { earned: LONGEST_EARNED, site: site(context) },
       before: '',
       after: '',
     }),
@@ -332,7 +330,7 @@ const OFF = {
   seeding: 'The bot is not sending seeding messages: SEEDING_MESSAGE_MINUTES is 0.',
   match: 'The bot is not sending match messages: MATCH_MESSAGES is off, or SITE_URL is not set.',
   welcome: 'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
-  top: "The bot is not sending top players' messages: TOP_PLAYER_MESSAGES is 0, or SITE_URL is not set.",
+  end: 'The bot is not sending end-of-match messages: TOP_PLAYER_MESSAGES is 0 and AWARD_MESSAGES is off, or SITE_URL is not set.',
 };
 
 export const buildLinesPage = (saved: SavedLines, context: LinesContext): LinesPage => {

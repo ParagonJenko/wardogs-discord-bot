@@ -3,6 +3,8 @@ import { initialState, isQuiet, step, type AlertKind, type MonitorState } from '
 import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
+import type { LiveMatch } from './live.ts';
+import { hasWinner, matchEndMessages, type MatchEndRule } from './matchend.ts';
 import {
   joinMessageDue,
   JoinWatchSchema,
@@ -13,9 +15,6 @@ import {
   remember,
   seedingMessageDue,
   seedingPick,
-  topPlayerMessages,
-  topPlayersDue,
-  TopPlayerWatchSchema,
   watchJoins,
   watchWelcomes,
   welcomePick,
@@ -24,7 +23,6 @@ import {
   type JoinWatch,
   type MatchMessages,
   type Recent,
-  type TopPlayerWatch,
   type WelcomeWatch,
 } from './messages.ts';
 import {
@@ -75,8 +73,8 @@ export type BotState = {
   outage: Outage | null;
   // The lines each list used lately, so the next message does not repeat one (see messages.ts).
   recent: Recent;
-  // The last match's top players' messages that are waiting for them to be in game.
-  topPlayers: TopPlayerWatch | null;
+  // The last match that had its end-of-match messages (its start time, see matchend.ts), so it has them once.
+  endMessages: number | null;
 };
 
 export type StateStore = {
@@ -103,9 +101,11 @@ type PollerDeps = {
   // Staff's Steam IDs: they are never named as top seeders (see staffprofiles.ts). Only asked when the server goes live.
   staff?: () => Promise<ReadonlySet<string>>;
   // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
-  // players: the live alert's top seeders and the match summary; and while top players' messages wait, as private
+  // players: the live alert's top seeders and the match summary; and when the end-of-match messages go out, as private
   // profiles get none.
   privateProfiles?: () => Promise<ReadonlySet<string>>;
+  // The kill feed's record of a match, for its awards (see matchend.ts), or null when it has none of that match.
+  liveMatch?: (match: MatchState) => Promise<LiveMatch | null>;
   // An outage confirmed or over, for the moderation log. Told once: one that fails is logged, not retried.
   outage?: (event: OutageEvent) => Promise<void>;
 };
@@ -192,8 +192,8 @@ const BotStateSchema = z.object({
   outage: OutageSchema.nullable().default(null),
   // Missing from state saved before lines avoided repeats.
   recent: RecentSchema.default({}),
-  // Missing from state saved before top players' messages.
-  topPlayers: TopPlayerWatchSchema.nullable().default(null),
+  // Missing from state saved before end-of-match messages.
+  endMessages: z.number().nullable().default(null),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -212,7 +212,7 @@ const StoredStateSchema = z.union([
       last: null,
       outage: null,
       recent: {},
-      topPlayers: null,
+      endMessages: null,
     }),
   ),
 ]);
@@ -255,6 +255,46 @@ const readLines = async (lines: (() => Promise<Lines>) | undefined, log: Logger)
   }
 };
 
+type EndDeps = Pick<PollerDeps, 'messagePlayer' | 'log' | 'liveMatch'> & { random: () => number };
+
+// The end-of-match messages for a match just won, privately to each of its best players in game (see matchend.ts). One
+// that fails is not tried again. Without the kill feed's record of the match, the scoreboard's top players still get
+// theirs. Gives back the lines used lately.
+const congratulate = async (
+  { messagePlayer, log, liveMatch, random }: EndDeps,
+  rule: MatchEndRule,
+  match: MatchState,
+  players: Player[],
+  hidden: ReadonlySet<string>,
+  wording: Lines,
+  recent: Recent,
+): Promise<Recent> => {
+  if (messagePlayer === undefined) return recent;
+  let live: LiveMatch | null = null;
+  if (rule.awards && liveMatch !== undefined) {
+    try {
+      live = await liveMatch(match);
+    } catch (error) {
+      log.error(`Reading the kill feed's match failed, so its awards are left out: ${errorText(error)}`);
+    }
+  }
+  const sent = matchEndMessages(match, live, new Set(steamIds(players)), hidden, rule, random, wording, recent);
+  for (const { steamId, name, text } of sent.messages) {
+    const who = `${JSON.stringify(name)} (${steamId})`;
+    try {
+      await messagePlayer(steamId, text);
+      log.info(`Sent end-of-match message to ${who}: ${text}`);
+    } catch (error) {
+      log.error(`End-of-match message to ${who} failed: ${errorText(error)}`);
+    }
+  }
+  return sent.recent;
+};
+
+// A match the bot saw go live and start, so its scoreboard is whole, and that has not had its end-of-match messages.
+const unthanked = (match: MatchState | null, state: BotState): match is MatchState =>
+  match !== null && match.summarisable && match.liveAt !== null && match.startedAt !== state.endMessages;
+
 // Returns a function that runs one check. It never throws, so a bad poll does not stop the loop.
 export const createPoller = ({
   config,
@@ -270,6 +310,7 @@ export const createPoller = ({
   lines,
   staff,
   privateProfiles,
+  liveMatch,
   outage: tellOutage,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
@@ -306,37 +347,6 @@ export const createPoller = ({
       }
     }
     return { watch: markWelcomed(watched, due, time), recent: lately };
-  };
-
-  // The top players' messages from the last match that are due, privately to each player now in game. One that fails
-  // is not tried again. When a match just ended, its top players' messages wait for the next check (see
-  // TOP_PLAYER_WAIT_MS). While they are off, none go out and none wait, even ones saved before they were turned off.
-  // Gives back what still waits, and the lines used lately.
-  const congratulate = async (
-    previous: TopPlayerWatch | null,
-    finished: MatchState | null,
-    players: Player[],
-    hidden: ReadonlySet<string>,
-    time: number,
-    wording: Lines,
-    recent: Recent,
-  ): Promise<{ watch: TopPlayerWatch | null; recent: Recent }> => {
-    const rule = config.topPlayerMessages;
-    if (rule === null || messagePlayer === undefined) return { watch: null, recent };
-    const { due, watch } = topPlayersDue(previous, new Set(steamIds(players)), time);
-    // A player made private since the match ended has no player page any more.
-    for (const { steamId, name, text } of due.filter((m) => !hidden.has(m.steamId))) {
-      const who = `${JSON.stringify(name)} (${steamId})`;
-      try {
-        await messagePlayer(steamId, text);
-        log.info(`Sent top player message to ${who}: ${text}`);
-      } catch (error) {
-        log.error(`Top player message to ${who} failed: ${errorText(error)}`);
-      }
-    }
-    if (finished === null) return { watch, recent };
-    const top = topPlayerMessages(finished, hidden, rule, random, wording, recent);
-    return { watch: top.messages.length === 0 ? null : { at: time, waiting: top.messages }, recent: top.recent };
   };
 
   // An outage confirmed or over goes to staff once it is saved, so a check that fails after it never tells them twice.
@@ -397,7 +407,7 @@ export const createPoller = ({
         last: reading,
         outage: null,
         recent: {},
-        topPlayers: null,
+        endMessages: null,
       });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
@@ -433,8 +443,13 @@ export const createPoller = ({
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
     // Not caught, like the seed below: nothing has been saved yet, so the next check tries again.
     const staffIds = wentLive && staff !== undefined ? await staff() : new Set<string>();
-    // A top player's message may be waiting for them, so a player made private since their match ended is skipped too.
-    const naming = wentLive || finished !== null || state.unsentSummary !== null || state.topPlayers !== null;
+    // The end-of-match messages go out the first check that sees a team win, or else the one that sees the match end
+    // (the map changing, or the server emptying), when the kill feed's word that it ended did not send them already
+    // (see createMatchEndCheck).
+    const endRule = messagePlayer === undefined ? null : config.matchEndMessages;
+    const won = match !== null && hasWinner(status.factionScores, config.scoreToWin) ? match : null;
+    const ending = endRule === null ? null : ([finished, won].find((m) => unthanked(m, state)) ?? null);
+    const naming = wentLive || finished !== null || state.unsentSummary !== null || ending !== null;
     const hidden = naming && privateProfiles !== undefined ? await privateProfiles() : new Set<string>();
     const seeders = wentLive
       ? topSeeders(publicNamesBySteamId(state.seeding, hidden), TOP_SEEDERS, staffIds).map((s) => ({
@@ -448,8 +463,7 @@ export const createPoller = ({
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
-    const congratulating = finished !== null && config.topPlayerMessages !== null && messagePlayer !== undefined;
-    const wording = broadcast === undefined && !welcoming && !congratulating ? DEFAULT_LINES : await readLines(lines, log);
+    const wording = broadcast === undefined && !welcoming && ending === null ? DEFAULT_LINES : await readLines(lines, log);
     const { messages, send: milestone, used: milestoneLine } =
       config.matchMessages !== null && broadcast !== undefined && status.players > 0
         ? nextMessage(state.messages, match, time, config.matchMessages, config.vip, random, wording, state.recent)
@@ -484,7 +498,11 @@ export const createPoller = ({
     }
 
     const { watch: welcomes, recent: welcomed } = await welcome(state.welcomes, players, status.players, time, wording, used);
-    const { watch: topPlayers, recent } = await congratulate(state.topPlayers, finished, players, hidden, time, wording, welcomed);
+    const recent =
+      ending === null || endRule === null
+        ? welcomed
+        : await congratulate({ messagePlayer, log, liveMatch, random }, endRule, ending, players, hidden, wording, welcomed);
+    const endMessages = ending?.startedAt ?? state.endMessages;
 
     // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
     // Discord is down, and an unsent summary is kept to retry. A newer summary replaces one still waiting; that match
@@ -501,7 +519,7 @@ export const createPoller = ({
       last: reading,
       outage,
       recent,
-      topPlayers,
+      endMessages,
     };
     try {
       const summary = tracked.unsentSummary;
@@ -547,7 +565,7 @@ export const createPoller = ({
       last: reading,
       outage,
       recent,
-      topPlayers,
+      endMessages,
     });
   };
 
@@ -603,5 +621,37 @@ export const createJoinCheck =
     } catch (error) {
       log.error(`Join check failed: ${errorText(error)}`);
       return true;
+    }
+  };
+
+type MatchEndCheckDeps = Pick<
+  PollerDeps,
+  'config' | 'fetchSnapshot' | 'now' | 'log' | 'store' | 'random' | 'lines' | 'privateProfiles' | 'liveMatch'
+> & { messagePlayer: (steamId: string, text: string) => Promise<void> };
+
+// Returns a function that sends the end-of-match messages the moment the kill feed says a match ended, while everyone is
+// still on the scoreboard, rather than at the next check. It reads the server once, and goes ahead when a team has won,
+// or is a point short (the server may not have the winning point yet), or the match is over already, in a match that
+// has not had them: after a check that sent them, or for word of a match long over, it sends nothing. The match it read
+// is saved, so the match summary has the same scoreboard as the messages; a match already over is left to the next
+// check, which records it. It must not run at the same time as a check, as both save the state. It never throws.
+export const createMatchEndCheck =
+  ({ config, fetchSnapshot, messagePlayer, now, log, store, random = Math.random, lines, privateProfiles, liveMatch }: MatchEndCheckDeps) =>
+  async (): Promise<void> => {
+    try {
+      const rule = config.matchEndMessages;
+      const state = await store.load();
+      if (rule === null || state === null) return;
+      const { status, players } = await fetchSnapshot();
+      const { match, finished } = observeMatch(state.match, status, players, state.alerts.phase === 'live', now());
+      const won = match !== null && hasWinner(status.factionScores, config.scoreToWin - 1) ? match : null;
+      const ending = [finished, won].find((m) => unthanked(m, state)) ?? null;
+      if (ending === null) return;
+      const hidden = privateProfiles === undefined ? new Set<string>() : await privateProfiles();
+      const wording = await readLines(lines, log);
+      const recent = await congratulate({ messagePlayer, log, liveMatch, random }, rule, ending, players, hidden, wording, state.recent);
+      await store.save({ ...state, ...(finished === null ? { match } : {}), endMessages: ending.startedAt, recent });
+    } catch (error) {
+      log.error(`Match end check failed: ${errorText(error)}`);
     }
   };

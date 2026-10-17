@@ -35,7 +35,7 @@ describe('loadConfig', () => {
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
       welcomeMessages: { afterMs: 120_000, siteHost: null, discord: null },
-      topPlayerMessages: null,
+      matchEndMessages: null,
       roundups: { hour: 17, webhookUrl: 'https://discord.com/api/webhooks/111/abc-DEF_123' },
       rotationHour: 5,
     });
@@ -137,15 +137,20 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '-1' })).toThrow(/WELCOME_MESSAGE_MINUTES/);
   });
 
-  it('messages the top 5 players when a match ends by default, only with a website, unless set to 0', () => {
+  it('messages the top 5 players and the award winners when a match is won by default, only with a website', () => {
     const site = { ...required, SITE_URL: 'https://gaminginit.com/' };
 
-    expect(loadConfig(site).topPlayerMessages).toEqual({ count: 5, siteHost: 'gaminginit.com' });
-    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '10' }).topPlayerMessages).toEqual({ count: 10, siteHost: 'gaminginit.com' });
-    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '0' }).topPlayerMessages).toBeNull();
-    expect(loadConfig(required).topPlayerMessages).toBeNull();
+    expect(loadConfig(site).matchEndMessages).toEqual({ count: 5, awards: true, siteHost: 'gaminginit.com' });
+    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '10', AWARD_MESSAGES: 'off' }).matchEndMessages).toEqual({
+      count: 10,
+      awards: false,
+      siteHost: 'gaminginit.com',
+    });
+    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '0' }).matchEndMessages).toEqual({ count: 0, awards: true, siteHost: 'gaminginit.com' });
+    expect(loadConfig({ ...site, TOP_PLAYER_MESSAGES: '0', AWARD_MESSAGES: 'off' }).matchEndMessages).toBeNull();
+    expect(loadConfig(required).matchEndMessages).toBeNull();
     expect(() => loadConfig({ ...site, TOP_PLAYER_MESSAGES: '101' })).toThrow(/TOP_PLAYER_MESSAGES/);
-    expect(() => loadConfig({ ...site, TOP_PLAYER_MESSAGES: '-1' })).toThrow(/TOP_PLAYER_MESSAGES/);
+    expect(() => loadConfig({ ...site, AWARD_MESSAGES: 'maybe' })).toThrow(/AWARD_MESSAGES/);
   });
 
   it('turns on automatic VIP when VIP_SEED_DAYS is set', () => {

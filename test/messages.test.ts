@@ -2,19 +2,14 @@ import { describe, expect, it } from 'vitest';
 import * as lines from '../src/lines.ts';
 import {
   joinMessageDue,
-  killCount,
   markWelcomed,
   MAX_LENGTH,
   milestones,
   nextMessage,
-  ordinal,
   remember,
   type Recent,
   seedingMessage,
   seedingMessageDue,
-  TOP_PLAYER_WAIT_MS,
-  topPlayerMessages,
-  topPlayersDue,
   watchJoins,
   watchWelcomes,
   WELCOME_AGAIN_MS,
@@ -430,73 +425,5 @@ describe('not repeating lines', () => {
 
     expect(recent.x).toEqual(Array.from({ length: 10 }, (_, i) => `l${i + 20}`));
     expect(remember(recent, { text: '', list: 'x', line: 'l29' }).x?.filter((line) => line === 'l29')).toHaveLength(1);
-  });
-});
-
-describe('top players', () => {
-  const top = { count: 3, siteHost: 'gaminginit.com' };
-  const stats = (kills: number, deaths = 0) => ({ kills, deaths, lastKills: kills, lastDeaths: deaths });
-  const ended = match({
-    players: {
-      a: { name: 'Ash', ...stats(9) },
-      b: { name: 'Bo', ...stats(4, 1) },
-      c: { name: 'Cy', ...stats(4, 3) },
-      d: { name: 'Dee', ...stats(2) },
-      e: { name: 'Eve', ...stats(0) },
-    },
-  });
-  const [line0, line1, line2] = lines.TOP_PLAYER;
-  const fill = (line: string | undefined, place: string, kills: string) =>
-    (line ?? '').replace('{place}', place).replace('{kills}', kills).replace('{site}', 'gaminginit.com');
-
-  it('says places and kills as players read them', () => {
-    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 100, 101, 111, 112].map(ordinal)).toEqual([
-      '1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '100th', '101st', '111th', '112th',
-    ]);
-    expect([killCount(1), killCount(0), killCount(23)]).toEqual(['1 kill', '0 kills', '23 kills']);
-  });
-
-  it('messages the top players in the order of the scoreboard, each with a line it has not used lately', () => {
-    const { messages, recent } = topPlayerMessages(ended, new Set(), top, () => 0);
-
-    expect(messages).toEqual([
-      { steamId: 'a', name: 'Ash', text: fill(line0, '1st', '9 kills') },
-      { steamId: 'b', name: 'Bo', text: fill(line1, '2nd', '4 kills') },
-      { steamId: 'c', name: 'Cy', text: fill(line2, '3rd', '4 kills') },
-    ]);
-    expect(recent['topPlayer']).toEqual([line0, line1, line2]);
-  });
-
-  it('leaves out a private profile, but keeps its place, and players without a kill', () => {
-    const { messages } = topPlayerMessages(ended, new Set(['a']), { ...top, count: 10 }, () => 0);
-
-    expect(messages.map((m) => [m.steamId, m.text.match(/\d+(st|nd|rd|th)/)?.[0]])).toEqual([
-      ['b', '2nd'],
-      ['c', '3rd'],
-      ['d', '4th'],
-    ]);
-  });
-
-  it('fits every line in the game without cutting it, at the most players and kills', () => {
-    const many = match({ players: Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`p${i}`, { name: 'P', ...stats(999 - i) }])) });
-    const texts = Array.from({ length: 100 }, (_, i) => i / 100).flatMap(
-      (r) => topPlayerMessages(many, new Set(), { count: 100, siteHost: 'gaminginit.com' }, () => r).messages,
-    );
-
-    expect(texts.every((m) => m.text.length <= MAX_LENGTH && !m.text.endsWith('…'))).toBe(true);
-    expect(lines.TOP_PLAYER.every((line) => line.includes('{site}'))).toBe(true);
-  });
-
-  it('sends each waiting message once its player is in game, and drops them all after 5 minutes', () => {
-    const waiting = topPlayerMessages(ended, new Set(), top, () => 0).messages;
-    const watch = { at: 0, waiting };
-
-    const first = topPlayersDue(watch, new Set(['a', 'c', 'x']), MINUTE);
-    expect(first.due.map((m) => m.steamId)).toEqual(['a', 'c']);
-    expect(first.watch).toEqual({ at: 0, waiting: [waiting[1]] });
-
-    expect(topPlayersDue(first.watch, new Set(['b']), TOP_PLAYER_WAIT_MS)).toEqual({ due: [waiting[1]], watch: null });
-    expect(topPlayersDue(first.watch, new Set(['b']), TOP_PLAYER_WAIT_MS + 1)).toEqual({ due: [], watch: null });
-    expect(topPlayersDue(null, new Set(['b']), MINUTE)).toEqual({ due: [], watch: null });
   });
 });

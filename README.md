@@ -1177,7 +1177,8 @@ them: the game sends them in a new form, and the bot needs changing.
 - **Other tools too.** `EventFeedEndpoints` is a list: a server panel can have its own `+EventFeedEndpoints=` line
   beside the bot's, and both get every kill.
 - **Not just kills.** Since Season 2 the feed also sends players joining and leaving, the match's state and its result.
-  The bot leaves those out: it has them from its own checks.
+  The bot has those from its own checks, so it leaves them out, but for the word that a match ended: it sends the
+  [end-of-match messages](#end-of-match) at once.
 - **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
 - **What counts.** A kill counts for the weapon that made it: guns, launchers, grenades and tools, things placed (mines,
   claymores, C4, IEDs), a vehicle's gun, an emplacement (the L81 mortar and other fixed weapons, such as AA, which the
@@ -1376,30 +1377,52 @@ them join (`WELCOME_MESSAGE_MINUTES`), with the basic rules and where the Discor
 - Set `WELCOME_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to turn
   it off.
 
-### Top players
+### End of match
 
-When a match ends, the top 5 players on its scoreboard (`TOP_PLAYER_MESSAGES`) each get a private message in game (like
-`/warn`, only they see it) with where they finished and where to see their stats:
+The moment a team wins a match, its best players each get a private message in game (like `/warn`, only they see
+it), while everyone is still on the scoreboard: what they earned, and where to see their stats.
 
-> GG! You finished 2nd on the scoreboard with 23 kills. See your stats at gaminginit.com
+> GG! This match: 1st on the scoreboard (63 kills), best assaulter (40 kills) and most headshots (21). See your stats
+> at gaminginit.com
 
-- **Top players** are ranked as in the match summary: most kills, then fewest deaths. A player without a kill isn't
-  one.
-- **After the map change:** players reconnect while the next map loads, so the bot holds each message until the check
-  after the match ended, and then sends it the first time that player is in game. One who isn't back within 5 minutes of
-  the match ending doesn't get it.
-- **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none, even one made private
-  while their message waits. They keep their place, so the others are told the place the match summary gives them.
-- Only for a match the bot saw go live, like the match summary.
-- The line is picked at random from the top player lines, passing over the ones used lately so players mostly get
-  different ones; staff change them on the [Lines tab](#lines-tab) (Top players). `{place}` ("2nd"), `{kills}`
-  ("23 kills") and `{site}` are filled in. The line is the whole message, so it should say where the website is.
-- A message that fails to send is logged (`Top player message to "<name>" (<Steam ID>) failed: …`) and not tried again.
-  Each one sent is logged as `Sent top player message to "<name>" (<Steam ID>): …`.
+- **The top 5 on the scoreboard** (`TOP_PLAYER_MESSAGES`), ranked as in the match summary: most kills, then fewest
+  deaths. A player without a kill has no place.
+- **The award winners** (`AWARD_MESSAGES`), from the [kill feed](#weapon-stats)'s record of the match (Cloudflare
+  only), with team kills left out:
+
+  | Award               | For                                                              | Needs    |
+  | ------------------- | ---------------------------------------------------------------- | -------- |
+  | best assaulter      | Kills with assault rifles, SMGs and shotguns                     | 3 kills  |
+  | best support        | Kills with mortars, artillery and emplacements                   | 3 kills  |
+  | best machine gunner | Kills with machine guns                                          | 3 kills  |
+  | best marksman       | Kills with marksman and sniper rifles, and the bow               | 3 kills  |
+  | best demolitions    | Kills with launchers, grenades, mines and C4                     | 3 kills  |
+  | best vehicle crew   | Kills with a vehicle's guns                                      | 3 kills  |
+  | most headshots      | Headshot kills                                                   | 3        |
+  | longest kill        | The longest kill with a hand-held weapon that does not lock on   |          |
+  | best kill streak    | Kills in a row without dying                                     | 5        |
+
+  The roles are the same as the [roundups'](#roundups) awards. A tie goes to whoever the feed named first.
+- **One message each.** A player who earned several things gets them in one message, their place first, at most 3 of
+  them so it fits the game's line.
+- **When.** The game's kill feed says when a match ends, and the bot reads the server at once and sends them. A check
+  that sees a team on `SCORE_TO_WIN` (100) sends them too, in case the feed's word did not come: so without the kill
+  feed, they go out at the first check (each minute) after the win, if the scoreboard is still up. If no check saw the
+  win, they go out at the check that sees the next map, to whoever is in game then. Each match has them once.
+- **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none. They keep their place,
+  so the others are told the place the match summary gives them.
+- Only for a match the bot saw go live and start, like the match summary.
+- The line is picked at random from the end-of-match lines, passing over the ones used lately so players mostly get
+  different ones; staff change them on the [Lines tab](#lines-tab) (End of match). `{earned}` (such as "2nd on the
+  scoreboard (23 kills) and best demolitions (8 kills)") and `{site}` are filled in. The line is the whole message, so
+  it should say where the website is.
+- A message that fails to send is logged (`End-of-match message to "<name>" (<Steam ID>) failed: …`) and not tried
+  again. Each one sent is logged as `Sent end-of-match message to "<name>" (<Steam ID>): …`.
 - It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`. It isn't a warning:
   it has no "Staff warning:" in front and doesn't go in the moderation log or the player's history.
 - Set `TOP_PLAYER_MESSAGES` to another number of players (up to 100) in the `vars` block of `wrangler.jsonc`, or `"0"`
-  to turn it off. It needs `SITE_URL`; without it none are sent.
+  for none, and `AWARD_MESSAGES` to `"off"` to leave the award winners out. They need `SITE_URL`; without it none are
+  sent.
 
 ### Seeding and match messages
 
@@ -1471,7 +1494,7 @@ is won at a score other than 100. They need `SITE_URL`; without it none are sent
 
 The [staff page](#staff-page) has a tab for the lines the bot says in game, so staff can reword them, add new ones or
 take some out without a deploy. Each list (seeding, welcome, 10 minutes in, halfway and 90 points for each faction,
-level scores, any other team, top players) has its own editor:
+level scores, any other team, end of match) has its own editor:
 
 - Each line shows the whole message as it goes out in game, with what the bot adds before and after it (such as
   "Halfway there!" and the seeding call to action) and its placeholders filled in, and how many of the game's 200
@@ -1572,7 +1595,7 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 
 The RCON password gives full admin control of the server (kick, ban, end match, change settings). On its own
 the bot only reads the server, sends the [in-game messages](#in-game-messages) (`POST /v1/broadcast`, and
-`POST /v1/players/…/message` for the welcome and the top players), changes the
+`POST /v1/players/…/message` for the welcome and the end of match), changes the
 whitelist in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/config`), puts each day's planned
 [map rotation](#map-rotations) there in the same way, and lifts timed bans when they end (`DELETE /v1/bans/…`). Everything else it changes is asked for by staff through a
 [staff command](#staff-commands). Still:

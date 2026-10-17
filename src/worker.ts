@@ -136,7 +136,8 @@ import {
   type SavedLines,
 } from './linespage.ts';
 import type { OutageEvent } from './outages.ts';
-import { createJoinCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
+import { feedRecordOf } from './matchend.ts';
+import { createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
 import {
   ALERT_LOG_KEY,
   buildReview,
@@ -379,7 +380,7 @@ import {
   type RulesPage,
   type WeaponRule,
 } from './weaponrules.ts';
-import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveSnapshot } from './live.ts';
+import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, recordLive, type LiveMatch, type LiveSnapshot } from './live.ts';
 import {
   adminFeed,
   alertedOn,
@@ -764,6 +765,30 @@ export class Watcher extends DurableObject<Env> {
     if (await this.alerting(joinCheck)) await this.ctx.storage.setAlarm(Date.now() + JOIN_CHECK_MS);
   }
 
+  // The kill feed says a match ended: its end-of-match messages go out now, while players are still on the scoreboard
+  // (see createMatchEndCheck). In the background, so the game has its reply at once, and with the checks, so it never
+  // saves the state while one is part-way through.
+  async matchEnded(): Promise<void> {
+    const { config, http } = this.rcon();
+    const endCheck = createMatchEndCheck({
+      config,
+      fetchSnapshot: () => fetchSnapshot(config.rconUrl, config.rconPassword, http),
+      messagePlayer: (steamId, text) => messagePlayer(config.rconUrl, config.rconPassword, steamId, text, http),
+      now: Date.now,
+      log: console,
+      store: this.stateStore(),
+      lines: () => this.lines(),
+      privateProfiles: () => this.privateSteam(),
+      liveMatch: (match) => this.liveMatchOf(match),
+    });
+    this.ctx.waitUntil(this.alerting(endCheck));
+  }
+
+  // The kill feed's record of a match, for its awards (see feedRecordOf).
+  private async liveMatchOf(match: MatchState): Promise<LiveMatch | null> {
+    return feedRecordOf(parseLiveMatch(await this.ctx.storage.get('live')), match, Date.now());
+  }
+
   private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {
     const storage = this.ctx.storage;
     await storage.put('stats', change(parseStats(await storage.get('stats'))));
@@ -913,6 +938,7 @@ export class Watcher extends DurableObject<Env> {
       lines: () => this.lines(),
       staff: () => this.staffSteam(),
       privateProfiles: () => this.privateSteam(),
+      liveMatch: (match) => this.liveMatchOf(match),
       outage: (event) => this.tellOutage(event),
       stats: {
         check: (observation) =>
@@ -3167,6 +3193,8 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
   }
   try {
     const accepted = batch.events.length === 0 ? 0 : await watcher().recordFeed(batch.events);
+    // Once the batch's last kills are counted, so the awards have them.
+    if (batch.ended) await watcher().matchEnded();
     return Response.json({ ok: true, accepted, skipped: batch.skipped });
   } catch (error) {
     console.error(`Kill feed batch failed: ${errorText(error)}`);

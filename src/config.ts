@@ -1,13 +1,7 @@
 import { z } from 'zod';
 import type { AlertRules, QuietHours } from './alerts.ts';
-import {
-  discordLink,
-  MAX_TOP_PLAYERS,
-  type MessageRule,
-  type SeedingMessageRule,
-  type TopPlayerRule,
-  type WelcomeRule,
-} from './messages.ts';
+import { MAX_TOP_PLAYERS, type MatchEndRule } from './matchend.ts';
+import { discordLink, type MessageRule, type SeedingMessageRule, type WelcomeRule } from './messages.ts';
 
 const numericId = z.string().regex(/^\d+$/, 'must be a numeric ID');
 // Just the listener's address; the bot adds /v1/status itself. Pasted values often carry quotes, stray
@@ -105,9 +99,12 @@ const EnvSchema = z
     // A private message to each player this many minutes after they join, with the basic rules, the Discord
     // (DISCORD_INVITE) and the website (SITE_URL). 0 turns it off.
     WELCOME_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(2),
-    // When a match ends, a private message to this many of the top players on its scoreboard, with where they finished
-    // and the website (SITE_URL) for their stats. Needs SITE_URL. 0 turns it off.
+    // The moment a team wins a match, a private message to this many of the top players on its scoreboard, with where
+    // they finished and the website (SITE_URL) for their stats. Needs SITE_URL. 0 sends none.
     TOP_PLAYER_MESSAGES: z.coerce.number().int().min(0).max(MAX_TOP_PLAYERS).default(5),
+    // With the top players' messages, one to each of the match's award winners from the kill feed (best demolitions,
+    // most headshots and the rest): "on" or "off". Needs SITE_URL.
+    AWARD_MESSAGES: z.enum(['on', 'off']).default('on'),
     // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
     ROUNDUPS: z.enum(['on', 'off']).default('on'),
     // The hour (UTC) on Mondays, and on the 1st of the month, when the roundups go out.
@@ -187,8 +184,8 @@ export type Config = {
   seedingMessages: SeedingMessageRule | null;
   // Null when WELCOME_MESSAGE_MINUTES is 0.
   welcomeMessages: WelcomeRule | null;
-  // Null when TOP_PLAYER_MESSAGES is 0 or there is no SITE_URL to point players at.
-  topPlayerMessages: TopPlayerRule | null;
+  // Null when TOP_PLAYER_MESSAGES is 0 and AWARD_MESSAGES is off, or there is no SITE_URL to point players at.
+  matchEndMessages: MatchEndRule | null;
   // When the roundups go out (an hour, UTC) and where. Null when ROUNDUPS is off.
   roundups: RoundupRule | null;
   // The hour (UTC) each day's map rotation starts.
@@ -260,8 +257,10 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
             discord: e.DISCORD_INVITE ? discordLink(e.DISCORD_INVITE) : null,
           }
         : null,
-    topPlayerMessages:
-      e.TOP_PLAYER_MESSAGES > 0 && e.SITE_URL ? { count: e.TOP_PLAYER_MESSAGES, siteHost: new URL(e.SITE_URL).host } : null,
+    matchEndMessages:
+      (e.TOP_PLAYER_MESSAGES > 0 || e.AWARD_MESSAGES === 'on') && e.SITE_URL
+        ? { count: e.TOP_PLAYER_MESSAGES, awards: e.AWARD_MESSAGES === 'on', siteHost: new URL(e.SITE_URL).host }
+        : null,
     roundups:
       e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,
     rotationHour: e.ROTATION_HOUR,

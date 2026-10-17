@@ -4,8 +4,8 @@
 // on one line of up to 200 characters with the call to action the bot adds after it.
 //
 // Placeholders: {team} is the faction's name, {score} its points and {site} the website (SITE_URL, such as
-// gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players". {place} is
-// where a player finished on the match's scoreboard, such as "2nd", and {kills} their kills, such as "23 kills".
+// gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players". {earned} is
+// what a player earned in a match, such as "2nd on the scoreboard (23 kills) and best demolitions (8 kills)".
 
 // A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
 // The bot puts the Discord and the website after the line.
@@ -52,13 +52,13 @@ export const TEN_MINUTES = [
   '10 minutes in. Rules in our Discord, and Season 1 got roasted at {site}/season',
 ];
 
-// A private message to each of the top players on a match's scoreboard when it ends (see TOP_PLAYER_MESSAGES). These
-// are the whole message, so they point at the website.
-export const TOP_PLAYER = [
-  'GG! You finished {place} on the scoreboard with {kills}. See your stats at {site}',
-  '{place} on the scoreboard with {kills}. Nice work. See where you rank on the leaderboard at {site}',
-  'GG, {place} on the scoreboard with {kills}. Your K/D, wins and play time are on your player page at {site}',
-  'You finished {place} with {kills}. Bragging rights are on the leaderboard at {site}',
+// A private message to each of a match's best players the moment a team wins it (see matchend.ts): {earned} names their
+// place on the scoreboard and their awards. These are the whole message, so they point at the website.
+export const MATCH_END = [
+  'GG! This match: {earned}. See your stats at {site}',
+  'GG! You got {earned}. See where you rank on the leaderboard at {site}',
+  'Nice match: {earned}. Your K/D, wins and play time are on your player page at {site}',
+  'Bragging rights: {earned}. It is all on the leaderboard at {site}',
 ];
 
 // The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
@@ -165,7 +165,7 @@ export type Lines = {
   halfwayOther: string[];
   nearly: Record<string, string[]>;
   nearlyOther: string[];
-  topPlayer: string[];
+  matchEnd: string[];
 };
 
 export const DEFAULT_LINES: Lines = {
@@ -177,5 +177,5 @@ export const DEFAULT_LINES: Lines = {
   halfwayOther: HALFWAY_OTHER,
   nearly: NEARLY,
   nearlyOther: NEARLY_OTHER,
-  topPlayer: TOP_PLAYER,
+  matchEnd: MATCH_END,
 };

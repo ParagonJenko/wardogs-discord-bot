@@ -49,11 +49,13 @@ export const isKill = (e: FeedEvent): e is FeedKill =>
   e.killerSteamId !== null && e.killerSteamId !== e.victimSteamId && e.cause !== null && !e.tags.includes('Suicide');
 
 // Every death in a batch, in the order the game sent them, the kills among them, how many of its events were something
-// else, and how many of those the bot does not know: neither a death it can read nor one of OTHER_TYPES.
-export type FeedBatch = { events: FeedEvent[]; kills: FeedKill[]; skipped: number; unread: number };
+// else, and how many of those the bot does not know: neither a death it can read nor one of OTHER_TYPES. `ended` is
+// whether the batch says a match ended.
+export type FeedBatch = { events: FeedEvent[]; kills: FeedKill[]; skipped: number; unread: number; ended: boolean };
 
 // What else the feed sends since Season 2 (15 October 2026): players joining and leaving, the match's state and its
-// result. The bot has these from its own checks, so it leaves them out, and they are not unread.
+// result. The bot has these from its own checks, so it leaves them out, and they are not unread. Only the word that a
+// match ended is used: it sends the end-of-match messages at once (see matchend.ts).
 const OTHER_TYPES = ['player_joined', 'player_left', 'match_state', 'match_ended'];
 const typeOf = (raw: unknown): unknown => (typeof raw === 'object' && raw !== null && 'type' in raw ? raw.type : undefined);
 
@@ -109,7 +111,8 @@ export const parseFeed = (body: unknown): FeedBatch | null => {
       tags: tags.filter((t) => t !== 'Headshot'),
     });
   }
-  return { events, kills: events.filter(isKill), skipped: batch.data.events.length - events.length, unread };
+  const ended = batch.data.events.some((raw) => typeOf(raw) === 'match_ended');
+  return { events, kills: events.filter(isKill), skipped: batch.data.events.length - events.length, unread, ended };
 };
 
 const sha256 = async (text: string): Promise<Uint8Array> =>
