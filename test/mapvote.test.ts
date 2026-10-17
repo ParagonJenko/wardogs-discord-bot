@@ -286,6 +286,18 @@ describe('conditionOptions', () => {
     expect(conditionOptions([lighting('DayClear'), lighting('DayRain')]).map((o) => o.key)).toEqual(['day', 'rain', 'random']);
   });
 
+  it("groups the server's own lighting ids: Start is dawn, End is dusk, Gray is overcast", () => {
+    const ids = ['DayStartClear', 'DayEarlyClear', 'DayEarlyFog', 'DayClear', 'DayLateClear', 'DayLateGray', 'DayLateGrayFog', 'DayLateRain', 'DayEndClear'];
+    const options = conditionOptions(ids.map((id) => lighting(id)));
+    expect(options.map((o) => o.key)).toEqual(['day', 'rain', 'fog', 'dusk', 'random']);
+    const of = (key: string) => options.find((o) => o.key === key)?.lightings.map((l) => l.id);
+    expect(of('day')).toEqual(['DayEarlyClear', 'DayEarlyFog', 'DayClear', 'DayLateClear', 'DayLateGray', 'DayLateGrayFog', 'DayLateRain']);
+    expect(of('rain')).toEqual(['DayLateRain']);
+    expect(of('fog')).toEqual(['DayEarlyFog', 'DayLateGrayFog']);
+    expect(of('dusk')).toEqual(['DayEndClear']);
+    expect(conditionOptions(ids.slice(0, 1).concat('DayLateGray').map((id) => lighting(id))).map((o) => o.key)).toEqual(['day', 'overcast', 'dawn', 'random']);
+  });
+
   it('offers no row when there is nothing to choose between', () => {
     expect(conditionOptions([])).toEqual([]);
     expect(conditionOptions([lighting('Sunny'), lighting('Other')])).toEqual([]);

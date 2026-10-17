@@ -598,8 +598,9 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
    A second row of buttons votes on the **conditions** (time of day and weather): groups of the server's lightings such as
    Day, Night and Rain, and 🎲 Random. Each person has one vote on the map and one on the conditions, each changed on its
-   own. The groups are matched from the names of the lightings the server lists (day, night, dusk, dawn, rain or storm,
-   fog, snow, overcast), at most four plus Random, and a group the server has no lighting for isn't offered. With fewer than
+   own. The groups are matched from the ids and names of the lightings the server lists (day, night, rain or storm, fog,
+   dusk, overcast, dawn, snow, in that order; the server's ids start with Day, so DayStart… is dawn, DayEnd… is dusk and
+   …Gray… is overcast), at most four plus Random, and a group the server has no lighting for isn't offered. With fewer than
    two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain. The
    group with the most votes (a tie by chance) gives a random lighting from it, and Random picks from all of them. With no
    votes on it, the lighting stays as the rotation has it. It is part of the same message, so nothing more is announced.

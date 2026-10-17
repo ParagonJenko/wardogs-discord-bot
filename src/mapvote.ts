@@ -174,16 +174,18 @@ export const pickOptions = (
 
 // The groups the conditions row can offer, in the order they are kept when there are more than fit (a row holds five
 // buttons and Random is one). A lighting is in every group its id or name fits, so Night covers a rainy night too. The
-// names are matched, not listed, as the server's catalogue decides what lightings there are.
+// names are matched, not listed, as the server's catalogue decides what lightings there are. The server's ids all begin
+// with Day (DayStartClear, DayEarlyFog, DayLateGray, DayLateRain, DayEndClear), so Start is dawn and End is dusk, not day,
+// and Gray is overcast. Weather comes before the times that are one lighting each, as it is what players tell apart.
 const CONDITION_GROUPS = [
-  { key: 'day', label: 'Day', pattern: /day|noon|morning/i },
+  { key: 'day', label: 'Day', pattern: /day(?!start|end)|noon|morning/i },
   { key: 'night', label: 'Night', pattern: /night/i },
   { key: 'rain', label: 'Rain', pattern: /rain|storm|thunder|shower/i },
-  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening/i },
-  { key: 'dawn', label: 'Dawn', pattern: /dawn|sunrise/i },
   { key: 'fog', label: 'Fog', pattern: /fog|mist/i },
+  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening|dayend/i },
+  { key: 'overcast', label: 'Overcast', pattern: /overcast|cloud|gr[ae]y/i },
+  { key: 'dawn', label: 'Dawn', pattern: /dawn|sunrise|daystart/i },
   { key: 'snow', label: 'Snow', pattern: /snow/i },
-  { key: 'overcast', label: 'Overcast', pattern: /overcast|cloud/i },
 ] as const;
 const MAX_CONDITION_GROUPS = 4;
 export const RANDOM_CONDITION = 'random';
