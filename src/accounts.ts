@@ -285,7 +285,7 @@ export type AccountView = {
   // Whether their profile is private, and whether they made it so (staff keep control of what they made private).
   private: { on: boolean; byYou: boolean };
   // Their votes in the next-map vote that is open, for the vote page. Null with no vote open, or no vote cast.
-  ballot: { poll: string; map: string | null; light: string | null } | null;
+  ballot: { poll: string; map: string | null; light: string | null; weather: string | null } | null;
   // What linking gives them in this server, for the page to say.
   perks: { role: boolean; vipRole: boolean; messages: boolean; join: boolean };
 };
@@ -320,12 +320,17 @@ export const readAccountAction = async (request: Request): Promise<AccountAction
   }
 };
 
-// A vote cast from the website: the vote's id, and the map or the conditions.
-export type WebVote = { poll: string; map?: string; light?: string };
+// A vote cast from the website: the vote's id, and the map, the time of day (`light`) or the weather.
+export type WebVote = { poll: string; map?: string; light?: string; weather?: string };
 
 const WebVoteSchema = z
-  .object({ poll: z.string().regex(/^\d{1,20}$/), map: z.string().max(80).optional(), light: z.string().max(20).optional() })
-  .refine((v) => (v.map === undefined) !== (v.light === undefined));
+  .object({
+    poll: z.string().regex(/^\d{1,20}$/),
+    map: z.string().max(80).optional(),
+    light: z.string().max(20).optional(),
+    weather: z.string().max(20).optional(),
+  })
+  .refine((v) => [v.map, v.light, v.weather].filter((x) => x !== undefined).length === 1);
 
 export const readWebVote = async (request: Request): Promise<WebVote | null> => {
   if (Number(request.headers.get('content-length') ?? 0) > ACCOUNT_BODY_BYTES) return null;
@@ -334,8 +339,8 @@ export const readWebVote = async (request: Request): Promise<WebVote | null> => 
   try {
     const parsed = WebVoteSchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
     if (!parsed.success) return null;
-    const { poll, map, light } = parsed.data;
-    return { poll, ...(map === undefined ? {} : { map }), ...(light === undefined ? {} : { light }) };
+    const { poll, map, light, weather } = parsed.data;
+    return { poll, ...(map === undefined ? {} : { map }), ...(light === undefined ? {} : { light }), ...(weather === undefined ? {} : { weather }) };
   } catch {
     return null;
   }

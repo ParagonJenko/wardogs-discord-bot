@@ -11,6 +11,7 @@ import {
   isOpen as isOpenVote,
   matchIsOver,
   conditionOptions,
+  weatherOptions,
   closeScoreFor,
   editVoteMessage,
   MAP_VOTE_KEY,
@@ -1441,7 +1442,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // A press of a vote button: counts it and answers with the vote message as it is now, and what to tell the voter.
-  async castMapVote(press: { poll: string; map?: string; light?: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
+  async castMapVote(press: { poll: string; map?: string; light?: string; weather?: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
     const config = loadConfig(stringVars(this.env));
     return this.voting(async () => {
       const now = Date.now();
@@ -1449,7 +1450,16 @@ export class Watcher extends DurableObject<Env> {
       if (config.mapVote === null || vote === null || vote.id !== press.poll) {
         return { update: null, reply: 'That vote is over. A new one opens with the next match.' };
       }
-      const cast = castVote(vote, { user: press.userId, ...(press.map === undefined ? {} : { map: press.map }), ...(press.light === undefined ? {} : { light: press.light }) }, now);
+      const cast = castVote(
+        vote,
+        {
+          user: press.userId,
+          ...(press.map === undefined ? {} : { map: press.map }),
+          ...(press.light === undefined ? {} : { light: press.light }),
+          ...(press.weather === undefined ? {} : { weather: press.weather }),
+        },
+        now,
+      );
       if (!('vote' in cast)) {
         return { update: null, reply: cast.result === 'closed' ? 'The vote has closed.' : 'That choice is not in this vote.' };
       }
@@ -1457,8 +1467,8 @@ export class Watcher extends DurableObject<Env> {
       const name =
         press.map !== undefined
           ? (cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map))
-          : (cast.vote.conditions.find((c) => c.key === press.light)?.label ?? 'that');
-      const what = press.map !== undefined ? 'map' : 'conditions';
+          : ((press.weather !== undefined ? cast.vote.weather : cast.vote.conditions).find((c) => c.key === (press.weather ?? press.light))?.label ?? 'that');
+      const what = press.map !== undefined ? 'map' : press.weather !== undefined ? 'weather' : 'time of day';
       return {
         update: voteMessage(cast.vote, now, config.siteUrl),
         reply:
@@ -1577,7 +1587,7 @@ export class Watcher extends DurableObject<Env> {
       return;
     }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
-    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []));
+    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []), weatherOptions(catalog?.lightings ?? []));
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
     await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
@@ -3131,7 +3141,7 @@ export class Watcher extends DurableObject<Env> {
           ballotOf: async (id) => {
             const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
             const ballot = vote === null || !isOpenVote(vote, Date.now()) ? undefined : vote.ballots.find((b) => b.user === id);
-            return vote === null || ballot === undefined ? null : { poll: vote.id, map: ballot.map, light: ballot.light };
+            return vote === null || ballot === undefined ? null : { poll: vote.id, map: ballot.map, light: ballot.light, weather: ballot.weather };
           },
         },
         userId,
@@ -3190,12 +3200,13 @@ export class Watcher extends DurableObject<Env> {
   async castWebVote(
     userId: string,
     vote: WebVote,
-  ): Promise<{ ok: boolean; reply: string; mine: { map: string | null; light: string | null }; vote: PublicVote | null }> {
+  ): Promise<{ ok: boolean; reply: string; mine: { map: string | null; light: string | null; weather: string | null }; vote: PublicVote | null }> {
     const result = await this.castMapVote({
       poll: vote.poll,
       userId,
       ...(vote.map === undefined ? {} : { map: vote.map }),
       ...(vote.light === undefined ? {} : { light: vote.light }),
+      ...(vote.weather === undefined ? {} : { weather: vote.weather }),
     });
     const config = loadConfig(stringVars(this.env));
     const saved = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
@@ -3204,7 +3215,7 @@ export class Watcher extends DurableObject<Env> {
     return {
       ok: result.update !== null,
       reply: result.reply.replace(/\*\*/g, ''),
-      mine: { map: ballot?.map ?? null, light: ballot?.light ?? null },
+      mine: { map: ballot?.map ?? null, light: ballot?.light ?? null, weather: ballot?.weather ?? null },
       vote: saved === null ? null : publicVote(saved, Date.now()),
     };
   }

@@ -596,14 +596,17 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
-   A second row of buttons votes on the **conditions** (time of day and weather): groups of the server's lightings such as
-   Day, Night and Rain, and 🎲 Random. Each person has one vote on the map and one on the conditions, each changed on its
-   own. The groups are matched from the ids and names of the lightings the server lists (day, night, rain or storm, fog,
-   dusk, overcast, dawn, snow, in that order; the server's ids start with Day, so DayStart… is dawn, DayEnd… is dusk and
-   …Gray… is overcast), at most four plus Random, and a group the server has no lighting for isn't offered. With fewer than
-   two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain; but rain, fog and snow are their own groups, so a rainy afternoon is in Rain only, never in Day. The
-   group with the most votes (a tie by chance) gives a random lighting from it, and Random picks from all of them. With no
-   votes on it, the lighting stays as the rotation has it. It is part of the same message, so nothing more is announced.
+   Two more rows of buttons vote on the **time of day** (Morning, Day, Afternoon, Dusk, Night) and the **weather** (Clear,
+   Fog, Rain, Snow), each with 🎲 Random. Each person has one vote on the map, one on the time of day and one on the weather,
+   each changed on its own. They are matched from the ids and names of the lightings the server lists: its ids start with
+   Day and say the time after it (DayStart… and DayEarly… are Morning, DayLate… is Afternoon, DayEnd… is Dusk), and
+   …Rain…, …Fog… and …Snow… are the weather, with everything else, overcast (…Gray…) included, Clear. A group the server has
+   no lighting for isn't offered, at most four plus Random, and with fewer than two groups on a row there is no such row.
+   The winning time and weather (each a tie by chance) give a random lighting that has both. When none does, the weather
+   wins: the lighting is one with that weather and the time nearest the one chosen (Dusk and Rain gives the afternoon rain).
+   With only a time voted on, it is a clear lighting at that time when there is one; with only weather, any time. Random
+   picks from all lightings. With no votes on either, the lighting stays as the rotation has it. It is part of the same
+   message, so nothing more is announced.
    Nothing is sent to the server that its own catalogue (`/v1/catalog/...`) does not list: only maps that list a game mode
    and infantry only themselves are offered, the infantry only id sent is that map's own, and every lighting is one the server
    listed. If the catalogue can't confirm the winner, nothing is staged (the vote retries until the match ends).
@@ -611,7 +614,7 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). Closing picks the winner and takes the buttons
    away; nothing is sent to the server yet. A match already at that score when the bot sees it gets no vote.
 4. The map with the most votes (a tie is settled by chance) is put on the server, **infantry only**, with the lighting the
-   conditions vote chose. `MAP_VOTE_STAGING` says how:
+   time of day and weather votes chose. `MAP_VOTE_STAGING` says how:
    - `rotation` (default): the map is put into the server's rotation as the next map, as soon as the vote closes, without
      cutting the match on now short. A build that serves the live rotation edit routes (`POST /v1/rotation/entries` and
      `POST /v1/rotation/entries/{index}/move`, listed in `GET /v1/capabilities`) gets it the way "Set as next map" in the

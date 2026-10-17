@@ -12,10 +12,11 @@ import type { MapChoice } from './rotationspage.ts';
 // One vote per person is one per Discord account: a ballot is the voter's Discord user ID, and pressing a button again
 // moves it. Only members of the server can press the buttons (checked in interactions.ts).
 //
-// A second row of buttons votes on the conditions (time of day and weather): groups of the server's lightings such as Day,
-// Night and Rain, and Random. Each person has one vote on the map and one on the conditions. The winning group gives a
-// random lighting from it; with no votes on it, the lighting is left as the rotation has it. It is part of the same
-// message, so it adds nothing for people to read.
+// Two more rows of buttons vote on the conditions: the time of day (Morning, Day, Afternoon, Dusk, Night) and the weather
+// (Clear, Fog, Rain, Snow), each with Random, as groups of the server's lightings. Each person has one vote on the map, one
+// on the time of day and one on the weather. The winning time and weather give a lighting that has both; with no such
+// lighting the weather wins, and the time nearest the one chosen is used. With no votes on either, the lighting is left as
+// the rotation has it. It is part of the same message, so it adds nothing for people to read.
 
 export const MAP_VOTE_KEY = 'mapVote';
 
@@ -48,12 +49,13 @@ export type VoteOption = { map: string; name: string };
 // One of the server's lightings (times of day and weather, such as DayClear), by id and the name to show.
 export type Lighting = { id: string; name: string };
 
-// A choice on the conditions row: the lightings it covers (a group such as Night, or every one for Random).
+// A choice on the time of day or the weather row: the lightings it covers (a group such as Dusk or Rain, or every one for
+// Random).
 export type ConditionOption = { key: string; label: string; lightings: Lighting[] };
 
-// `user` is the voter's Discord user ID. It is never sent to the website. `map` and `light` are what they picked, each null
-// until they vote on it.
-export type Ballot = { user: string; map: string | null; light: string | null; at: number };
+// `user` is the voter's Discord user ID. It is never sent to the website. `map`, `light` (the time of day; the name is from
+// when it was the only conditions vote) and `weather` are what they picked, each null until they vote on it.
+export type Ballot = { user: string; map: string | null; light: string | null; weather: string | null; at: number };
 
 // How a vote ended: the map the server was told to play next, or why it was not told.
 export type VoteOutcome = {
@@ -80,13 +82,17 @@ export type MapVote = {
   // The score a team reaching closes the vote. 0 when unknown (a vote saved before this was kept): then only time closes it.
   closeScore: number;
   options: VoteOption[];
-  // The conditions row: empty when the server's lightings give fewer than two groups to choose between.
+  // The time of day row: empty when the server's lightings give fewer than two groups to choose between.
   conditions: ConditionOption[];
+  // The weather row, likewise.
+  weather: ConditionOption[];
   ballots: Ballot[];
   // The Discord message the vote is in, to update as votes come and when it ends.
   message: { channelId: string; messageId: string } | null;
   outcome: VoteOutcome | null;
 };
+
+const OptionSchema = z.object({ key: z.string(), label: z.string(), lightings: z.array(z.object({ id: z.string(), name: z.string() })) });
 
 const MapVoteSchema = z.object({
   id: z.string(),
@@ -96,11 +102,16 @@ const MapVoteSchema = z.object({
   closesAt: z.number(),
   closeScore: z.number().default(0),
   options: z.array(z.object({ map: z.string(), name: z.string() })),
-  conditions: z
-    .array(z.object({ key: z.string(), label: z.string(), lightings: z.array(z.object({ id: z.string(), name: z.string() })) }))
-    .default([]),
+  conditions: z.array(OptionSchema).default([]),
+  weather: z.array(OptionSchema).default([]),
   ballots: z.array(
-    z.object({ user: z.string(), map: z.string().nullable().default(null), light: z.string().nullable().default(null), at: z.number() }),
+    z.object({
+      user: z.string(),
+      map: z.string().nullable().default(null),
+      light: z.string().nullable().default(null),
+      weather: z.string().nullable().default(null),
+      at: z.number(),
+    }),
   ),
   message: z.object({ channelId: z.string(), messageId: z.string() }).nullable().default(null),
   outcome: z
@@ -172,39 +183,66 @@ export const pickOptions = (
   return sample(pool, count, random).map((m) => ({ map: m.id, name: m.name }));
 };
 
-// The groups the conditions row can offer, in the order they are kept when there are more than fit (a row holds five
-// buttons and Random is one). A lighting is in every group its id or name fits, so Night covers a rainy night too. The
-// names are matched, not listed, as the server's catalogue decides what lightings there are. The server's ids all begin
-// with Day (DayStartClear, DayEarlyFog, DayLateGray, DayLateRain, DayEndClear), so Start is dawn and End is dusk, not day,
-// and Gray is overcast. Weather comes before the times that are one lighting each, as it is what players tell apart.
-// Rain, fog and snow are their own choices: a lighting with one of them is not also in Day, Dusk or Dawn, so voting for
-// a clear day never gives rain. (Night is the exception: a rainy night is in Night and in Rain.)
-const WET = /rain|storm|thunder|shower|fog|mist|snow/i;
-const CONDITION_GROUPS = [
-  { key: 'day', label: 'Day', pattern: /day(?!start|end)|noon|morning/i, dry: true },
-  { key: 'night', label: 'Night', pattern: /night/i, dry: false },
-  { key: 'rain', label: 'Rain', pattern: /rain|storm|thunder|shower/i, dry: false },
-  { key: 'fog', label: 'Fog', pattern: /fog|mist/i, dry: false },
-  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening|dayend/i, dry: true },
-  { key: 'overcast', label: 'Overcast', pattern: /overcast|cloud|gr[ae]y/i, dry: false },
-  { key: 'dawn', label: 'Dawn', pattern: /dawn|sunrise|daystart/i, dry: true },
-  { key: 'snow', label: 'Snow', pattern: /snow/i, dry: false },
+// The time of day and the weather of a lighting, from its id and name. The server's ids all begin with Day and say the time
+// after it (DayStartClear, DayEarlyFog, DayClear, DayLateGray, DayLateRain, DayEndClear): Start is dawn and Early the
+// morning, so both are Morning; Late is the afternoon and End is dusk. The weather is Clear, Fog, Rain or Snow, and Gray
+// (overcast) counts as Clear. The names are matched, not listed, as the server's catalogue decides what lightings there are.
+const TIMES = [
+  { key: 'morning', label: 'Morning', pattern: /dawn|sunrise|morning|daystart|dayearly/i },
+  { key: 'day', label: 'Day', pattern: /day|noon/i },
+  { key: 'afternoon', label: 'Afternoon', pattern: /afternoon|daylate/i },
+  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening|dayend/i },
+  { key: 'night', label: 'Night', pattern: /night/i },
 ] as const;
+// What decides a lighting's time when its text fits more than one of the above (DayEndClear has "day" and "dayend").
+const TIME_CHECKS = ['night', 'dusk', 'morning', 'afternoon', 'day'] as const;
+// Which times are kept when there are more than fit on the row (five buttons, and Random is one).
+const TIME_PRIORITY = ['day', 'night', 'dusk', 'morning', 'afternoon'] as const;
+
+const WEATHERS = [
+  { key: 'clear', label: 'Clear', pattern: /^$/ },
+  { key: 'fog', label: 'Fog', pattern: /fog|mist/i },
+  { key: 'rain', label: 'Rain', pattern: /rain|storm|thunder|shower/i },
+  { key: 'snow', label: 'Snow', pattern: /snow/i },
+] as const;
+// Rain comes before fog when a lighting has both. Each of these is kept, as there are only four.
+const WEATHER_CHECKS = ['rain', 'fog', 'snow'] as const;
+
 const MAX_CONDITION_GROUPS = 4;
 export const RANDOM_CONDITION = 'random';
 
-// The conditions row for a server's lightings: the groups it has, and Random across all of them. Nothing (no row) when
-// there are fewer than two groups to choose between.
-export const conditionOptions = (lightings: readonly Lighting[]): ConditionOption[] => {
-  const groups = CONDITION_GROUPS.flatMap((g) => {
-    const own = lightings.filter((l) => {
-      const text = `${l.id} ${l.name}`;
-      return g.pattern.test(text) && !(g.dry && WET.test(text));
-    });
+const textOf = (l: Lighting): string => `${l.id} ${l.name}`;
+
+// The key of a lighting's time of day, or null when its id and name say none.
+export const timeOf = (l: Lighting): string | null =>
+  TIME_CHECKS.find((key) => TIMES.find((t) => t.key === key)!.pattern.test(textOf(l))) ?? null;
+
+// The key of a lighting's weather: clear unless it says otherwise.
+export const weatherOf = (l: Lighting): string => WEATHER_CHECKS.find((key) => WEATHERS.find((w) => w.key === key)!.pattern.test(textOf(l))) ?? 'clear';
+
+// A row for some groups of the server's lightings: the groups it has in the order shown, at most four kept by `priority`,
+// and Random across all the lightings. Nothing (no row) when there are fewer than two groups to choose between.
+const groupRow = (
+  lightings: readonly Lighting[],
+  groups: readonly { key: string; label: string }[],
+  priority: readonly string[],
+  keyOf: (l: Lighting) => string | null,
+): ConditionOption[] => {
+  const present = groups.flatMap((g) => {
+    const own = lightings.filter((l) => keyOf(l) === g.key);
     return own.length > 0 ? [{ key: g.key, label: g.label, lightings: own }] : [];
-  }).slice(0, MAX_CONDITION_GROUPS);
-  return groups.length < 2 ? [] : [...groups, { key: RANDOM_CONDITION, label: 'Random', lightings: [...lightings] }];
+  });
+  const kept = new Set(priority.filter((key) => present.some((g) => g.key === key)).slice(0, MAX_CONDITION_GROUPS));
+  const shown = present.filter((g) => kept.has(g.key));
+  return shown.length < 2 ? [] : [...shown, { key: RANDOM_CONDITION, label: 'Random', lightings: [...lightings] }];
 };
+
+// The time of day row for a server's lightings (Morning, Day, Afternoon, Dusk, Night, and Random).
+export const conditionOptions = (lightings: readonly Lighting[]): ConditionOption[] => groupRow(lightings, TIMES, TIME_PRIORITY, timeOf);
+
+// The weather row (Clear, Fog, Rain, Snow, and Random).
+export const weatherOptions = (lightings: readonly Lighting[]): ConditionOption[] =>
+  groupRow(lightings, WEATHERS, ['clear', 'rain', 'fog', 'snow'], weatherOf);
 
 export const openVote = (
   match: { startedAt: number },
@@ -214,6 +252,7 @@ export const openVote = (
   now: number,
   closeScore: number,
   conditions: ConditionOption[] = [],
+  weather: ConditionOption[] = [],
 ): MapVote => ({
   id: String(match.startedAt),
   matchStartedAt: match.startedAt,
@@ -223,6 +262,7 @@ export const openVote = (
   closeScore,
   options,
   conditions,
+  weather,
   ballots: [],
   message: null,
   outcome: null,
@@ -230,18 +270,25 @@ export const openVote = (
 
 export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
 
-// One ballot per Discord user, with a vote on the map and one on the conditions: voting again moves that vote, and the
-// other stays. A vote for what they already chose changes nothing. `ballot` has the map or the conditions, not both.
-export const castVote = (vote: MapVote, ballot: { user: string; map?: string; light?: string }, now: number): CastResult => {
+// One ballot per Discord user, with a vote on the map, one on the time of day and one on the weather: voting again moves that
+// vote, and the others stay. A vote for what they already chose changes nothing. `ballot` has one of the three.
+export const castVote = (vote: MapVote, ballot: { user: string; map?: string; light?: string; weather?: string }, now: number): CastResult => {
   if (!isOpen(vote, now)) return { result: 'closed' };
-  const { map, light } = ballot;
-  if ((map === undefined) === (light === undefined)) return { result: 'unknown-map' };
+  const { map, light, weather } = ballot;
+  if ([map, light, weather].filter((v) => v !== undefined).length !== 1) return { result: 'unknown-map' };
   if (map !== undefined && !vote.options.some((o) => o.map === map)) return { result: 'unknown-map' };
   if (light !== undefined && !vote.conditions.some((c) => c.key === light)) return { result: 'unknown-map' };
+  if (weather !== undefined && !vote.weather.some((c) => c.key === weather)) return { result: 'unknown-map' };
   const had = vote.ballots.find((b) => b.user === ballot.user);
   const others = vote.ballots.filter((b) => b.user !== ballot.user);
-  const next: Ballot = { user: ballot.user, map: map ?? had?.map ?? null, light: light ?? had?.light ?? null, at: now };
-  const before = map !== undefined ? had?.map : had?.light;
+  const next: Ballot = {
+    user: ballot.user,
+    map: map ?? had?.map ?? null,
+    light: light ?? had?.light ?? null,
+    weather: weather ?? had?.weather ?? null,
+    at: now,
+  };
+  const before = map !== undefined ? had?.map : light !== undefined ? had?.light : had?.weather;
   return { vote: { ...vote, ballots: [...others, next] }, result: before == null ? 'counted' : 'changed' };
 };
 
@@ -261,22 +308,53 @@ export const chooseWinner = (vote: MapVote, random: () => number): string | null
   )[0]!.map;
 };
 
-// Votes for each choice on the conditions row, in the order they were offered.
+// Votes for each choice on the time of day row, in the order they were offered.
 export const tallyConditions = (vote: MapVote): { key: string; label: string; votes: number }[] =>
   vote.conditions.map((c) => ({ key: c.key, label: c.label, votes: vote.ballots.filter((b) => b.light === c.key).length }));
 
-// The lighting the conditions vote chose: a random one from the group with the most votes (a tie is settled by chance), or
-// null when nobody voted on it, and then the lighting stays as the rotation has it.
-export const chooseConditions = (vote: MapVote, random: () => number): Lighting | null => {
-  const counts = tallyConditions(vote);
-  const top = Math.max(0, ...counts.map((c) => c.votes));
+// Votes for each choice on the weather row.
+export const tallyWeather = (vote: MapVote): { key: string; label: string; votes: number }[] =>
+  vote.weather.map((c) => ({ key: c.key, label: c.label, votes: vote.ballots.filter((b) => b.weather === c.key).length }));
+
+// The choice on a row with the most votes (a tie is settled by chance), or null when nobody voted on it.
+const leader = (options: readonly ConditionOption[], votes: readonly { key: string; votes: number }[], random: () => number): ConditionOption | null => {
+  const top = Math.max(0, ...votes.map((v) => v.votes));
   if (top === 0) return null;
-  const group = sample(
-    counts.filter((c) => c.votes === top),
+  const won = sample(
+    votes.filter((v) => v.votes === top),
     1,
     random,
   )[0]!;
-  return sample(vote.conditions.find((c) => c.key === group.key)?.lightings ?? [], 1, random)[0] ?? null;
+  return options.find((o) => o.key === won.key) ?? null;
+};
+
+// Of the lightings, those whose time of day is nearest `time` (all of them when it has no place, as Random has none).
+const nearestTime = (lightings: readonly Lighting[], time: string): Lighting[] => {
+  const at = TIMES.findIndex((t) => t.key === time);
+  const distance = (l: Lighting): number => {
+    const key = timeOf(l);
+    return at < 0 || key === null ? Infinity : Math.abs(TIMES.findIndex((t) => t.key === key) - at);
+  };
+  const best = Math.min(...lightings.map(distance));
+  return best === Infinity ? [...lightings] : lightings.filter((l) => distance(l) === best);
+};
+
+// The lighting the time of day and weather votes chose, or null when nobody voted on either, and then the lighting stays as
+// the rotation has it. The winning time and weather give a lighting that has both. When none does the weather wins, with the
+// time nearest the one chosen. With only a time, the lighting is a clear one when that time has one; with only weather, any time.
+export const chooseConditions = (vote: MapVote, random: () => number): Lighting | null => {
+  const time = leader(vote.conditions, tallyConditions(vote), random);
+  const weather = leader(vote.weather, tallyWeather(vote), random);
+  const pick = (lightings: readonly Lighting[]): Lighting | null => sample(lightings, 1, random)[0] ?? null;
+  if (time !== null && weather !== null) {
+    const ids = new Set(weather.lightings.map((l) => l.id));
+    const both = time.lightings.filter((l) => ids.has(l.id));
+    return pick(both.length > 0 ? both : nearestTime(weather.lightings, time.key));
+  }
+  if (weather !== null) return pick(weather.lightings);
+  if (time === null) return null;
+  const clear = time.key === RANDOM_CONDITION ? [] : time.lightings.filter((l) => weatherOf(l) === 'clear');
+  return pick(clear.length > 0 ? clear : time.lightings);
 };
 
 // Whether people can vote on this match right now: the vote is for this match, which has not ended, its time has not run out
@@ -319,8 +397,10 @@ export type PublicVote = {
   closedAt: number | null;
   options: { map: string; name: string; votes: number }[];
   total: number;
-  // The conditions row with its votes; empty when there is none.
+  // The time of day row with its votes; empty when there is none.
   conditions: { key: string; label: string; votes: number }[];
+  // The weather row with its votes, likewise.
+  weather: { key: string; label: string; votes: number }[];
   // The lighting the conditions vote chose, once it has, such as "Night, rain".
   lightingName: string | null;
   // The map that won and is on its way to the server, when the vote ended with one.
@@ -346,6 +426,7 @@ export const publicVote = (vote: MapVote, now: number): PublicVote => {
     options,
     total: options.reduce((sum, o) => sum + o.votes, 0),
     conditions: tallyConditions(vote),
+    weather: tallyWeather(vote),
     lightingName: vote.outcome?.lightingName ?? null,
     winner: winner === null ? null : { map: winner, name: options.find((o) => o.map === winner)?.name ?? mapName(winner) },
     infantryOnly: true,
@@ -366,6 +447,7 @@ export const NOTE = {
 // the most Discord allows.
 export const VOTE_ID_PREFIX = 'mapvote';
 export const LIGHT_ID_PREFIX = 'maplight';
+export const WEATHER_ID_PREFIX = 'mapweather';
 const BAR_WIDTH = 12;
 const barOf = (votes: number, total: number): string => {
   const filled = total === 0 ? 0 : Math.round((votes / total) * BAR_WIDTH);
@@ -379,13 +461,23 @@ const OVER_COLOUR = 0x8a94a3;
 
 export type VoteMessage = { embeds: Embed[]; components: unknown[]; allowed_mentions: { parse: never[] } };
 
+// What the description asks people to vote on besides the map.
+const conditionsAsked = (shown: PublicVote): string =>
+  shown.conditions.length > 0 && shown.weather.length > 0
+    ? ', the time of day and the weather'
+    : shown.conditions.length > 0
+      ? ' and the time of day'
+      : shown.weather.length > 0
+        ? ' and the weather'
+        : '';
+
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
   const shown = publicVote(vote, now);
   const at = `<t:${Math.floor(vote.closesAt / 1000)}:R>`;
   const closing = vote.closeScore > 0 ? `when a team reaches ${vote.closeScore} points, or ${at}, whichever is first.` : `${at}.`;
   const where = siteUrl === undefined ? '' : ` Results also on ${siteUrl.replace(/\/$/, '')}/vote.`;
   const description = shown.open
-    ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**${shown.conditions.length > 0 ? ' and the conditions' : ''}. ` +
+    ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**${conditionsAsked(shown)}. ` +
       `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${where}`
     : shown.winner !== null
       ? shown.pending
@@ -401,11 +493,13 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
       value: `${barOf(o.votes, shown.total)} ${o.votes} ${o.votes === 1 ? 'vote' : 'votes'}`,
     })),
   };
-  // The conditions as one line, so the row adds a field and not a field each.
-  if (shown.conditions.length > 0 && (shown.open || shown.winner !== null)) {
+  // The time of day and the weather as a line each, so a row adds one field and not a field per button.
+  if (shown.open || shown.winner !== null) {
+    const line = (rows: { label: string; votes: number }[]): string => rows.map((c) => `**${c.label}** ${c.votes}`).join(' · ');
     embed.fields = [
       ...(embed.fields ?? []),
-      { name: '🌤️ Conditions', value: shown.conditions.map((c) => `**${c.label}** ${c.votes}`).join(' · ') },
+      ...(shown.conditions.length > 0 ? [{ name: '🕒 Time of day', value: line(shown.conditions) }] : []),
+      ...(shown.weather.length > 0 ? [{ name: '🌦️ Weather', value: line(shown.weather) }] : []),
     ];
   }
   const buttons = shown.open
@@ -420,22 +514,22 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
     type: 1,
     components: buttons.slice(i * BUTTONS_PER_ROW, (i + 1) * BUTTONS_PER_ROW),
   }));
-  // The conditions row: its own row, so it is clear it is a second vote.
-  const conditionButtons =
-    shown.open && vote.conditions.length > 0
+  // The time of day and weather rows: a row each, so it is clear they are votes of their own.
+  const conditionRow = (options: ConditionOption[], prefix: string) =>
+    shown.open && options.length > 0
       ? [
           {
             type: 1,
-            components: vote.conditions.map((c) => ({
+            components: options.map((c) => ({
               type: 2,
               style: SECONDARY,
               label: c.key === RANDOM_CONDITION ? '🎲 Random' : c.label,
-              custom_id: `${LIGHT_ID_PREFIX}:${vote.id}:${c.key}`,
+              custom_id: `${prefix}:${vote.id}:${c.key}`,
             })),
           },
         ]
       : [];
-  const components = [...rows, ...conditionButtons];
+  const components = [...rows, ...conditionRow(vote.conditions, LIGHT_ID_PREFIX), ...conditionRow(vote.weather, WEATHER_ID_PREFIX)];
   return { embeds: [embed], components, allowed_mentions: { parse: [] } };
 };
 
@@ -445,10 +539,16 @@ export const parseVoteButton = (customId: string | undefined): { poll: string; m
   return found === null ? null : { poll: found[1]!, map: found[2]! };
 };
 
-// A conditions button's custom_id: "maplight:<vote id>:<group>". Null for anything else.
+// A time of day button's custom_id: "maplight:<vote id>:<group>". Null for anything else.
 export const parseLightButton = (customId: string | undefined): { poll: string; light: string } | null => {
   const found = /^maplight:(\d{1,20}):([a-z]{1,16})$/.exec(customId ?? '');
   return found === null ? null : { poll: found[1]!, light: found[2]! };
+};
+
+// A weather button's custom_id: "mapweather:<vote id>:<group>". Null for anything else.
+export const parseWeatherButton = (customId: string | undefined): { poll: string; weather: string } | null => {
+  const found = /^mapweather:(\d{1,20}):([a-z]{1,16})$/.exec(customId ?? '');
+  return found === null ? null : { poll: found[1]!, weather: found[2]! };
 };
 
 // The link to the vote's message in Discord, while it is open and was posted.
