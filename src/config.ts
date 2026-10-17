@@ -57,6 +57,17 @@ const EnvSchema = z
     DISCORD_MODLOG_WEBHOOK_URL: webhookUrl.optional(),
     DISCORD_ROLE_ID: numericId.optional(),
     DISCORD_INVITE: invite.optional(),
+    // Player accounts (see accounts.ts): the role a player gets for linking their Steam account, and the one they have
+    // while they have seeder VIP. Both optional; the bot's role must be above them. Need DISCORD_BOT_TOKEN.
+    DISCORD_LINKED_ROLE_ID: numericId.optional(),
+    DISCORD_VIP_ROLE_ID: numericId.optional(),
+    // A path on the website that sends people to the Discord invite and counts the click, such as /discord. The welcome
+    // message gives it instead of the invite code: it is short enough to type. It needs the website to have the path.
+    DISCORD_SHORT_LINK: z
+      .string()
+      .trim()
+      .regex(/^\/[\w-]+$/, 'must be a path on the website, like /discord')
+      .optional(),
     // The community website; Discord posts link to it.
     SITE_URL: z.url({ protocol: /^https?$/ }).optional(),
     // The server's ID for Join by ID in the game's server browser; the status posts show it so people can join.
@@ -181,6 +192,8 @@ export type Config = {
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
+  // What the bot does for player accounts: the roles, and whether it can send them messages and add them to the server.
+  accounts: { linkedRoleId: string | undefined; vipRoleId: string | undefined; botToken: string | undefined };
   // The server's ID for Join by ID in game, when set.
   serverId: string | undefined;
   pollIntervalMs: number;
@@ -238,6 +251,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,
+    accounts: { linkedRoleId: e.DISCORD_LINKED_ROLE_ID, vipRoleId: e.DISCORD_VIP_ROLE_ID, botToken: e.DISCORD_BOT_TOKEN || undefined },
     serverId: e.SERVER_ID,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,
     rules: {
@@ -276,7 +290,12 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
         ? {
             afterMs: e.WELCOME_MESSAGE_MINUTES * 60_000,
             siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null,
-            discord: e.DISCORD_INVITE ? discordLink(e.DISCORD_INVITE) : null,
+            discord:
+              e.SITE_URL && e.DISCORD_SHORT_LINK
+                ? `${new URL(e.SITE_URL).host}${e.DISCORD_SHORT_LINK}`
+                : e.DISCORD_INVITE
+                  ? discordLink(e.DISCORD_INVITE)
+                  : null,
           }
         : null,
     matchEndMessages:

@@ -8,6 +8,7 @@ import {
   chooseConditions,
   chooseWinner,
   closeDue,
+  isOpen as isOpenVote,
   matchIsOver,
   conditionOptions,
   closeScoreFor,
@@ -49,14 +50,46 @@ import {
   type AdminSteamSources,
 } from './admin.ts';
 import {
+  forget,
+  growth,
+  isMemberNow,
+  linkedMembers,
+  linkWithProof,
+  recordSignIn,
+  setAlerts,
+  setPrivate,
+  syncAccounts,
+  unlink,
+  view as viewAccount,
+  type ActionResult,
+  type BookDeps,
+  type BookStorage,
+  type Growth,
+  type SignInResult,
+} from './accountbook.ts';
+import { parseSteamLink, readAccountAction, readWebVote, steamLinkKey, type AccountAction, type AccountView, type WebVote } from './accounts.ts';
+import { addMember, isMember as botIsMember, sendDirectMessage, setRole } from './accountsdiscord.ts';
+import { DISCORD_CLICKS_KEY, parseClicks, sourceOf, summarise as summariseClicks, withClick, type ClickSummary } from './discordclicks.ts';
+import { steamLoginUrl, verifySteamClaim } from './steamopenid.ts';
+import {
+  ACCOUNT_PAGE,
   adminAuthConfig,
+  type AdminAuthConfig,
+  type JoinOutcome,
+  type LoginState,
   ADMIN_PAGE,
   CALLBACK_PATH,
-  checkState,
   CLEAR_LOGIN_COOKIE,
+  createPlayerSession,
   createSession,
+  createSteamProof,
   finishLogin,
+  finishPlayerLogin,
   notSetUpText,
+  peekState,
+  readPlayerSession,
+  readState,
+  readSteamProof,
   siteOriginOf,
   readSession,
   returnAddress,
@@ -462,6 +495,9 @@ const stringVars = (env: Env): Record<string, string> =>
   Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
+
+// Player accounts: how often a check gives roles and sends messages, and how long who is linked is remembered.
+const ACCOUNTS_EVERY_MS = 5 * 60_000;
 
 const SEEDERS_LISTED = 25;
 // Recent matches are the last 10, so their records are among the newest few.
@@ -1038,6 +1074,7 @@ export class Watcher extends DurableObject<Env> {
       store: this.stateStore(),
       lines: () => this.lines(),
       staff: () => this.staffSteam(),
+      linked: () => this.linkedSteam(),
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
       matchFeed: () => this.matchFeed(),
@@ -1058,6 +1095,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
+    await this.keepAccounts(config);
     await this.serial(() => this.updateRotation(config, seen.snapshot));
     await this.updateMapVote(config, seen.snapshot);
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
@@ -2876,6 +2914,11 @@ export class Watcher extends DurableObject<Env> {
       }
       const linked = linkSteam(profiles, user, action.steamId, Date.now());
       if ('problem' in linked) return linked;
+      // A player who proved the Steam account is theirs (see accounts.ts) has it; staff only typed it in.
+      const player = parseSteamLink(await storage.get(steamLinkKey(linked.steamId)));
+      if (player !== null && player.u !== user.id) {
+        return { problem: 'That Steam account is linked to a player, who proved it with their Discord profile or Steam. Check the ID.' };
+      }
       await storage.put(STAFF_PROFILES_KEY, linked.profiles);
       console.info(`Staff page: ${JSON.stringify(user.name)} (Discord user ${user.id}) linked Steam account ${linked.steamId}`);
       return { steamId: linked.steamId };
@@ -2885,6 +2928,211 @@ export class Watcher extends DurableObject<Env> {
     if (steamId === null) return { steamId, player: null };
     const seen = (await this.recentDays(Date.now())).findLast((d) => d.players[steamId] !== undefined);
     return { steamId, player: seen?.players[steamId]?.name ?? null };
+  }
+
+  // ---- Player accounts (see accounts.ts and accountbook.ts) ----
+
+  // Account changes and the passes that give roles and send messages run one at a time.
+  private accounting = oneAtATime();
+  private accountsSyncedAt = 0;
+  // Steam accounts of players in the server who linked, for the welcome message: read now and then, not at every welcome.
+  private linkedCache: { at: number; ids: Set<string> } | null = null;
+
+  private bookStorage(): BookStorage {
+    const storage = this.ctx.storage;
+    return {
+      get: (keys) => storage.get(keys),
+      put: (entries) => storage.put(entries),
+      delete: (keys) => storage.delete(keys),
+      list: (options) => storage.list(options),
+    };
+  }
+
+  // What the bot may do for accounts. Without DISCORD_BOT_TOKEN and DISCORD_GUILD_ID it can sign players in and link them,
+  // but it gives no roles, sends no messages and checks nobody's membership.
+  private accountDeps(config: Config): BookDeps {
+    const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
+    const { botToken, linkedRoleId, vipRoleId } = config.accounts;
+    const acting = botToken !== undefined && /^\d+$/.test(guildId);
+    return {
+      storage: this.bookStorage(),
+      now: Date.now(),
+      rule: {
+        roles: { ...(linkedRoleId === undefined ? {} : { linked: linkedRoleId }), ...(vipRoleId === undefined ? {} : { vip: vipRoleId }) },
+        messages: acting,
+        siteUrl: config.siteUrl,
+        vip: config.vip,
+      },
+      discord: acting
+        ? {
+            isMember: (userId) => botIsMember(botToken, guildId, userId),
+            setRole: (userId, roleId, on) => setRole(botToken, guildId, userId, roleId, on),
+            direct: (userId, text) => sendDirectMessage(botToken, userId, text),
+          }
+        : null,
+      log: { info: (message) => console.info(message), error: (message) => console.error(message) },
+    };
+  }
+
+  // The public id of a player's page, when they have been seen lately and can be found there.
+  private async playerPageId(steamId: string): Promise<string | null> {
+    if (!(await this.recentDays(Date.now())).some((d) => d.players[steamId] !== undefined)) return null;
+    return (await this.idsFor([steamId])).get(steamId) ?? null;
+  }
+
+  private async lastNameOf(steamId: string): Promise<string | null> {
+    return (await this.recentDays(Date.now())).findLast((d) => d.players[steamId] !== undefined)?.players[steamId]?.name ?? null;
+  }
+
+  // One pass of roles and messages. After a sign-in or a change it runs at once; the checks run it every few minutes.
+  private async syncAccountsNow(config: Config, force: boolean): Promise<void> {
+    await syncAccounts(this.accountDeps(config), parseVipState(await this.ctx.storage.get('vip')), force);
+  }
+
+  private async keepAccounts(config: Config): Promise<void> {
+    const now = Date.now();
+    if (now - this.accountsSyncedAt < ACCOUNTS_EVERY_MS) return;
+    this.accountsSyncedAt = now;
+    try {
+      await this.accounting(() => this.syncAccountsNow(config, false));
+    } catch (error) {
+      console.error(`Player accounts: the pass failed: ${errorText(error)}`);
+    }
+  }
+
+  private syncSoon(config: Config): void {
+    this.linkedCache = null;
+    this.ctx.waitUntil(
+      this.accounting(() => this.syncAccountsNow(config, true)).catch((error: unknown) => console.error(`Player accounts: the pass failed: ${errorText(error)}`)),
+    );
+  }
+
+  // A player signed in with Discord on the website. `login.steamId` is the Steam account on their Discord profile.
+  async accountSignIn(
+    user: { id: string; name: string },
+    login: { member: boolean; joined: boolean; steamId: string | null; roles: string[] | null },
+  ): Promise<SignInResult> {
+    const config = loadConfig(stringVars(this.env));
+    const result = await this.accounting(async () =>
+      recordSignIn(this.accountDeps(config), user, login, parseVipState(await this.ctx.storage.get('vip'))),
+    );
+    this.syncSoon(config);
+    return result;
+  }
+
+  // What the account page shows. Null when they have no account.
+  async accountView(userId: string): Promise<AccountView | null> {
+    const config = loadConfig(stringVars(this.env));
+    return this.accounting(async () => {
+      const deps = this.accountDeps(config);
+      return viewAccount(
+        {
+          ...deps,
+          canJoin: deps.discord !== null,
+          playerPage: (steamId) => this.playerPageId(steamId),
+          ballotOf: async (id) => {
+            const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
+            const ballot = vote === null || !isOpenVote(vote, Date.now()) ? undefined : vote.ballots.find((b) => b.user === id);
+            return vote === null || ballot === undefined ? null : { poll: vote.id, map: ballot.map, light: ballot.light };
+          },
+        },
+        userId,
+        parseVipState(await this.ctx.storage.get('vip')),
+      );
+    });
+  }
+
+  // Links the Steam account Steam's sign-in vouched for (`steamId`, from a proof the Worker checked) to the signed-in player.
+  async accountLinkSteam(userId: string, steamId: string): Promise<{ steamId: string } | { problem: string }> {
+    const config = loadConfig(stringVars(this.env));
+    const result = await this.accounting(async () =>
+      linkWithProof(this.accountDeps(config), userId, steamId, parseVipState(await this.ctx.storage.get('vip'))),
+    );
+    if ('problem' in result) {
+      return {
+        problem:
+          result.problem === 'steam-taken'
+            ? 'That Steam account was linked by a staff member. Ask staff in the Discord to sort it out.'
+            : result.problem === 'no-account'
+              ? 'Sign in again.'
+              : 'That is not a Steam account.',
+      };
+    }
+    this.syncSoon(config);
+    return result;
+  }
+
+  async accountAct(userId: string, action: Exclude<AccountAction, { action: 'steam' }>): Promise<ActionResult> {
+    const config = loadConfig(stringVars(this.env));
+    const result = await this.accounting(async () => {
+      const deps = this.accountDeps(config);
+      switch (action.action) {
+        case 'unlink':
+          return unlink(deps, userId);
+        case 'alerts':
+          return setAlerts(deps, userId, action.on);
+        case 'private':
+          return setPrivate(deps, userId, action.on, (steamId) => this.lastNameOf(steamId));
+        case 'forget':
+          return forget(deps, userId);
+      }
+    });
+    if (action.action === 'unlink') this.syncSoon(config);
+    this.linkedCache = null;
+    return result;
+  }
+
+  // Whether this player is in the server now, for voting on the website.
+  async accountIsMember(userId: string): Promise<boolean> {
+    const config = loadConfig(stringVars(this.env));
+    return this.accounting(() => isMemberNow(this.accountDeps(config), userId));
+  }
+
+  // A vote cast on the website by a signed-in member: counted as the button in Discord is, and the Discord message updated.
+  async castWebVote(
+    userId: string,
+    vote: WebVote,
+  ): Promise<{ ok: boolean; reply: string; mine: { map: string | null; light: string | null }; vote: PublicVote | null }> {
+    const result = await this.castMapVote({
+      poll: vote.poll,
+      userId,
+      ...(vote.map === undefined ? {} : { map: vote.map }),
+      ...(vote.light === undefined ? {} : { light: vote.light }),
+    });
+    const config = loadConfig(stringVars(this.env));
+    const saved = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
+    if (result.update !== null && saved !== null && config.mapVote !== null) await this.showVote(config, config.mapVote, saved);
+    const ballot = saved?.ballots.find((b) => b.user === userId);
+    return {
+      ok: result.update !== null,
+      reply: result.reply.replace(/\*\*/g, ''),
+      mine: { map: ballot?.map ?? null, light: ballot?.light ?? null },
+      vote: saved === null ? null : publicVote(saved, Date.now()),
+    };
+  }
+
+  // Players in the server who linked their Steam account: their welcome in game leaves the invite out.
+  private async linkedSteam(): Promise<Set<string>> {
+    const now = Date.now();
+    if (this.linkedCache !== null && now - this.linkedCache.at < ACCOUNTS_EVERY_MS) return this.linkedCache.ids;
+    const ids = await linkedMembers(this.bookStorage());
+    this.linkedCache = { at: now, ids };
+    return ids;
+  }
+
+  // A click on the Discord invite (see discordclicks.ts).
+  async discordClick(src: string): Promise<void> {
+    await this.ctx.storage.put(DISCORD_CLICKS_KEY, withClick(parseClicks(await this.ctx.storage.get(DISCORD_CLICKS_KEY)), sourceOf(src), dayOf(Date.now())));
+  }
+
+  // For the staff page: clicks on the invite by place, and how many players have accounts.
+  async discordGrowth(): Promise<{ clicks: ClickSummary; accounts: Growth; members: number | null }> {
+    const stored = await this.ctx.storage.get([DISCORD_CLICKS_KEY, 'stats']);
+    return {
+      clicks: summariseClicks(parseClicks(stored.get(DISCORD_CLICKS_KEY)), dayOf(Date.now()), 30),
+      accounts: await growth(this.bookStorage()),
+      members: parseStats(stored.get('stats')).discord?.members ?? null,
+    };
   }
 
   // "Checked, they're fine" on a player, or taking it back, for the rest of the UTC day (see checked.ts). The check as it
@@ -3219,40 +3467,242 @@ const staffLogin = async (request: Request, vars: Record<string, string>): Promi
   return new Response(null, { status: 302, headers: { location, 'set-cookie': cookie, 'cache-control': 'no-store' } });
 };
 
+// Back to a page on the website, with a session or what went wrong after the #, which no server sees.
+const backToSite = (returnTo: string, fragment: string): Response =>
+  new Response(null, {
+    status: 302,
+    headers: {
+      location: `${returnTo}#${fragment}`,
+      'set-cookie': CLEAR_LOGIN_COOKIE,
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
+    },
+  });
+
+// Staff and players both come back here from Discord: the state they left with says which sign-in it was.
 const staffCallback = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
   const config = adminAuthConfig(vars);
   if ('missing' in config) return notSetUp(config.missing);
   const url = new URL(request.url);
-  // Back to the page, with the session or what went wrong after the #, which no server sees.
-  const back = (returnTo: string, fragment: string): Response =>
-    new Response(null, {
-      status: 302,
-      headers: {
-        location: `${returnTo}#${fragment}`,
-        'set-cookie': CLEAR_LOGIN_COOKIE,
-        'cache-control': 'no-store',
-        'referrer-policy': 'no-referrer',
-      },
-    });
-  const returnTo = await checkState(config.clientSecret, url.searchParams.get('state'), request.headers.get('cookie'), Date.now());
-  if (returnTo === null) return back(`${config.siteOrigin}${ADMIN_PAGE}`, 'error=expired');
+  const state = await readState(config.clientSecret, url.searchParams.get('state'), request.headers.get('cookie'), Date.now());
+  if (state === null) {
+    // Not this browser's sign-in, or too late: the page that asked, if the state at least names it, learns that.
+    const peeked = await peekState(config.clientSecret, url.searchParams.get('state'), Date.now());
+    const page = peeked?.flow === 'player' ? ACCOUNT_PAGE : ADMIN_PAGE;
+    return backToSite(`${config.siteOrigin}${page}`, 'error=expired');
+  }
+  if (state.flow === 'player') return playerCallback(request, vars, config, state, watcher);
+  const { returnTo } = state;
+  const back = (fragment: string): Response => backToSite(returnTo, fragment);
   const code = url.searchParams.get('code');
-  if (code === null) return back(returnTo, `error=${url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'}`);
+  if (code === null) return back(`error=${url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'}`);
   try {
     const result = await finishLogin(config, code, callbackUrl(request));
     if ('problem' in result) {
       console.info(`Staff sign-in refused: ${result.problem}`);
-      return back(returnTo, `error=${result.problem}`);
+      return back(`error=${result.problem}`);
     }
     console.info(`Staff signed in: ${JSON.stringify(result.user.name)} (Discord user ${result.user.id})`);
     const { id, name, username } = result.user;
     await watcher()
       .noteStaff(id, name, username)
       .catch((error: unknown) => console.error(`Noting a staff name failed: ${errorText(error)}`));
-    return back(returnTo, `session=${await createSession(config.clientSecret, result.user, Date.now())}`);
+    return back(`session=${await createSession(config.clientSecret, result.user, Date.now())}`);
   } catch (error) {
     console.error(`Staff sign-in failed: ${errorText(error)}`);
-    return back(returnTo, 'error=failed');
+    return back('error=failed');
+  }
+};
+
+// A player's sign-in (see accounts.ts): the same Discord callback as staff, a different session. The page is told after the
+// #: the session, whether they are in the server (`member`), what the "join" button did (`join`: added, already, banned or
+// unavailable), and what was found of their Steam account (`steam`: linked, none or taken).
+const playerCallback = async (
+  request: Request,
+  vars: Record<string, string>,
+  config: AdminAuthConfig,
+  state: LoginState,
+  watcher: () => DurableObjectStub<Watcher>,
+): Promise<Response> => {
+  const { returnTo } = state;
+  const url = new URL(request.url);
+  const code = url.searchParams.get('code');
+  if (code === null) return backToSite(returnTo, `error=${url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'}`);
+  const botToken = vars['DISCORD_BOT_TOKEN']?.trim();
+  try {
+    // Adding someone is the bot's, with the access token they gave. A failure is not a failed sign-in: they are told.
+    const join = async (userId: string, accessToken: string): Promise<JoinOutcome> => {
+      if (!botToken) return 'unavailable';
+      try {
+        return await addMember(botToken, config.guildId, userId, accessToken);
+      } catch (error) {
+        console.error(`Player sign-in: adding ${userId} to the server failed: ${errorText(error)}`);
+        return 'unavailable';
+      }
+    };
+    const login = await finishPlayerLogin(config, code, callbackUrl(request), state.join, join);
+    const { user } = login;
+    const result = await watcher().accountSignIn(
+      { id: user.id, name: user.name },
+      { member: login.member, joined: login.join === 'added', steamId: login.steamId, roles: login.roles },
+    );
+    console.info(`Player signed in: Discord user ${user.id} (member ${login.member}, join ${login.join ?? 'not asked'}, steam ${result.steam})`);
+    const session = await createPlayerSession(config.clientSecret, user, Date.now());
+    return backToSite(returnTo, `session=${session}&member=${login.member ? 1 : 0}&join=${login.join ?? 'no'}&steam=${result.steam}`);
+  } catch (error) {
+    console.error(`Player sign-in failed: ${errorText(error)}`);
+    return backToSite(returnTo, 'error=failed');
+  }
+};
+
+// GET /auth/player/login: a player signs in with Discord. `join=1` also asks Discord to let the bot add them to the server.
+const playerLogin = async (request: Request, vars: Record<string, string>): Promise<Response> => {
+  const config = adminAuthConfig(vars);
+  if ('missing' in config) return notSetUp(config.missing);
+  const params = new URL(request.url).searchParams;
+  const returnTo = returnAddress(params.get('return'), config.siteOrigin, ACCOUNT_PAGE);
+  const { location, cookie } = await startLogin(config, callbackUrl(request), returnTo, Date.now(), { flow: 'player', join: params.get('join') === '1' });
+  return new Response(null, { status: 302, headers: { location, 'set-cookie': cookie, 'cache-control': 'no-store' } });
+};
+
+const STEAM_CALLBACK_PATH = '/auth/steam/callback';
+
+// The cookie that ties a Steam sign-in to the browser that started it, as the Discord sign-in's does (LOGIN_COOKIE): its value is
+// in the address Steam sends the browser back to (`n`, which Steam signs), and only the browser with the cookie is taken.
+const STEAM_COOKIE = 'wardogs_steam';
+const STEAM_COOKIE_SECONDS = 10 * 60;
+
+// GET /auth/steam: sends the browser to Steam to sign in, to prove which Steam account is theirs.
+const steamLogin = (request: Request, vars: Record<string, string>): Response => {
+  const origin = siteOriginOf(vars);
+  if (origin === null) return notSetUp(['SITE_URL']);
+  const returnTo = returnAddress(new URL(request.url).searchParams.get('return'), origin, ACCOUNT_PAGE);
+  const mark = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  const callback = new URL(STEAM_CALLBACK_PATH, request.url);
+  callback.searchParams.set('return', returnTo);
+  callback.searchParams.set('n', mark);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: steamLoginUrl(callback.href, new URL(request.url).origin),
+      'set-cookie': `${STEAM_COOKIE}=${mark}; Path=/auth; Max-Age=${STEAM_COOKIE_SECONDS}; HttpOnly; Secure; SameSite=Lax`,
+      'cache-control': 'no-store',
+    },
+  });
+};
+
+const CLEAR_STEAM_COOKIE = `${STEAM_COOKIE}=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+
+// GET /auth/steam/callback: Steam sends the browser back. What Steam vouches for goes to the website as a proof, which the
+// player's own session turns into a link (the proof names no Discord user, so it is no use to anyone else). Only for the
+// browser that went to Steam: an address someone else got Steam to make cannot be used to link an account for a visitor.
+const steamCallback = async (request: Request, vars: Record<string, string>): Promise<Response> => {
+  const config = adminAuthConfig(vars);
+  if ('missing' in config) return notSetUp(config.missing);
+  const params = new URL(request.url).searchParams;
+  const returnTo = returnAddress(params.get('return'), config.siteOrigin, ACCOUNT_PAGE);
+  const to = (fragment: string): Response =>
+    new Response(null, {
+      status: 302,
+      headers: { location: `${returnTo}#${fragment}`, 'set-cookie': CLEAR_STEAM_COOKIE, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+    });
+  const cookie = /(?:^|;\s*)wardogs_steam=([0-9a-f]{32})(?:;|$)/.exec(request.headers.get('cookie') ?? '')?.[1];
+  const mark = params.get('n');
+  if (cookie === undefined || mark === null || cookie !== mark) return to('error=expired');
+  try {
+    const steamId = await verifySteamClaim(request.url);
+    if (steamId === null) return to('error=steam');
+    return to(`steamproof=${await createSteamProof(config.clientSecret, steamId, Date.now())}`);
+  } catch (error) {
+    console.error(`Steam sign-in failed: ${errorText(error)}`);
+    return to('error=steam');
+  }
+};
+
+// The account page's data and the website vote, for a signed-in player only. Like the staff page's: only the website may
+// read it from a browser, and nothing keeps a copy.
+const accountApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
+  const config = adminAuthConfig(vars);
+  const headers = {
+    'access-control-allow-origin': siteOriginOf(vars) ?? 'null',
+    'access-control-allow-headers': 'authorization, content-type',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-max-age': '600',
+    'cache-control': 'no-store',
+    vary: 'origin',
+  };
+  if ('missing' in config) console.error(notSetUpText(config.missing));
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  if ('missing' in config) return Response.json({ error: 'Sign-in is not set up yet.' }, { status: 503, headers });
+  const session = await readPlayerSession(config.clientSecret, request.headers.get('authorization'), Date.now());
+  if (session === null) return Response.json({ error: 'Sign in again' }, { status: 401, headers });
+  const route = `${request.method} ${new URL(request.url).pathname}`;
+  const unavailable = (what: string, error: unknown): Response => {
+    console.error(`Player account ${what} failed: ${errorText(error)}`);
+    return Response.json({ error: "Couldn't do that just now. Try again in a minute." }, { status: 503, headers });
+  };
+  if (route === 'GET /api/account') {
+    try {
+      const account = await watcher().accountView(session.userId);
+      // Forgotten (or never saved): their session means nothing now.
+      return account === null ? Response.json({ error: 'Sign in again' }, { status: 401, headers }) : Response.json(account, { headers });
+    } catch (error) {
+      return unavailable('page', error);
+    }
+  }
+  if (route === 'POST /api/account') {
+    const action = await readAccountAction(request);
+    if (action === null) return Response.json({ error: 'Not an account request' }, { status: 400, headers });
+    try {
+      if (action.action === 'steam') {
+        const steamId = await readSteamProof(config.clientSecret, action.proof, Date.now());
+        if (steamId === null) return Response.json({ error: 'That Steam sign-in has run out. Try again.' }, { status: 400, headers });
+        const linked = await watcher().accountLinkSteam(session.userId, steamId);
+        return 'problem' in linked ? Response.json({ error: linked.problem }, { status: 400, headers }) : Response.json({ ok: true }, { headers });
+      }
+      const result = await watcher().accountAct(session.userId, action);
+      return 'problem' in result ? Response.json({ error: result.problem }, { status: 400, headers }) : Response.json({ ok: true }, { headers });
+    } catch (error) {
+      return unavailable(action.action, error);
+    }
+  }
+  if (route === 'POST /api/account/vote') {
+    const vote = await readWebVote(request);
+    if (vote === null) return Response.json({ error: 'Not a vote' }, { status: 400, headers });
+    try {
+      if (!(await watcher().accountIsMember(session.userId))) {
+        return Response.json({ error: 'Join the Discord server to vote.', code: 'not-member' }, { status: 403, headers });
+      }
+      return Response.json(await watcher().castWebVote(session.userId, vote), { headers });
+    } catch (error) {
+      return unavailable('vote', error);
+    }
+  }
+  return Response.json({ error: 'Not found' }, { status: 404, headers });
+};
+
+// GET /go/discord?src=<place>: counts the click (see discordclicks.ts) and sends the browser to the invite. The count runs in
+// the background, so the redirect is not held up by it.
+const goDiscord = (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>, ctx: ExecutionContext): Response => {
+  const code = loadConfigQuiet(vars)?.inviteCode;
+  if (code === undefined) return new Response('Not found', { status: 404 });
+  ctx.waitUntil(
+    watcher()
+      .discordClick(sourceOf(new URL(request.url).searchParams.get('src')))
+      .catch((error: unknown) => console.error(`Counting a Discord click failed: ${errorText(error)}`)),
+  );
+  return new Response(null, {
+    status: 302,
+    headers: { location: `https://discord.gg/${code}`, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+  });
+};
+
+// The settings, or nothing when they are wrong: a bad setting elsewhere must not stop the invite working.
+const loadConfigQuiet = (vars: Record<string, string>): Config | null => {
+  try {
+    return loadConfig(vars);
+  } catch {
+    return null;
   }
 };
 
@@ -3525,6 +3975,15 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
       return Response.json({ error: 'The kill feed is unavailable' }, { status: 503, headers });
     }
   }
+  // The Discord growth card: clicks on the invite by place, and how many players have accounts.
+  if (route === 'GET /api/admin/growth') {
+    try {
+      return Response.json(await watcher().discordGrowth(), { headers });
+    } catch (error) {
+      console.error(`Staff page Discord growth failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't load the numbers just now." }, { status: 503, headers });
+    }
+  }
   if (route !== 'GET /api/admin/overview') return Response.json({ error: 'Not found' }, { status: 404, headers });
   try {
     const overview = await watcher().adminOverview(days);
@@ -3632,7 +4091,12 @@ export default {
     const watcher = () => env.WATCHER.get(env.WATCHER.idFromName('watcher'));
     if (request.method === 'POST' && url.pathname.endsWith(FEED_PATH)) return ingestKills(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname === '/auth/login') return staffLogin(request, stringVars(env));
+    if (request.method === 'GET' && url.pathname === '/auth/player/login') return playerLogin(request, stringVars(env));
     if (request.method === 'GET' && url.pathname === CALLBACK_PATH) return staffCallback(request, stringVars(env), watcher);
+    if (request.method === 'GET' && url.pathname === '/auth/steam') return steamLogin(request, stringVars(env));
+    if (request.method === 'GET' && url.pathname === STEAM_CALLBACK_PATH) return steamCallback(request, stringVars(env));
+    if (request.method === 'GET' && url.pathname === '/go/discord') return goDiscord(request, stringVars(env), watcher, ctx);
+    if (url.pathname === '/api/account' || url.pathname === '/api/account/vote') return accountApi(request, stringVars(env), watcher);
     if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname === '/api/review') return reviewApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.

@@ -39,6 +39,7 @@ const config: Config = {
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
+  accounts: { linkedRoleId: undefined, vipRoleId: undefined, botToken: undefined },
   serverId: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0, seedHoldMs: 0 },

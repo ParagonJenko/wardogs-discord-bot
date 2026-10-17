@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestHarness, type TestHarness } from 'wrangler';
-import { createSession } from '../src/adminauth.ts';
+import { createPlayerSession, createSession, startLogin } from '../src/adminauth.ts';
 import { SEASON } from '../src/season.ts';
 
 // The Worker as Cloudflare runs it: built from wrangler.jsonc by Wrangler and run in workerd, the same runtime, with the
@@ -432,6 +432,114 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       if (open) expect(early.body.roundup).toBeNull();
       else expect(early.body.roundup).toMatchObject({ kind: 'season', partial: true, players: 1 });
       expect(errors()).toEqual([]);
+    });
+  });
+
+  describe('player accounts', () => {
+    const player = { id: '100000000000000009', name: 'Player' };
+    const asPlayer = async (secret = CLIENT_SECRET) => ({ authorization: `Bearer ${await createPlayerSession(secret, player, Date.now())}` });
+
+    it('sends players to Discord for their connections, and to join only when they pressed the join button', async () => {
+      const scopeOf = async (path: string) => {
+        const login = await server.fetch(path, { redirect: 'manual' });
+        expect(login.status).toBe(302);
+        expect(login.headers.get('set-cookie')).toMatch(/^wardogs_login=/);
+        return new URL(login.headers.get('location') ?? '').searchParams.get('scope');
+      };
+
+      expect(await scopeOf('/auth/player/login')).toBe('identify connections guilds.members.read');
+      expect(await scopeOf('/auth/player/login?join=1')).toBe('identify connections guilds.members.read guilds.join');
+      expect(await scopeOf('/auth/login?join=1')).toBe('identify guilds guilds.members.read');
+    });
+
+    it('tells a player who comes back too late on their own page, and staff on theirs', async () => {
+      const back = async (flow: 'player' | 'staff') => {
+        const { location } = await startLogin(
+          { clientId: APPLICATION_ID, clientSecret: CLIENT_SECRET, guildId: GUILD, adminRoleIds: [], siteOrigin: SITE },
+          'https://x.test/auth/callback',
+          `${SITE}/account`,
+          Date.now(),
+          { flow },
+        );
+        const state = new URL(location).searchParams.get('state') ?? '';
+        // No cookie: not the browser that started it.
+        const response = await server.fetch(`/auth/callback?code=x&state=${encodeURIComponent(state)}`, { redirect: 'manual' });
+        expect(response.status).toBe(302);
+        return response.headers.get('location');
+      };
+
+      expect(await back('player')).toBe(`${SITE}/account#error=expired`);
+      expect(await back('staff')).toBe(`${SITE}/admin#error=expired`);
+    });
+
+    it('serves the account only to a session a player signed in with, and never takes a staff session', async () => {
+      const none = await server.fetch('/api/account');
+      expect(none.status).toBe(401);
+      expect(none.headers.get('access-control-allow-origin')).toBe(SITE);
+      expect((await server.fetch('/api/account', { method: 'OPTIONS' })).status).toBe(204);
+
+      const staff = await createSession(CLIENT_SECRET, player, Date.now());
+      expect((await server.fetch('/api/account', { headers: { authorization: `Bearer ${staff}` } })).status).toBe(401);
+      expect((await server.fetch('/api/account', { headers: await asPlayer('not-the-client-secret') })).status).toBe(401);
+      // Signed, but they have no account: forgotten, or never made.
+      expect((await server.fetch('/api/account', { headers: await asPlayer() })).status).toBe(401);
+    });
+
+    it('never lets a player session into the staff page', async () => {
+      expect((await server.fetch('/api/admin/commands', { headers: await asPlayer() })).status).toBe(401);
+      expect((await server.fetch('/api/admin/growth', { headers: await asPlayer() })).status).toBe(401);
+    });
+
+    it('refuses account requests it cannot read, and a website vote from someone not in the server', async () => {
+      const headers = { ...(await asPlayer()), 'content-type': 'application/json' };
+      expect((await server.fetch('/api/account', { method: 'POST', headers, body: JSON.stringify({ action: 'nope' }) })).status).toBe(400);
+      expect((await server.fetch('/api/account/vote', { method: 'POST', headers, body: JSON.stringify({ poll: 'x' }) })).status).toBe(400);
+      const vote = await json('/api/account/vote', { method: 'POST', headers, body: JSON.stringify({ poll: '1759300000000', map: 'Foy' }) });
+      expect(vote.status).toBe(403);
+      expect(vote.body).toMatchObject({ code: 'not-member' });
+    });
+
+    it('sends players to Steam to sign in, and only takes a proof Steam made', async () => {
+      const login = await server.fetch(`/auth/steam?return=${encodeURIComponent(`${SITE}/account`)}`, { redirect: 'manual' });
+      expect(login.status).toBe(302);
+      const to = new URL(login.headers.get('location') ?? '');
+      expect(`${to.origin}${to.pathname}`).toBe('https://steamcommunity.com/openid/login');
+      const returnTo = new URL(to.searchParams.get('openid.return_to') ?? '');
+      expect(returnTo.pathname).toBe('/auth/steam/callback');
+      expect(returnTo.searchParams.get('return')).toBe(`${SITE}/account`);
+      // The sign-in is tied to this browser: a cookie, and the same value in the address Steam sends it back to.
+      const cookie = /^wardogs_steam=([0-9a-f]{32});/.exec(login.headers.get('set-cookie') ?? '')?.[1];
+      expect(cookie).toBeDefined();
+      expect(returnTo.searchParams.get('n')).toBe(cookie);
+
+      const callback = (query: string, cookieHeader?: string) =>
+        server.fetch(`/auth/steam/callback?return=${encodeURIComponent(`${SITE}/account`)}&n=${cookie}${query}`, {
+          redirect: 'manual',
+          ...(cookieHeader === undefined ? {} : { headers: { cookie: cookieHeader } }),
+        });
+      // From this browser, but not a claim Steam made.
+      const forged = await callback('&openid.mode=id_res', `wardogs_steam=${cookie}`);
+      expect(forged.status).toBe(302);
+      expect(forged.headers.get('location')).toBe(`${SITE}/account#error=steam`);
+      // From another browser: an address someone else got Steam to make.
+      for (const other of [undefined, 'wardogs_steam=' + '0'.repeat(32)]) {
+        const elsewhere = await callback('&openid.mode=id_res', other);
+        expect(elsewhere.headers.get('location')).toBe(`${SITE}/account#error=expired`);
+      }
+    });
+
+    it('has no Discord link to count clicks for until the invite is set', async () => {
+      expect((await server.fetch('/go/discord?src=hero', { redirect: 'manual' })).status).toBe(404);
+    });
+
+    it('gives staff the growth numbers', async () => {
+      const staff = await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now());
+      const growth = await json('/api/admin/growth', { headers: { authorization: `Bearer ${staff}` } });
+      expect(growth.status).toBe(200);
+      expect(growth.body).toMatchObject({
+        clicks: { days: 30, total: 0, places: [] },
+        accounts: { accounts: 0, linked: 0, members: 0, joinedOnSite: 0, withVipRole: 0 },
+      });
     });
   });
 });

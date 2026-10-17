@@ -104,6 +104,8 @@ type PollerDeps = {
   lines?: () => Promise<Lines>;
   // Staff's Steam IDs: they are never named as top seeders (see staffprofiles.ts). Only asked when the server goes live.
   staff?: () => Promise<ReadonlySet<string>>;
+  // Steam IDs of players who linked their Discord account on the website: their welcome leaves the Discord invite out.
+  linked?: () => Promise<ReadonlySet<string>>;
   // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
   // players: the live alert's top seeders and the match summary; and when the end-of-match messages go out, as private
   // profiles get none.
@@ -337,6 +339,7 @@ export const createPoller = ({
   matchFeed,
   voting,
   outage: tellOutage,
+  linked,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
@@ -359,8 +362,17 @@ export const createPoller = ({
     if (watched === null) return { watch: null, recent };
     const due = welcomesDue(watched, time, rule, config.pollIntervalMs);
     let lately = recent;
+    // Someone who linked their Discord account is in the server: the invite is not for them. Read only when a welcome is due.
+    let linkedIds: ReadonlySet<string> = new Set();
+    if (due.length > 0 && linked !== undefined) {
+      try {
+        linkedIds = await linked();
+      } catch (error) {
+        log.error(`Reading who linked their Discord account failed, so welcomes still give the invite: ${errorText(error)}`);
+      }
+    }
     for (const steamId of due) {
-      const pick = welcomePick(rule, random, wording, lately);
+      const pick = welcomePick(linkedIds.has(steamId) ? { ...rule, discord: null } : rule, random, wording, lately);
       const text = pick.text;
       lately = remember(lately, pick);
       const who = `${JSON.stringify(players.find((p) => p.steamId === steamId)?.name ?? '')} (${steamId})`;

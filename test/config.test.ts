@@ -24,6 +24,7 @@ describe('loadConfig', () => {
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
+      accounts: { linkedRoleId: undefined, vipRoleId: undefined, botToken: undefined },
       serverId: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000, seedHoldMs: 300_000 },
@@ -116,6 +117,12 @@ describe('loadConfig', () => {
 
   it('reads the website address for links in Discord posts', () => {
     expect(loadConfig({ ...required, SITE_URL: 'https://gaminginit.com' }).siteUrl).toBe('https://gaminginit.com');
+    expect(loadConfig({ ...required, DISCORD_LINKED_ROLE_ID: '900', DISCORD_VIP_ROLE_ID: '901', DISCORD_BOT_TOKEN: 'tok' }).accounts).toEqual({
+      linkedRoleId: '900',
+      vipRoleId: '901',
+      botToken: 'tok',
+    });
+    expect(() => loadConfig({ ...required, DISCORD_LINKED_ROLE_ID: 'role' })).toThrow('must be a numeric ID');
     expect(() => loadConfig({ ...required, SITE_URL: 'gaminginit' })).toThrow(/SITE_URL/);
     expect(() => loadConfig({ ...required, SITE_URL: 'javascript:alert(1)' })).toThrow(/SITE_URL/);
   });
@@ -149,6 +156,12 @@ describe('loadConfig', () => {
       loadConfig({ ...required, SITE_URL: 'https://gaminginit.com/', DISCORD_INVITE: 'https://discord.gg/qsJFYGhSJ4' }).welcomeMessages,
     ).toEqual({ afterMs: 120_000, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' });
     expect(loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '5' }).welcomeMessages).toEqual({ afterMs: 300_000, siteHost: null, discord: null });
+    // The website's short link, when there is a website, in place of the invite code.
+    expect(
+      loadConfig({ ...required, SITE_URL: 'https://gaminginit.com/', DISCORD_INVITE: 'qsJFYGhSJ4', DISCORD_SHORT_LINK: '/discord' }).welcomeMessages,
+    ).toEqual({ afterMs: 120_000, siteHost: 'gaminginit.com', discord: 'gaminginit.com/discord' });
+    expect(loadConfig({ ...required, DISCORD_INVITE: 'qsJFYGhSJ4', DISCORD_SHORT_LINK: '/discord' }).welcomeMessages?.discord).toBe('discord.gg/qsJFYGhSJ4');
+    expect(() => loadConfig({ ...required, DISCORD_SHORT_LINK: 'discord' })).toThrow('must be a path on the website');
     expect(loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '0' }).welcomeMessages).toBeNull();
     expect(() => loadConfig({ ...required, WELCOME_MESSAGE_MINUTES: '-1' })).toThrow(/WELCOME_MESSAGE_MINUTES/);
   });
