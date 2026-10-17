@@ -91,11 +91,11 @@
     "ROUNDUP_HOUR": "17",
     // The next-map vote in Discord: when a match goes live, a message with a button per map in one channel, open for this
     // many minutes or until a team has 75% of SCORE_TO_WIN. The winner is put on the server as the next map, infantry only,
-    // like /setnextmap. It does nothing until DISCORD_VOTE_CHANNEL_ID (the channel's ID, a var here) and DISCORD_BOT_TOKEN
-    // (a secret) are set: see the README, "Next-map vote". "on" or "off".
+    // like /setnextmap. It does nothing until DISCORD_BOT_TOKEN (a secret) is also set: see the README, "Next-map vote". "on" or "off".
     "MAP_VOTE": "on",
     "MAP_VOTE_OPTIONS": "4",
-    "MAP_VOTE_MINUTES": "15"
-    // , "DISCORD_VOTE_CHANNEL_ID": "…"
+    "MAP_VOTE_MINUTES": "15",
+    // The channel the vote is posted in (the bot needs View Channel, Send Messages and Embed Links there).
+    "DISCORD_VOTE_CHANNEL_ID": "1561043064800280596"
   }
 }

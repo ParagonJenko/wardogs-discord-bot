@@ -601,8 +601,8 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
 Set up (Cloudflare):
 
 1. Give the bot access to the channel: **View Channel**, **Send Messages** and **Embed Links**.
-2. Add `DISCORD_VOTE_CHANNEL_ID` (the channel's ID: Discord → Settings → Advanced → Developer Mode, then right-click the
-   channel → Copy Channel ID) under `vars` in `wrangler.jsonc`.
+2. `DISCORD_VOTE_CHANNEL_ID` (under `vars` in `wrangler.jsonc`, already set) is the channel's ID: Discord → Settings →
+   Advanced → Developer Mode, then right-click the channel → Copy Channel ID.
 3. Add the bot's token as a secret: `npx wrangler secret put DISCORD_BOT_TOKEN` (Developer Portal → Bot → Reset Token).
    This is the same optional secret the staff page uses to name staff. A webhook can't carry buttons, so posting the vote
    needs the bot itself.
