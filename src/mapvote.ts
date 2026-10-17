@@ -189,6 +189,10 @@ export type PublicVote = {
   fromMap: string;
   fromName: string;
   closesAt: number;
+  // The score a team reaching closes the vote, or 0 when only time does.
+  closeScore: number;
+  // When it ended, once it has, so the website shows the result for a while after.
+  closedAt: number | null;
   options: { map: string; name: string; votes: number }[];
   total: number;
   // The map that won and is on its way to the server, when the vote ended with one.
@@ -209,6 +213,8 @@ export const publicVote = (vote: MapVote, now: number): PublicVote => {
     fromMap: vote.fromMap,
     fromName: mapName(vote.fromMap),
     closesAt: vote.closesAt,
+    closeScore: vote.closeScore,
+    closedAt: vote.outcome?.at ?? null,
     options,
     total: options.reduce((sum, o) => sum + o.votes, 0),
     winner: winner === null ? null : { map: winner, name: options.find((o) => o.map === winner)?.name ?? mapName(winner) },

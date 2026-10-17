@@ -149,7 +149,7 @@ describe('publicVote and storage', () => {
   it('shows votes and the winner but never who voted', () => {
     const v: MapVote = { ...vote(), ballots: [{ ...ballot(1, 'A'), at: NOW }], outcome: { at: NOW, winner: 'A', pending: false } };
     const shown = publicVote(v, NOW + 1);
-    expect(shown).toMatchObject({ open: false, total: 1, winner: { map: 'A', name: 'Alpha' }, infantryOnly: true, pending: false });
+    expect(shown).toMatchObject({ open: false, total: 1, winner: { map: 'A', name: 'Alpha' }, infantryOnly: true, pending: false, closeScore: 95, closedAt: NOW });
     expect(JSON.stringify(shown)).not.toContain('user1');
   });
 
