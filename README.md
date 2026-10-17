@@ -658,10 +658,12 @@ without pressing the join button.
 **Linking Steam.** Two ways, both proving the player owns the Steam account, so nothing is taken on trust:
 
 - **From Discord.** If their Discord profile has a Steam account connected (and Discord has verified it), signing in links it,
-  with nothing more to do.
+  with nothing more to do. A Steam account they linked with Steam is not replaced by the one on their Discord profile.
 - **With Steam.** `GET /auth/steam` sends them to Steam's own sign-in (OpenID). Steam sends the browser back to
-  `/auth/steam/callback`, and the Worker asks Steam to confirm what it was told (`check_authentication`). Only then does it
-  give the website a **proof** of the Steam ID, good for 10 minutes. The proof names no Discord user: the page sends it with
+  `/auth/steam/callback`, and the Worker asks Steam to confirm what it was told (`check_authentication`; a claim with any
+  `openid.` parameter given twice is refused, as this and Steam could read it differently). The sign-in is tied to the browser that
+  started it, with a cookie and the same value in the address Steam signs, so an address someone else got Steam to make is no use
+  for another visitor. Only then does it give the website a **proof** of the Steam ID, good for 10 minutes. The proof names no Discord user: the page sends it with
   the player's own session, and the Worker links the two. A proof from another browser is no use without the session that is
   asking.
 
@@ -674,7 +676,8 @@ they link here.
 **The roles** (optional). `DISCORD_LINKED_ROLE_ID` is given when a player links their Steam account, and
 `DISCORD_VIP_ROLE_ID` while they have VIP (from seeding, or given by staff with `/vip add`; not a staff spot). Both are taken
 back when it stops being true, when they unlink, and when they delete their account. The bot's own role must be above them
-in the server's role list, with **Manage Roles**. A role that fails is tried again 15 minutes later.
+in the server's role list, with **Manage Roles**. A role that fails is tried again 15 minutes later. Signing in reads the roles
+the player has now (Discord takes them when someone leaves), so a member who left and came back is given them again.
 
 **The VIP messages.** A private Discord message from the bot when a linked player:
 
@@ -690,7 +693,8 @@ first message says so.
 
 **The pass.** Every 5 minutes (and straight after a sign-in or a change) the bot goes through the accounts it has something to
 do for: the ones waiting for a role, the ones whose VIP it is keeping track of, and the owners of the Steam accounts that hold VIP
-now. At most 15 accounts and 40 calls to Discord a pass; the rest wait for the next. Without `DISCORD_BOT_TOKEN` it does
+now. At most 15 accounts and 40 calls to Discord a pass; the rest go to the front of the list for the next, so accounts that stay
+on it for days (VIP) cannot starve the others. Someone known to be out of the server is left alone until they sign in. Without `DISCORD_BOT_TOKEN` it does
 nothing, and players can still sign in and link.
 
 **The welcome.** A player who linked their account and is in the server is not sent the Discord invite in their welcome in game.
@@ -714,7 +718,9 @@ account and how it was proved, whether they are in the server, whether they want
 what it told them about their VIP. `steamLink:<Steam ID>` says whose a Steam account is, and `accountWork` lists who the bot has
 something to do for. **None of it is in any public route**: the website cannot tell who is who, a player's page does not show
 whether they have an account, and a private profile stays private. A player can **delete their account** on the page: the roles
-are taken, everything above is removed, and what they set as private stays as it was. The code is in `src/accounts.ts` (what an
+are taken (if Discord refuses, nothing is deleted and they are told to try again, so no roles are left on an account nothing
+remembers), everything above is removed, and what they set as private stays as it was. A profile a player made private themselves
+can be made public by whoever owns the Steam account, from whichever Discord account; one staff made private stays staff's. The code is in `src/accounts.ts` (what an
 account is), `src/accountbook.ts` (what the bot does with them), `src/accountsdiscord.ts` (the calls to Discord),
 `src/steamopenid.ts` and `src/discordclicks.ts`.
 
