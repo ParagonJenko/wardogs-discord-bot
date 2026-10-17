@@ -5,6 +5,7 @@ import {
   closeDue,
   closeScoreFor,
   isOpen,
+  matchIsOver,
   openVote,
   parseMapVote,
   parseVoteButton,
@@ -23,6 +24,7 @@ import {
   withPlayed,
   type MapVote,
 } from '../src/mapvote.ts';
+import type { MatchFeed } from '../src/matchfeed.ts';
 import type { MapChoice } from '../src/rotationspage.ts';
 
 const choice = (id: string, modes = 1, infantry = true): MapChoice => ({
@@ -418,5 +420,33 @@ describe('votingNow', () => {
 
   it('is open on time alone for a vote saved without a close score', () => {
     expect(votingNow({ ...vote(), closeScore: 0 }, match(99), NOW + 1)).toBe(true);
+  });
+});
+
+describe('matchIsOver', () => {
+  const feed = (state: string | null, stateAt: number | null, resultAt: number | null = null): MatchFeed => ({
+    state,
+    stateAt,
+    playingAt: null,
+    result: resultAt === null ? null : { at: resultAt, map: 'A', matchId: '1', winner: null, factionScores: [], players: null },
+  });
+
+  it('is not over while the match is being played, even on the close score', () => {
+    expect(matchIsOver(vote(), feed('MatchState.Playing.KOTH', NOW + 1), 96, 100)).toBe(false);
+    expect(matchIsOver(vote(), null, 96, 100)).toBe(false);
+  });
+
+  it('is over at the end screen, or at the result, since the vote opened', () => {
+    expect(matchIsOver(vote(), feed('MatchState.PostMatch', NOW + 1), 96, 100)).toBe(true);
+    expect(matchIsOver(vote(), feed('MatchState.Playing', NOW + 1, NOW + 2), 96, 100)).toBe(true);
+  });
+
+  it('does not take the last match\'s end screen or result for this one', () => {
+    expect(matchIsOver(vote(), feed('MatchState.PostMatch', NOW - 1, NOW - 1), 10, 100)).toBe(false);
+  });
+
+  it('is over without the feed once a team has the winning score', () => {
+    expect(matchIsOver(vote(), null, 99, 100)).toBe(false);
+    expect(matchIsOver(vote(), null, 100, 100)).toBe(true);
   });
 });

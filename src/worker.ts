@@ -8,6 +8,7 @@ import {
   chooseConditions,
   chooseWinner,
   closeDue,
+  matchIsOver,
   conditionOptions,
   closeScoreFor,
   editVoteMessage,
@@ -870,6 +871,18 @@ export class Watcher extends DurableObject<Env> {
     this.ctx.waitUntil(this.alerting(endCheck));
   }
 
+  // The kill feed says the match is over (its end screen, or its result): the map vote's winner is put on the server now,
+  // not at the next check, as the end screen only lasts about a minute. In the background, so the game has its reply at once.
+  async voteMatchOver(): Promise<void> {
+    const { config, http } = this.rcon();
+    if (config.mapVote === null) return;
+    this.ctx.waitUntil(
+      fetchStatus(config.rconUrl, config.rconPassword, http)
+        .then((status) => this.updateMapVote(config, { status, players: [] }))
+        .catch((error: unknown) => console.error(`Map vote at the end of the match failed: ${errorText(error)}`)),
+    );
+  }
+
   // The kill feed's record of a match, for its awards (see feedRecordOf).
   private async liveMatchOf(match: MatchState): Promise<LiveMatch | null> {
     return feedRecordOf(parseLiveMatch(await this.ctx.storage.get('live')), match);
@@ -1421,9 +1434,9 @@ export class Watcher extends DurableObject<Env> {
     };
     const ended = (v: MapVote, outcome: VoteOutcome): MapVote => ({ ...v, outcome });
 
-    // A vote for an earlier match: too late to put anything on the server.
-    // A match the game has ended stays in the state until the next one starts, so it counts as over too.
-    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt || match.endedAt !== undefined)) {
+    // A vote for an earlier match: too late to put anything on the server. A match that has ended is not: its winner is put
+    // on the server while the end screen shows, and applyVoteWinner refuses once the server has moved to another map.
+    if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt)) {
       if (vote.outcome === null || vote.outcome.pending) {
         vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
         console.info(`Map vote: the match ended before the vote could be applied`);
@@ -1433,9 +1446,10 @@ export class Watcher extends DurableObject<Env> {
     }
 
     if (vote !== null && match !== null) {
+      const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
+      const over = matchIsOver(vote, await this.matchFeed(), leading, config.scoreToWin);
       if (vote.outcome === null) {
-        const leading = Math.max(0, ...match.factionScores.map((f) => f.score));
-        if (!closeDue(vote, now, leading)) return;
+        if (!closeDue(vote, now, leading) && !over) return;
         const winner = chooseWinner(vote, Math.random);
         const lighting = chooseConditions(vote, Math.random);
         vote = await save(
@@ -1449,7 +1463,8 @@ export class Watcher extends DurableObject<Env> {
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
         await this.showVote(config, rule, vote);
       }
-      if (vote.outcome?.pending) {
+      // The winner waits for the end of the match: the server ended a match early when it was staged with a team on 95.
+      if (vote.outcome?.pending && over) {
         const outcome = await this.applyVoteWinner(config, vote, playing);
         const next = await save(ended(vote, outcome));
         // The message changes when the winner is on the server, or when it can't be; a retry still waiting says the same.
@@ -2073,19 +2088,21 @@ export class Watcher extends DurableObject<Env> {
   // A batch from the game's kill feed: the day's weapon totals, each killer's, the live match, the match's state and
   // result, and the join log, in one write. Only storage is awaited, so no other batch is counted part-way through.
   // Answers how many events were new, and whether a new one was a match's result.
-  async recordFeed({ timeline, presence }: FeedRecord): Promise<{ accepted: number; ended: boolean }> {
+  async recordFeed({ timeline, presence }: FeedRecord): Promise<{ accepted: number; ended: boolean; over: boolean }> {
     const unseen = <T extends { eventId: string }>(list: T[]): T[] =>
       list.filter((e, i) => !this.eventsSeen.has(e.eventId) && list.findIndex((o) => o.eventId === e.eventId) === i);
     const happened = unseen(timeline);
     const came = unseen(presence);
     const fresh = [...happened, ...came];
-    if (fresh.length === 0) return { accepted: 0, ended: false };
+    if (fresh.length === 0) return { accepted: 0, ended: false, over: false };
     const now = Date.now();
     const day = dayOf(now);
     const dayKey = weaponDayKey(now);
     const events = happened.filter((e): e is FeedEvent => !isMatchEvent(e));
     const matchEvents = happened.filter(isMatchEvent);
     const ended = matchEvents.some((e) => e.type === 'result');
+    // The match is over for the map vote at its end screen, or at its result if that comes first.
+    const over = matchEvents.some((e) => e.type === 'result' || e.state.startsWith('MatchState.PostMatch'));
     const kills = events.filter(isKill);
     const killers = [...new Set(kills.map((k) => k.killerSteamId))];
     const griefKey = griefDayKey(now);
@@ -2159,7 +2176,7 @@ export class Watcher extends DurableObject<Env> {
     // it has gone.
     if (came.length > 0) this.ctx.waitUntil(this.feedJoined(came, now));
     this.ctx.waitUntil(this.broadcastLive());
-    return { accepted: fresh.length, ended };
+    return { accepted: fresh.length, ended, over };
   }
 
   // The SQLite database, with the staff page's kill_days table, which is made the first time.
@@ -3526,9 +3543,12 @@ const ingestKills = async (request: Request, vars: Record<string, string>, watch
     console.error(`Kill feed: a batch came with ${unread} events, and none could be read. The game may send them in a new form.`);
   }
   try {
-    const { accepted, ended } = timeline.length + presence.length === 0 ? { accepted: 0, ended: false } : await watcher().recordFeed({ timeline, presence });
+    const { accepted, ended, over } =
+      timeline.length + presence.length === 0 ? { accepted: 0, ended: false, over: false } : await watcher().recordFeed({ timeline, presence });
     // Once the batch's last kills are counted, so the awards have them.
     if (ended) await watcher().matchEnded();
+    // Once the state is saved, as the vote reads it.
+    if (over) await watcher().voteMatchOver();
     return Response.json({ ok: true, accepted, skipped: unread });
   } catch (error) {
     console.error(`Kill feed batch failed: ${errorText(error)}`);
