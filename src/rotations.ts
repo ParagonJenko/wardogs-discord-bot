@@ -431,12 +431,18 @@ export const lastPutOnFirst = (book: RotationBook): SavedRotation[] => {
   return last === null ? book.rotations : [last, ...book.rotations.filter((r) => r !== last)];
 };
 
-// The slot (from 0) the server is on in its rotation: the entry marked "now", or else the status's. Null when neither
-// says.
-export const rotationSlot = (rotation: Rotation, status: { rotationIndex: number | null }): number | null => {
-  const marked = rotation.entries.findIndex((e) => e.status === 'now');
-  const slot = marked === -1 ? status.rotationIndex : marked;
-  return slot === null || slot < 0 ? null : slot;
+// The slot (from 0) the server is on in its rotation: the entry marked "now", or else the status's. When neither says, in
+// a rotation played in order, the slot before the one it goes to next (the entry marked "next", or else the status's).
+// Null when none of these says.
+export const rotationSlot = (rotation: Rotation, status: { rotationIndex: number | null; rotationNextIndex?: number }): number | null => {
+  const n = rotation.entries.length;
+  const now = rotation.entries.findIndex((e) => e.status === 'now');
+  if (now !== -1) return now;
+  if (status.rotationIndex !== null && status.rotationIndex >= 0) return status.rotationIndex;
+  if (n === 0 || rotation.mode.toLowerCase() === 'random') return null;
+  const marked = rotation.entries.findIndex((e) => e.status === 'next');
+  const next = marked === -1 ? (status.rotationNextIndex ?? -1) : marked;
+  return next < 0 || next >= n ? null : (next - 1 + n) % n;
 };
 
 // The rotation as it is written, so the server plays it from its first map at the next map change. On a change the

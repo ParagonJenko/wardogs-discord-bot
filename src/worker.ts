@@ -362,7 +362,7 @@ import {
   type RotationServer,
   type RotationEntry,
 } from './rotations.ts';
-import { parseVoteInsert, planInsert, stillInserted, VOTE_INSERT_KEY, whyNoInsert, type VoteInsert } from './voteinsert.ts';
+import { parseVoteInsert, planInsert, rotationFacts, stillInserted, VOTE_INSERT_KEY, whyNoInsert, type VoteInsert } from './voteinsert.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -1624,8 +1624,9 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Writes the winner into the server's rotation as the next map, and remembers how to take it out (see voteinsert.ts). The
-  // reason, as text, when the rotation can't take it: it was not read, is off or random, or the server did not say which
-  // slot it is on. The server keeps playing the match on now, as when the daily rotation is put on.
+  // reason, as text, when the rotation can't take it: it was not read, or is off or random. When the server does not say
+  // which slot it is on, the winner goes in every slot. The server keeps playing the match on now, as when the daily
+  // rotation is put on.
   private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null, notRead: string): Promise<true | string> {
     if (rotation === null) return notRead;
     const { rconUrl, rconPassword } = config;
@@ -1634,13 +1635,23 @@ export class Watcher extends DurableObject<Env> {
     // Written already, by an earlier check that went on to fail: not written twice.
     const written = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
     if (written !== null && written.voteId === vote.id && stillInserted(rotation, written)) return true;
-    const slot = rotationSlot(rotation, await fetchStatus(rconUrl, rconPassword, http));
+    const status = await fetchStatus(rconUrl, rconPassword, http);
+    const slot = rotationSlot(rotation, status);
     const plan = planInsert(rotation, slot, winner);
-    if (plan === null) return whyNoInsert(rotation, slot) ?? 'it cannot be planned';
-    const insert: VoteInsert = { voteId: vote.id, fromMap: vote.fromMap, map: winner.map, restore: plan.restore, length: plan.staged.length, at: Date.now() };
+    if (plan === null) return `${whyNoInsert(rotation) ?? 'it cannot be planned'} (${rotationFacts(rotation, status)})`;
+    const insert: VoteInsert = {
+      voteId: vote.id,
+      fromMap: vote.fromMap,
+      map: winner.map,
+      restore: plan.restore,
+      length: plan.staged.length,
+      at: Date.now(),
+      ...(plan.asIs ? { asIs: true } : {}),
+    };
     // Kept first: if the write goes through and this check then fails, the rotation is still put back.
     await storage.put(VOTE_INSERT_KEY, insert);
-    await putRotation({ ...this.settingsFile({ config, http }), slot: async () => slot }, plan.staged);
+    await putRotation({ ...this.settingsFile({ config, http }), slot: async () => (plan.asIs ? null : slot) }, plan.staged);
+    if (plan.asIs) console.info(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
     // The live status reads the new rotation at the next check.
     await storage.delete('boardRotation');
     return true;
@@ -1657,7 +1668,7 @@ export class Watcher extends DurableObject<Env> {
       const http = socketHttp(connect);
       const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
       if (stillInserted(rotation, insert)) {
-        const slot = rotationSlot(rotation, status);
+        const slot = insert.asIs ? null : rotationSlot(rotation, status);
         await putRotation({ ...this.settingsFile({ config, http }), slot: async () => slot }, insert.restore);
         await storage.delete('boardRotation');
         console.info(`Map vote: the server is on ${playing}; the rotation is back as it was, from ${insert.restore[0]?.map ?? 'its start'}`);
