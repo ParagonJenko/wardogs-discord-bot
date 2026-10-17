@@ -327,7 +327,9 @@ import {
   type RotationEdit,
   type RotationEditResult,
   type RotationServer,
+  type RotationEntry,
 } from './rotations.ts';
+import { parseVoteInsert, planInsert, stillInserted, VOTE_INSERT_KEY, type VoteInsert } from './voteinsert.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -1411,7 +1413,12 @@ export class Watcher extends DurableObject<Env> {
   // on the server as the next map. A failure is logged; it never stops what comes after it.
   private async updateMapVote(config: Config, snapshot: Snapshot | null): Promise<void> {
     const rule = config.mapVote;
-    if (rule === null || snapshot === null || snapshot.status.map === '') return;
+    if (snapshot === null || snapshot.status.map === '') return;
+    // Whether or not there is a vote now: a winner put in the rotation is taken out once it is playing.
+    await this.voting(() => this.restoreVoteInsert(config, snapshot.status.map)).catch((error: unknown) =>
+      console.error(`Map vote: restoring the rotation failed: ${errorText(error)}`),
+    );
+    if (rule === null) return;
     try {
       await this.voting(() => this.stepMapVote(config, rule, snapshot.status.map));
     } catch (error) {
@@ -1463,9 +1470,9 @@ export class Watcher extends DurableObject<Env> {
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
         await this.showVote(config, rule, vote);
       }
-      // The winner waits for the end of the match: the server ended a match early when it was staged with a team on 95.
-      if (vote.outcome?.pending && over) {
-        const outcome = await this.applyVoteWinner(config, vote, playing);
+      // The queued winner waits for the end of the match: the server ended a match early when it was queued with a team on 95.
+      if (vote.outcome?.pending && (rule.staging === 'rotation' || over)) {
+        const outcome = await this.applyVoteWinner(config, vote, playing, rule.staging, over);
         const next = await save(ended(vote, outcome));
         // The message changes when the winner is on the server, or when it can't be; a retry still waiting says the same.
         if (!outcome.pending) await this.showVote(config, rule, next);
@@ -1514,9 +1521,11 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Stages the winner, infantry only, as /setnextmap does. A failure keeps the outcome pending, and the next check tries
-  // again until the match ends.
-  private async applyVoteWinner(config: Config, vote: MapVote, playing: string): Promise<VoteOutcome> {
+  // Puts the winner on the server, infantry only. With staging "rotation" it goes into the server's rotation as the next map
+  // (see insertVoteWinner), which can be done as soon as the vote closes; "queue", or a rotation that cannot take it, stages
+  // it as /setnextmap does, which waits for `over` (the match is over). A failure keeps the outcome pending, and the next
+  // check tries again until the match ends.
+  private async applyVoteWinner(config: Config, vote: MapVote, playing: string, staging: 'rotation' | 'queue', over: boolean): Promise<VoteOutcome> {
     const at = Date.now();
     const winner = vote.outcome?.winner ?? null;
     if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
@@ -1547,9 +1556,14 @@ export class Watcher extends DurableObject<Env> {
       if (staged !== null && staged.at > vote.openedAt && staged.fromMap === vote.fromMap) {
         return { at, winner: null, pending: false, note: NOTE.staff };
       }
-      await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
+      const inserted = staging === 'rotation' && (await this.insertVoteWinner(config, vote, { map: winner, ...planned.setup }, rotation));
+      if (!inserted) {
+        // Not before the match is over: the server ended a match early when this was sent with a team on 95.
+        if (!over) return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
+        await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
+      }
       await this.stageNextMap(winner, playing);
-      console.info(`Map vote: ${winner} staged as the next map, ${JSON.stringify(planned.setup)}`);
+      console.info(`Map vote: ${winner} staged as the next map ${inserted ? 'in the rotation' : 'in the queue'}, ${JSON.stringify(planned.setup)}`);
       const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
       const votes = vote.ballots.filter((b) => b.map === winner).length;
       await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${vote.outcome?.lightingName ? `, ${vote.outcome.lightingName}` : ''} (${votes} votes).`, http).catch((error: unknown) =>
@@ -1559,6 +1573,53 @@ export class Watcher extends DurableObject<Env> {
     } catch (error) {
       console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
       return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
+    }
+  }
+
+  // Writes the winner into the server's rotation as the next map, and remembers how to take it out (see voteinsert.ts). False
+  // when the rotation can't take it: it was not read, is off or random, or the server did not say which slot it is on. The
+  // server keeps playing the match on now, as when the daily rotation is put on.
+  private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null): Promise<boolean> {
+    if (rotation === null) return false;
+    const { rconUrl, rconPassword } = config;
+    const http = socketHttp(connect);
+    const storage = this.ctx.storage;
+    // Written already, by an earlier check that went on to fail: not written twice.
+    const written = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
+    if (written !== null && written.voteId === vote.id && stillInserted(rotation, written)) return true;
+    const slot = rotationSlot(rotation, await fetchStatus(rconUrl, rconPassword, http));
+    const plan = planInsert(rotation, slot, winner);
+    if (plan === null) return false;
+    const insert: VoteInsert = { voteId: vote.id, fromMap: vote.fromMap, map: winner.map, restore: plan.restore, length: plan.staged.length, at: Date.now() };
+    // Kept first: if the write goes through and this check then fails, the rotation is still put back.
+    await storage.put(VOTE_INSERT_KEY, insert);
+    await putRotation({ ...this.settingsFile({ config, http }), slot: async () => slot }, plan.staged);
+    // The live status reads the new rotation at the next check.
+    await storage.delete('boardRotation');
+    return true;
+  }
+
+  // Once the server has moved on from the map the vote was for, the rotation is written back as it was, from the map that
+  // would have come next, if it is still the one that was written (staff or the daily rotation may have changed it since).
+  private async restoreVoteInsert(config: Config, playing: string): Promise<void> {
+    const storage = this.ctx.storage;
+    const insert = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
+    if (insert === null || playing === insert.fromMap) return;
+    try {
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
+      if (stillInserted(rotation, insert)) {
+        const slot = rotationSlot(rotation, status);
+        await putRotation({ ...this.settingsFile({ config, http }), slot: async () => slot }, insert.restore);
+        await storage.delete('boardRotation');
+        console.info(`Map vote: the server is on ${playing}; the rotation is back as it was, from ${insert.restore[0]?.map ?? 'its start'}`);
+      } else {
+        console.info(`Map vote: the rotation has changed since ${insert.map} was put in it, so it is left as it is`);
+      }
+      await storage.delete(VOTE_INSERT_KEY);
+    } catch (error) {
+      console.error(`Map vote: could not put the rotation back, trying again next check: ${errorText(error)}`);
     }
   }
 

@@ -43,10 +43,10 @@ describe('loadConfig', () => {
   });
 
   it('turns the map vote on with MAP_VOTE, with its options and minutes', () => {
-    expect(loadConfig({ ...required, MAP_VOTE: 'on' }).mapVote).toEqual({ options: 4, minutes: 60, closePercent: 95, channelId: undefined, botToken: undefined });
+    expect(loadConfig({ ...required, MAP_VOTE: 'on' }).mapVote).toEqual({ options: 4, minutes: 60, closePercent: 95, channelId: undefined, botToken: undefined, staging: 'rotation' });
     expect(
       loadConfig({ ...required, MAP_VOTE: 'on', MAP_VOTE_OPTIONS: '3', MAP_VOTE_MINUTES: '10', MAP_VOTE_CLOSE_PERCENT: '90', DISCORD_VOTE_CHANNEL_ID: '555', DISCORD_BOT_TOKEN: 'abc' }).mapVote,
-    ).toEqual({ options: 3, minutes: 10, closePercent: 90, channelId: '555', botToken: 'abc' });
+    ).toEqual({ options: 3, minutes: 10, closePercent: 90, channelId: '555', botToken: 'abc', staging: 'rotation' });
     expect(() => loadConfig({ ...required, MAP_VOTE: 'on', MAP_VOTE_OPTIONS: '1' })).toThrow(/MAP_VOTE_OPTIONS/);
   });
 

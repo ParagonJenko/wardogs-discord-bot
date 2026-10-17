@@ -37,7 +37,7 @@ const choice = (id: string, modes = 1, infantry = true): MapChoice => ({
 
 const NOW = 1_000_000;
 const vote = (): MapVote =>
-  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, closePercent: 95, channelId: '1', botToken: 't' }, NOW, 95);
+  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation' }, NOW, 95);
 const ballot = (n: number, map: string) => ({ user: `user${n}`, map });
 
 describe('pickOptions', () => {

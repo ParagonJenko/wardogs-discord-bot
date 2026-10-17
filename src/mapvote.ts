@@ -33,7 +33,15 @@ export const VOTE_SETUP_OPTIONS = { infantry_only: 'true' };
 
 // `channelId` is where the vote is posted and `botToken` the bot's, which posting and editing a message with buttons need
 // (a webhook can't carry them). The vote does not run without both.
-export type MapVoteRule = { options: number; minutes: number; closePercent: number; channelId: string | undefined; botToken: string | undefined };
+export type MapVoteRule = {
+  options: number;
+  minutes: number;
+  closePercent: number;
+  channelId: string | undefined;
+  botToken: string | undefined;
+  // How the winner is put on the server (see MAP_VOTE_STAGING in config.ts).
+  staging: 'rotation' | 'queue';
+};
 
 export type VoteOption = { map: string; name: string };
 

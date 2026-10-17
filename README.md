@@ -607,14 +607,21 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
 3. The vote stays open until a team reaches `MAP_VOTE_CLOSE_PERCENT` of `SCORE_TO_WIN` (default 95, so 95 of 100), or for
    `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). Closing picks the winner and takes the buttons
    away; nothing is sent to the server yet. A match already at that score when the bot sees it gets no vote.
-4. The map with the most votes (a tie is settled by chance) is staged on the server when the match is over, never before:
-   staging it mid-round was followed by the server ending the match early (17 October, on 96 of 100). The match is over when
-   the kill feed says it went to its end screen (`MatchState.PostMatch`) or sent its result, which the bot acts on at once
-   (the end screen lasts about a minute), or, without the feed, when a check sees a team on `SCORE_TO_WIN`. The winner is
-   staged **infantry only**, the same as `/setnextmap`, with the lighting the conditions vote chose: the rotation is unchanged,
-   and the server goes there when the end screen finishes. The result is announced in game. It tries again each check if the
-   server can't be reached, until the server has moved to another map. Nothing is staged when nobody voted, when staff used
-   `/setnextmap` or `/changemap` while the vote was open (their pick stands), or when the server had moved on first.
+4. The map with the most votes (a tie is settled by chance) is put on the server, **infantry only**, with the lighting the
+   conditions vote chose. `MAP_VOTE_STAGING` says how:
+   - `rotation` (default): the map is written into the server's rotation as the next map, in front of the one that would
+     have come next, the same way the daily rotation is put on (`PUT /v1/config`, which never cuts the match on now short).
+     This can be done as soon as the vote closes. When the server has moved on to another map, the rotation is written back
+     as it was, from the map that would have come next, if no one has changed it since. It needs the rotation on, in order,
+     with the server saying which slot it is on; otherwise it falls back to `queue`.
+   - `queue`: staged with `POST /v1/match/map` (what `/setnextmap` does) once the match is over, never before: staging it
+     mid-round was followed by the server ending the match early (17 October, on 96 of 100). The match is over when the kill
+     feed says it went to its end screen (`MatchState.PostMatch`) or sent its result, which the bot acts on at once (the end
+     screen lasts about a minute), or, without the feed, when a check sees a team on `SCORE_TO_WIN`.
+
+   The result is announced in game. It tries again each check if the server can't be reached, until the server has moved to
+   another map. Nothing is put on when nobody voted, when staff used `/setnextmap` or `/changemap` while the vote was open
+   (their pick stands), or when the server had moved on first.
 
 Set up (Cloudflare):
 
