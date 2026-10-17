@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MATCH_END } from '../src/lines.ts';
 import type { LiveMatch, LivePlayer } from '../src/live.ts';
-import { hasWinner, honours, killCount, LONGEST_EARNED, matchEndMessages, ordinal, type MatchEndRule } from '../src/matchend.ts';
+import { feedRecordOf, hasWinner, honours, killCount, LONGEST_EARNED, matchEndMessages, ordinal, type MatchEndRule } from '../src/matchend.ts';
 import { MAX_LENGTH } from '../src/messages.ts';
 import type { MatchState, TrackedPlayer } from '../src/tracking.ts';
 
@@ -101,6 +101,12 @@ describe('honours', () => {
     expect(honours(match, feed, { ...rule, awards: false }).map((h) => h.steamId)).toEqual(['a', 'b', 'c']);
   });
 
+  it('gives the longest kill however short it is', () => {
+    const close = live([fed('x', 'Xi', { longest: 0.4, longestCause: 'Id.Item.M4' })]);
+
+    expect(honours(match, close, { ...rule, count: 0 })).toEqual([{ steamId: 'x', name: 'Xi', earned: ['longest kill (0 m)'] }]);
+  });
+
   it('does not count a longest kill with a weapon that locks on, or a mine', () => {
     const locked = live([fed('x', 'Xi', { longest: 900, longestCause: 'Id.Item.Launcher_04' })]);
 
@@ -135,6 +141,27 @@ describe('matchEndMessages', () => {
     for (const line of MATCH_END) {
       expect(fill(line, LONGEST_EARNED).length).toBeLessThanOrEqual(MAX_LENGTH);
     }
+  });
+});
+
+describe('feedRecordOf', () => {
+  const MINUTE = 60_000;
+  // The checks saw the match on Ozeti from minute 10 to minute 40.
+  const round: MatchState = { ...match, key: 'Ozeti_KOTH_01#2', startedAt: 10 * MINUTE, lastSeenAt: 40 * MINUTE };
+  const record = (startedAt: number, lastAt: number, map = 'Ozeti_KOTH_01'): LiveMatch => ({ ...live([]), map, startedAt, lastAt });
+
+  it("takes the feed's record of this match, even one that began a little before the checks saw it start", () => {
+    expect(feedRecordOf(record(9 * MINUTE, 39 * MINUTE), round, 40 * MINUTE)).not.toBeNull();
+  });
+
+  it('leaves out the round before on the same map, as after a restart while the feed was down', () => {
+    expect(feedRecordOf(record(-20 * MINUTE, 9 * MINUTE), round, 40 * MINUTE)).toBeNull();
+  });
+
+  it('leaves out the next match, another map, and no record at all', () => {
+    expect(feedRecordOf(record(41 * MINUTE, 42 * MINUTE), round, 42 * MINUTE)).toBeNull();
+    expect(feedRecordOf(record(11 * MINUTE, 39 * MINUTE, 'Bakurani_KOTH_01'), round, 40 * MINUTE)).toBeNull();
+    expect(feedRecordOf(null, round, 40 * MINUTE)).toBeNull();
   });
 });
 

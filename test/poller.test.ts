@@ -1110,6 +1110,21 @@ describe('end-of-match messages', () => {
       expect(later.sent).toEqual([]);
     });
 
+    it('keeps the scoreboard it read, so the match summary has what the messages said, but not a match already over', async () => {
+      const store = memoryStore();
+      await endPoller(live, {}, { store }).run(2);
+      // b takes the lead after the last check.
+      await endCheck(store, scored(crowd(22, kills([[a, 9], [b, 15], [c, 2]])), [100, 60])).check();
+      expect((await store.load())?.match?.players[b]?.kills).toBe(15);
+
+      const over = memoryStore();
+      await endPoller(live, {}, { store: over }).run(2);
+      const { check, sent } = endCheck(over, nextMap([a, b]));
+      await check();
+      expect(sent.map(([steamId]) => steamId)).toEqual([a, b]);
+      expect((await over.load())?.match?.key).toBe('Kavkazi#0');
+    });
+
     it("adds the kill feed's award winners", async () => {
       const store = memoryStore();
       await endPoller(live, {}, { store }).run(2);

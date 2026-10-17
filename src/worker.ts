@@ -136,6 +136,7 @@ import {
   type SavedLines,
 } from './linespage.ts';
 import type { OutageEvent } from './outages.ts';
+import { feedRecordOf } from './matchend.ts';
 import { createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
 import {
   ALERT_LOG_KEY,
@@ -783,12 +784,9 @@ export class Watcher extends DurableObject<Env> {
     this.ctx.waitUntil(this.alerting(endCheck));
   }
 
-  // The kill feed's record of a match, for its awards: null when the feed's match is another, such as the next one on
-  // the same map, which started after this one was last seen.
+  // The kill feed's record of a match, for its awards (see feedRecordOf).
   private async liveMatchOf(match: MatchState): Promise<LiveMatch | null> {
-    const saved = parseLiveMatch(await this.ctx.storage.get('live'));
-    if (saved === null || saved.startedAt > match.lastSeenAt) return null;
-    return isCurrent(saved, { map: mapName(matchMap(match)), startedAt: match.startedAt }, Date.now()) ? saved : null;
+    return feedRecordOf(parseLiveMatch(await this.ctx.storage.get('live')), match, Date.now());
   }
 
   private async updateStats(change: (stats: SiteStats) => SiteStats): Promise<void> {

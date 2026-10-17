@@ -1,8 +1,9 @@
+import { mapName } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import type { LiveMatch, LivePlayer } from './live.ts';
+import { isCurrent, type LiveMatch, type LivePlayer } from './live.ts';
 import { fit, pickLine, remember, type Recent } from './messages.ts';
 import type { FactionScore } from './rcon.ts';
-import { topPlayers, type MatchState } from './tracking.ts';
+import { matchMap, topPlayers, type MatchState } from './tracking.ts';
 import { countsForLongest, weaponRole, type WeaponRole } from './weapons.ts';
 
 // The end of a match: the moment a team wins, each of its best players in game gets a private message with what they
@@ -54,8 +55,8 @@ export const AWARDS: Award[] = [
   role('vehicle-gun', 'best vehicle crew'),
   { value: (p) => p.headshots, least: 3, says: (n) => `most headshots (${n})` },
   {
-    value: (p) => (p.longestCause !== null && countsForLongest(p.longestCause) ? (p.longest ?? 0) : 0),
-    least: 1,
+    value: (p) => (p.longestCause !== null && countsForLongest(p.longestCause) ? (p.longest ?? -1) : -1),
+    least: 0,
     says: (metres) => `longest kill (${Math.round(metres)} m)`,
   },
   { value: (p) => p.bestStreak, least: 5, says: (n) => `best kill streak (${n})` },
@@ -67,6 +68,17 @@ const winnerOf = (players: LivePlayer[], award: Award): LivePlayer | null =>
     (best, p) => (award.value(p) >= award.least && (best === null || award.value(p) > award.value(best)) ? p : best),
     null,
   );
+
+// The kill feed's record of the match on now (`live`, as saved) when it is this match's, for its awards: with a death
+// after the checks saw the match start, none before they last saw it, and on its map. Not the round before, as after a
+// restart on the same map while the feed was down.
+export const feedRecordOf = (live: LiveMatch | null, match: MatchState, now: number): LiveMatch | null =>
+  live !== null &&
+  live.lastAt >= match.startedAt &&
+  live.startedAt <= match.lastSeenAt &&
+  isCurrent(live, { map: mapName(matchMap(match)), startedAt: match.startedAt }, now)
+    ? live
+    : null;
 
 export type Honours = { steamId: string; name: string; earned: string[] };
 

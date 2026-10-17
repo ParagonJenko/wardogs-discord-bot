@@ -632,9 +632,9 @@ type MatchEndCheckDeps = Pick<
 // Returns a function that sends the end-of-match messages the moment the kill feed says a match ended, while everyone is
 // still on the scoreboard, rather than at the next check. It reads the server once, and goes ahead when a team has won,
 // or is a point short (the server may not have the winning point yet), or the match is over already, in a match that
-// has not had them: after a check that sent them, or for word of a match long over, it sends nothing. The match itself
-// is left to the checks, so only that the messages went out is saved. It must not run at the same time as a check, as
-// both save the state. It never throws.
+// has not had them: after a check that sent them, or for word of a match long over, it sends nothing. The match it read
+// is saved, so the match summary has the same scoreboard as the messages; a match already over is left to the next
+// check, which records it. It must not run at the same time as a check, as both save the state. It never throws.
 export const createMatchEndCheck =
   ({ config, fetchSnapshot, messagePlayer, now, log, store, random = Math.random, lines, privateProfiles, liveMatch }: MatchEndCheckDeps) =>
   async (): Promise<void> => {
@@ -650,7 +650,7 @@ export const createMatchEndCheck =
       const hidden = privateProfiles === undefined ? new Set<string>() : await privateProfiles();
       const wording = await readLines(lines, log);
       const recent = await congratulate({ messagePlayer, log, liveMatch, random }, rule, ending, players, hidden, wording, state.recent);
-      await store.save({ ...state, endMessages: ending.startedAt, recent });
+      await store.save({ ...state, ...(finished === null ? { match } : {}), endMessages: ending.startedAt, recent });
     } catch (error) {
       log.error(`Match end check failed: ${errorText(error)}`);
     }
