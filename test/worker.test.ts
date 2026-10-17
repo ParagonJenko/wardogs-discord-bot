@@ -485,6 +485,54 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect((await server.fetch('/api/account', { headers: await asPlayer() })).status).toBe(401);
     });
 
+    it('gives every staff route to staff only: no session, a player session, a forged one and a session for the wrong thing are all refused', async () => {
+      const routes: [string, string][] = [
+        ['GET', '/api/admin/commands'],
+        ['GET', '/api/admin/growth'],
+        ['GET', '/api/admin/kills'],
+        ['GET', '/api/admin/lines'],
+        ['GET', '/api/admin/overview'],
+        ['GET', '/api/admin/player?player=76561198000000001'],
+        ['GET', '/api/admin/rotations'],
+        ['GET', '/api/admin/rules'],
+        ['GET', '/api/admin/season'],
+        ['POST', '/api/admin/check'],
+        ['POST', '/api/admin/command'],
+        ['POST', '/api/admin/dealt'],
+        ['POST', '/api/admin/lines'],
+        ['POST', '/api/admin/profile'],
+        ['POST', '/api/admin/rotations'],
+        ['POST', '/api/admin/rules'],
+        ['POST', '/api/admin/suggest'],
+        // A route that does not exist is refused the same way, so nothing says which are there.
+        ['GET', '/api/admin/anything-else'],
+      ];
+      const staffer = { id: '100000000000000003', name: 'Staffer' };
+      const refused: Record<string, string | undefined> = {
+        none: undefined,
+        player: `Bearer ${await createPlayerSession(CLIENT_SECRET, staffer, Date.now())}`,
+        forged: `Bearer ${await createSession('not-the-client-secret', staffer, Date.now())}`,
+        expired: `Bearer ${await createSession(CLIENT_SECRET, staffer, Date.now() - 40 * 60 * 60_000)}`,
+        junk: 'Bearer not-a-token',
+      };
+      for (const [method, path] of routes) {
+        for (const [kind, authorization] of Object.entries(refused)) {
+          const response = await server.fetch(path, {
+            method,
+            headers: { ...(authorization === undefined ? {} : { authorization }), 'content-type': 'application/json' },
+            ...(method === 'POST' ? { body: '{}' } : {}),
+          });
+          expect(response.status, `${method} ${path} with ${kind}`).toBe(401);
+        }
+      }
+      // The live kill feed socket takes a session too, and from the website only.
+      expect((await server.fetch('/api/admin/live', { headers: { upgrade: 'websocket', origin: SITE } })).status).toBe(401);
+      expect((await server.fetch('/api/admin/live', { headers: { upgrade: 'websocket', origin: 'https://evil.example' } })).status).toBe(403);
+      // And the one with a session a staff member really has gets past the gate.
+      const staff = await createSession(CLIENT_SECRET, staffer, Date.now());
+      expect((await server.fetch('/api/admin/commands', { headers: { authorization: `Bearer ${staff}` } })).status).toBe(200);
+    });
+
     it('never lets a player session into the staff page', async () => {
       expect((await server.fetch('/api/admin/commands', { headers: await asPlayer() })).status).toBe(401);
       expect((await server.fetch('/api/admin/growth', { headers: await asPlayer() })).status).toBe(401);
