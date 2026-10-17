@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { mapEmoji, mapName, type Embed } from './discord.ts';
+import type { MatchFeed } from './matchfeed.ts';
 import type { MapChoice } from './rotationspage.ts';
 
 // The next-map vote. While a match is live the bot posts a message with a button for each of a few maps in one Discord
@@ -19,8 +20,9 @@ import type { MapChoice } from './rotationspage.ts';
 export const MAP_VOTE_KEY = 'mapVote';
 
 // A vote closes at the first of its time running out and the leading team reaching its close score (MAP_VOTE_CLOSE_PERCENT
-// of the winning score, 95% by default), so it is over while the match can still be told where to go next. The time is
-// only a backstop: a match lasts about 50 minutes, so the score is what normally closes it.
+// of the winning score, 95% by default), so people stop voting before the match ends. The time is only a backstop: a match
+// lasts about 50 minutes, so the score is what normally closes it. Closing only picks the winner: it is put on the server
+// once the match is over (see matchIsOver), as staging it mid-round was followed by the match ending early.
 // Always at least a point short of the winning score, however small SCORE_TO_WIN or high the percent: rounding up must not
 // leave the vote open until the match is won.
 export const closeScoreFor = (scoreToWin: number, percent: number): number =>
@@ -31,7 +33,15 @@ export const VOTE_SETUP_OPTIONS = { infantry_only: 'true' };
 
 // `channelId` is where the vote is posted and `botToken` the bot's, which posting and editing a message with buttons need
 // (a webhook can't carry them). The vote does not run without both.
-export type MapVoteRule = { options: number; minutes: number; closePercent: number; channelId: string | undefined; botToken: string | undefined };
+export type MapVoteRule = {
+  options: number;
+  minutes: number;
+  closePercent: number;
+  channelId: string | undefined;
+  botToken: string | undefined;
+  // How the winner is put on the server (see MAP_VOTE_STAGING in config.ts).
+  staging: 'rotation' | 'queue';
+};
 
 export type VoteOption = { map: string; name: string };
 
@@ -279,6 +289,15 @@ export const votingNow = (
 export const closeDue = (vote: MapVote, now: number, leadingScore: number): boolean =>
   vote.outcome === null && (now >= vote.closesAt || (vote.closeScore > 0 && leadingScore >= vote.closeScore));
 
+// Whether the match the vote is for is over, so its winner can be put on the server without cutting the round short: the game
+// said the match went to its end screen (MatchState.PostMatch) or sent its result, since the vote opened (`feed`, null
+// without the kill feed), or a team has the winning score on the bot's own reading (`leadingScore`).
+export const matchIsOver = (vote: MapVote, feed: MatchFeed | null, leadingScore: number, scoreToWin: number): boolean => {
+  const endScreen = feed?.state?.startsWith('MatchState.PostMatch') === true && (feed.stateAt ?? 0) >= vote.openedAt;
+  const resulted = feed?.result != null && feed.result.at >= vote.openedAt;
+  return endScreen || resulted || leadingScore >= scoreToWin;
+};
+
 // What the website gets: the options with their votes, never the ballots or who cast them.
 export type PublicVote = {
   id: string;
@@ -362,7 +381,7 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
       `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${where}`
     : shown.winner !== null
       ? shown.pending
-        ? `**${shown.winner.name}** won. Putting it on the server…`
+        ? `**${shown.winner.name}** won. It goes on the server when the match ends…`
         : `**${shown.winner.name}** won and plays next, **infantry only**${shown.lightingName ? `, **${shown.lightingName}**` : ''}.`
       : (shown.note ?? 'The vote has closed. Counting the votes…');
   const embed: Embed = {
