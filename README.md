@@ -695,7 +695,9 @@ nothing, and players can still sign in and link.
 
 **The welcome.** A player who linked their account and is in the server is not sent the Discord invite in their welcome in game.
 Everyone else is. With `DISCORD_SHORT_LINK` (`/discord`), the welcome says `gaminginit.com/discord` instead of the invite code,
-which is hard to type in game.
+which is hard to type in game. **Deploy in this order:** the bot first (the website's Discord links go through `/go/discord`, which
+only this version has), then the website (it has the `/discord` path), then turn `DISCORD_SHORT_LINK` on in `wrangler.jsonc`
+(it is commented out) and deploy the bot again.
 
 **Counting clicks.** `GET /go/discord?src=<place>` counts the click for that place and sends the browser to `DISCORD_INVITE`.
 The website's Discord buttons and the short link go through it, so the staff page can show which of them people click, without the
