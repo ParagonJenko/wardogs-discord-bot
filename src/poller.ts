@@ -5,7 +5,9 @@ import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.
 import { DEFAULT_LINES, type Lines } from './lines.ts';
 import type { LiveMatch } from './live.ts';
 import { hasWinner, matchEndMessages, type MatchEndRule } from './matchend.ts';
+import { sameMap, type MatchFeed } from './matchfeed.ts';
 import {
+  JOIN_WAIT_MS,
   joinMessageDue,
   JoinWatchSchema,
   markWelcomed,
@@ -39,7 +41,9 @@ import type { SeedCredit } from './players.ts';
 import { publicNames, publicNamesBySteamId } from './privacy.ts';
 import type { Player, Snapshot } from './rcon.ts';
 import type { Observation } from './stats.ts';
+import type { FeedPresence } from './weapons.ts';
 import {
+  matchMap,
   observeMatch,
   settleWin,
   summarise,
@@ -106,6 +110,10 @@ type PollerDeps = {
   privateProfiles?: () => Promise<ReadonlySet<string>>;
   // The kill feed's record of a match, for its awards (see matchend.ts), or null when it has none of that match.
   liveMatch?: (match: MatchState) => Promise<LiveMatch | null>;
+  // The kill feed's word on the match: its state and latest result (see matchfeed.ts), or null while the feed is not
+  // heard from. With it, a match ends when the game says, with the game's scores, and nothing is worked out from the
+  // scores the checks see.
+  matchFeed?: () => Promise<MatchFeed | null>;
   // An outage confirmed or over, for the moderation log. Told once: one that fails is logged, not retried.
   outage?: (event: OutageEvent) => Promise<void>;
 };
@@ -164,6 +172,7 @@ const BotStateSchema = z.object({
           .transform((p) => ({ ...p, lastKills: p.lastKills ?? p.kills, lastDeaths: p.lastDeaths ?? p.deaths })),
       ),
       factionScores: Scores,
+      endedAt: z.number().optional(),
     })
     .nullable(),
   // Missing from state saved before summaries were retried this way.
@@ -255,6 +264,17 @@ const readLines = async (lines: (() => Promise<Lines>) | undefined, log: Logger)
   }
 };
 
+// The kill feed's word on the match. If it can't be read, the check goes on as without the feed.
+const readFeed = async (matchFeed: (() => Promise<MatchFeed | null>) | undefined, log: Logger): Promise<MatchFeed | null> => {
+  if (matchFeed === undefined) return null;
+  try {
+    return await matchFeed();
+  } catch (error) {
+    log.error(`Reading the kill feed's match failed, so the check goes on without it: ${errorText(error)}`);
+    return null;
+  }
+};
+
 type EndDeps = Pick<PollerDeps, 'messagePlayer' | 'log' | 'liveMatch'> & { random: () => number };
 
 // The end-of-match messages for a match just won, privately to each of its best players in game (see matchend.ts). One
@@ -311,6 +331,7 @@ export const createPoller = ({
   staff,
   privateProfiles,
   liveMatch,
+  matchFeed,
   outage: tellOutage,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
@@ -422,8 +443,10 @@ export const createPoller = ({
     const result = step(state.alerts, status.players, time, config.rules, crashed(outage));
     const before = state.alerts.phase;
     const after = result.state.phase;
-    const { match, finished: ended } = observeMatch(state.match, status, players, after === 'live', time);
-    const finished = ended === null ? null : { ...ended, factionScores: settleWin(ended.factionScores, config.scoreToWin) };
+    const feed = await readFeed(matchFeed, log);
+    const { match, finished: ended } = observeMatch(state.match, status, players, after === 'live', time, feed);
+    // Without the game's result, a side the last check saw one point short won (see settleWin).
+    const finished = ended === null || feed !== null ? ended : { ...ended, factionScores: settleWin(ended.factionScores, config.scoreToWin) };
     // Seeding is time on the server while it is in the seeding phase: filling up from empty, or building back up
     // after a drop from live (a crash, or players leaving) that outlasted the grace time. A shorter drop keeps the
     // server live, so a quick restart is not seeding.
@@ -443,11 +466,11 @@ export const createPoller = ({
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
     // Not caught, like the seed below: nothing has been saved yet, so the next check tries again.
     const staffIds = wentLive && staff !== undefined ? await staff() : new Set<string>();
-    // The end-of-match messages go out the first check that sees a team win, or else the one that sees the match end
-    // (the map changing, or the server emptying), when the kill feed's word that it ended did not send them already
-    // (see createMatchEndCheck).
+    // The end-of-match messages go out the moment the kill feed says a match ended (see createMatchEndCheck), or else at
+    // the check that sees it end. Without the feed, that is the first check that sees a team on the winning score, or the
+    // one that sees the match end (the map changing, or the server emptying).
     const endRule = messagePlayer === undefined ? null : config.matchEndMessages;
-    const won = match !== null && hasWinner(status.factionScores, config.scoreToWin) ? match : null;
+    const won = feed === null && match !== null && hasWinner(status.factionScores, config.scoreToWin) ? match : null;
     const ending = endRule === null ? null : ([finished, won].find((m) => unthanked(m, state)) ?? null);
     const naming = wentLive || finished !== null || state.unsentSummary !== null || ending !== null;
     const hidden = naming && privateProfiles !== undefined ? await privateProfiles() : new Set<string>();
@@ -459,7 +482,8 @@ export const createPoller = ({
       : [];
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
     if (credits.length > 0) await stats?.seeded(credits, time);
-    const endedAt = finished === null ? null : ((await stats?.matchEnded(finished, time)) ?? null);
+    // A match the game ended is recorded as ending when it did.
+    const endedAt = finished === null ? null : ((await stats?.matchEnded(finished, finished.endedAt ?? time)) ?? null);
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
@@ -624,28 +648,57 @@ export const createJoinCheck =
     }
   };
 
+type FeedJoinsDeps = Pick<PollerDeps, 'config' | 'log' | 'store'>;
+
+// Returns a function that notes the kill feed's joins and leaves while the server seeds, so the seeding message goes out
+// 30 seconds after someone joins (see createJoinCheck, which sends it) without reading who is in game every few seconds.
+// `players` is how many the game said were on after the last of them. It answers when the message will be due, or null
+// when none is waiting. It must not run at the same time as a check, as both save the state. It never throws.
+export const createFeedJoins =
+  ({ config, log, store }: FeedJoinsDeps) =>
+  async (presence: FeedPresence[], players: number | null, at: number): Promise<number | null> => {
+    try {
+      const state = await store.load();
+      if (config.seedingMessages === null || state === null || state.joins === null || state.alerts.phase !== 'seeding') return null;
+      const left = new Set(presence.filter((p) => p.type === 'left').map((p) => p.steamId));
+      const online = state.joins.online.filter((id) => !left.has(id));
+      const joined = [...new Set(presence.filter((p) => p.type === 'joined' && !online.includes(p.steamId)).map((p) => p.steamId))];
+      const count = players ?? online.length + joined.length;
+      const watched = watchJoins(state.joins, [...online, ...joined], at, canSeedMessage(true, count, config.rules.live));
+      const changed = joined.length > 0 || online.length < state.joins.online.length || watched.lastJoinAt !== state.joins.lastJoinAt;
+      if (changed) await store.save({ ...state, joins: watched });
+      return watched.lastJoinAt === null ? null : watched.lastJoinAt + JOIN_WAIT_MS;
+    } catch (error) {
+      log.error(`Noting the kill feed's joins failed: ${errorText(error)}`);
+      return null;
+    }
+  };
+
 type MatchEndCheckDeps = Pick<
   PollerDeps,
-  'config' | 'fetchSnapshot' | 'now' | 'log' | 'store' | 'random' | 'lines' | 'privateProfiles' | 'liveMatch'
+  'config' | 'fetchSnapshot' | 'now' | 'log' | 'store' | 'random' | 'lines' | 'privateProfiles' | 'liveMatch' | 'matchFeed'
 > & { messagePlayer: (steamId: string, text: string) => Promise<void> };
 
 // Returns a function that sends the end-of-match messages the moment the kill feed says a match ended, while everyone is
-// still on the scoreboard, rather than at the next check. It reads the server once, and goes ahead when a team has won,
-// or is a point short (the server may not have the winning point yet), or the match is over already, in a match that
-// has not had them: after a check that sent them, or for word of a match long over, it sends nothing. The match it read
-// is saved, so the match summary has the same scoreboard as the messages; a match already over is left to the next
-// check, which records it. It must not run at the same time as a check, as both save the state. It never throws.
+// still on the scoreboard, rather than at the next check. It reads the server once, for the scoreboard, and goes ahead
+// for the match the game's result is for: the one on now, if it started before the result came and is on its map, or
+// the one the reading shows just ended. A match that had them already gets none, so after a check that sent them, or
+// for word of a match long over, it sends nothing. The match it read is saved, so the match summary has the same
+// scoreboard as the messages; the next check ends it with the game's result (see observeMatch). It must not run at the
+// same time as a check, as both save the state. It never throws.
 export const createMatchEndCheck =
-  ({ config, fetchSnapshot, messagePlayer, now, log, store, random = Math.random, lines, privateProfiles, liveMatch }: MatchEndCheckDeps) =>
+  ({ config, fetchSnapshot, messagePlayer, now, log, store, random = Math.random, lines, privateProfiles, liveMatch, matchFeed }: MatchEndCheckDeps) =>
   async (): Promise<void> => {
     try {
       const rule = config.matchEndMessages;
       const state = await store.load();
       if (rule === null || state === null) return;
+      const result = (await readFeed(matchFeed, log))?.result ?? null;
+      if (result === null) return;
       const { status, players } = await fetchSnapshot();
       const { match, finished } = observeMatch(state.match, status, players, state.alerts.phase === 'live', now());
-      const won = match !== null && hasWinner(status.factionScores, config.scoreToWin - 1) ? match : null;
-      const ending = [finished, won].find((m) => unthanked(m, state)) ?? null;
+      const resulted = result.at > match.startedAt && sameMap(result.map, matchMap(match)) ? match : null;
+      const ending = [finished, resulted].find((m) => unthanked(m, state)) ?? null;
       if (ending === null) return;
       const hidden = privateProfiles === undefined ? new Set<string>() : await privateProfiles();
       const wording = await readLines(lines, log);

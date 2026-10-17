@@ -7,13 +7,15 @@ import {
   liveSteamIds,
   ON_FIRE,
   parseLiveMatch,
+  phaseOf,
   recordLive,
   RIVALRY_KILLS,
   trimLive,
   type LiveMatch,
 } from '../src/live.ts';
+import { NO_MATCH_FEED } from '../src/matchfeed.ts';
 import { PRIVATE_NAME } from '../src/privacy.ts';
-import type { FeedEvent } from '../src/weapons.ts';
+import type { FeedEvent, FeedMatchEvent } from '../src/weapons.ts';
 
 const ASH = '76561198000000001';
 const BO = '76561198000000002';
@@ -42,8 +44,24 @@ const death = (killer: string | null, victim: string, time: number, overrides: P
   ...overrides,
 });
 
-const play = (events: FeedEvent[], match: LiveMatch | null = null, at = NOW): LiveMatch => {
-  const result = recordLive(match, events, at, factionOf);
+// The game's result for a match on Kavkazi: Lonestar won.
+const ended = (overrides: Partial<FeedMatchEvent> = {}): FeedMatchEvent => ({
+  eventId: `r${next++}`,
+  type: 'result',
+  time: 3000,
+  matchId: 'm1',
+  map: 'Kavkazi',
+  players: 40,
+  winner: 'Lonestar',
+  factionScores: [
+    { name: 'Lonestar', score: 100 },
+    { name: 'Valkyra', score: 61 },
+  ],
+  ...overrides,
+} as FeedMatchEvent);
+
+const play = (events: (FeedEvent | FeedMatchEvent)[], match: LiveMatch | null = null, at = NOW, playingAt: number | null = null): LiveMatch => {
+  const result = recordLive(match, events, at, factionOf, playingAt);
   if (result === null) throw new Error('no match');
   return result;
 };
@@ -114,15 +132,29 @@ describe('recordLive', () => {
     expect(match).toMatchObject({ kills: 2, otherDeaths: 1 });
   });
 
-  it('starts a new match when the match clock starts again, the map or the game changes, or after a quiet spell', () => {
+  it('starts a new match after the game ended the last, or started one since its last death, or on another map or match', () => {
     const first = play([death(ASH, BO, 500)]);
 
-    expect(play([death(BO, ASH, 520)], first).players).toHaveLength(2);
-    expect(play([death(BO, ASH, 12)], first).feed).toHaveLength(1);
+    expect(play([death(BO, ASH, 520)], first, NOW + 60_000).feed).toHaveLength(2);
+    expect(play([death(BO, ASH, 12)], play([ended()], first, NOW + 30_000), NOW + 60_000).feed).toHaveLength(1);
+    expect(play([death(BO, ASH, 12)], first, NOW + 60_000, NOW + 50_000).feed).toHaveLength(1);
     expect(play([death(BO, ASH, 600, { map: 'Ozeti' })], first).map).toBe('Ozeti');
     expect(play([death(BO, ASH, 600, { matchId: 'm2' })], first).feed).toHaveLength(1);
-    expect(play([death(BO, ASH, 600)], first, NOW + 21 * 60_000).feed).toHaveLength(1);
-    expect(play([death(BO, ASH, 495)], first).feed).toHaveLength(2);
+    // Neither the match clock nor a quiet spell decides: only what the game says.
+    expect(play([death(BO, ASH, 12)], first, NOW + 21 * 60_000).feed).toHaveLength(2);
+    // The match started being played before its first death.
+    expect(play([death(BO, ASH, 520)], play([death(ASH, BO, 500)], null, NOW, NOW - 60_000), NOW + 60_000, NOW - 60_000).feed).toHaveLength(2);
+  });
+
+  it("ends the match with the game's result, in the order the game sent it", () => {
+    const match = play([death(ASH, BO, 2990), ended(), death(BO, ASH, 3010)], null, NOW);
+
+    expect(match.feed).toHaveLength(1);
+    expect(match.endedAt).toBeNull();
+    const over = play([death(ASH, BO, 2990), ended()], null, NOW);
+    expect(over).toMatchObject({ endedAt: NOW, result: { winner: 'Lonestar', factionScores: [{ name: 'Lonestar', score: 100 }, { name: 'Valkyra', score: 61 }] } });
+    expect(play([ended({ map: 'Europe' })], play([death(ASH, BO, 10)])).endedAt).toBeNull();
+    expect(recordLive(null, [ended()], NOW, factionOf)).toBeNull();
   });
 
   it(`keeps the last ${LIVE_FEED_KEPT} deaths, and the first blood`, () => {
@@ -249,19 +281,34 @@ describe('liveStats', () => {
 
 describe('isCurrent', () => {
   const match = play([death(ASH, BO, 10)]);
+  const over = play([ended()], match, NOW + 60_000);
+  const playing = (at: number) => ({ ...NO_MATCH_FEED, state: 'MatchState.Playing.KOTH', stateAt: at, playingAt: at });
 
-  it('is the match on the server when it is on the same map and not over before that match started', () => {
+  it('is the match on the server when it is on the same map and the game has started none since', () => {
     // The bot's checks name the map as players know it: Kavkazi is Bakurani.
-    expect(isCurrent(match, { map: 'Bakurani', startedAt: NOW - 30 * 60_000 }, NOW)).toBe(true);
-    // The first kills of a match can come before the check that sees it start.
-    expect(isCurrent(match, { map: 'Bakurani', startedAt: NOW + 60_000 }, NOW + 60_000)).toBe(true);
-    expect(isCurrent(match, { map: 'Bakurani', startedAt: NOW + 5 * 60_000 }, NOW + 5 * 60_000)).toBe(false);
-    expect(isCurrent(match, { map: 'Ozeti', startedAt: NOW - 30 * 60_000 }, NOW)).toBe(false);
+    expect(isCurrent(match, NO_MATCH_FEED, { map: 'Bakurani' }, NOW)).toBe(true);
+    expect(isCurrent(match, playing(NOW - 60_000), { map: 'Bakurani' }, NOW)).toBe(true);
+    expect(isCurrent(match, playing(NOW + 60_000), { map: 'Bakurani' }, NOW + 60_000)).toBe(false);
+    expect(isCurrent(match, NO_MATCH_FEED, { map: 'Ozeti' }, NOW)).toBe(false);
+  });
+
+  it('keeps a match the game ended, with its result, until the next starts', () => {
+    expect(isCurrent(over, NO_MATCH_FEED, { map: 'Bakurani' }, NOW + 30 * 60_000)).toBe(true);
+    expect(isCurrent(over, playing(NOW + 2 * 60_000), { map: 'Bakurani' }, NOW + 2 * 60_000)).toBe(false);
   });
 
   it('stays up a while after the server empties', () => {
-    expect(isCurrent(match, null, NOW + 5 * 60_000)).toBe(true);
-    expect(isCurrent(match, null, NOW + 11 * 60_000)).toBe(false);
+    expect(isCurrent(match, NO_MATCH_FEED, null, NOW + 5 * 60_000)).toBe(true);
+    expect(isCurrent(match, NO_MATCH_FEED, null, NOW + 11 * 60_000)).toBe(false);
+    expect(isCurrent(over, NO_MATCH_FEED, null, NOW + 11 * 60_000)).toBe(true);
+  });
+});
+
+describe('phaseOf', () => {
+  it("says where the match is from the game's state", () => {
+    expect(
+      ['MatchState.PreMatch.WaitingForPlayers.PlayerCount', 'MatchState.Playing.KOTH', 'MatchState.PostMatch', 'MatchState.Other'].map(phaseOf),
+    ).toEqual(['pre-match', 'playing', 'post-match', null]);
   });
 });
 

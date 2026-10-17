@@ -1,3 +1,4 @@
+import { resultScores, sameMap, type MatchFeed, type MatchResult } from './matchfeed.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 
 // Seeding: how many checks each player was online for while the server was filling up.
@@ -20,10 +21,13 @@ export const topSeeders = (
     .sort((a, b) => b.checks - a.checks)
     .slice(0, count);
 
-// Matches: WARDOGS RCON does not report when a match ends, so a new match is recognised by the map changing, by a
+// Matches: with the kill feed (Cloudflare, since Season 2) the game says when a match ends, with its final scores (see
+// matchfeed.ts), and the match is over there and then; the next starts when the game says a match is being played
+// again. Without it, as RCON does not report when a match ends, a new match is recognised by the map changing, by a
 // restart on the same map (the faction scores drop and most players' counters start again from 0), or by the server
-// emptying. One player's counters starting again (they rejoined) is not a new match. The summary uses the last stats
-// seen before that, so it can miss up to one check of the final minute.
+// emptying, and the summary uses the last stats seen before that, so it can miss up to one check of the final minute.
+// These also start the next match after one the game ended, and end a match the game sent no result for (one ended or
+// restarted by hand). One player's counters starting again (they rejoined) is not a new match.
 export type PlayerStats = { name: string; kills: number; deaths: number };
 
 // A player on a match's scoreboard. The Steam ID is missing from summaries saved before it was kept; it never goes on
@@ -46,6 +50,9 @@ export type MatchState = {
   peakPlayers: number;
   players: Record<string, TrackedPlayer>;
   factionScores: FactionScore[];
+  // When the game said the match ended, with its result: its scores are then the game's final ones. Missing while the
+  // match goes on, and for a match the bot saw end on its own.
+  endedAt?: number;
 };
 
 export type MatchSummary = {
@@ -131,9 +138,9 @@ export const summarise = (match: MatchState): MatchSummary => ({
   top: topPlayers(match.players),
 });
 
-// The bot reads the server once a minute, so the last reading before a match ends can come just before the winning
-// point. A side alone on one point short of the winning score when its match ends won it, so it gets the winning score.
-// The same scores come back when nothing changes.
+// Without the kill feed's result, the bot only has its own reading once a minute, and the last before a match ends can
+// come just before the winning point. A side alone on one point short of the winning score when its match ends won it,
+// so it gets the winning score. The same scores come back when nothing changes.
 export const settleWin = (scores: FactionScore[], scoreToWin: number): FactionScore[] => {
   const [first, second] = [...scores].sort((a, b) => b.score - a.score);
   if (first === undefined || first.score !== scoreToWin - 1 || second?.score === first.score) return scores;
@@ -155,39 +162,55 @@ const freshMatch = (status: ServerStatus, now: number, summarisable: boolean): M
 const emptied = (match: MatchState, status: ServerStatus, players: Player[]): boolean =>
   match.peakPlayers > 0 && status.players === 0 && players.length === 0;
 
-// `finished` is the match that just ended, when it went live and the bot saw it start.
+// The game's result for `match`: one that came while it was on, on its map.
+const resultFor = (match: MatchState, feed: MatchFeed | null): MatchResult | null => {
+  const result = feed?.result ?? null;
+  return result !== null && result.at > match.startedAt && sameMap(result.map, keyMap(match.key)) ? result : null;
+};
+
+// The match with a reading added.
+const withReading = (base: MatchState, status: ServerStatus, players: Player[], live: boolean, now: number): MatchState => ({
+  ...base,
+  // Keeps the latest map and slot, but not a reading that left the map out.
+  key: status.map === '' ? base.key : matchKey(status),
+  // A match starts when someone is first seen in it, not while the server sits empty on the map.
+  startedAt: base.peakPlayers === 0 ? now : base.startedAt,
+  lastSeenAt: now,
+  liveAt: base.liveAt ?? (live ? now : null),
+  peakPlayers: Math.max(base.peakPlayers, status.players),
+  players: {
+    ...base.players,
+    ...Object.fromEntries(players.map((p) => [p.steamId, track(base.players[p.steamId], p)])),
+  },
+  factionScores: status.factionScores.length > 0 ? status.factionScores : base.factionScores,
+});
+
+// `finished` is the match that just ended, when it went live and the bot saw it start. `feed` is the kill feed's word on
+// the match (see matchfeed.ts), null without it. A match the game ended is over at its result, with the game's scores
+// and the last reading before or at the end; it then waits, as it was, for the next match, and is not finished again.
 export const observeMatch = (
   previous: MatchState | null,
   status: ServerStatus,
   players: Player[],
   live: boolean,
   now: number,
+  feed: MatchFeed | null = null,
 ): { match: MatchState; finished: MatchState | null } => {
-  const isNew =
-    previous === null ||
-    mapChanged(previous, status) ||
-    restarted(previous, status, players) ||
-    emptied(previous, status, players);
-  const base = isNew ? freshMatch(status, now, !(previous === null && live)) : previous;
-
-  const match: MatchState = {
-    ...base,
-    // Keeps the latest map and slot, but not a reading that left the map out.
-    key: status.map === '' ? base.key : matchKey(status),
-    // A match starts when someone is first seen in it, not while the server sits empty on the map.
-    startedAt: base.peakPlayers === 0 ? now : base.startedAt,
-    lastSeenAt: now,
-    liveAt: base.liveAt ?? (live ? now : null),
-    peakPlayers: Math.max(base.peakPlayers, status.players),
-    players: {
-      ...base.players,
-      ...Object.fromEntries(
-        players.map((p) => [p.steamId, track(base.players[p.steamId], p)]),
-      ),
-    },
-    factionScores: status.factionScores.length > 0 ? status.factionScores : base.factionScores,
-  };
-
-  const finished = isNew && previous !== null && previous.summarisable && previous.liveAt !== null ? previous : null;
-  return { match, finished };
+  const fresh = (summarisable: boolean): MatchState => withReading(freshMatch(status, now, summarisable), status, players, live, now);
+  if (previous === null) return { match: fresh(!live), finished: null };
+  const isNew = mapChanged(previous, status) || restarted(previous, status, players) || emptied(previous, status, players);
+  if (previous.endedAt !== undefined) {
+    const begun = isNew || (feed?.playingAt != null && feed.playingAt > previous.endedAt);
+    return { match: begun ? fresh(true) : previous, finished: null };
+  }
+  const summarisable = (m: MatchState): MatchState | null => (m.summarisable && m.liveAt !== null ? m : null);
+  const result = resultFor(previous, feed);
+  if (result !== null) {
+    // The reading is the new match's when the map already changed; otherwise it is the scoreboard at the end.
+    const last = isNew ? previous : withReading(previous, status, players, live, now);
+    const ended: MatchState = { ...last, lastSeenAt: result.at, factionScores: resultScores(result, last.factionScores), endedAt: result.at };
+    return { match: isNew ? fresh(true) : ended, finished: summarisable(ended) };
+  }
+  if (isNew) return { match: fresh(true), finished: summarisable(previous) };
+  return { match: withReading(previous, status, players, live, now), finished: null };
 };

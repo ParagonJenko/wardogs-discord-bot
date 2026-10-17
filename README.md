@@ -18,8 +18,10 @@ It also posts:
   [staff](#staff-steam-accounts).
 - **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
-  length, peak population, and the top 5 players by kills with deaths and K/D. With `SITE_URL` set (Cloudflare), its
-  title links to that match on the website's matches page.
+  length, peak population, and the top 5 players by kills with deaths and K/D. With the [kill feed](#weapon-stats)
+  (Cloudflare), the game says when a match ends and the final score; without it, the bot works them out from its own
+  checks (see [Behaviour](#behaviour)). With `SITE_URL` set (Cloudflare), its title links to that match on the
+  website's matches page.
 - **A [live server status](#live-server-status)** (Cloudflare only): one message in a channel of its own,
   edited every minute with the state, players, map, next map, score and top players.
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
@@ -596,7 +598,7 @@ A staff-only Discord channel where the bot posts, as they happen:
 | 🔴 Server crashed / 📉 players dropped at once | A live server lost more than three quarters of its players from one check to the next, and 3 minutes later still has under half of them. With the players before and now, and whether it was at a map change |
 | 🔴 Can't reach the server | The bot could not reach a server that had players for 5 minutes. It may still be running with only RCON down |
 | 🟢 Server back / ⚪ not back | After either of those: when 90% of the players are back, with how long it took, the fewest players and how long the bot could not reach it; or 3 hours on, when they never came back |
-| 🔇 Kill feed quiet / 🔊 back | The server is live (`LIVE_THRESHOLD` players) and the [kill feed](#weapon-stats) has sent nothing for 10 minutes, such as after a game update that changed how the feed is set up; then again when kills arrive. Once the bot has had the feed, with `KILL_FEED_TOKEN` set |
+| 🔇 Kill feed quiet / 🔊 back | The server is live (`LIVE_THRESHOLD` players) and the [kill feed](#weapon-stats) has sent nothing for 10 minutes, such as after a game update that changed how the feed is set up; then again when events arrive. Once the bot has had the feed, with `KILL_FEED_TOKEN` set |
 
 To set it up:
 
@@ -647,9 +649,12 @@ lines, weapon rules and admin tools. Staff sign in with Discord, and the pages s
   ([Kills and headshots](#kills-and-headshots)), today's griefing flags, VIP and bans, and whether a staff member
   [checked them](#checked-theyre-fine) today. Nothing while the server has not answered for 3 minutes.
 - **Who joined and left**: the server's latest 500 joins and leaves, newest first, with how long each player who left
-  had been on. The bot compares who is in game at each check with the check before, so a join or leave shows up to a
-  minute late, and someone on for less than a minute between two checks is missed. When the bot could not read the
-  server for a while, the first check after notes everyone who joined or left meanwhile, with since when. The players
+  had been on. With the [kill feed](#weapon-stats), the game says the moment someone joins or leaves, and that is the
+  time noted. The bot also compares who is in game at each check with the check before, for anything the feed did not
+  say (and, without the feed, for everything): such a join or leave shows up to a minute late, and someone on for less
+  than a minute between two checks is missed. When the bot could not read the server for a while, the first check
+  after notes everyone who joined or left meanwhile, with since when. A check whose reading came just before the feed
+  said someone joined or left (within 15 seconds) does not undo it. The players
   on when the bot started keeping the log have no join, so their time on is left out when they leave. Stored as
   `joinLog`, written only when someone joined or left. Each time someone leaves, their time on the server also goes in
   the SQLite database's `sessions` table for their history, kept for 30 days.
@@ -1176,9 +1181,21 @@ them: the game sends them in a new form, and the bot needs changing.
   happens: see Kill feed quiet.
 - **Other tools too.** `EventFeedEndpoints` is a list: a server panel can have its own `+EventFeedEndpoints=` line
   beside the bot's, and both get every kill.
-- **Not just kills.** Since Season 2 the feed also sends players joining and leaving, the match's state and its result.
-  The bot has those from its own checks, so it leaves them out, but for the word that a match ended: it sends the
-  [end-of-match messages](#end-of-match) at once.
+- **Not just kills.** Since Season 2 the feed also sends players joining and leaving, the match's state (pre-match,
+  playing, post-match) and each match's result: the winning side and the final scores. The bot uses them in place of
+  what it used to work out from its checks once a minute:
+  - **The end of a match** is the game's result. The [end-of-match messages](#end-of-match) go out at once, the
+    match is recorded with the game's final scores and when it ended, and its summary posts at the next check
+    (within a minute), rather than when the map changes. The next match starts when the game says one is being
+    played, or the map changes. Stored as `matchFeed`: the latest state and result.
+  - **The [live match](#live-match)** ends with the result and starts again with the next match the game starts.
+  - **Joins and leaves** go in the staff page's [join log](#staff-page) the moment they happen, and set the
+    [seeding message](#seeding-and-match-messages) for someone who joined, without reading who is in game every 5
+    seconds.
+  - Any of them counts as hearing from the feed, for Kill feed quiet.
+
+  While the feed is quiet (10 minutes with nothing from it, as on an empty server or when it does not reach the bot),
+  the bot goes back to working matches out from its checks, as without the feed.
 - **From the day it starts.** Only kills from then on have a weapon. `since` says which day, and the website says it too.
 - **What counts.** A kill counts for the weapon that made it: guns, launchers, grenades and tools, things placed (mines,
   claymores, C4, IEDs), a vehicle's gun, an emplacement (the L81 mortar and other fixed weapons, such as AA, which the
@@ -1232,6 +1249,7 @@ It has:
 | `feed`         | Whether the bot has ever had the kill feed                                                  |
 | `server`       | As in [`/api/stats`](#website-stats): name, players, map, phase, score, `seenAt`            |
 | `currentMatch` | As in `/api/stats`: the match on the server, with the top 5 by kills from its scoreboard. Null when the server is empty or not answering |
+| `phase`        | Where the match is, as the game last said: `{ phase, since }`, `phase` being `pre-match`, `playing` or `post-match`. Null without the kill feed, or while the server is not answering |
 | `match`        | The kill feed's match, or null before it has a death. See below                             |
 
 `match` has the map, when its first and latest deaths came in (`startedAt`, `lastKillAt`), the kills, headshots, team
@@ -1247,10 +1265,13 @@ kills and other deaths (`otherDeaths`: suicides and falls), and:
 - **Sides.** The feed does not say who is on which side, so the bot takes it from its last check of the server. Two
   players on the same side make a team kill, which counts as neither a kill nor towards a streak.
 - **Streaks.** Any death ends one: a fall or a suicide too.
-- **A new match.** The feed does not say when a match ends. A new one starts when the match clock starts again (the game
-  restarts it with each match), the map changes, the game restarts, or nobody dies for 20 minutes. The page shows the
-  feed's match only while it is the one on the server: on the same map, and not over before the bot's checks saw the
-  server's match start. With nobody on, it stays up for 10 minutes after its last death.
+- **A new match.** The game says when a match ends, with the winning side and the final scores (`endedAt` and
+  `result`: `winner` and `factionScores`), and when the next starts being played. The first death after either starts
+  a new match, as does one on another map or in another of the game's matches. The page shows the feed's match while
+  it is the one on the server: on the same map, and with no match started since; a match that ended stays up, with its
+  result, until the next starts. With nobody on, it stays up for 10 minutes after its last death, or after it ended.
+- **Where the match is.** `phase` is the game's latest word on it, while the server answers: `pre-match` (loading,
+  waiting for players or counting down), `playing` or `post-match`, and `since` when. Null without the kill feed.
 - **Cost.** A page opening its WebSocket is one Worker request, and so is reconnecting. The updates it is sent are not
   requests, and pings are answered without waking the Durable Object, so a page left open all evening costs one
   request. While a page cannot connect, it loads `/api/live` every 15 seconds instead. At most 500 pages can be
@@ -1405,10 +1426,11 @@ it), while everyone is still on the scoreboard: what they earned, and where to s
   The roles are the same as the [roundups'](#roundups) awards. A tie goes to whoever the feed named first.
 - **One message each.** A player who earned several things gets them in one message, their place first, at most 3 of
   them so it fits the game's line.
-- **When.** The game's kill feed says when a match ends, and the bot reads the server at once and sends them. A check
-  that sees a team on `SCORE_TO_WIN` (100) sends them too, in case the feed's word did not come: so without the kill
-  feed, they go out at the first check (each minute) after the win, if the scoreboard is still up. If no check saw the
-  win, they go out at the check that sees the next map, to whoever is in game then. Each match has them once.
+- **When.** The game's kill feed says when a match ends, and the bot reads the server at once, for the scoreboard, and
+  sends them; the match summary then has that same scoreboard. Should a check get there first, it sends them. Without
+  the kill feed (or while it is quiet), a check that sees a team on `SCORE_TO_WIN` (100) sends them: they go out at
+  the first check (each minute) after the win, if the scoreboard is still up. If no check saw the win, they go out at
+  the check that sees the next map, to whoever is in game then. Each match has them once.
 - **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none. They keep their place,
   so the others are told the place the match summary gives them.
 - Only for a match the bot saw go live and start, like the match summary.
@@ -1436,9 +1458,11 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
 | Neither                             | We're seeding! 15 more players and we go live. Thanks for helping get it live! |
 
 - **When someone joins:** 30 seconds after they join, so they have loaded in to see it. When several join close
-  together, it waits until 30 seconds after the last of them and goes out once. While the server seeds, the bot reads
-  who is in game every 5 seconds to see joins, so it goes out 30 to 35 seconds after the join. For the player who
-  starts the seed on an empty server, the bot only sees them at the next minute's check, then waits 30 seconds.
+  together, it waits until 30 seconds after the last of them and goes out once. With the [kill feed](#weapon-stats),
+  the game says when someone joins, and the bot sets the message for 30 seconds after; it reads who is in game once,
+  when it is due. Without the feed (or while it is quiet), the bot reads who is in game every 5 seconds while the
+  server seeds, so it goes out 30 to 35 seconds after the join. For the player who starts the seed on an empty server,
+  the bot only sees them at the next minute's check, then waits 30 seconds.
 - **Every 5 minutes:** 5 minutes after the last seeding message, including one for a join. A 5-minute message that is
   due while one for a join is waiting holds back, so they never both go out.
 - **Never at 20 players:** no seeding message goes out once the server has `LIVE_THRESHOLD` (20) players, even in
@@ -1454,9 +1478,10 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
 - When a match message (below) is due on the same check, it goes first and the seeding message waits a minute.
 - Set `SEEDING_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to
   turn them all off, the ones for joins too. They do not need `SITE_URL`.
-- The reads every 5 seconds only happen while the server seeds: on Cloudflare, a Durable Object alarm (12 a minute,
-  about 720 for each hour of seeding, within the free plan); with Node, a second timer. Each is one RCON request
-  (`GET /v1/players`).
+- The reads every 5 seconds only happen while the server seeds and the bot has no kill feed to say who joins: on
+  Cloudflare, a Durable Object alarm (12 a minute, about 720 for each hour of seeding, within the free plan); with
+  Node, a second timer. Each is one RCON request (`GET /v1/players`). With the feed, it is one alarm and one read for
+  each seeding message for a join.
 
 During a match, the bot broadcasts short messages in game that point players at the website (`SITE_URL`) for the
 leaderboard, the Discord and seeding:
@@ -1556,11 +1581,17 @@ docker run -d --restart unless-stopped --env-file .env --name wardogs-bot wardog
 - A live server that drops below `LOW_POP_THRESHOLD` for longer than `DROP_GRACE_MINUTES` is being seeded again,
   whether it crashed or players left, and whether or not it emptied. Its seeding count starts once the drop has
   lasted that long, so the first `DROP_GRACE_MINUTES` after a drop do not count as seeding.
-- WARDOGS RCON does not report when a match ends. The bot treats a map change, a restart on the same map, or
-  the server emptying as the end of a match, and summarises it from the last stats it saw. That can miss up to
-  one minute at the end of the match. A side one point short of `SCORE_TO_WIN` in that last reading (99 of 100)
-  scored the winning point in that minute, so the match is recorded with it on 100. Matches saved on 99 before
-  this was added are put right once, on the first check after the deploy. A restart means the faction scores
+- With the [kill feed](#weapon-stats) (Cloudflare), the game says when a match ends, with its final scores: the
+  match is over then, with the last stats the bot read at or before the end (it reads the server the moment the
+  game says), and is recorded as ending when the game said. It then stays as it was until the next match starts:
+  when the game says one is being played, or the map changes, the server restarts on the same map, or it empties.
+  A match the game sent no result for (ended or restarted by hand) ends the way it does without the feed.
+- WARDOGS RCON does not report when a match ends, so without the kill feed (on Node, or while the feed is quiet)
+  the bot treats a map change, a restart on the same map, or the server emptying as the end of a match, and
+  summarises it from the last stats it saw. That can miss up to one minute at the end of the match. A side one
+  point short of `SCORE_TO_WIN` in that last reading (99 of 100) scored the winning point in that minute, so the
+  match is recorded with it on 100; with the feed, the game's scores are used and nothing is worked out. Matches
+  saved on 99 before this was added are put right once, on the first check after the deploy. A restart means the faction scores
   drop and most players' kills and deaths start again from 0 at once. One player's counters starting again (they
   rejoined or switched team) is not a new match: their earlier kills and deaths are kept and the new ones added.
   The rotation slot moving, or a reading without the map, does not end a match either. Players who left mid-match

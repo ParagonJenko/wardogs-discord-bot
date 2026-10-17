@@ -259,7 +259,7 @@ describe('buildLinesPage', () => {
     const ash = { steamId: 'a', name: 'Ash', faction: null, kills: 25, deaths: 0, headshots: 0, teamKills: 0, streak: 0, bestStreak: 0 };
     const feed: LiveMatch = {
       ...{ matchId: 'm', map: 'Europe', startedAt: 0, lastAt: 0, lastTime: 0, pairs: {}, firstBlood: null, feed: [] },
-      ...{ kills: 25, headshots: 0, teamKills: 0, otherDeaths: 0 },
+      ...{ kills: 25, headshots: 0, teamKills: 0, otherDeaths: 0, endedAt: null, result: null },
       players: [{ ...ash, chain: 0, chainTime: null, bestChain: 0, longest: null, longestCause: null, weapons: { 'Id.Item.RPG7': 8 } }],
     };
     const end = { count: 5, awards: true, siteHost: 'gaminginit.com' };

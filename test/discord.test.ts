@@ -1550,11 +1550,12 @@ describe('buildFeedAlert', () => {
     expect(embedOf(message)).toMatchObject({
       title: '🔇 Kill feed quiet',
       url: 'https://gaminginit.com/admin',
-      footer: { text: "From the bot's checks, every minute. It posts again when kills arrive." },
+      footer: { text: "From the bot's checks, every minute. It posts again when events arrive." },
       timestamp: new Date(AT).toISOString(),
     });
     const lines = embedOf(message)?.description?.split('\n') ?? [];
-    expect(lines[0]).toBe(`The server is live with **99** players, and the game has sent no kills for **10 min**. The last batch came ${t(AT - 2 * MINUTE)}.`);
+    expect(lines[0]).toBe(`The server is live with **99** players, and the game has sent nothing for **10 min**. The last batch came ${t(AT - 2 * MINUTE)}.`);
+    expect(lines[1]).toContain('the bot works out from its own checks when matches end and who won');
     expect(lines[2]).toContain('`[/Script/WDRCON.WDRCONSettings]`');
   });
 
@@ -1562,16 +1563,16 @@ describe('buildFeedAlert', () => {
     const message = buildFeedAlert({ type: 'quiet', at: AT + 10 * MINUTE, quietFrom: AT, heardAt: null, players: 40 });
 
     expect(embedOf(message)?.description?.split('\n')[0]).toBe(
-      'The server is live with **40** players, and the game has sent no kills for **10 min**. The bot has no batch from it on record.',
+      'The server is live with **40** players, and the game has sent nothing for **10 min**. The bot has no batch from it on record.',
     );
   });
 
-  it('says when kills arrive again, and how long the feed was quiet', () => {
+  it('says when events arrive again, and how long the feed was quiet', () => {
     const message = buildFeedAlert({ type: 'back', at: AT + 71 * MINUTE, quietFrom: AT, heardAt: AT + 70 * MINUTE });
 
     expect(embedOf(message)).toMatchObject({
       title: '🔊 Kill feed back',
-      description: 'Kills are arriving again, **1 h 10 min** after the feed went quiet.',
+      description: 'Events are arriving again, **1 h 10 min** after the feed went quiet.',
       color: 0x2ecc71,
       timestamp: new Date(AT + 70 * MINUTE).toISOString(),
     });

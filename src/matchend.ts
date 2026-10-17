@@ -1,6 +1,7 @@
 import { mapName } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import { isCurrent, type LiveMatch, type LivePlayer } from './live.ts';
+import type { LiveMatch, LivePlayer } from './live.ts';
+import { sameMap } from './matchfeed.ts';
 import { fit, pickLine, remember, type Recent } from './messages.ts';
 import type { FactionScore } from './rcon.ts';
 import { matchMap, topPlayers, type MatchState } from './tracking.ts';
@@ -70,13 +71,13 @@ const winnerOf = (players: LivePlayer[], award: Award): LivePlayer | null =>
   );
 
 // The kill feed's record of the match on now (`live`, as saved) when it is this match's, for its awards: with a death
-// after the checks saw the match start, none before they last saw it, and on its map. Not the round before, as after a
-// restart on the same map while the feed was down.
-export const feedRecordOf = (live: LiveMatch | null, match: MatchState, now: number): LiveMatch | null =>
+// after the checks saw the match start, none after it ended (or they last saw it), and on its map. Not the round
+// before, as after a restart on the same map while the feed was down.
+export const feedRecordOf = (live: LiveMatch | null, match: MatchState): LiveMatch | null =>
   live !== null &&
   live.lastAt >= match.startedAt &&
-  live.startedAt <= match.lastSeenAt &&
-  isCurrent(live, { map: mapName(matchMap(match)), startedAt: match.startedAt }, now)
+  live.startedAt <= (match.endedAt ?? match.lastSeenAt) &&
+  (live.map === '' || sameMap(mapName(live.map), mapName(matchMap(match))))
     ? live
     : null;
 

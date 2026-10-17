@@ -1,11 +1,14 @@
 import { z } from 'zod';
 import type { Sql } from './killfeed.ts';
 import type { Player } from './rcon.ts';
+import type { FeedPresence } from './weapons.ts';
 
-// The staff page's join log: who joined and left the server, and each player's times on it. The bot compares who is in
-// game at each check with the check before, so a join or leave shows up to a minute late, and someone on for less than
-// a minute between two checks is missed. While the bot cannot read the server, nothing is noted; the first check after
-// notes everyone who joined or left meanwhile, and says since when (`from`).
+// The staff page's join log: who joined and left the server, and each player's times on it. With the kill feed (since
+// Season 2) the game says the moment someone joins or leaves, and that is when it is noted. The bot also compares who is
+// in game at each check with the check before, for whatever the feed did not say (without the feed, everything): such a
+// join or leave shows up to a minute late, and someone on for less than a minute between two checks is missed. While the
+// bot cannot read the server, nothing is noted that way; the first check after notes everyone who joined or left
+// meanwhile, and says since when (`from`).
 //
 // Two records. 'joinLog' (Durable Object storage) is who is in game and the latest joins and leaves, written with a
 // check's other records, and only when someone joined or left. The sessions table, in the Durable Object's SQLite
@@ -19,6 +22,9 @@ export const JOINS_KEPT = 500;
 export const JOINS_BYTES = 80_000;
 // Checks are a minute apart: a longer gap than this means the bot could not read the server in between.
 export const JOIN_GAP_MS = 3 * 60_000;
+// A join or leave the feed noted this soon before a check can be newer than the check's reading of who is in game, which
+// then does not undo it.
+export const FEED_NEWER_MS = 15_000;
 // The staff page's longest period.
 export const SESSION_DAYS_KEPT = 30;
 // The UTC day the sessions no longer kept were last deleted ('sessionsPruned'), so it is done once a day.
@@ -26,7 +32,7 @@ export const SESSIONS_PRUNED_KEY = 'sessionsPruned';
 // A player's history lists at most this many of their times on the server.
 export const SESSIONS_LISTED = 300;
 
-// One join or leave. `at` is the check that noticed it. `from` is the check before, when that was over JOIN_GAP_MS
+// One join or leave. `at` is when the game said it, or the check that noticed it. `from` is the check before, when that was over JOIN_GAP_MS
 // earlier: it happened somewhere between the two. On a leave, `joinedAt` is when the bot first saw them in game, or null
 // when they were already on when the log started, and `joinedFrom` the join's `from`.
 export type JoinEvent = {
@@ -88,7 +94,8 @@ const latest = (events: JoinEvent[]): JoinEvent[] => {
 // leaves it `added`. `lastCheckAt` is when the check before reached the server, or null if none has. Gives back `log`
 // itself when nobody joined or left, so the caller can skip the write. The first time, everyone in game is noted without
 // a join, as the bot cannot tell when they came on. A reading that lists nobody while the server says it has players is
-// not trusted, so a bad reading never shows everyone leaving and joining again.
+// not trusted, so a bad reading never shows everyone leaving and joining again. Nor is it for anyone the feed said joined
+// or left in the FEED_NEWER_MS before it.
 export const recordJoins = (
   log: JoinLog | null,
   players: Player[],
@@ -103,9 +110,15 @@ export const recordJoins = (
   }
   if (players.length === 0 && count > 0) return { log, added: [] };
   const gap = lastCheckAt !== null && at - lastCheckAt > JOIN_GAP_MS ? { from: lastCheckAt } : {};
+  const fed = new Set(log.events.filter((e) => e.at > at - FEED_NEWER_MS).map((e) => e.steamId));
   const added: JoinEvent[] = [];
+  const inGame: JoinLog['inGame'] = {};
   for (const [steamId, was] of Object.entries(log.inGame)) {
     if (now.has(steamId)) continue;
+    if (fed.has(steamId)) {
+      inGame[steamId] = was;
+      continue;
+    }
     added.push({
       at,
       kind: 'left',
@@ -116,11 +129,38 @@ export const recordJoins = (
       ...(was.from === undefined ? {} : { joinedFrom: was.from }),
     });
   }
-  const inGame: JoinLog['inGame'] = {};
   for (const [steamId, name] of now) {
     const was = log.inGame[steamId];
+    if (was === undefined && fed.has(steamId)) continue;
     if (was === undefined) added.push({ at, kind: 'joined', steamId, name, ...gap });
     inGame[steamId] = was ?? { name, since: at, ...gap };
+  }
+  return added.length === 0 ? { log, added } : { log: { inGame, events: latest([...log.events, ...added]) }, added };
+};
+
+// The log after the kill feed's joins and leaves, in the order the game sent them, all got at `at`, and those it
+// `added`: a join of someone already noted in game, or a leave of someone who is not, adds nothing. Gives back `log`
+// itself when nothing was added. Before the first check starts the log, they are left to it.
+export const recordPresence = (log: JoinLog | null, presence: FeedPresence[], at: number): { log: JoinLog | null; added: JoinEvent[] } => {
+  if (log === null) return { log, added: [] };
+  const inGame = { ...log.inGame };
+  const added: JoinEvent[] = [];
+  for (const p of presence) {
+    const was = inGame[p.steamId];
+    if (p.type === 'joined' && was === undefined) {
+      added.push({ at, kind: 'joined', steamId: p.steamId, name: p.name });
+      inGame[p.steamId] = { name: p.name, since: at };
+    } else if (p.type === 'left' && was !== undefined) {
+      added.push({
+        at,
+        kind: 'left',
+        steamId: p.steamId,
+        name: p.name || was.name,
+        joinedAt: was.since,
+        ...(was.from === undefined ? {} : { joinedFrom: was.from }),
+      });
+      delete inGame[p.steamId];
+    }
   }
   return added.length === 0 ? { log, added } : { log: { inGame, events: latest([...log.events, ...added]) }, added };
 };

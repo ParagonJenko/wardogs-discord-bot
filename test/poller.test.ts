@@ -3,8 +3,10 @@ import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import { DEFAULT_LINES, type Lines } from '../src/lines.ts';
 import type { LiveMatch, LivePlayer } from '../src/live.ts';
+import { NO_MATCH_FEED, type MatchFeed } from '../src/matchfeed.ts';
 import type { OutageEvent } from '../src/outages.ts';
 import {
+  createFeedJoins,
   createJoinCheck,
   createMatchEndCheck,
   createPoller,
@@ -17,6 +19,7 @@ import {
 import type { SeedCredit } from '../src/players.ts';
 import type { Player, Snapshot } from '../src/rcon.ts';
 import type { Observation } from '../src/stats.ts';
+import type { FeedPresence } from '../src/weapons.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 // The bot's own lines with one seeding line, for tests of when a message goes out rather than what it says.
@@ -73,6 +76,7 @@ const setup = (
   overrides: Partial<Config> = {},
   staff?: () => Promise<ReadonlySet<string>>,
   privateProfiles?: () => Promise<ReadonlySet<string>>,
+  matchFeed?: () => Promise<MatchFeed | null>,
 ) => {
   const queue = [...snapshots];
   const sent: DiscordMessage[] = [];
@@ -95,6 +99,7 @@ const setup = (
     stats,
     staff,
     privateProfiles,
+    matchFeed,
   });
   const run = async (times: number) => {
     for (let i = 0; i < times; i++) await tick();
@@ -525,6 +530,121 @@ describe('poller stats', () => {
     expect(field(sent.at(-1), 'Score')).not.toContain('99');
   });
 
+  describe('with the kill feed', () => {
+    const scored = (players: Player[], valkyra: number, kharr: number, map = 'Kavkazi'): Snapshot => {
+      const base = snapshot(players, map);
+      return {
+        ...base,
+        status: { ...base.status, factionScores: [{ name: 'Valkyra', score: valkyra, colorHex: '#3366ff' }, { name: 'Kharr', score: kharr }] },
+      };
+    };
+    // The game's result at 3 minutes 20 seconds: Valkyra won 100 to 71.
+    const won: MatchFeed = {
+      ...NO_MATCH_FEED,
+      result: { at: 200_000, map: 'Kavkazi', matchId: 'm1', winner: 'Valkyra', factionScores: [{ name: 'Valkyra', score: 100 }, { name: 'Kharr', score: 71 }], players: 22 },
+    };
+
+    it("ends the match at the game's result, with its scores, records it when it ended, and summarises it once", async () => {
+      const stats = sink();
+      let feed = NO_MATCH_FEED;
+      const { run, sent, store } = setup(
+        [
+          snapshot(crowd(5)),
+          scored(crowd(22, [player('a', 3)]), 60, 40),
+          scored(crowd(22, [player('a', 5)]), 99, 70),
+          // After the result, the scoreboard as the match ended, then the next map.
+          scored(crowd(22, [player('a', 6)]), 99, 70),
+          scored(crowd(22, [player('a', 6)]), 99, 70),
+          scored(crowd(22), 0, 0, 'Europe'),
+        ],
+        memoryStore(),
+        stats,
+        {},
+        undefined,
+        undefined,
+        async () => feed,
+      );
+
+      await run(3);
+      feed = won;
+      await run(3);
+
+      expect(stats.matchEnded).toHaveBeenCalledTimes(1);
+      const [ended, at] = stats.matchEnded.mock.calls[0] ?? [];
+      expect(at).toBe(200_000);
+      expect(ended).toMatchObject({ key: 'Kavkazi#0', endedAt: 200_000, lastSeenAt: 200_000, players: { a: { kills: 6 } } });
+      expect(ended?.factionScores).toEqual([{ name: 'Valkyra', score: 100, colorHex: '#3366ff' }, { name: 'Kharr', score: 71 }]);
+      expect(titles(sent).filter((t) => t?.startsWith('🏁'))).toHaveLength(1);
+      expect(field(sent.find((m) => m.embeds[0]?.title.startsWith('🏁')), 'Score')).toContain('100');
+      expect((await store.load())?.match).toMatchObject({ key: 'Europe#0', startedAt: 360_000 });
+      expect((await store.load())?.match?.endedAt).toBeUndefined();
+    });
+
+    it('starts the next match on the same map when the game says one is being played', async () => {
+      const stats = sink();
+      // A result from before the first check is not this match's.
+      let feed: MatchFeed = { ...won, result: { ...won.result!, at: 30_000 } };
+      const { run, store } = setup(
+        [snapshot(crowd(5)), scored(crowd(22, [player('a', 3)]), 60, 40), scored(crowd(22, [player('a', 3)]), 99, 70), scored(crowd(22, [player('a', 3)]), 99, 70)],
+        memoryStore(),
+        stats,
+        {},
+        undefined,
+        undefined,
+        async () => feed,
+      );
+
+      await run(2);
+      expect((await store.load())?.match?.endedAt).toBeUndefined();
+      feed = { ...won, result: { ...won.result!, at: 150_000 } };
+      await run(1);
+      expect((await store.load())?.match?.endedAt).toBe(150_000);
+      feed = { ...feed, state: 'MatchState.Playing.KOTH', stateAt: 230_000, playingAt: 230_000 };
+      await run(1);
+
+      expect((await store.load())?.match).toMatchObject({ startedAt: 240_000, peakPlayers: 22 });
+      expect((await store.load())?.match?.endedAt).toBeUndefined();
+      expect(stats.matchEnded).toHaveBeenCalledTimes(1);
+    });
+
+    it('works nothing out from the scores: a side one point short is not given the win', async () => {
+      const stats = sink();
+      const { run } = setup(
+        [snapshot(crowd(5)), scored(crowd(22), 60, 40), scored(crowd(22), 99, 70), scored(crowd(22), 0, 0, 'Europe')],
+        memoryStore(),
+        stats,
+        {},
+        undefined,
+        undefined,
+        async () => NO_MATCH_FEED,
+      );
+
+      await run(4);
+
+      expect(stats.matchEnded.mock.calls[0]?.[0].factionScores.map((s) => s.score)).toEqual([99, 70]);
+    });
+
+    it('goes on as without the feed when it cannot be read, and logs it', async () => {
+      const stats = sink();
+      const { run, log } = setup(
+        [snapshot(crowd(5)), scored(crowd(22), 60, 40), scored(crowd(22), 99, 70), scored(crowd(22), 0, 0, 'Europe')],
+        memoryStore(),
+        stats,
+        {},
+        undefined,
+        undefined,
+        async () => {
+          throw new Error('storage gone');
+        },
+      );
+
+      await run(4);
+
+      expect(stats.matchEnded.mock.calls[0]?.[0].factionScores.map((s) => s.score)).toEqual([100, 70]);
+      expect(log.error).toHaveBeenCalledWith("Reading the kill feed's match failed, so the check goes on without it: storage gone");
+    });
+  });
+
   it('records a finished match even when Discord rejects its summary, and keeps tracking the next one', async () => {
     const stats = sink();
     const { run, send, log } = setup(
@@ -936,7 +1056,7 @@ describe('end-of-match messages', () => {
   // The kill feed's match: f is the best machine gunner.
   const fed: LiveMatch = {
     ...{ matchId: 'm1', map: 'Kavkazi', startedAt: 0, lastAt: 0, lastTime: 0, pairs: {}, firstBlood: null, feed: [] },
-    ...{ kills: 7, headshots: 0, teamKills: 0, otherDeaths: 0 },
+    ...{ kills: 7, headshots: 0, teamKills: 0, otherDeaths: 0, endedAt: null, result: null },
     players: [fedPlayer(f, { 'Id.Item.M249': 7 })],
   };
 
@@ -1070,8 +1190,12 @@ describe('end-of-match messages', () => {
   });
 
   describe('when the kill feed says the match ended', () => {
-    // The kill feed's word comes at 2 minutes 30 seconds, between the checks.
-    const endCheck = (store: StateStore, reading: Snapshot | Error, deps: Options = {}) => {
+    // The game's result comes at 2 minutes 30 seconds, between the checks.
+    const result = (overrides: Partial<NonNullable<MatchFeed['result']>> = {}): MatchFeed => ({
+      ...NO_MATCH_FEED,
+      result: { at: 150_000, map: 'Kavkazi', matchId: 'm1', winner: 'Valkyra', factionScores: [{ name: 'Valkyra', score: 100 }], players: 22, ...overrides },
+    });
+    const endCheck = (store: StateStore, reading: Snapshot | Error, deps: Options & { matchFeed?: () => Promise<MatchFeed | null> } = {}) => {
       const sent: [steamId: string, text: string][] = [];
       const messagePlayer = vi.fn(async (steamId: string, message: string) => {
         sent.push([steamId, message]);
@@ -1088,15 +1212,16 @@ describe('end-of-match messages', () => {
         log,
         store,
         random: () => 0,
+        matchFeed: async () => result(),
         ...deps,
       });
       return { check, sent, log };
     };
 
-    it('sends them at once when a team has won, or is a point short, and the next check sends none', async () => {
+    it('sends them at once, whatever the scores the server shows, and the next check sends none', async () => {
       const store = memoryStore();
       await endPoller(live, {}, { store }).run(2);
-      const { check, sent } = endCheck(store, playing([99, 60]));
+      const { check, sent } = endCheck(store, playing([97, 60]));
 
       await check();
 
@@ -1116,6 +1241,7 @@ describe('end-of-match messages', () => {
       // b takes the lead after the last check.
       await endCheck(store, scored(crowd(22, kills([[a, 9], [b, 15], [c, 2]])), [100, 60])).check();
       expect((await store.load())?.match?.players[b]?.kills).toBe(15);
+      expect((await store.load())?.match?.endedAt).toBeUndefined();
 
       const over = memoryStore();
       await endPoller(live, {}, { store: over }).run(2);
@@ -1135,12 +1261,14 @@ describe('end-of-match messages', () => {
       expect(sent.map(([steamId]) => steamId)).toEqual([a, b, c, f]);
     });
 
-    it('sends none without a winner, as for word of a match long over, or after a check sent them', async () => {
+    it('sends none without a result, for one from before the match or on another map, or after a check sent them', async () => {
       const store = memoryStore();
       await endPoller(live, {}, { store }).run(2);
-      const early = endCheck(store, playing([60, 40]));
-      await early.check();
-      expect(early.sent).toEqual([]);
+      for (const matchFeed of [async () => null, async () => NO_MATCH_FEED, async () => result({ at: 30_000 }), async () => result({ map: 'Europe' })]) {
+        const early = endCheck(store, playing([100, 60]), { matchFeed });
+        await early.check();
+        expect(early.sent).toEqual([]);
+      }
 
       await endPoller([playing([100, 60])], {}, { store, from: 2 }).run(1);
       const again = endCheck(store, playing([100, 60]));
@@ -1684,5 +1812,70 @@ describe('in-game messages', () => {
     await run(4);
 
     expect(broadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe("the kill feed's joins while seeding", () => {
+  const every5 = { everyMs: 5 * 60_000, siteHost: 'gaminginit.com' };
+  const presence = (type: 'joined' | 'left', steamId: string, players: number | null = null): FeedPresence => ({
+    eventId: `${type}-${steamId}`,
+    type,
+    steamId,
+    name: `P${steamId}`,
+    players,
+  });
+
+  // A check at 60 seconds finds a, b and c seeding.
+  const seeding = async (overrides: Partial<Config> = {}, players = [player('a'), player('b'), player('c')]) => {
+    const store = memoryStore();
+    const deps = { config: { ...config, seedingMessages: every5, ...overrides }, log: { info: vi.fn(), error: vi.fn() }, store };
+    await createPoller({ ...deps, fetchSnapshot: async () => snapshot(players), send: vi.fn(async () => {}), now: () => 60_000 })();
+    return { ...deps, feedJoins: createFeedJoins(deps) };
+  };
+
+  it('sets the seeding message for 30 seconds after the last join, which the join check then sends', async () => {
+    const { feedJoins, store, config: seedingConfig, log } = await seeding();
+
+    expect(await feedJoins([presence('joined', 'd', 4)], 4, 100_000)).toBe(130_000);
+    expect(await feedJoins([presence('joined', 'e', 5)], 5, 110_000)).toBe(140_000);
+    expect((await store.load())?.joins).toEqual({ online: ['a', 'b', 'c', 'd', 'e'], lastJoinAt: 110_000 });
+
+    const sent: string[] = [];
+    const joinCheck = createJoinCheck({
+      config: seedingConfig,
+      fetchPlayers: async () => ['a', 'b', 'c', 'd', 'e'].map((id) => player(id)),
+      broadcast: async (message) => {
+        sent.push(message);
+      },
+      now: () => 140_000,
+      log,
+      store,
+      random: () => 0,
+      lines: firstSeeding,
+    });
+    await joinCheck();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('15 more players');
+  });
+
+  it('counts someone who left and came back as joining, and someone already in game as not', async () => {
+    const { feedJoins, store } = await seeding();
+
+    expect(await feedJoins([presence('joined', 'a', 3)], 3, 100_000)).toBeNull();
+    expect(await feedJoins([presence('left', 'a', 2)], 2, 105_000)).toBeNull();
+    expect((await store.load())?.joins?.online).toEqual(['b', 'c']);
+    expect(await feedJoins([presence('joined', 'a', 3)], 3, 110_000)).toBe(140_000);
+  });
+
+  it('waits for nothing when the join takes the server live, or it is not seeding, or seeding messages are off', async () => {
+    const full = await seeding();
+    expect(await full.feedJoins([presence('joined', 'd', 20)], 20, 100_000)).toBeNull();
+    expect((await full.store.load())?.joins).toEqual({ online: ['a', 'b', 'c', 'd'], lastJoinAt: null });
+
+    const live = await seeding({}, crowd(25));
+    expect(await live.feedJoins([presence('joined', 'd', 26)], 26, 100_000)).toBeNull();
+
+    const off = await seeding({ seedingMessages: null });
+    expect(await off.feedJoins([presence('joined', 'd', 4)], 4, 100_000)).toBeNull();
   });
 });

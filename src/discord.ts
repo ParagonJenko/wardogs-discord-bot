@@ -1332,7 +1332,7 @@ export const buildOutageAlert = (event: OutageEvent, siteUrl?: string): DiscordM
   };
 };
 
-// The kill feed quiet on a live server, or kills arriving again after, for the moderation log channel (see
+// The kill feed quiet on a live server, or events arriving again after, for the moderation log channel (see
 // feedwatch.ts).
 export const buildFeedAlert = (event: FeedWatchEvent, siteUrl?: string): DiscordMessage => {
   if (event.type === 'back') {
@@ -1341,7 +1341,7 @@ export const buildFeedAlert = (event: FeedWatchEvent, siteUrl?: string): Discord
         {
           title: '🔊 Kill feed back',
           ...staffPage(siteUrl),
-          description: `Kills are arriving again, **${lasted(event.heardAt - event.quietFrom)}** after the feed went quiet.`,
+          description: `Events are arriving again, **${lasted(event.heardAt - event.quietFrom)}** after the feed went quiet.`,
           color: COLORS.live,
           timestamp: new Date(event.heardAt).toISOString(),
         },
@@ -1356,14 +1356,15 @@ export const buildFeedAlert = (event: FeedWatchEvent, siteUrl?: string): Discord
         title: '🔇 Kill feed quiet',
         ...staffPage(siteUrl),
         description: [
-          `The server is live with **${event.players}** players, and the game has sent no kills for **${lasted(event.at - event.quietFrom)}**. ${last}`,
-          'Until it is back there are no weapon stats, live match, griefing or headshot alerts, team kill warnings or weapon rules.',
+          `The server is live with **${event.players}** players, and the game has sent nothing for **${lasted(event.at - event.quietFrom)}**. ${last}`,
+          'Until it is back there are no weapon stats, live match, griefing or headshot alerts, team kill warnings or weapon rules, ' +
+            'and the bot works out from its own checks when matches end and who won.',
           'Check the feed lines under `[/Script/WDRCON.WDRCONSettings]` in `ServerSettings.ini` (the `Url` ends in `/api/ingest/events`), ' +
             'as a game update can change them. ' +
-            "In the Worker's logs, `Kill feed refused` means the token does not match, and `none could be read` that the game sends kills in a new form.",
+            "In the Worker's logs, `Kill feed refused` means the token does not match, and `none could be read` that the game sends events in a new form.",
         ].join('\n'),
         color: COLORS.lowPop,
-        footer: { text: "From the bot's checks, every minute. It posts again when kills arrive." },
+        footer: { text: "From the bot's checks, every minute. It posts again when events arrive." },
         timestamp: new Date(event.quietFrom).toISOString(),
       },
     ],

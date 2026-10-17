@@ -307,9 +307,12 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 2 } });
     });
 
-    it("answers a batch of Season 2's other events, with no deaths in it", async () => {
+    it("takes Season 2's joins and match states, with no deaths in the batch, each once", async () => {
+      server.clearLogs();
       const batch = { events: [{ type: 'player_joined', eventId: 'j1', playerSteamId: ASH, players: 1 }, { type: 'match_state', eventId: 's1', state: 'MatchState.Playing' }] };
-      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 2 } });
+      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 2, skipped: 0 } });
+      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 0 } });
+      expect(errors()).toEqual([]);
     });
 
     it('reads the server at once when the feed says a match ended, for the end-of-match messages', async () => {
@@ -317,7 +320,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       server.clearLogs();
       const batch = { events: [{ type: 'match_ended', eventId: 'r1', eventTime: 4, players: 22, winningFaction: 'Valkyra', factionScores: [] }] };
 
-      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 0, skipped: 1 } });
+      expect(await json('/api/ingest/events', feedPost(batch))).toEqual({ status: 200, body: { ok: true, accepted: 1, skipped: 0 } });
       await vi.waitFor(() => expect(rcon.requests).toEqual(expect.arrayContaining(['GET /v1/status', 'GET /v1/players'])));
       expect(errors()).toEqual([]);
     });

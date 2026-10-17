@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NO_MATCH_FEED, type MatchFeed } from '../src/matchfeed.ts';
 import type { FactionScore, Player, ServerStatus } from '../src/rcon.ts';
 import { observeMatch, settleWin, summarise, tallySeeding, topSeeders, type MatchState } from '../src/tracking.ts';
 
@@ -258,6 +259,82 @@ describe('match tracking', () => {
     ]);
 
     expect(finished).toEqual([expect.objectContaining({ top: [{ steamId: 'a', name: 'Pa', kills: 6, deaths: 2 }] })]);
+  });
+});
+
+describe("match tracking with the game's result", () => {
+  // The game says at 2 minutes 30 seconds that Valkyra won, 100 to 91.
+  const won = (overrides: Partial<NonNullable<MatchFeed['result']>> = {}, feed: Partial<MatchFeed> = {}): MatchFeed => ({
+    ...NO_MATCH_FEED,
+    result: {
+      at: 150_000,
+      map: 'Kavkazi',
+      matchId: 'm1',
+      winner: 'Valkyra',
+      factionScores: [
+        { name: 'Valkyra', score: 100 },
+        { name: 'Kharr', score: 91 },
+      ],
+      players: 24,
+      ...overrides,
+    },
+    ...feed,
+  });
+  const seen = status({
+    factionScores: [
+      { name: 'Valkyra', score: 99, colorHex: '#3366ff' },
+      { name: 'Kharr', score: 90 },
+    ],
+  });
+  // Seen empty at 0, live from 1 minute.
+  const start = (): MatchState => {
+    const first = observeMatch(null, status({ players: 0 }), [], false, 0).match;
+    return observeMatch(observeMatch(first, seen, [player('a', 5)], true, 60_000).match, seen, [player('a', 9)], true, 120_000).match;
+  };
+
+  it('ends the match at the result, with the final scores and the scoreboard as it ended', () => {
+    const { match, finished } = observeMatch(start(), seen, [player('a', 12)], true, 180_000, won());
+
+    expect(finished).toBe(match);
+    expect(match).toMatchObject({ endedAt: 150_000, lastSeenAt: 150_000, players: { a: { kills: 12 } } });
+    expect(match.factionScores).toEqual([
+      { name: 'Valkyra', score: 100, colorHex: '#3366ff' },
+      { name: 'Kharr', score: 91 },
+    ]);
+    expect(summarise(match).durationMs).toBe(90_000);
+  });
+
+  it('then waits as it was for the next match, and does not finish it again', () => {
+    const over = observeMatch(start(), seen, [player('a', 12)], true, 180_000, won()).match;
+
+    const waiting = observeMatch(over, seen, [player('a', 12), player('b')], true, 240_000, won());
+    expect(waiting).toEqual({ match: over, finished: null });
+    const next = observeMatch(over, status({ map: 'Europe', factionScores: [] }), [player('a')], true, 300_000, won());
+    expect(next.finished).toBeNull();
+    expect(next.match).toMatchObject({ key: 'Europe#0', startedAt: 300_000, players: { a: { kills: 0 } } });
+    expect(next.match.endedAt).toBeUndefined();
+  });
+
+  it('starts the next match on the same map when the game says one is being played', () => {
+    const over = observeMatch(start(), seen, [player('a', 12)], true, 180_000, won()).match;
+    const playing = won({}, { state: 'MatchState.Playing.KOTH', stateAt: 200_000, playingAt: 200_000 });
+
+    const { match, finished } = observeMatch(over, seen, [player('a', 12)], true, 240_000, playing);
+    expect(finished).toBeNull();
+    expect(match).toMatchObject({ startedAt: 240_000, peakPlayers: 24 });
+    expect(match.endedAt).toBeUndefined();
+  });
+
+  it("keeps a reading taken after the map changed for the next match's", () => {
+    const { match, finished } = observeMatch(start(), status({ map: 'Europe', factionScores: [] }), [player('a', 1)], true, 180_000, won());
+
+    expect(finished).toMatchObject({ key: 'Kavkazi#0', endedAt: 150_000, players: { a: { kills: 9 } } });
+    expect(match).toMatchObject({ key: 'Europe#0', players: { a: { kills: 1 } } });
+  });
+
+  it('leaves out a result from before the match started, or on another map', () => {
+    expect(observeMatch(start(), seen, [player('a', 12)], true, 180_000, won({ at: 30_000 })).finished).toBeNull();
+    expect(observeMatch(start(), seen, [player('a', 12)], true, 180_000, won({ map: 'Europe' })).finished).toBeNull();
   });
 });
 

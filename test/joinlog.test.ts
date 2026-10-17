@@ -2,6 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import {
   createSessions,
+  FEED_NEWER_MS,
   JOIN_GAP_MS,
   JOINS_BYTES,
   JOINS_KEPT,
@@ -10,6 +11,7 @@ import {
   playerSessions,
   pruneSessions,
   recordJoins,
+  recordPresence,
   SESSIONS_LISTED,
   writeSessions,
   type JoinEvent,
@@ -17,6 +19,7 @@ import {
 } from '../src/joinlog.ts';
 import type { Sql } from '../src/killfeed.ts';
 import type { Player } from '../src/rcon.ts';
+import type { FeedPresence } from '../src/weapons.ts';
 
 const ASH = '76561198000000001';
 const BO = '76561198000000002';
@@ -126,6 +129,44 @@ describe('recordJoins', () => {
     expect(new TextEncoder().encode(JSON.stringify(big.events)).length).toBeLessThanOrEqual(JOINS_BYTES);
     expect(big.events.length).toBeGreaterThan(100);
     expect(big.events.at(-1)?.at).toBe(NOW + JOINS_KEPT * MINUTE);
+  });
+});
+
+describe('recordPresence', () => {
+  const said = (type: 'joined' | 'left', steamId: string, name: string): FeedPresence => ({ eventId: `${type}${steamId}`, type, steamId, name, players: null });
+  const started = check(null, [player(ASH, 'Ash')], NOW, null);
+
+  it('notes joins and leaves the moment the game says them, with how long a player was on', () => {
+    const joined = recordPresence(started, [said('joined', BO, 'Bo')], NOW + 10_000);
+    expect(joined.added).toEqual([{ at: NOW + 10_000, kind: 'joined', steamId: BO, name: 'Bo' }]);
+    expect(joined.log?.inGame[BO]).toEqual({ name: 'Bo', since: NOW + 10_000 });
+
+    const left = recordPresence(joined.log, [said('left', BO, 'Bo')], NOW + 40_000);
+    expect(left.added).toEqual([{ at: NOW + 40_000, kind: 'left', steamId: BO, name: 'Bo', joinedAt: NOW + 10_000 }]);
+    expect(left.log?.inGame).not.toHaveProperty(BO);
+    // On for half a minute, between two checks: the checks alone would have missed it.
+    expect(left.added.map(minutesOn)).toEqual([1]);
+  });
+
+  it('adds nothing for a join of someone in game, or a leave of someone who is not, and leaves the log to the first check', () => {
+    const same = recordPresence(started, [said('joined', ASH, 'Ash'), said('left', CY, 'Cy')], NOW + 10_000);
+    expect(same).toEqual({ log: started, added: [] });
+    expect(recordPresence(null, [said('joined', ASH, 'Ash')], NOW)).toEqual({ log: null, added: [] });
+  });
+
+  it("is not undone by a check whose reading came before the game said it", () => {
+    const joined = recordPresence(started, [said('joined', BO, 'Bo')], NOW + 50_000).log;
+    const left = recordPresence(joined, [said('left', ASH, 'Ash')], NOW + 55_000).log;
+    // The check read the server just before both, and saves after them.
+    const after = recordJoins(left, [player(ASH, 'Ash')], 1, NOW + 60_000, NOW);
+    expect(after.added).toEqual([]);
+    expect(Object.keys(after.log.inGame)).toEqual([BO]);
+    // Long enough after, the checks have the last word again.
+    const later = recordJoins(left, [player(ASH, 'Ash')], 1, NOW + 55_000 + FEED_NEWER_MS + MINUTE, NOW);
+    expect(later.added.map((e) => [e.kind, e.steamId])).toEqual([
+      ['left', BO],
+      ['joined', ASH],
+    ]);
   });
 });
 
