@@ -624,11 +624,11 @@ export class Watcher extends DurableObject<Env> {
   // Adds to a player's log, and changes their ban (null lifts it), the VIP state or the bot's copy of the server's ban
   // list (`serverBan`: the ban the bot just put on the server, or null for one it lifted) in the same write. The bot's
   // own bans go on that copy as it makes them, so the next check does not take them for bans made outside the bot.
-  // Every entry then goes to the moderation log channel.
+  // Every entry then goes to the moderation log channel, unless `quiet`.
   private async record(
     steamId: string,
     entry: ModEntry | null,
-    change: { ban?: BanRecord | null; vip?: VipState; serverBan?: ServerBan | null } = {},
+    change: { ban?: BanRecord | null; vip?: VipState; serverBan?: ServerBan | null; quiet?: boolean } = {},
   ): Promise<void> {
     const key = modLogKey(steamId);
     const stored = await this.ctx.storage.get([key, 'bans', 'serverBans']);
@@ -644,7 +644,7 @@ export class Watcher extends DurableObject<Env> {
         ? {}
         : { serverBans: change.serverBan === null ? otherServerBans : { ...otherServerBans, [steamId]: change.serverBan } }),
     });
-    if (entry !== null) this.postModLog(steamId, entry);
+    if (entry !== null && change.quiet !== true) this.postModLog(steamId, entry);
   }
 
   // Where the moderation log goes. A configuration problem only stops the posts: what they report is saved already.
@@ -745,10 +745,12 @@ export class Watcher extends DurableObject<Env> {
               console.error(`Team kill warning for ${JSON.stringify(k.name)} (${k.steamId}) failed: ${errorText(error)}`);
               return;
             }
-            // In their history and the moderation log, like a staff member's /warn.
-            await this.record(k.steamId, { action: 'warn', at: Date.now(), by: 'bot', name: k.name, reason: TEAM_KILL_WARNING, detail: 'Team kill' }).catch(
-              (error: unknown) => console.error(`Team kill warning log for ${k.steamId} failed: ${errorText(error)}`),
-            );
+            // In their history like a staff member's /warn, but not posted to the moderation log.
+            await this.record(
+              k.steamId,
+              { action: 'warn', at: Date.now(), by: 'bot', name: k.name, reason: TEAM_KILL_WARNING, detail: 'Team kill' },
+              { quiet: true },
+            ).catch((error: unknown) => console.error(`Team kill warning log for ${k.steamId} failed: ${errorText(error)}`));
           }),
         );
       })().catch((error: unknown) => console.error(`Team kill warnings failed: ${errorText(error)}`)),
