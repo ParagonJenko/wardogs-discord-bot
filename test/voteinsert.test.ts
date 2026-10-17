@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Rotation } from '../src/rcon.ts';
 import { fromTheStart } from '../src/rotations.ts';
-import { parseVoteInsert, planInsert, rotationFacts, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
+import { canMoveEntries, parseVoteInsert, planInsert, planMove, rotationFacts, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
 
 const rotation = (maps: string[], now: number, over: Partial<Rotation> = {}): Rotation => ({
   enabled: true,
@@ -76,6 +76,50 @@ describe('whyNoInsert', () => {
     expect(whyNoInsert(rotation(['A', 'B'], 0, { enabled: false }))).toMatch(/off/);
     expect(whyNoInsert(rotation(['A', 'B'], 0, { mode: 'Random' }))).toMatch(/random/);
     expect(whyNoInsert(rotation([], 0))).toMatch(/no maps/);
+  });
+});
+
+describe('planMove', () => {
+  const voted = { map: 'V', experiences: ['V_KOTH', 'KOTH_InfantryOnly'], lighting: 'Night' };
+  // The moves done one swap at a time, as the server does them; what the rotation then plays after `now`.
+  const moved = (maps: string[], plan: { add: boolean; from: number; to: number }): string[] => {
+    const list = plan.add ? [...maps, 'V'] : [...maps];
+    const step = plan.to < plan.from ? -1 : 1;
+    for (let at = plan.from; at !== plan.to; at += step) [list[at], list[at + step]] = [list[at + step] as string, list[at] as string];
+    return list;
+  };
+
+  it('adds the winner and moves it into the slot after the one playing', () => {
+    const plan = planMove(rotation(['A', 'B', 'C', 'D'], 1), 1, voted);
+    expect(plan).toEqual({ add: true, from: 4, to: 2 });
+    expect(moved(['A', 'B', 'C', 'D'], plan)).toEqual(['A', 'B', 'V', 'C', 'D']);
+  });
+
+  it('moves the entry the rotation already has with the same setup, from in front of or behind the one playing', () => {
+    const same = { ...voted, experiences: ['KOTH_InfantryOnly', 'V_KOTH'] };
+    const behind = rotation(['A', 'B', 'C', 'V'], 0);
+    behind.entries[3] = { ...behind.entries[3]!, ...same };
+    expect(moved(['A', 'B', 'C', 'V'], planMove(behind, 0, voted))).toEqual(['A', 'V', 'B', 'C']);
+    const before = rotation(['V', 'A', 'B', 'C'], 2);
+    before.entries[0] = { ...before.entries[0]!, ...same };
+    expect(moved(['V', 'A', 'B', 'C'], planMove(before, 2, voted))).toEqual(['A', 'B', 'V', 'C']);
+  });
+
+  it('adds one when the same map is in the rotation with another setup', () => {
+    expect(planMove(rotation(['A', 'V', 'B'], 0), 0, voted).add).toBe(true);
+  });
+
+  it('goes to the top when the one playing is the last, or the slot is not known, as the console does', () => {
+    expect(planMove(rotation(['A', 'B', 'C'], 2), 2, voted)).toEqual({ add: true, from: 3, to: 0 });
+    expect(planMove(rotation(['A', 'B', 'C'], -1), null, voted)).toEqual({ add: true, from: 3, to: 0 });
+  });
+});
+
+describe('canMoveEntries', () => {
+  it('needs both the add and the move routes', () => {
+    expect(canMoveEntries(['GET /v1/rotation', 'POST /v1/rotation/entries', 'POST /v1/rotation/entries/*/move'])).toBe(true);
+    expect(canMoveEntries(['GET /v1/rotation', 'PUT /v1/config'])).toBe(false);
+    expect(canMoveEntries(['POST /v1/rotation/entries'])).toBe(false);
   });
 });
 

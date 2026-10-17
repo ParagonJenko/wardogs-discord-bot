@@ -84,6 +84,38 @@ export const planInsert = (rotation: Rotation, slot: number | null, winner: Rota
   return { staged: [winner, ...restore], restore, asIs: false };
 };
 
+// The live edit routes, which builds that have them use for "Set as next map" in the server's own console.
+export const MOVE_ROUTES = ['POST /v1/rotation/entries', 'POST /v1/rotation/entries/*/move'];
+export const canMoveEntries = (routes: string[]): boolean => MOVE_ROUTES.every((route) => routes.includes(route));
+
+// Two entries are played the same: map, the same experiences in any order, lighting and zones ("None" is no zones).
+const sameSetup = (entry: Rotation['entries'][number], winner: RotationEntry): boolean => {
+  const key = (v: string | undefined): string => (!v || v === 'None' ? '' : v);
+  const set = (ids: string[] | undefined): string => [...(ids ?? [])].sort().join('+');
+  return (
+    entry.map === winner.map &&
+    set(entry.experiences) === set(winner.experiences) &&
+    key(entry.lighting) === key(winner.lighting) &&
+    key(entry.zoneAlternator) === key(winner.zoneAlternator)
+  );
+};
+
+// With the live edit routes, as the server's own console does "Set as next map": the entry the rotation already has with
+// the winner's setup (not the one playing), or else one added at the end, moved one slot at a time into the slot after
+// the one playing. With that the last, or the slot not known, the top. `from` is where the winner is before the moves.
+export type MovePlan = { add: boolean; from: number; to: number };
+
+export const planMove = (rotation: Rotation, now: number | null, winner: RotationEntry): MovePlan => {
+  const n = rotation.entries.length;
+  const at = now ?? -1;
+  const found = rotation.entries.findIndex((e, i) => i !== at && sameSetup(e, winner));
+  // Taking the winner out from in front of the one playing moves that one up a slot.
+  const nowAfter = found !== -1 && at > found ? at - 1 : at;
+  const restLast = found === -1 ? n - 1 : n - 2;
+  const to = nowAfter < 0 || nowAfter >= restLast ? 0 : nowAfter + 1;
+  return { add: found === -1, from: found === -1 ? n : found, to };
+};
+
 // Whether the server's rotation is still the one that was written: with the winner in it, and no one has changed it since.
 export const stillInserted = (rotation: Rotation, insert: VoteInsert): boolean =>
   rotation.entries.length === insert.length && rotation.entries.some((e) => e.map === insert.map);

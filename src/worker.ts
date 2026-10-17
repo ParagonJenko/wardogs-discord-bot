@@ -229,6 +229,7 @@ import {
 } from './profiles.ts';
 import {
   addBan,
+  addRotationEntry,
   fetchBans,
   fetchConfig,
   fetchExperiences,
@@ -238,11 +239,13 @@ import {
   fetchPlayers,
   fetchRotation,
   fetchSnapshot,
+  fetchRoutes,
   fetchStatus,
   fetchZones,
   isNotInGame,
   kickPlayer,
   messagePlayer,
+  moveRotationEntry,
   putConfig,
   queueMap,
   RconError,
@@ -252,6 +255,7 @@ import {
   type HttpClient,
   type Rotation,
   type ServerConfig,
+  type ServerStatus,
   type Snapshot,
 } from './rcon.ts';
 import {
@@ -353,6 +357,7 @@ import {
   rotationDay,
   rotationEntries,
   rotationSlot,
+  nextSlot,
   rotationToday,
   seedDefault,
   serverEntries,
@@ -362,7 +367,18 @@ import {
   type RotationServer,
   type RotationEntry,
 } from './rotations.ts';
-import { parseVoteInsert, planInsert, rotationFacts, stillInserted, VOTE_INSERT_KEY, whyNoInsert, type VoteInsert } from './voteinsert.ts';
+import {
+  canMoveEntries,
+  parseVoteInsert,
+  planInsert,
+  planMove,
+  rotationFacts,
+  stillInserted,
+  VOTE_INSERT_KEY,
+  whyNoInsert,
+  type InsertPlan,
+  type VoteInsert,
+} from './voteinsert.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -1623,37 +1639,85 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Writes the winner into the server's rotation as the next map, and remembers how to take it out (see voteinsert.ts). The
-  // reason, as text, when the rotation can't take it: it was not read, or is off or random. When the server does not say
-  // which slot it is on, the winner goes in every slot. The server keeps playing the match on now, as when the daily
-  // rotation is put on.
+  // Puts the winner into the server's rotation as the next map. The reason, as text, when the rotation can't take it: it
+  // was not read, or is off or random. A build with the live edit routes moves (or adds) it into the slot after the one
+  // playing, as "Set as next map" in the server's own console does; it stays there, as it does from the console. Other
+  // builds get it through the config document (see writeVoteWinner). The server keeps playing the match on now.
   private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null, notRead: string): Promise<true | string> {
     if (rotation === null) return notRead;
+    const { rconUrl, rconPassword } = config;
+    const http = socketHttp(connect);
+    const status = await fetchStatus(rconUrl, rconPassword, http);
+    const slot = rotationSlot(rotation, status);
+    const problem = whyNoInsert(rotation);
+    if (problem !== null) return `${problem} (${rotationFacts(rotation, status)})`;
+    const routes = await fetchRoutes(rconUrl, rconPassword, http).catch((error: unknown) => {
+      console.error(`Map vote: could not read the server's routes, so the rotation goes through the config document: ${errorText(error)}`);
+      return [];
+    });
+    if (!canMoveEntries(routes)) return this.writeVoteWinner(config, vote, winner, rotation, status, slot);
+    // Done again from the rotation as it is, a retry finds the winner already in it and moves it no further than needed.
+    const move = planMove(rotation, slot, winner);
+    const { map, ...setup } = winner;
+    if (move.add) await addRotationEntry(rconUrl, rconPassword, map, http, setup);
+    const step = move.to < move.from ? -1 : 1;
+    for (let at = move.from; at !== move.to; at += step) await moveRotationEntry(rconUrl, rconPassword, at, step < 0 ? 'up' : 'down', http);
+    // The live status reads the new rotation at the next check.
+    await this.ctx.storage.delete('boardRotation');
+    console.info(`Map vote: ${winner.map} ${move.add ? 'added to' : 'moved in'} the rotation, into slot ${move.to} (${rotationFacts(rotation, status)})`);
+    return true;
+  }
+
+  // Writes the winner into the rotation in the config document, and remembers how to take it out (see voteinsert.ts). When
+  // the server does not say which slot it is on, the winner goes in every slot. A write re-anchors the server's place in
+  // the rotation, so where it goes next is read back: when the server says, and it is not the winner, the winner goes in
+  // every slot after all.
+  private async writeVoteWinner(
+    config: Config,
+    vote: MapVote,
+    winner: RotationEntry,
+    rotation: Rotation,
+    status: ServerStatus,
+    slot: number | null,
+  ): Promise<true | string> {
     const { rconUrl, rconPassword } = config;
     const http = socketHttp(connect);
     const storage = this.ctx.storage;
     // Written already, by an earlier check that went on to fail: not written twice.
     const written = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
     if (written !== null && written.voteId === vote.id && stillInserted(rotation, written)) return true;
-    const status = await fetchStatus(rconUrl, rconPassword, http);
-    const slot = rotationSlot(rotation, status);
+    const write = async (plan: InsertPlan): Promise<void> => {
+      const insert: VoteInsert = {
+        voteId: vote.id,
+        fromMap: vote.fromMap,
+        map: winner.map,
+        restore: plan.restore,
+        length: plan.staged.length,
+        at: Date.now(),
+        ...(plan.asIs ? { asIs: true } : {}),
+      };
+      // Kept first: if the write goes through and this check then fails, the rotation is still put back.
+      await storage.put(VOTE_INSERT_KEY, insert);
+      await putRotation({ ...this.settingsFile({ config, http }), slot: async () => (plan.asIs ? null : slot) }, plan.staged);
+      // The live status reads the new rotation at the next check.
+      await storage.delete('boardRotation');
+    };
     const plan = planInsert(rotation, slot, winner);
     if (plan === null) return `${whyNoInsert(rotation) ?? 'it cannot be planned'} (${rotationFacts(rotation, status)})`;
-    const insert: VoteInsert = {
-      voteId: vote.id,
-      fromMap: vote.fromMap,
-      map: winner.map,
-      restore: plan.restore,
-      length: plan.staged.length,
-      at: Date.now(),
-      ...(plan.asIs ? { asIs: true } : {}),
-    };
-    // Kept first: if the write goes through and this check then fails, the rotation is still put back.
-    await storage.put(VOTE_INSERT_KEY, insert);
-    await putRotation({ ...this.settingsFile({ config, http }), slot: async () => (plan.asIs ? null : slot) }, plan.staged);
-    if (plan.asIs) console.info(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
-    // The live status reads the new rotation at the next check.
-    await storage.delete('boardRotation');
+    await write(plan);
+    if (plan.asIs) {
+      console.info(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
+      return true;
+    }
+    const [after, afterStatus] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
+    const next = nextSlot(after, afterStatus);
+    if (next === null || after.entries[next]?.map === winner.map) return true;
+    const every = planInsert(rotation, null, winner);
+    if (every === null) return 'it cannot be planned';
+    await write(every);
+    console.info(
+      `Map vote: after the write the server goes to ${after.entries[next]?.map ?? 'another map'} next, not ${winner.map}, so ${winner.map} is in every slot (${rotationFacts(after, afterStatus)})`,
+    );
     return true;
   }
 

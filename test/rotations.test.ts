@@ -13,6 +13,7 @@ import {
   rotationDay,
   rotationName,
   rotationSlot,
+  nextSlot,
   hasDefault,
   seedDefault,
   serverEntries,
@@ -447,6 +448,19 @@ describe('fromTheStart', () => {
     expect(written[8 % 3]).toEqual(OZETI);
   });
 
+});
+
+describe('nextSlot', () => {
+  const rotation = (entries: Rotation['entries'], mode = 'ordered'): Rotation => ({ enabled: true, mode, entries });
+  const plain = [{ ...OZETI, status: null }, { ...BAKURANI, status: null }, { ...ZESTAFONA, status: null }];
+
+  it('reads the entry marked next, or the status\'s, or the one after the slot it is on', () => {
+    expect(nextSlot(rotation([plain[0]!, plain[1]!, { ...ZESTAFONA, status: 'next' }]), { rotationIndex: null })).toBe(2);
+    expect(nextSlot(rotation(plain), { rotationIndex: null, rotationNextIndex: 1 })).toBe(1);
+    expect(nextSlot(rotation(plain), { rotationIndex: 2 })).toBe(0);
+    expect(nextSlot(rotation(plain), { rotationIndex: null })).toBeNull();
+    expect(nextSlot(rotation(plain, 'random'), { rotationIndex: 0 })).toBeNull();
+  });
 });
 
 describe('rotationSlot', () => {
