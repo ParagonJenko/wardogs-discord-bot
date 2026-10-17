@@ -6,6 +6,9 @@ import { loadConfig } from './config.ts';
 import {
   castVote,
   chooseConditions,
+  chooseZone,
+  votePool,
+  zoneOptions,
   chooseWinner,
   closeDue,
   isOpen as isOpenVote,
@@ -1442,7 +1445,7 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // A press of a vote button: counts it and answers with the vote message as it is now, and what to tell the voter.
-  async castMapVote(press: { poll: string; map?: string; light?: string; weather?: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
+  async castMapVote(press: { poll: string; map?: string; light?: string; weather?: string; zone?: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
     const config = loadConfig(stringVars(this.env));
     return this.voting(async () => {
       const now = Date.now();
@@ -1457,6 +1460,7 @@ export class Watcher extends DurableObject<Env> {
           ...(press.map === undefined ? {} : { map: press.map }),
           ...(press.light === undefined ? {} : { light: press.light }),
           ...(press.weather === undefined ? {} : { weather: press.weather }),
+          ...(press.zone === undefined ? {} : { zone: press.zone }),
         },
         now,
       );
@@ -1467,8 +1471,8 @@ export class Watcher extends DurableObject<Env> {
       const name =
         press.map !== undefined
           ? (cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map))
-          : ((press.weather !== undefined ? cast.vote.weather : cast.vote.conditions).find((c) => c.key === (press.weather ?? press.light))?.label ?? 'that');
-      const what = press.map !== undefined ? 'map' : press.weather !== undefined ? 'weather' : 'time of day';
+          : ((press.weather !== undefined ? cast.vote.weather : press.zone !== undefined ? cast.vote.zones : cast.vote.conditions).find((c) => c.key === (press.weather ?? press.zone ?? press.light))?.label ?? 'that');
+      const what = press.map !== undefined ? 'map' : press.weather !== undefined ? 'weather' : press.zone !== undefined ? 'circles' : 'time of day';
       return {
         update: voteMessage(cast.vote, now, config.siteUrl),
         reply:
@@ -1539,12 +1543,19 @@ export class Watcher extends DurableObject<Env> {
         if (!closeDue(vote, now, leading) && !over) return;
         const winner = chooseWinner(vote, Math.random);
         const lighting = chooseConditions(vote, Math.random);
+        const zone = winner === null ? null : chooseZone(vote, winner, Math.random);
         vote = await save(
           ended(
             vote,
             winner === null
               ? { at: now, winner: null, pending: false, note: NOTE.nobody }
-              : { at: now, winner, pending: true, ...(lighting === null ? {} : { lighting: lighting.id, lightingName: lighting.name }) },
+              : {
+                  at: now,
+                  winner,
+                  pending: true,
+                  ...(lighting === null ? {} : { lighting: lighting.id, lightingName: lighting.name }),
+                  ...(zone === null ? {} : { zone: zone.id, zoneName: zone.name }),
+                },
           ),
         );
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
@@ -1587,7 +1598,12 @@ export class Watcher extends DurableObject<Env> {
       return;
     }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
-    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []), weatherOptions(catalog?.lightings ?? []));
+    // The maps a Random map button picks from, and the layouts they have for the circles row.
+    const pool = votePool(catalog?.maps ?? [], playing, recent, rule.options);
+    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []), weatherOptions(catalog?.lightings ?? []), {
+      pool: pool.map((m) => ({ map: m.id, name: m.name })),
+      zones: zoneOptions(pool),
+    });
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
     await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
@@ -1628,7 +1644,10 @@ export class Watcher extends DurableObject<Env> {
         throw new Error(`the server's catalogue does not list ${winner} with infantry only`);
       }
       const lighting = vote.outcome?.lighting;
-      const planned = planSetup(winner, { ...VOTE_SETUP_OPTIONS, ...(lighting ? { lighting } : {}) }, {
+      // Only a layout this map lists, so the vote is not held up by one the catalogue has since dropped.
+      const zone = vote.outcome?.zone;
+      const zones = zone && choice.zones.some((z) => z.id === zone) ? zone : undefined;
+      const planned = planSetup(winner, { ...VOTE_SETUP_OPTIONS, ...(lighting ? { lighting } : {}), ...(zones ? { zones } : {}) }, {
         rotation,
         mapExperiences: [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
         experiences: catalog?.experiences ?? null,
@@ -1655,7 +1674,8 @@ export class Watcher extends DurableObject<Env> {
       console.info(`Map vote: ${winner} staged as the next map ${inserted === true ? 'in the rotation' : 'in the queue'}, ${JSON.stringify(planned.setup)}`);
       const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
       const votes = vote.ballots.filter((b) => b.map === winner).length;
-      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${vote.outcome?.lightingName ? `, ${vote.outcome.lightingName}` : ''} (${votes} votes).`, http).catch((error: unknown) =>
+      const setup = [vote.outcome?.lightingName, zones && vote.outcome?.zoneName ? `${vote.outcome.zoneName} zones` : null].filter(Boolean);
+      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${setup.map((x) => `, ${x}`).join('')} (${votes > 0 ? `${votes} votes` : 'picked at random'}).`, http).catch((error: unknown) =>
         console.error(`Map vote result announcement failed: ${errorText(error)}`),
       );
       return { ...vote.outcome, at, winner, pending: false };
@@ -3141,7 +3161,7 @@ export class Watcher extends DurableObject<Env> {
           ballotOf: async (id) => {
             const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
             const ballot = vote === null || !isOpenVote(vote, Date.now()) ? undefined : vote.ballots.find((b) => b.user === id);
-            return vote === null || ballot === undefined ? null : { poll: vote.id, map: ballot.map, light: ballot.light, weather: ballot.weather };
+            return vote === null || ballot === undefined ? null : { poll: vote.id, map: ballot.map, light: ballot.light, weather: ballot.weather, zone: ballot.zone };
           },
         },
         userId,
@@ -3200,13 +3220,14 @@ export class Watcher extends DurableObject<Env> {
   async castWebVote(
     userId: string,
     vote: WebVote,
-  ): Promise<{ ok: boolean; reply: string; mine: { map: string | null; light: string | null; weather: string | null }; vote: PublicVote | null }> {
+  ): Promise<{ ok: boolean; reply: string; mine: { map: string | null; light: string | null; weather: string | null; zone: string | null }; vote: PublicVote | null }> {
     const result = await this.castMapVote({
       poll: vote.poll,
       userId,
       ...(vote.map === undefined ? {} : { map: vote.map }),
       ...(vote.light === undefined ? {} : { light: vote.light }),
       ...(vote.weather === undefined ? {} : { weather: vote.weather }),
+      ...(vote.zone === undefined ? {} : { zone: vote.zone }),
     });
     const config = loadConfig(stringVars(this.env));
     const saved = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
@@ -3215,7 +3236,7 @@ export class Watcher extends DurableObject<Env> {
     return {
       ok: result.update !== null,
       reply: result.reply.replace(/\*\*/g, ''),
-      mine: { map: ballot?.map ?? null, light: ballot?.light ?? null, weather: ballot?.weather ?? null },
+      mine: { map: ballot?.map ?? null, light: ballot?.light ?? null, weather: ballot?.weather ?? null, zone: ballot?.zone ?? null },
       vote: saved === null ? null : publicVote(saved, Date.now()),
     };
   }

@@ -18,6 +18,11 @@ import {
   weatherOptions,
   weatherOf,
   parseWeatherButton,
+  parseZoneButton,
+  chooseZone,
+  zoneOptions,
+  votePool,
+  RANDOM_MAP,
   type Lighting,
   voteMessage,
   editVoteMessage,
@@ -116,7 +121,7 @@ describe('castVote', () => {
 });
 
 describe('chooseWinner', () => {
-  const withVotes = (picks: string[]): MapVote => ({ ...vote(), ballots: picks.map((map, i) => ({ ...ballot(i, map), light: null, weather: null, at: NOW })) });
+  const withVotes = (picks: string[]): MapVote => ({ ...vote(), ballots: picks.map((map, i) => ({ ...ballot(i, map), light: null, weather: null, zone: null, at: NOW })) });
 
   it('takes the map with the most votes', () => {
     expect(chooseWinner(withVotes(['A', 'B', 'B']), Math.random)).toBe('B');
@@ -163,7 +168,7 @@ describe('closeScoreFor', () => {
 
 describe('publicVote and storage', () => {
   it('shows votes and the winner but never who voted', () => {
-    const v: MapVote = { ...vote(), ballots: [{ ...ballot(1, 'A'), light: null, weather: null, at: NOW }], outcome: { at: NOW, winner: 'A', pending: false } };
+    const v: MapVote = { ...vote(), ballots: [{ ...ballot(1, 'A'), light: null, weather: null, zone: null, at: NOW }], outcome: { at: NOW, winner: 'A', pending: false } };
     const shown = publicVote(v, NOW + 1);
     expect(shown).toMatchObject({ open: false, total: 1, winner: { map: 'A', name: 'Alpha' }, infantryOnly: true, pending: false, closeScore: 95, closedAt: NOW });
     expect(JSON.stringify(shown)).not.toContain('user1');
@@ -185,7 +190,7 @@ describe('publicVote and storage', () => {
 describe('voteMessage', () => {
   const cast = (v: MapVote, picks: [number, string][]): MapVote => ({
     ...v,
-    ballots: picks.map(([n, map]) => ({ ...ballot(n, map), light: null, weather: null, at: NOW })),
+    ballots: picks.map(([n, map]) => ({ ...ballot(n, map), light: null, weather: null, zone: null, at: NOW })),
   });
 
   it('has a button per map while open, each carrying the vote and the map', () => {
@@ -325,7 +330,7 @@ describe('the time of day and weather votes', () => {
     let v = apply(withBoth(), { user: 'a', map: 'A' });
     v = apply(v, { user: 'a', light: 'dusk' });
     v = apply(v, { user: 'a', weather: 'rain' });
-    expect(v.ballots).toEqual([{ user: 'a', map: 'A', light: 'dusk', weather: 'rain', at: NOW + 1 }]);
+    expect(v.ballots).toEqual([{ user: 'a', map: 'A', light: 'dusk', weather: 'rain', zone: null, at: NOW + 1 }]);
     v = apply(v, { user: 'a', weather: 'fog' });
     v = apply(v, { user: 'a', map: 'B' });
     expect(v.ballots[0]).toMatchObject({ map: 'B', light: 'dusk', weather: 'fog' });
@@ -455,6 +460,121 @@ describe('parseLightButton and parseWeatherButton', () => {
     expect(parseWeatherButton(undefined)).toBeNull();
   });
 });
+
+describe('the random map and the circles', () => {
+  const zone = (id: string, name: string) => ({ id, name });
+  const maps = [
+    { ...choice('Bakurani'), zones: [zone('ZoneAlternator.Bakurani.Default.Circle', 'Circle'), zone('ZoneAlternator.Bakurani.Default.Line', 'Line'), zone('ZoneAlternator.Bakurani.Default.Factory', 'Factory')] },
+    { ...choice('Ozeti'), zones: [zone('ZoneAlternator.Ozeti.Default.Circle', 'Circle'), zone('ZoneAlternator.Ozeti.Default.Line', 'Line')] },
+    { ...choice('Zestafona'), zones: [zone('ZoneAlternator.Zestafona.Default.Circle', 'Circle')] },
+    { ...choice('Bare'), zones: [] },
+  ];
+  const poolOf = (ms: typeof maps) => ms.map((m) => ({ map: m.id, name: m.name }));
+  const withAll = (): MapVote =>
+    openVote(
+      { startedAt: 42 },
+      'Kavkazi',
+      [{ map: 'Bakurani', name: 'Bakurani' }, { map: 'Ozeti', name: 'Ozeti' }],
+      { options: 2, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation' },
+      NOW,
+      95,
+      conditionOptions(serverLightings),
+      weatherOptions(serverLightings),
+      { pool: poolOf(maps), zones: zoneOptions(maps) },
+    );
+  const apply = (v: MapVote, ballotOf: { user: string; map?: string; light?: string; weather?: string; zone?: string }): MapVote => {
+    const cast = castVote(v, ballotOf, NOW + 1);
+    if (!('vote' in cast)) throw new Error(cast.result);
+    return cast.vote;
+  };
+
+  it('offers every playable map the pool, and a Random button only when there is a pool', () => {
+    expect(votePool([choice('Now'), choice('A'), choice('B'), choice('C'), choice('NoModes', 0)], 'Now', ['Now'], 2).map((m) => m.id)).toEqual(['A', 'B', 'C']);
+    expect(votePool([choice('Now'), choice('A')], 'Now', ['Now'], 2)).toEqual([]);
+    expect(withAll().options.map((o) => o.map)).toEqual(['Bakurani', 'Ozeti', RANDOM_MAP]);
+    expect(vote().options.map((o) => o.map)).not.toContain(RANDOM_MAP);
+  });
+
+  it('picks a map of the pool at random when Random has the most votes', () => {
+    const v = apply(apply(withAll(), { user: 'a', map: 'Bakurani' }), { user: 'b', map: RANDOM_MAP });
+    // A tie between Bakurani and Random: either way, a map the pool has.
+    const winners = new Set([0, 0.4, 0.99].map((roll) => chooseWinner(v, () => roll)));
+    expect([...winners].every((w) => ['Bakurani', 'Ozeti', 'Zestafona', 'Bare'].includes(w!))).toBe(true);
+    const random = apply(v, { user: 'c', map: RANDOM_MAP });
+    expect(new Set([0, 0.3, 0.6, 0.99].map((roll) => chooseWinner(random, () => roll))).size).toBeGreaterThan(1);
+    expect(chooseWinner(apply(withAll(), { user: 'a', map: 'Ozeti' }), () => 0.5)).toBe('Ozeti');
+  });
+
+  it('offers the layouts the maps have by name, the most common first, and Random', () => {
+    const options = zoneOptions(maps);
+    expect(options.map((o) => o.label)).toEqual(['Circle', 'Line', 'Factory', 'Random']);
+    expect(options.map((o) => o.key)).toEqual(['z0', 'z1', 'z2', 'random']);
+    expect(options[0]!.zones.map((z) => z.map)).toEqual(['Bakurani', 'Ozeti', 'Zestafona']);
+    expect(options.at(-1)!.zones).toHaveLength(6);
+  });
+
+  it('offers no circles row with fewer than two layouts, or only None', () => {
+    expect(zoneOptions([])).toEqual([]);
+    expect(zoneOptions([{ id: 'A', zones: [zone('A.Circle', 'Circle')] }])).toEqual([]);
+    expect(zoneOptions([{ id: 'A', zones: [zone('A.None', 'None'), zone('A.Circle', 'Circle')] }])).toEqual([]);
+  });
+
+  it('gives the winning map its layout of the winning name, or one of its own when it has none', () => {
+    const line = apply(withAll(), { user: 'a', zone: 'z1' });
+    expect(chooseZone(line, 'Ozeti', () => 0)?.id).toBe('ZoneAlternator.Ozeti.Default.Line');
+    // Zestafona has no Line: it gets its own (only) layout.
+    expect(chooseZone(line, 'Zestafona', () => 0)?.id).toBe('ZoneAlternator.Zestafona.Default.Circle');
+    // A map with no layouts has nothing to set.
+    expect(chooseZone(line, 'Bare', () => 0)).toBeNull();
+    // Random: any of the map's own.
+    const random = apply(withAll(), { user: 'a', zone: 'random' });
+    expect(new Set([0, 0.4, 0.99].map((roll) => chooseZone(random, 'Bakurani', () => roll)?.id)).size).toBeGreaterThan(1);
+    // Nobody voted: the layout stays as the rotation has it.
+    expect(chooseZone(withAll(), 'Ozeti', () => 0)).toBeNull();
+  });
+
+  it('counts a vote on the circles apart from the others, and refuses one that is not offered', () => {
+    const v = apply(apply(withAll(), { user: 'a', map: 'Ozeti' }), { user: 'a', zone: 'z0' });
+    expect(v.ballots[0]).toMatchObject({ map: 'Ozeti', zone: 'z0' });
+    expect(castVote(v, { user: 'a', zone: 'z0' }, NOW + 2).result).toBe('changed');
+    expect(castVote(v, { user: 'b', zone: 'z0' }, NOW + 2).result).toBe('counted');
+    expect(castVote(v, { user: 'a', zone: 'z9' }, NOW + 2).result).toBe('unknown-map');
+    expect(castVote(vote(), { user: 'a', zone: 'z0' }, NOW + 2).result).toBe('unknown-map');
+    expect(castVote(v, { user: 'a', zone: 'z0', weather: 'rain' }, NOW + 2).result).toBe('unknown-map');
+    expect(publicVote(v, NOW + 2).zones.map((z) => [z.key, z.votes])).toEqual([['z0', 1], ['z1', 0], ['z2', 0], ['random', 0]]);
+  });
+
+  it('puts four rows below the maps in the Discord message, at most five rows in all', () => {
+    const message = voteMessage(withAll(), NOW + 1);
+    expect(message.components).toHaveLength(4);
+    const labels = (i: number) => (message.components[i] as { components: { label: string }[] }).components.map((b) => b.label);
+    expect(labels(0)).toEqual(['Bakurani', 'Ozeti', '🎲 Random']);
+    expect(labels(3)).toEqual(['Circle', 'Line', 'Factory', '🎲 Random']);
+    expect(message.embeds[0]?.fields?.at(-1)?.name).toContain('Circles');
+    expect(message.embeds[0]?.description).toContain('the time of day, the weather and the circles');
+    const six = { ...withAll(), options: Array.from({ length: 7 }, (_, i) => ({ map: `M${i}`, name: `M${i}` })) };
+    expect(voteMessage(six, NOW + 1).components).toHaveLength(5);
+  });
+
+  it('reads a vote stored before the circles and the random map', () => {
+    const { zones: _z, pool: _p, ...older } = vote();
+    const parsed = parseMapVote({ ...older, ballots: [{ user: 'a', map: 'A', at: NOW }] });
+    expect(parsed?.zones).toEqual([]);
+    expect(parsed?.pool).toEqual([]);
+    expect(parsed?.ballots[0]?.zone).toBeNull();
+  });
+});
+
+describe('parseZoneButton', () => {
+  it('reads only circles buttons of this vote', () => {
+    expect(parseZoneButton('mapzone:42:z1')).toEqual({ poll: '42', zone: 'z1' });
+    expect(parseZoneButton('mapzone:42:random')).toEqual({ poll: '42', zone: 'random' });
+    expect(parseZoneButton('maplight:42:dusk')).toBeNull();
+    expect(parseZoneButton('mapzone:x:z1')).toBeNull();
+    expect(parseZoneButton(undefined)).toBeNull();
+  });
+});
+
 
 describe('votingNow', () => {
   const match = (leading: number, extra: { endedAt?: number } = {}) => ({

@@ -12,11 +12,12 @@ import type { MapChoice } from './rotationspage.ts';
 // One vote per person is one per Discord account: a ballot is the voter's Discord user ID, and pressing a button again
 // moves it. Only members of the server can press the buttons (checked in interactions.ts).
 //
-// Two more rows of buttons vote on the conditions: the time of day (Morning, Day, Afternoon, Dusk, Night) and the weather
-// (Clear, Fog, Rain, Snow), each with Random, as groups of the server's lightings. Each person has one vote on the map, one
-// on the time of day and one on the weather. The winning time and weather give a lighting that has both; with no such
-// lighting the weather wins, and the time nearest the one chosen is used. With no votes on either, the lighting is left as
-// the rotation has it. It is part of the same message, so it adds nothing for people to read.
+// Three more rows of buttons vote on the conditions: the time of day (Morning, Day, Afternoon, Dusk, Night), the weather
+// (Clear, Fog, Rain, Snow) and the circles (the control-zone layout: Circle, Line …), each with Random, as groups of what the
+// server lists. Each person has one vote on the map, one on the time of day, one on the weather and one on the circles. The
+// winning time and weather give a lighting that has both; with no such lighting the weather wins, and the time nearest the
+// one chosen is used. The winning circles are the winning map's layout of that name, or one of its own when it has none.
+// With no votes on a row, that part is left as the rotation has it. It is all part of the same message.
 
 export const MAP_VOTE_KEY = 'mapVote';
 
@@ -46,6 +47,16 @@ export type MapVoteRule = {
 
 export type VoteOption = { map: string; name: string };
 
+// The map button that picks a map at random, from `pool` (every map the vote could have offered).
+export const RANDOM_MAP = 'random';
+
+// One of a map's control-zone layouts, by its id and the name to show.
+export type ZoneChoice = { map: string; id: string; name: string };
+
+// A choice on the circles row: the layouts it covers, one or more per map (a layout is the same by name on every map that
+// has it), or every layout of every map for Random.
+export type ZoneOption = { key: string; label: string; zones: ZoneChoice[] };
+
 // One of the server's lightings (times of day and weather, such as DayClear), by id and the name to show.
 export type Lighting = { id: string; name: string };
 
@@ -54,8 +65,8 @@ export type Lighting = { id: string; name: string };
 export type ConditionOption = { key: string; label: string; lightings: Lighting[] };
 
 // `user` is the voter's Discord user ID. It is never sent to the website. `map`, `light` (the time of day; the name is from
-// when it was the only conditions vote) and `weather` are what they picked, each null until they vote on it.
-export type Ballot = { user: string; map: string | null; light: string | null; weather: string | null; at: number };
+// when it was the only conditions vote), `weather` and `zone` (the circles) are what they picked, each null until they vote.
+export type Ballot = { user: string; map: string | null; light: string | null; weather: string | null; zone: string | null; at: number };
 
 // How a vote ended: the map the server was told to play next, or why it was not told.
 export type VoteOutcome = {
@@ -69,6 +80,9 @@ export type VoteOutcome = {
   // The lighting the conditions vote chose, with its name, when it chose one.
   lighting?: string | null;
   lightingName?: string | null;
+  // The layout the circles vote chose, with its name, when it chose one.
+  zone?: string | null;
+  zoneName?: string | null;
 };
 
 export type MapVote = {
@@ -86,6 +100,10 @@ export type MapVote = {
   conditions: ConditionOption[];
   // The weather row, likewise.
   weather: ConditionOption[];
+  // The circles row, likewise.
+  zones: ZoneOption[];
+  // Every map the vote could have offered, for the Random map button (which is in `options` when there is one).
+  pool: VoteOption[];
   ballots: Ballot[];
   // The Discord message the vote is in, to update as votes come and when it ends.
   message: { channelId: string; messageId: string } | null;
@@ -93,6 +111,12 @@ export type MapVote = {
 };
 
 const OptionSchema = z.object({ key: z.string(), label: z.string(), lightings: z.array(z.object({ id: z.string(), name: z.string() })) });
+
+const ZoneOptionSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  zones: z.array(z.object({ map: z.string(), id: z.string(), name: z.string() })),
+});
 
 const MapVoteSchema = z.object({
   id: z.string(),
@@ -104,12 +128,15 @@ const MapVoteSchema = z.object({
   options: z.array(z.object({ map: z.string(), name: z.string() })),
   conditions: z.array(OptionSchema).default([]),
   weather: z.array(OptionSchema).default([]),
+  zones: z.array(ZoneOptionSchema).default([]),
+  pool: z.array(z.object({ map: z.string(), name: z.string() })).default([]),
   ballots: z.array(
     z.object({
       user: z.string(),
       map: z.string().nullable().default(null),
       light: z.string().nullable().default(null),
       weather: z.string().nullable().default(null),
+      zone: z.string().nullable().default(null),
       at: z.number(),
     }),
   ),
@@ -122,6 +149,8 @@ const MapVoteSchema = z.object({
       note: z.string().optional(),
       lighting: z.string().nullable().optional(),
       lightingName: z.string().nullable().optional(),
+      zone: z.string().nullable().optional(),
+      zoneName: z.string().nullable().optional(),
     })
     .nullable()
     .default(null),
@@ -159,14 +188,8 @@ export const withPlayed = (recent: readonly string[], playing: string): string[]
 
 // The maps a vote can offer: ones the server can play (with a game mode and infantry only) that were not played lately, and never the one
 // being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
-// the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is no vote.
-export const pickOptions = (
-  maps: readonly MapChoice[],
-  playing: string,
-  recent: readonly string[],
-  count: number,
-  random: () => number,
-): VoteOption[] => {
+// the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is none.
+export const votePool = (maps: readonly MapChoice[], playing: string, recent: readonly string[], count: number): MapChoice[] => {
   // Only maps that list infantry only themselves: every winner is played with it, and the id sent must be one that map has
   // (see applyVoteWinner), never one found on another map.
   const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
@@ -179,8 +202,40 @@ export const pickOptions = (
     const back = playable.filter((m) => recent.includes(m.id)).sort((a, b) => newestFirst.indexOf(b.id) - newestFirst.indexOf(a.id));
     pool.push(...back.slice(0, 2 - pool.length));
   }
-  if (pool.length < 2) return [];
-  return sample(pool, count, random).map((m) => ({ map: m.id, name: m.name }));
+  return pool.length < 2 ? [] : pool;
+};
+
+// The maps on the buttons: `count` of the pool, chosen at random.
+export const pickOptions = (
+  maps: readonly MapChoice[],
+  playing: string,
+  recent: readonly string[],
+  count: number,
+  random: () => number,
+): VoteOption[] => sample(votePool(maps, playing, recent, count), count, random).map((m) => ({ map: m.id, name: m.name }));
+
+// The circles row for the maps a vote could play (its pool): the layouts they have, the same by name on every map that has
+// it, the most common first (then by name), at most four, and Random across all of them. Nothing (no row) with fewer than two.
+export const zoneOptions = (maps: readonly Pick<MapChoice, 'id' | 'zones'>[]): ZoneOption[] => {
+  const byName = new Map<string, { label: string; zones: ZoneChoice[] }>();
+  for (const map of maps) {
+    for (const zone of map.zones) {
+      const name = zone.name.trim();
+      if (name === '' || name.toLowerCase() === 'none') continue;
+      const found = byName.get(name.toLowerCase()) ?? { label: name, zones: [] };
+      found.zones.push({ map: map.id, id: zone.id, name });
+      byName.set(name.toLowerCase(), found);
+    }
+  }
+  const shown = [...byName.values()]
+    .sort((a, b) => new Set(b.zones.map((z) => z.map)).size - new Set(a.zones.map((z) => z.map)).size || a.label.localeCompare(b.label))
+    .slice(0, MAX_CONDITION_GROUPS);
+  return shown.length < 2
+    ? []
+    : [
+        ...shown.map((g, i) => ({ key: `z${i}`, label: g.label, zones: g.zones })),
+        { key: RANDOM_CONDITION, label: 'Random', zones: shown.flatMap((g) => g.zones) },
+      ];
 };
 
 // The time of day and the weather of a lighting, from its id and name. The server's ids all begin with Day and say the time
@@ -253,6 +308,7 @@ export const openVote = (
   closeScore: number,
   conditions: ConditionOption[] = [],
   weather: ConditionOption[] = [],
+  more: { pool?: VoteOption[]; zones?: ZoneOption[] } = {},
 ): MapVote => ({
   id: String(match.startedAt),
   matchStartedAt: match.startedAt,
@@ -260,9 +316,12 @@ export const openVote = (
   openedAt: now,
   closesAt: now + rule.minutes * 60_000,
   closeScore,
-  options,
+  // A Random map button comes with the pool it picks from.
+  options: (more.pool?.length ?? 0) > 0 ? [...options, { map: RANDOM_MAP, name: '🎲 Random' }] : options,
   conditions,
   weather,
+  zones: more.zones ?? [],
+  pool: more.pool ?? [],
   ballots: [],
   message: null,
   outcome: null,
@@ -270,15 +329,20 @@ export const openVote = (
 
 export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
 
-// One ballot per Discord user, with a vote on the map, one on the time of day and one on the weather: voting again moves that
-// vote, and the others stay. A vote for what they already chose changes nothing. `ballot` has one of the three.
-export const castVote = (vote: MapVote, ballot: { user: string; map?: string; light?: string; weather?: string }, now: number): CastResult => {
+// One ballot per Discord user, with a vote on the map, one on the time of day, one on the weather and one on the circles:
+// voting again moves that vote, and the others stay. A vote for what they already chose changes nothing. `ballot` has one.
+export const castVote = (
+  vote: MapVote,
+  ballot: { user: string; map?: string; light?: string; weather?: string; zone?: string },
+  now: number,
+): CastResult => {
   if (!isOpen(vote, now)) return { result: 'closed' };
-  const { map, light, weather } = ballot;
-  if ([map, light, weather].filter((v) => v !== undefined).length !== 1) return { result: 'unknown-map' };
+  const { map, light, weather, zone } = ballot;
+  if ([map, light, weather, zone].filter((v) => v !== undefined).length !== 1) return { result: 'unknown-map' };
   if (map !== undefined && !vote.options.some((o) => o.map === map)) return { result: 'unknown-map' };
   if (light !== undefined && !vote.conditions.some((c) => c.key === light)) return { result: 'unknown-map' };
   if (weather !== undefined && !vote.weather.some((c) => c.key === weather)) return { result: 'unknown-map' };
+  if (zone !== undefined && !vote.zones.some((c) => c.key === zone)) return { result: 'unknown-map' };
   const had = vote.ballots.find((b) => b.user === ballot.user);
   const others = vote.ballots.filter((b) => b.user !== ballot.user);
   const next: Ballot = {
@@ -286,9 +350,10 @@ export const castVote = (vote: MapVote, ballot: { user: string; map?: string; li
     map: map ?? had?.map ?? null,
     light: light ?? had?.light ?? null,
     weather: weather ?? had?.weather ?? null,
+    zone: zone ?? had?.zone ?? null,
     at: now,
   };
-  const before = map !== undefined ? had?.map : light !== undefined ? had?.light : had?.weather;
+  const before = map !== undefined ? had?.map : light !== undefined ? had?.light : weather !== undefined ? had?.weather : had?.zone;
   return { vote: { ...vote, ballots: [...others, next] }, result: before == null ? 'counted' : 'changed' };
 };
 
@@ -296,16 +361,20 @@ export const castVote = (vote: MapVote, ballot: { user: string; map?: string; li
 export const tally = (vote: MapVote): { map: string; name: string; votes: number }[] =>
   vote.options.map((o) => ({ ...o, votes: vote.ballots.filter((b) => b.map === o.map).length }));
 
-// The map with the most votes; a tie is settled by chance. Null when nobody voted.
+// The map with the most votes; a tie is settled by chance. Null when nobody voted. When Random has the most votes, the map is
+// one of the pool (or of the other buttons when there is no pool) chosen by chance.
 export const chooseWinner = (vote: MapVote, random: () => number): string | null => {
   const counts = tally(vote);
   const top = Math.max(0, ...counts.map((c) => c.votes));
   if (top === 0) return null;
-  return sample(
+  const won = sample(
     counts.filter((c) => c.votes === top),
     1,
     random,
   )[0]!.map;
+  if (won !== RANDOM_MAP) return won;
+  const among = vote.pool.length > 0 ? vote.pool : vote.options.filter((o) => o.map !== RANDOM_MAP);
+  return sample(among, 1, random)[0]?.map ?? null;
 };
 
 // Votes for each choice on the time of day row, in the order they were offered.
@@ -318,12 +387,12 @@ export const tallyWeather = (vote: MapVote): { key: string; label: string; votes
 
 // The choice on a row with the most votes, or null when nobody voted on it. A tie is settled by chance, or with `safest` for
 // the choice that comes first on the row (the row lists the safest weather first, so rain never wins a tie on luck).
-const leader = (
-  options: readonly ConditionOption[],
+const leader = <T extends { key: string }>(
+  options: readonly T[],
   votes: readonly { key: string; votes: number }[],
   random: () => number,
   safest = false,
-): ConditionOption | null => {
+): T | null => {
   const top = Math.max(0, ...votes.map((v) => v.votes));
   if (top === 0) return null;
   const tied = votes.filter((v) => v.votes === top);
@@ -360,6 +429,22 @@ export const chooseConditions = (vote: MapVote, random: () => number): Lighting 
   if (time === null) return null;
   const clear = time.key === RANDOM_CONDITION ? [] : time.lightings.filter((l) => weatherOf(l) === 'clear');
   return pick(clear.length > 0 ? clear : time.lightings);
+};
+
+// Votes for each choice on the circles row.
+export const tallyZones = (vote: MapVote): { key: string; label: string; votes: number }[] =>
+  vote.zones.map((c) => ({ key: c.key, label: c.label, votes: vote.ballots.filter((b) => b.zone === c.key).length }));
+
+// The layout the circles vote chose for the winning map, or null when nobody voted on it (and then the layout stays as the
+// rotation has it) or the map has none. The winning choice gives the map's layout of that name; when the map has none, or
+// Random won, one of the map's own layouts is picked by chance.
+export const chooseZone = (vote: MapVote, map: string, random: () => number): ZoneChoice | null => {
+  const won = leader(vote.zones, tallyZones(vote), random);
+  if (won === null) return null;
+  const own = (zones: readonly ZoneChoice[]): ZoneChoice[] => zones.filter((z) => z.map === map);
+  const any = own(vote.zones.flatMap((o) => o.zones));
+  const asked = won.key === RANDOM_CONDITION ? [] : own(won.zones);
+  return sample(asked.length > 0 ? asked : any, 1, random)[0] ?? null;
 };
 
 // Whether people can vote on this match right now: the vote is for this match, which has not ended, its time has not run out
@@ -406,8 +491,11 @@ export type PublicVote = {
   conditions: { key: string; label: string; votes: number }[];
   // The weather row with its votes, likewise.
   weather: { key: string; label: string; votes: number }[];
-  // The lighting the conditions vote chose, once it has, such as "Night, rain".
+  // The circles row with its votes, likewise.
+  zones: { key: string; label: string; votes: number }[];
+  // The lighting the conditions vote chose, once it has, such as "Night, rain", and the circles it chose, such as "Circle".
   lightingName: string | null;
+  zoneName: string | null;
   // The map that won and is on its way to the server, when the vote ended with one.
   winner: { map: string; name: string } | null;
   // Every winner is played infantry only; the page says so.
@@ -432,7 +520,9 @@ export const publicVote = (vote: MapVote, now: number): PublicVote => {
     total: options.reduce((sum, o) => sum + o.votes, 0),
     conditions: tallyConditions(vote),
     weather: tallyWeather(vote),
+    zones: tallyZones(vote),
     lightingName: vote.outcome?.lightingName ?? null,
+    zoneName: vote.outcome?.zoneName ?? null,
     winner: winner === null ? null : { map: winner, name: options.find((o) => o.map === winner)?.name ?? mapName(winner) },
     infantryOnly: true,
     note: vote.outcome?.note ?? null,
@@ -453,6 +543,7 @@ export const NOTE = {
 export const VOTE_ID_PREFIX = 'mapvote';
 export const LIGHT_ID_PREFIX = 'maplight';
 export const WEATHER_ID_PREFIX = 'mapweather';
+export const ZONE_ID_PREFIX = 'mapzone';
 const BAR_WIDTH = 12;
 const barOf = (votes: number, total: number): string => {
   const filled = total === 0 ? 0 : Math.round((votes / total) * BAR_WIDTH);
@@ -466,15 +557,16 @@ const OVER_COLOUR = 0x8a94a3;
 
 export type VoteMessage = { embeds: Embed[]; components: unknown[]; allowed_mentions: { parse: never[] } };
 
-// What the description asks people to vote on besides the map.
-const conditionsAsked = (shown: PublicVote): string =>
-  shown.conditions.length > 0 && shown.weather.length > 0
-    ? ', the time of day and the weather'
-    : shown.conditions.length > 0
-      ? ' and the time of day'
-      : shown.weather.length > 0
-        ? ' and the weather'
-        : '';
+// What the description asks people to vote on besides the map: ", the time of day, the weather and the circles".
+const conditionsAsked = (shown: PublicVote): string => {
+  const asked = [
+    ...(shown.conditions.length > 0 ? ['the time of day'] : []),
+    ...(shown.weather.length > 0 ? ['the weather'] : []),
+    ...(shown.zones.length > 0 ? ['the circles'] : []),
+  ];
+  if (asked.length === 0) return '';
+  return asked.length === 1 ? ` and ${asked[0]}` : `, ${asked.slice(0, -1).join(', ')} and ${asked.at(-1)}`;
+};
 
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
   const shown = publicVote(vote, now);
@@ -505,6 +597,7 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
       ...(embed.fields ?? []),
       ...(shown.conditions.length > 0 ? [{ name: '🕒 Time of day', value: line(shown.conditions) }] : []),
       ...(shown.weather.length > 0 ? [{ name: '🌦️ Weather', value: line(shown.weather) }] : []),
+      ...(shown.zones.length > 0 ? [{ name: '🎯 Circles', value: line(shown.zones) }] : []),
     ];
   }
   const buttons = shown.open
@@ -519,8 +612,8 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
     type: 1,
     components: buttons.slice(i * BUTTONS_PER_ROW, (i + 1) * BUTTONS_PER_ROW),
   }));
-  // The time of day and weather rows: a row each, so it is clear they are votes of their own.
-  const conditionRow = (options: ConditionOption[], prefix: string) =>
+  // The time of day, weather and circles rows: a row each, so it is clear they are votes of their own.
+  const conditionRow = (options: { key: string; label: string }[], prefix: string) =>
     shown.open && options.length > 0
       ? [
           {
@@ -534,7 +627,12 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
           },
         ]
       : [];
-  const components = [...rows, ...conditionRow(vote.conditions, LIGHT_ID_PREFIX), ...conditionRow(vote.weather, WEATHER_ID_PREFIX)];
+  const components = [
+    ...rows,
+    ...conditionRow(vote.conditions, LIGHT_ID_PREFIX),
+    ...conditionRow(vote.weather, WEATHER_ID_PREFIX),
+    ...conditionRow(vote.zones, ZONE_ID_PREFIX),
+  ];
   return { embeds: [embed], components, allowed_mentions: { parse: [] } };
 };
 
@@ -548,6 +646,12 @@ export const parseVoteButton = (customId: string | undefined): { poll: string; m
 export const parseLightButton = (customId: string | undefined): { poll: string; light: string } | null => {
   const found = /^maplight:(\d{1,20}):([a-z]{1,16})$/.exec(customId ?? '');
   return found === null ? null : { poll: found[1]!, light: found[2]! };
+};
+
+// A circles button's custom_id: "mapzone:<vote id>:<group>" (z0, z1 … or random). Null for anything else.
+export const parseZoneButton = (customId: string | undefined): { poll: string; zone: string } | null => {
+  const found = /^mapzone:(\d{1,20}):([a-z0-9]{1,16})$/.exec(customId ?? '');
+  return found === null ? null : { poll: found[1]!, zone: found[2]! };
 };
 
 // A weather button's custom_id: "mapweather:<vote id>:<group>". Null for anything else.

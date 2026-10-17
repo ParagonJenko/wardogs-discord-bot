@@ -907,6 +907,15 @@ describe('a press of a vote button', () => {
     expect(d.castVote).toHaveBeenCalledWith({ poll: '42', weather: 'rain', userId: '9001' });
   });
 
+  it('counts a circles button as a vote on the circles', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Circle**.' })) };
+    const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'mapzone:42:z0' } });
+
+    await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', zone: 'z0', userId: '9001' });
+  });
+
   it('tells only the voter when the vote did not change, such as after it closed', async () => {
     const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: null, reply: 'The vote has closed.' })) };
     const { body, signature, timestamp } = await signed(press());
