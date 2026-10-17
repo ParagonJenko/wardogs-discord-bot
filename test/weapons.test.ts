@@ -225,6 +225,8 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('Stingray');
     expect(weaponName('Id.Item.SMG_03')).toBe('PP-19 Vityaz');
     expect(weaponName('Id.Item.WEPN_028')).toBe('MP5');
+    expect(weaponName('Id.Item.WEPN_031')).toBe('PP-19 Bizon');
+    expect(weaponName('Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun')).toBe('M2 Browning');
     expect(weaponName('Id.Item.WEPN_026')).toBe('M1911');
     expect(weaponName('Id.Item.WEPN_027')).toBe('Deagle');
     expect(weaponName('Id.Item.WEPN_032')).toBe('GGX 18');
@@ -275,10 +277,11 @@ describe('weaponName and weaponKind', () => {
 describe('weaponRole', () => {
   it('sorts the weapons the game is known to send by what they are for', () => {
     expect(
-      ['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.SMG_03', 'Id.Item.WEPN_028', 'Id.Item.M500', 'Id.Item.WEPN_037'].map(
+      ['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.SMG_03', 'Id.Item.WEPN_028', 'Id.Item.M500', 'Id.Item.WEPN_037', 'Id.Item.WEPN_031'].map(
         weaponRole,
       ),
     ).toEqual([
+      'assault',
       'assault',
       'assault',
       'assault',
@@ -323,8 +326,9 @@ describe('weaponRole', () => {
         'Id.Vehicle.WeaponExtension.TNK_01.Artillery',
         'Id.Vehicle.WeaponExtension.STN_01.MistralAA',
         'Vehicle.Variant.Stationary.STN_05',
+        'Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun',
       ].map(weaponRole),
-    ).toEqual(['support', 'support', 'support', 'support', 'support']);
+    ).toEqual(['support', 'support', 'support', 'support', 'support', 'support']);
     expect(weaponRole('Id.Vehicle.WeaponExtension.TNK_01.Heavy')).toBe('vehicle-gun');
     // The SPH-2 running someone over.
     expect(weaponRole('Vehicle.Variant.Land.Tracked.TNK_01.Artillery')).toBe('vehicle');
