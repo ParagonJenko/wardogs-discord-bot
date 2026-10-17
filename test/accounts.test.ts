@@ -217,11 +217,15 @@ describe('parsing', () => {
     await expect(readAccountAction(post({ action: 'steam', proof: 'x'.repeat(5000) }))).resolves.toBeNull();
   });
 
-  it('reads a vote for a map or for the conditions, not both and not neither', async () => {
+  it('reads a vote for a map, the time of day, the weather or the circles, only one of them', async () => {
     const post = (body: unknown) => new Request('https://x.test/api/account/vote', { method: 'POST', body: JSON.stringify(body) });
     await expect(readWebVote(post({ poll: '1759300000000', map: 'Foy' }))).resolves.toEqual({ poll: '1759300000000', map: 'Foy' });
     await expect(readWebVote(post({ poll: '1759300000000', light: 'night' }))).resolves.toEqual({ poll: '1759300000000', light: 'night' });
+    await expect(readWebVote(post({ poll: '1759300000000', weather: 'rain' }))).resolves.toEqual({ poll: '1759300000000', weather: 'rain' });
+    await expect(readWebVote(post({ poll: '1759300000000', zone: 'z1' }))).resolves.toEqual({ poll: '1759300000000', zone: 'z1' });
+    await expect(readWebVote(post({ poll: '1759300000000', map: 'Foy', zone: 'z1' }))).resolves.toBeNull();
     await expect(readWebVote(post({ poll: '1759300000000', map: 'Foy', light: 'night' }))).resolves.toBeNull();
+    await expect(readWebVote(post({ poll: '1759300000000', light: 'night', weather: 'rain' }))).resolves.toBeNull();
     await expect(readWebVote(post({ poll: '1759300000000' }))).resolves.toBeNull();
     await expect(readWebVote(post({ poll: 'abc', map: 'Foy' }))).resolves.toBeNull();
   });

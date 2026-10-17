@@ -1,3 +1,4 @@
+import { lightingName, zoneLayoutName } from './names.ts';
 import type { CatalogItem, MatchSetup, Rotation } from './rcon.ts';
 
 // What /setnextmap and /changemap stage: the map with a game mode, modifiers (infantry only, hardcore), lighting and
@@ -33,8 +34,9 @@ export type SetupCatalog = {
 export type PlannedSetup = { setup: MatchSetup; labels: string[] };
 
 const nameOf = (id: string, items: CatalogItem[] | null): string => items?.find((i) => i.id === id)?.name ?? id;
-// A layout the catalogue does not name goes by the end of its tag: ZoneAlternator.Bakurani.Default.Circle is "Circle".
-const zoneName = (id: string, zones: CatalogItem[] | null): string => zones?.find((z) => z.id === id)?.name ?? id.split('.').at(-1) ?? id;
+const lightingNameOf = (id: string, items: CatalogItem[] | null): string => items?.find((i) => i.id === id)?.name ?? lightingName(id);
+// A layout the catalogue does not name goes by its tag: ZoneAlternator.Bakurani.Default.Circle is "Circle".
+const zoneName = (id: string, zones: CatalogItem[] | null): string => zones?.find((z) => z.id === id)?.name ?? zoneLayoutName(id);
 
 // The id for what staff typed or picked: an id, or a name, ignoring case. A list that could not be read (null) lets
 // it through as typed; a list the server gave, even an empty one, is the only thing allowed.
@@ -52,7 +54,7 @@ export const setupLabels = (setup: MatchSetup, catalog: Pick<SetupCatalog, 'expe
   return [
     ...(mode ? [nameOf(mode, catalog.experiences)] : []),
     ...MODIFIERS.filter((m) => experiences.some((id) => m.pattern.test(id))).map((m) => m.name),
-    ...(setup.lighting ? [nameOf(setup.lighting, catalog.lightings)] : []),
+    ...(setup.lighting ? [lightingNameOf(setup.lighting, catalog.lightings)] : []),
     ...(setup.zoneAlternator ? [`${zoneName(setup.zoneAlternator, catalog.zones)} zones`] : []),
   ];
 };

@@ -889,13 +889,31 @@ describe('a press of a vote button', () => {
     expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', { content: 'You voted for **Bakurani**.', allowed_mentions: { parse: [] } });
   });
 
-  it('counts a conditions button as a vote on the conditions', async () => {
-    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Night**.' })) };
-    const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'maplight:42:night' } });
+  it('counts a time of day button as a vote on the time of day', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Dusk**.' })) };
+    const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'maplight:42:dusk' } });
 
     await handleInteraction(body, signature, timestamp, d);
 
-    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', light: 'night', userId: '9001' });
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', light: 'dusk', userId: '9001' });
+  });
+
+  it('counts a weather button as a vote on the weather', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Rain**.' })) };
+    const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'mapweather:42:rain' } });
+
+    await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', weather: 'rain', userId: '9001' });
+  });
+
+  it('counts a circles button as a vote on the circles', async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Circle**.' })) };
+    const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'mapzone:42:z0' } });
+
+    await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', zone: 'z0', userId: '9001' });
   });
 
   it('tells only the voter when the vote did not change, such as after it closed', async () => {
