@@ -601,7 +601,7 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    own. The groups are matched from the ids and names of the lightings the server lists (day, night, rain or storm, fog,
    dusk, overcast, dawn, snow, in that order; the server's ids start with Day, so DayStart… is dawn, DayEnd… is dusk and
    …Gray… is overcast), at most four plus Random, and a group the server has no lighting for isn't offered. With fewer than
-   two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain. The
+   two groups there is no conditions row. A lighting is in every group it fits, so a rainy night is in Night and in Rain; but rain, fog and snow are their own groups, so a rainy afternoon is in Rain only, never in Day. The
    group with the most votes (a tie by chance) gives a random lighting from it, and Random picks from all of them. With no
    votes on it, the lighting stays as the rotation has it. It is part of the same message, so nothing more is announced.
    Nothing is sent to the server that its own catalogue (`/v1/catalog/...`) does not list: only maps that list a game mode

@@ -177,15 +177,18 @@ export const pickOptions = (
 // names are matched, not listed, as the server's catalogue decides what lightings there are. The server's ids all begin
 // with Day (DayStartClear, DayEarlyFog, DayLateGray, DayLateRain, DayEndClear), so Start is dawn and End is dusk, not day,
 // and Gray is overcast. Weather comes before the times that are one lighting each, as it is what players tell apart.
+// Rain, fog and snow are their own choices: a lighting with one of them is not also in Day, Dusk or Dawn, so voting for
+// a clear day never gives rain. (Night is the exception: a rainy night is in Night and in Rain.)
+const WET = /rain|storm|thunder|shower|fog|mist|snow/i;
 const CONDITION_GROUPS = [
-  { key: 'day', label: 'Day', pattern: /day(?!start|end)|noon|morning/i },
-  { key: 'night', label: 'Night', pattern: /night/i },
-  { key: 'rain', label: 'Rain', pattern: /rain|storm|thunder|shower/i },
-  { key: 'fog', label: 'Fog', pattern: /fog|mist/i },
-  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening|dayend/i },
-  { key: 'overcast', label: 'Overcast', pattern: /overcast|cloud|gr[ae]y/i },
-  { key: 'dawn', label: 'Dawn', pattern: /dawn|sunrise|daystart/i },
-  { key: 'snow', label: 'Snow', pattern: /snow/i },
+  { key: 'day', label: 'Day', pattern: /day(?!start|end)|noon|morning/i, dry: true },
+  { key: 'night', label: 'Night', pattern: /night/i, dry: false },
+  { key: 'rain', label: 'Rain', pattern: /rain|storm|thunder|shower/i, dry: false },
+  { key: 'fog', label: 'Fog', pattern: /fog|mist/i, dry: false },
+  { key: 'dusk', label: 'Dusk', pattern: /dusk|sunset|evening|dayend/i, dry: true },
+  { key: 'overcast', label: 'Overcast', pattern: /overcast|cloud|gr[ae]y/i, dry: false },
+  { key: 'dawn', label: 'Dawn', pattern: /dawn|sunrise|daystart/i, dry: true },
+  { key: 'snow', label: 'Snow', pattern: /snow/i, dry: false },
 ] as const;
 const MAX_CONDITION_GROUPS = 4;
 export const RANDOM_CONDITION = 'random';
@@ -194,7 +197,10 @@ export const RANDOM_CONDITION = 'random';
 // there are fewer than two groups to choose between.
 export const conditionOptions = (lightings: readonly Lighting[]): ConditionOption[] => {
   const groups = CONDITION_GROUPS.flatMap((g) => {
-    const own = lightings.filter((l) => g.pattern.test(`${l.id} ${l.name}`));
+    const own = lightings.filter((l) => {
+      const text = `${l.id} ${l.name}`;
+      return g.pattern.test(text) && !(g.dry && WET.test(text));
+    });
     return own.length > 0 ? [{ key: g.key, label: g.label, lightings: own }] : [];
   }).slice(0, MAX_CONDITION_GROUPS);
   return groups.length < 2 ? [] : [...groups, { key: RANDOM_CONDITION, label: 'Random', lightings: [...lightings] }];

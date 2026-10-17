@@ -272,7 +272,7 @@ describe('conditionOptions', () => {
   it('groups lightings by time of day and weather, with Random across all of them', () => {
     const options = conditionOptions(lightings);
     expect(options.map((o) => o.key)).toEqual(['day', 'night', 'rain', 'dusk', 'random']);
-    expect(options.find((o) => o.key === 'day')?.lightings.map((l) => l.id)).toEqual(['DayClear', 'DayRain']);
+    expect(options.find((o) => o.key === 'day')?.lightings.map((l) => l.id)).toEqual(['DayClear']);
     // A rainy night is in Night and in Rain.
     expect(options.find((o) => o.key === 'rain')?.lightings.map((l) => l.id)).toEqual(['DayRain', 'NightStorm']);
     expect(options.find((o) => o.key === 'random')?.lightings).toHaveLength(5);
@@ -291,7 +291,7 @@ describe('conditionOptions', () => {
     const options = conditionOptions(ids.map((id) => lighting(id)));
     expect(options.map((o) => o.key)).toEqual(['day', 'rain', 'fog', 'dusk', 'random']);
     const of = (key: string) => options.find((o) => o.key === key)?.lightings.map((l) => l.id);
-    expect(of('day')).toEqual(['DayEarlyClear', 'DayEarlyFog', 'DayClear', 'DayLateClear', 'DayLateGray', 'DayLateGrayFog', 'DayLateRain']);
+    expect(of('day')).toEqual(['DayEarlyClear', 'DayClear', 'DayLateClear', 'DayLateGray']);
     expect(of('rain')).toEqual(['DayLateRain']);
     expect(of('fog')).toEqual(['DayEarlyFog', 'DayLateGrayFog']);
     expect(of('dusk')).toEqual(['DayEndClear']);
