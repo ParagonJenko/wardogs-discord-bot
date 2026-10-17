@@ -1522,8 +1522,8 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Puts the winner on the server, infantry only. With staging "rotation" it goes into the server's rotation as the next map
-  // (see insertVoteWinner), which can be done as soon as the vote closes; "queue", or a rotation that cannot take it, stages
-  // it as /setnextmap does, which waits for `over` (the match is over). A failure keeps the outcome pending, and the next
+  // (see insertVoteWinner), which can be done as soon as the vote closes; "queue" stages it as /setnextmap does, which waits
+  // for `over` (the match is over). A failure keeps the outcome pending, and the next
   // check tries again until the match ends.
   private async applyVoteWinner(config: Config, vote: MapVote, playing: string, staging: 'rotation' | 'queue', over: boolean): Promise<VoteOutcome> {
     const at = Date.now();
@@ -1558,6 +1558,8 @@ export class Watcher extends DurableObject<Env> {
       }
       const inserted = staging === 'rotation' && (await this.insertVoteWinner(config, vote, { map: winner, ...planned.setup }, rotation));
       if (!inserted) {
+        // The queue is only for staging "queue": a rotation that cannot take the winner is retried, never queued instead.
+        if (staging === 'rotation') throw new Error('the rotation cannot take it: it is off or random, or the server did not say which slot it is on');
         // Not before the match is over: the server ended a match early when this was sent with a team on 95.
         if (!over) return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
         await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
