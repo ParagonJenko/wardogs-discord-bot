@@ -445,6 +445,18 @@ export const rotationSlot = (rotation: Rotation, status: { rotationIndex: number
   return next < 0 || next >= n ? null : (next - 1 + n) % n;
 };
 
+// The slot the server goes to next, in a rotation played in order: the entry marked "next", or the status's, or else the
+// one after the slot it is on (see rotationSlot). Null when none of these says.
+export const nextSlot = (rotation: Rotation, status: { rotationIndex: number | null; rotationNextIndex?: number }): number | null => {
+  const n = rotation.entries.length;
+  if (n === 0 || rotation.mode.toLowerCase() === 'random') return null;
+  const marked = rotation.entries.findIndex((e) => e.status === 'next');
+  if (marked !== -1) return marked;
+  if (status.rotationNextIndex !== undefined && status.rotationNextIndex >= 0 && status.rotationNextIndex < n) return status.rotationNextIndex;
+  const now = rotationSlot(rotation, status);
+  return now === null || now >= n ? null : (now + 1) % n;
+};
+
 // The rotation as it is written, so the server plays it from its first map at the next map change. On a change the
 // server keeps the slot it is on and goes to the next slot in the new list, whatever map is there now, so a rotation
 // written from the top would start part-way round, or send the server back to the map just played. Instead the first

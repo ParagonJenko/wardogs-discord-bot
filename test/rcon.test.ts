@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addRotationEntry,
   addBan,
   endMatch,
   fetchBans,
@@ -12,10 +13,12 @@ import {
   fetchZones,
   kickPlayer,
   messagePlayer,
+  moveRotationEntry,
   queueMap,
   removeBan,
   switchFaction,
   fetchRotation,
+  fetchRoutes,
   fetchStatus,
   isNotInGame,
   putConfig,
@@ -358,6 +361,26 @@ describe('staff actions', () => {
     await queueMap(RCON, 'secret', 'Europe', http, { experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' });
 
     expect(requests[0]?.body).toBe(JSON.stringify({ map: 'Europe', experiences: ['Europe_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' }));
+  });
+
+  it('reads the routes the build serves, with each path parameter as *', async () => {
+    const { http, requests } = server([200, { routes: ['GET /v1/status', 'POST /v1/rotation/entries', 'POST  /v1/rotation/entries/{index}/move'] }]);
+
+    await expect(fetchRoutes(RCON, 'secret', http)).resolves.toEqual(['GET /v1/status', 'POST /v1/rotation/entries', 'POST /v1/rotation/entries/*/move']);
+    expect(requests[0]?.path).toBe('/v1/capabilities');
+  });
+
+  it('adds and moves live rotation entries', async () => {
+    const { http, requests } = server([200, {}], [200, {}]);
+
+    await addRotationEntry(RCON, 'secret', 'Europe', http, { experiences: ['Madrid_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' });
+    await moveRotationEntry(RCON, 'secret', 7, 'up', http);
+    await expect(moveRotationEntry(RCON, 'secret', -1, 'up', http)).rejects.toThrow(/Not a rotation index/);
+
+    expect(requests.map((r) => [r.method, r.path, r.body])).toEqual([
+      ['POST', '/v1/rotation/entries', JSON.stringify({ map: 'Europe', experiences: ['Madrid_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' })],
+      ['POST', '/v1/rotation/entries/7/move', JSON.stringify({ direction: 'up' })],
+    ]);
   });
 
   it('lists maps, queues the next one and ends the match', async () => {

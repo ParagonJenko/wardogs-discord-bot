@@ -299,6 +299,26 @@ export const queueMap = async (rconUrl: string, password: string, map: string, h
   await rconRequest(rconUrl, password, '/v1/match/map', http, json('POST', { map, ...setup }));
 };
 
+// The routes this build serves, as "METHOD /path" with each path parameter as `*` (e.g. "POST /v1/rotation/entries/*/move"),
+// from GET /v1/capabilities. Builds differ: some edit the rotation live, others only through the config document.
+const CapabilitiesSchema = z.object({ routes: z.array(z.string()).nullish() });
+
+export const fetchRoutes = async (rconUrl: string, password: string, http: HttpClient): Promise<string[]> => {
+  const { routes } = CapabilitiesSchema.parse(await rconRequest(rconUrl, password, '/v1/capabilities', http));
+  return (routes ?? []).map((route) => route.trim().replace(/\{[^}]*\}|:[^/\s]+/g, '*').replace(/\s+/g, ' '));
+};
+
+// Adds an entry at the end of the server's live rotation (not the config document).
+export const addRotationEntry = async (rconUrl: string, password: string, map: string, http: HttpClient, setup: MatchSetup = {}) => {
+  await rconRequest(rconUrl, password, '/v1/rotation/entries', http, json('POST', { map, ...setup }));
+};
+
+// Swaps a live rotation entry with the one before it ("up", towards the first) or after it ("down").
+export const moveRotationEntry = async (rconUrl: string, password: string, index: number, direction: 'up' | 'down', http: HttpClient) => {
+  if (!Number.isInteger(index) || index < 0) throw new Error(`Not a rotation index: ${index}`);
+  await rconRequest(rconUrl, password, `/v1/rotation/entries/${index}/move`, http, json('POST', { direction }));
+};
+
 // Ends the current match now; the server travels to the staged map, or the next in the rotation.
 export const endMatch = async (rconUrl: string, password: string, http: HttpClient) => {
   await rconRequest(rconUrl, password, '/v1/match/end', http, { method: 'POST', body: '{}' });

@@ -611,9 +611,14 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    away; nothing is sent to the server yet. A match already at that score when the bot sees it gets no vote.
 4. The map with the most votes (a tie is settled by chance) is put on the server, **infantry only**, with the lighting the
    conditions vote chose. `MAP_VOTE_STAGING` says how:
-   - `rotation` (default): the map is written into the server's rotation as the next map, in front of the one that would
-     have come next, the same way the daily rotation is put on (`PUT /v1/config`, which never cuts the match on now short).
-     This can be done as soon as the vote closes. When the server has moved on to another map, the rotation is written back
+   - `rotation` (default): the map is put into the server's rotation as the next map, as soon as the vote closes, without
+     cutting the match on now short. A build that serves the live rotation edit routes (`POST /v1/rotation/entries` and
+     `POST /v1/rotation/entries/{index}/move`, listed in `GET /v1/capabilities`) gets it the way "Set as next map" in the
+     server's own console does: the rotation's entry with the winner's setup, or a new one added at the end, is moved
+     into the slot after the one playing (the top when that is the last, or the server doesn't say), and stays there.
+     Other builds get it through the config document, the same way the daily rotation is put on (`PUT /v1/config`), in
+     front of the map that would have come next. A write re-anchors the server's place in the rotation, so the bot reads
+     back where it goes next and, when that is not the winner, writes the winner into every slot instead. When the server has moved on to another map, the rotation is written back
      as it was, from the map that would have come next, if no one has changed it since. It needs the rotation on and in
      order; otherwise nothing is put on and each check tries again (it never falls back to `queue`). The slot the server
      is on is the entry `/v1/rotation` marks `now`, or `nowIndex` in `/v1/status`, or else the one before the entry marked
