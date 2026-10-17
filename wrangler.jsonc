@@ -25,6 +25,15 @@
     "DISCORD_INVITE": "https://discord.gg/qsJFYGhSJ4",
     // Optional: the community website. Discord posts link to it, and in-game messages point players at it.
     "SITE_URL": "https://gaminginit.com",
+    // Optional: a path on the website that counts the click and sends people to DISCORD_INVITE. The welcome message in game
+    // gives it ("gaminginit.com/discord") instead of the invite code, which is too long to type. The website needs the path
+    // (`public/_redirects`), so deploy the website first. Left out, the welcome gives the invite code.
+    "DISCORD_SHORT_LINK": "/discord",
+    // Player accounts (the website's "Sign in with Discord"): the role a player gets for linking their Steam account, and the
+    // one they have while they have seeder VIP. Create the roles, put the bot's own role above them, and paste their IDs here
+    // (Server Settings -> Roles -> right-click -> Copy Role ID). Either may be left out. They need DISCORD_BOT_TOKEN.
+    // "DISCORD_LINKED_ROLE_ID": "",
+    // "DISCORD_VIP_ROLE_ID": "",
     // Optional: the server's ID for Join by ID in the game's server browser. The alerts, /serverstatus and the live
     // status show it, with how to join.
     "SERVER_ID": "2615de90-da95-4950-913a-246b1db49237",

@@ -27,6 +27,8 @@ It also posts:
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, the highlights, and awards: the best assaulter,
   support player, machine gunner, marksman, demolitions and vehicle crew, and shout-outs.
+- **[Player accounts](#player-accounts)** (Cloudflare only): players sign in to the website with Discord, link their Steam
+  account, and get a role and a message when their seeder VIP is earned or about to end. Sign-in can also add them to the server.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban, team
   move and VIP added or removed with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, players
   in game with one of the [riskiest Steam accounts](#risky-steam-accounts) or a day of unlikely headshots, and the server crashing
@@ -625,9 +627,94 @@ Set up (Cloudflare):
 No new Developer Portal setting: button presses arrive at the same Interactions Endpoint URL as the slash commands. While
 `MAP_VOTE` is on and the token or channel is missing, no vote opens and the logs say why.
 
-The website's `/vote` page shows the same counts, refreshed every few seconds, with a link to the channel. It cannot vote:
-`GET /api/vote` gives the options, votes, result and the channel link, never who voted. The vote is in the Durable Object
+The website's `/vote` page shows the same counts, refreshed every few seconds, with a link to the channel. A visitor can't
+vote there, but a signed-in member of the server can (see [Player accounts](#player-accounts)): the same vote, one per Discord
+account. `GET /api/vote` gives the options, votes, result and the channel link, never who voted. The vote is in the Durable Object
 under `mapVote`; the code is in `src/mapvote.ts`.
+
+## Player accounts
+
+Players sign in to the website with Discord, and link the Steam account they play on. It is how more of the people who play
+end up in the Discord, and why they stay: a linked account gets a role, and a message when its seeder VIP is earned, about to
+end or over. The website's `/account` page is where they do it (see the site's docs); this is what the bot does. Needs
+`DISCORD_APPLICATION_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_GUILD_ID` and `SITE_URL`, the same as the [staff page](#staff-page),
+and `DISCORD_BOT_TOKEN` for everything that happens in the server.
+
+**Signing in.** `GET /auth/player/login` sends the browser to Discord, and Discord sends it back to `/auth/callback`, the same
+URL as the staff page's sign-in, so **no new redirect is registered** in the Developer Portal. The state in the sign-in says
+whether it is staff or a player's. A player is asked for `identify`, `connections` (to find the Steam account on their
+Discord profile) and `guilds.members.read` (are they in the server). The page gets a **player session** in the address after
+`#session=`, valid for 30 days. It is a different kind of token from a staff session (see `src/adminauth.ts`): the staff
+routes never accept it, and `GET /api/account` never accepts a staff one. Signing in does not need the player to be in the
+server.
+
+**Joining.** "Sign in and join" is a separate button (`/auth/player/login?join=1`). It also asks for `guilds.join`, and Discord
+says so on its consent screen: "Join servers for you". The bot then adds them with its token
+(`PUT /guilds/<id>/members/<user>`), if they are not in already. If the server has membership screening on, Discord adds them
+as pending until they accept its rules. A ban or a bot that is not allowed to invite is not a failed sign-in: they are signed
+in, and the page says the join did not work. The bot needs **Create Instant Invite** in the server for this. Nobody is added
+without pressing the join button.
+
+**Linking Steam.** Two ways, both proving the player owns the Steam account, so nothing is taken on trust:
+
+- **From Discord.** If their Discord profile has a Steam account connected (and Discord has verified it), signing in links it,
+  with nothing more to do.
+- **With Steam.** `GET /auth/steam` sends them to Steam's own sign-in (OpenID). Steam sends the browser back to
+  `/auth/steam/callback`, and the Worker asks Steam to confirm what it was told (`check_authentication`). Only then does it
+  give the website a **proof** of the Steam ID, good for 10 minutes. The proof names no Discord user: the page sends it with
+  the player's own session, and the Worker links the two. A proof from another browser is no use without the session that is
+  asking.
+
+**One Steam account is one player's.** Whoever proves they own it now has it, so someone who lost their Discord account gets it
+back; the account that had it is unlinked and its roles are taken. A Steam account **staff linked** by hand (see
+[Staff Steam accounts](#staff-steam-accounts)) is different, because staff typed it in and nothing proved it: a player can't
+take it, and staff can't link one a player proved is theirs. Staff keep their staff spots and never earn seeder VIP, whatever
+they link here.
+
+**The roles** (optional). `DISCORD_LINKED_ROLE_ID` is given when a player links their Steam account, and
+`DISCORD_VIP_ROLE_ID` while they have VIP (from seeding, or given by staff with `/vip add`; not a staff spot). Both are taken
+back when it stops being true, when they unlink, and when they delete their account. The bot's own role must be above them
+in the server's role list, with **Manage Roles**. A role that fails is tried again 15 minutes later.
+
+**The VIP messages.** A private Discord message from the bot when a linked player:
+
+- earns VIP ("You earned seeder VIP … until …"), or has it renewed, or is given it by staff;
+- has a day left (once; none for a grant under two days, which would arrive straight after the first message);
+- has lost it ("Your VIP … has ended").
+
+Each message says when it ends in Discord's own time format and how to turn the messages off (the `/account` page). Linking
+while they already have VIP sends nothing: it is not news. A player who turned them off, closed their private messages, or
+is not in the server gets none, and a message that fails is logged and not tried again (the same as the in-game welcome).
+VIP taken away early, or made permanent by staff, gets no message. The server uses a new whitelist after its next restart, and the
+first message says so.
+
+**The pass.** Every 5 minutes (and straight after a sign-in or a change) the bot goes through the accounts it has something to
+do for: the ones waiting for a role, the ones whose VIP it is keeping track of, and the owners of the Steam accounts that hold VIP
+now. At most 15 accounts and 40 calls to Discord a pass; the rest wait for the next. Without `DISCORD_BOT_TOKEN` it does
+nothing, and players can still sign in and link.
+
+**The welcome.** A player who linked their account and is in the server is not sent the Discord invite in their welcome in game.
+Everyone else is. With `DISCORD_SHORT_LINK` (`/discord`), the welcome says `gaminginit.com/discord` instead of the invite code,
+which is hard to type in game.
+
+**Counting clicks.** `GET /go/discord?src=<place>` counts the click for that place and sends the browser to `DISCORD_INVITE`.
+The website's Discord buttons and the short link go through it, so the staff page can show which of them people click, without the
+website having an analytics service. It is a click, not a join: the staff page sets it beside how many accounts have signed in,
+linked Steam, are in the server and joined with the button. `src` is lowercase letters, digits and dashes (anything else is
+counted as `other`), and at most 30 places are counted a day, 45 days are kept. `GET /api/admin/growth` serves the numbers.
+
+**Voting on the website.** A signed-in member can vote on the website's `/vote` page. `POST /api/account/vote` counts it
+exactly as the button in Discord does (one vote per Discord account, so a vote in either place moves the other), and the Discord
+message is updated. Only members of the server can: the bot checks they are in it.
+
+**What is kept, and who can see it.** Per player, by Discord user ID (`account:<ID>`): their name in the server, the Steam
+account and how it was proved, whether they are in the server, whether they want the messages, the roles the bot gave them and
+what it told them about their VIP. `steamLink:<Steam ID>` says whose a Steam account is, and `accountWork` lists who the bot has
+something to do for. **None of it is in any public route**: the website cannot tell who is who, a player's page does not show
+whether they have an account, and a private profile stays private. A player can **delete their account** on the page: the roles
+are taken, everything above is removed, and what they set as private stays as it was. The code is in `src/accounts.ts` (what an
+account is), `src/accountbook.ts` (what the bot does with them), `src/accountsdiscord.ts` (the calls to Discord),
+`src/steamopenid.ts` and `src/discordclicks.ts`.
 
 ## Moderation log
 
@@ -1440,7 +1527,10 @@ them join (`WELCOME_MESSAGE_MINUTES`), with the basic rules and where the Discor
 - **Not again for 6 hours:** a player who rejoins within 6 hours of their welcome (a map change, a crash) doesn't get
   it again. Players already on when the bot starts watching (a deploy, a restart) count as welcomed.
 - Someone who leaves before their welcome goes out doesn't get it; they wait again if they come back.
-- The Discord link comes from `DISCORD_INVITE` and the website from `SITE_URL`; either is left out when not set.
+- The Discord link comes from `DISCORD_INVITE` and the website from `SITE_URL`; either is left out when not set. With
+  `DISCORD_SHORT_LINK` (`/discord`) it is the website's short link instead (`Discord: gaminginit.com/discord`), which counts the
+  click and is short enough to type. Players who linked their account on the website and are in the server get no Discord
+  link: see [Player accounts](#player-accounts).
 - The rules line is on the [Lines tab](#lines-tab) (Welcome), so staff can change it without a deploy. The default is
   in `src/lines.ts`.
 - A welcome that fails to send is logged (`Welcome to "<name>" (<Steam ID>) failed: …`) and not tried again. Each one
@@ -1701,6 +1791,9 @@ whitelist in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/
   (`api.steampowered.com`). Keep the key secret: requests made with it count against its daily limit.
 - The [staff page](#staff-page)'s data is only served for a session the Worker signed after Discord confirmed the person
   is staff in `DISCORD_GUILD_ID`. Keep `DISCORD_CLIENT_SECRET` secret: anyone with it could sign their own sessions.
+- [Player accounts](#player-accounts): a player's session is a different kind of token from staff's, so one never opens the other's
+  routes. A Steam ID is only linked when Discord or Steam vouched for it. Nobody is added to the server without pressing the join
+  button, and the bot's token never leaves the Worker: only the player's own access token is used, once, to add them.
 - Player names in posts are escaped, and posts never ping anyone except the configured role.
 
 ## Development

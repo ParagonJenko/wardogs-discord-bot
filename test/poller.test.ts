@@ -40,6 +40,7 @@ const config: Config = {
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
+  accounts: { linkedRoleId: undefined, vipRoleId: undefined, botToken: undefined },
   serverId: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0, seedHoldMs: 0 },
@@ -927,7 +928,12 @@ describe('welcomes', () => {
   const text = `${rules} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`;
 
   // A minute a check; records the minute, the player and the message of each welcome.
-  const welcomePoller = (snapshots: Snapshot[], overrides: Partial<Config> = {}, lines?: () => Promise<Lines>) => {
+  const welcomePoller = (
+    snapshots: Snapshot[],
+    overrides: Partial<Config> = {},
+    lines?: () => Promise<Lines>,
+    linked?: () => Promise<ReadonlySet<string>>,
+  ) => {
     const queue = [...snapshots];
     let clock = 0;
     const sent: [minute: number, steamId: string, text: string][] = [];
@@ -946,6 +952,7 @@ describe('welcomes', () => {
       messagePlayer,
       random: () => 0,
       ...(lines === undefined ? {} : { lines }),
+      ...(linked === undefined ? {} : { linked }),
     });
     const run = async (times: number) => {
       for (let i = 0; i < times; i++) await tick();
@@ -969,6 +976,38 @@ describe('welcomes', () => {
       [5, 'd', text],
     ]);
     expect(log.info).toHaveBeenCalledWith(`Sent welcome to "Pc" (c): ${text}`);
+  });
+
+  it('leaves the Discord invite out for a player who linked their account on the website, and gives it to the rest', async () => {
+    const { run, sent } = welcomePoller(
+      [snapshot([a, b]), snapshot([a, b, c]), snapshot([a, b, c, d]), ...Array.from({ length: 4 }, () => snapshot([a, b, c, d]))],
+      {},
+      undefined,
+      async () => new Set(['c']),
+    );
+
+    await run(7);
+
+    expect(sent).toEqual([
+      [4, 'c', `${rules} Website: gaminginit.com`],
+      [5, 'd', text],
+    ]);
+  });
+
+  it('still gives the invite when it cannot tell who linked', async () => {
+    const { run, sent, log } = welcomePoller(
+      [snapshot([a, b]), snapshot([a, b, c]), ...Array.from({ length: 4 }, () => snapshot([a, b, c]))],
+      {},
+      undefined,
+      async () => {
+        throw new Error('storage down');
+      },
+    );
+
+    await run(5);
+
+    expect(sent).toEqual([[4, 'c', text]]);
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('storage down'));
   });
 
   it("does not welcome players already on when the bot's first reading lists nobody but the server says it has players", async () => {

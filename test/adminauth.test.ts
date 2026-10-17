@@ -2,15 +2,24 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   adminAuthConfig,
   checkState,
+  createPlayerSession,
   createSession,
+  createSteamProof,
   finishLogin,
+  finishPlayerLogin,
   LOGIN_COOKIE,
   notSetUpText,
+  PLAYER_SESSION_DAYS,
+  peekState,
+  readPlayerSession,
   readSession,
+  readState,
+  readSteamProof,
   returnAddress,
   SESSION_HOURS,
   siteOriginOf,
   startLogin,
+  steamFromConnections,
   type AdminAuthConfig,
 } from '../src/adminauth.ts';
 
@@ -163,5 +172,142 @@ describe('finishLogin', () => {
     await expect(finishLogin(config, 'the-code', CALLBACK, discord({ token: new Response('invalid_grant', { status: 400 }) }))).rejects.toThrow(
       'Discord refused the sign-in code: 400 invalid_grant',
     );
+  });
+});
+
+describe('player sessions', () => {
+  it('lasts for days, and is never taken for a staff session or the other way round', async () => {
+    const player = await createPlayerSession(config.clientSecret, { id: '42', name: 'Paragon' }, NOW);
+    const staff = await createSession(config.clientSecret, { id: '42', name: 'Paragon' }, NOW);
+    const ends = NOW + PLAYER_SESSION_DAYS * 24 * 60 * 60_000;
+
+    await expect(readPlayerSession(config.clientSecret, `Bearer ${player}`, NOW)).resolves.toEqual({ userId: '42', name: 'Paragon', expiresAt: ends });
+    await expect(readPlayerSession(config.clientSecret, `Bearer ${player}`, ends)).resolves.toBeNull();
+    await expect(readSession(config.clientSecret, `Bearer ${player}`, NOW)).resolves.toBeNull();
+    await expect(readPlayerSession(config.clientSecret, `Bearer ${staff}`, NOW)).resolves.toBeNull();
+    await expect(readPlayerSession('another-secret', `Bearer ${player}`, NOW)).resolves.toBeNull();
+  });
+
+  it('holds a Steam proof for a few minutes, which is not a session either', async () => {
+    const proof = await createSteamProof(config.clientSecret, '76561198000000001', NOW);
+
+    await expect(readSteamProof(config.clientSecret, proof, NOW + 9 * 60_000)).resolves.toBe('76561198000000001');
+    await expect(readSteamProof(config.clientSecret, proof, NOW + 10 * 60_000)).resolves.toBeNull();
+    await expect(readSteamProof('another-secret', proof, NOW)).resolves.toBeNull();
+    await expect(readSteamProof(config.clientSecret, null, NOW)).resolves.toBeNull();
+    await expect(readPlayerSession(config.clientSecret, `Bearer ${proof}`, NOW)).resolves.toBeNull();
+    await expect(readSession(config.clientSecret, `Bearer ${proof}`, NOW)).resolves.toBeNull();
+  });
+});
+
+describe('a player signing in', () => {
+  it('asks for their connections, and only asks to join the server when they pressed the join button', async () => {
+    const plain = await startLogin(config, CALLBACK, `${SITE}/account`, NOW, { flow: 'player' });
+    const join = await startLogin(config, CALLBACK, `${SITE}/account`, NOW, { flow: 'player', join: true });
+    const staffJoin = await startLogin(config, CALLBACK, `${SITE}/admin`, NOW, { join: true });
+
+    expect(new URL(plain.location).searchParams.get('scope')).toBe('identify connections guilds.members.read');
+    expect(new URL(join.location).searchParams.get('scope')).toBe('identify connections guilds.members.read guilds.join');
+    // Staff are never asked to be added.
+    expect(new URL(staffJoin.location).searchParams.get('scope')).toBe('identify guilds guilds.members.read');
+  });
+
+  it('keeps which sign-in it is in the state, and treats an older state as staff', async () => {
+    const { location, cookie } = await startLogin(config, CALLBACK, `${SITE}/account`, NOW, { flow: 'player', join: true });
+    const state = new URL(location).searchParams.get('state');
+    const nonce = /^wardogs_login=([^;]+);/.exec(cookie)?.[1];
+
+    await expect(readState(config.clientSecret, state, `${LOGIN_COOKIE}=${nonce}`, NOW)).resolves.toEqual({ returnTo: `${SITE}/account`, flow: 'player', join: true });
+    await expect(readState(config.clientSecret, state, `${LOGIN_COOKIE}=other`, NOW)).resolves.toBeNull();
+    // Without the cookie only the page for an error is known, never a sign-in.
+    await expect(peekState(config.clientSecret, state, NOW)).resolves.toMatchObject({ flow: 'player' });
+    await expect(peekState(config.clientSecret, state, NOW + 10 * 60_000)).resolves.toBeNull();
+    await expect(peekState('another-secret', state, NOW)).resolves.toBeNull();
+    await expect(peekState(config.clientSecret, null, NOW)).resolves.toBeNull();
+  });
+
+  it('falls back to the account page, not the staff page', () => {
+    expect(returnAddress(null, SITE, '/account')).toBe(`${SITE}/account`);
+    expect(returnAddress('https://evil.example/', SITE, '/account')).toBe(`${SITE}/account`);
+    expect(returnAddress(`${SITE}/vote?x=1#y`, SITE, '/account')).toBe(`${SITE}/vote?x=1`);
+  });
+});
+
+describe('steamFromConnections', () => {
+  it('finds the Steam account on a Discord profile, when Discord has checked it', () => {
+    expect(steamFromConnections([{ type: 'twitch', id: '1' }, { type: 'steam', id: '76561198000000001', verified: true }])).toBe('76561198000000001');
+    expect(steamFromConnections([{ type: 'steam', id: '76561198000000001' }])).toBe('76561198000000001');
+  });
+
+  it('ignores an unchecked connection, an ID that is not a Steam64, and anything else', () => {
+    expect(steamFromConnections([{ type: 'steam', id: '76561198000000001', verified: false }])).toBeNull();
+    expect(steamFromConnections([{ type: 'steam', id: 'myname', verified: true }])).toBeNull();
+    expect(steamFromConnections([{ type: 'xbox', id: '76561198000000001', verified: true }])).toBeNull();
+    expect(steamFromConnections('nope')).toBeNull();
+    expect(steamFromConnections([])).toBeNull();
+  });
+});
+
+describe('finishPlayerLogin', () => {
+  type Answers = { member?: Response; connections?: Response };
+  const discord = ({ member, connections }: Answers = {}) =>
+    vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input).replace('https://discord.com/api/v10', '');
+      if (path === '/oauth2/token') return Response.json({ access_token: 'user-token', token_type: 'Bearer' });
+      if (path === '/users/@me') return Response.json({ id: '42', username: 'paragon', global_name: 'Paragon' });
+      if (path === '/users/@me/guilds/777/member') return member ?? Response.json({ roles: [], nick: 'Sarge' });
+      if (path === '/users/@me/connections') return connections ?? Response.json([{ type: 'steam', id: '76561198000000001', verified: true }]);
+      return new Response('Not found', { status: 404 });
+    });
+  const noJoin = vi.fn(async () => 'unavailable' as const);
+
+  it('knows a member, what they go by in the server, and the Steam account on their profile', async () => {
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, discord())).resolves.toEqual({
+      user: { id: '42', name: 'Sarge', username: 'paragon' },
+      member: true,
+      join: null,
+      steamId: '76561198000000001',
+    });
+    expect(noJoin).not.toHaveBeenCalled();
+  });
+
+  it('lets someone in who is not a member sign in, without adding them unless they asked to join', async () => {
+    const notMember = () => discord({ member: new Response('Unknown Guild', { status: 404 }) });
+
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, notMember())).resolves.toMatchObject({
+      user: { name: 'Paragon' },
+      member: false,
+      join: null,
+    });
+    expect(noJoin).not.toHaveBeenCalled();
+  });
+
+  it('adds them with the access token when they asked to join, and says what came of it', async () => {
+    const notMember = () => discord({ member: new Response('Unknown Guild', { status: 404 }) });
+    const added = vi.fn(async () => 'added' as const);
+    const banned = vi.fn(async () => 'banned' as const);
+
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, true, added, notMember())).resolves.toMatchObject({ member: true, join: 'added' });
+    expect(added).toHaveBeenCalledWith('42', 'user-token');
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, true, banned, notMember())).resolves.toMatchObject({ member: false, join: 'banned' });
+  });
+
+  it('does not add someone already in the server', async () => {
+    const added = vi.fn(async () => 'added' as const);
+
+    await expect(finishPlayerLogin(config, 'the-code', CALLBACK, true, added, discord())).resolves.toMatchObject({ member: true, join: 'already' });
+    expect(added).not.toHaveBeenCalled();
+  });
+
+  it('signs in without a Steam account when their connections cannot be read', async () => {
+    await expect(
+      finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, discord({ connections: new Response('no', { status: 403 }) })),
+    ).resolves.toMatchObject({ member: true, steamId: null });
+  });
+
+  it('fails when Discord will not say who signed in, or if they are in the server', async () => {
+    await expect(
+      finishPlayerLogin(config, 'the-code', CALLBACK, false, noJoin, discord({ member: new Response('boom', { status: 500 }) })),
+    ).rejects.toThrow('Discord did not say if they are in the server: 500');
   });
 });
