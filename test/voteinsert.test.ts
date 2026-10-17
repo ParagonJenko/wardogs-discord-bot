@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Rotation } from '../src/rcon.ts';
 import { fromTheStart } from '../src/rotations.ts';
-import { parseVoteInsert, planInsert, stillInserted } from '../src/voteinsert.ts';
+import { parseVoteInsert, planInsert, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
 
 const rotation = (maps: string[], now: number, over: Partial<Rotation> = {}): Rotation => ({
   enabled: true,
@@ -50,6 +50,17 @@ describe('planInsert', () => {
     expect(planInsert(rotation(['A', 'B'], 0), null, voted)).toBeNull();
     expect(planInsert(rotation(['A', 'B'], 0), 5, voted)).toBeNull();
     expect(planInsert(rotation([], 0), 0, voted)).toBeNull();
+  });
+});
+
+describe('whyNoInsert', () => {
+  it('names what keeps the winner out of the rotation, and is null when it can go in', () => {
+    expect(whyNoInsert(rotation(['A', 'B'], 0), 0)).toBeNull();
+    expect(whyNoInsert(rotation(['A', 'B'], 0, { enabled: false }), 0)).toMatch(/off/);
+    expect(whyNoInsert(rotation(['A', 'B'], 0, { mode: 'Random' }), 0)).toMatch(/random/);
+    expect(whyNoInsert(rotation([], 0), 0)).toMatch(/no maps/);
+    expect(whyNoInsert(rotation(['A', 'B'], 0), null)).toMatch(/did not say which rotation slot/);
+    expect(whyNoInsert(rotation(['A', 'B'], 0), 5)).toMatch(/slot 5 is not in its rotation of 2/);
   });
 });
 
