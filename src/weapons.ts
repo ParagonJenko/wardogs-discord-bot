@@ -275,6 +275,8 @@ const NAMES: Record<string, string> = {
   'Id.Item.MK22': 'MK22',
   // Not in Warcon's list. Wardogs Zone's pages go by the game's tags (wardogs.zone/database/wepn_035).
   'Id.Item.WEPN_035': 'Scout Rifle TD',
+  // Not in Warcon's list. Staff matched it with the game's own kill feed.
+  'Id.Item.WEPN_037': 'TCX-SPR',
   // Not in Warcon's list. The game's one sniper rifle left, and its kills are the longest of any hand-held weapon on
   // average, as the .50 cal's would be.
   'Id.Item.SR_04': 'AMR 50',
@@ -458,6 +460,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.SV98': 'marksman',
   'Id.Item.MK22': 'marksman',
   'Id.Item.WEPN_035': 'marksman',
+  'Id.Item.WEPN_037': 'marksman',
   'Id.Item.SR_04': 'marksman',
   'Id.Item.CombatBow': 'marksman',
   'Id.Item.Glock17': 'sidearm',

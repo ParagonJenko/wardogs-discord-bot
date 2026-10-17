@@ -221,6 +221,7 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Item.WEPN_030')).toBe('FAL');
     expect(weaponName('Id.Item.WEPN_033')).toBe('Bushmaster M17S');
     expect(weaponName('Id.Item.WEPN_035')).toBe('Scout Rifle TD');
+    expect(weaponName('Id.Item.WEPN_037')).toBe('TCX-SPR');
     expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('Stingray');
     expect(weaponName('Id.Item.SMG_03')).toBe('PP-19 Vityaz');
     expect(weaponName('Id.Item.WEPN_028')).toBe('MP5');
@@ -287,7 +288,8 @@ describe('weaponRole', () => {
       'assault',
     ]);
     expect(weaponRole('Id.Item.LMG_02')).toBe('machine-gun');
-    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.WEPN_035', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
+    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.WEPN_035', 'Id.Item.WEPN_037', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
+      'marksman',
       'marksman',
       'marksman',
       'marksman',
