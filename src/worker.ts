@@ -1469,7 +1469,21 @@ export class Watcher extends DurableObject<Env> {
     const closeScore = closeScoreFor(config.scoreToWin, rule.closePercent);
     if (Math.max(0, ...match.factionScores.map((f) => f.score)) >= closeScore) return;
     const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
-    if (options.length === 0) return;
+    if (options.length === 0) {
+      // Said at most every 10 minutes, so a server that can never offer two maps doesn't fill the logs once a minute.
+      if (Date.now() - voteUnavailableLoggedAt >= VOTE_LOG_MS) {
+        voteUnavailableLoggedAt = Date.now();
+        const maps = catalog?.maps ?? [];
+        const withModes = maps.filter((m) => m.modes.length > 0);
+        const withInfantry = withModes.filter((m) => m.modifiers.some((x) => x.key === 'infantry_only'));
+        console.error(
+          `Map vote: no vote opened, as fewer than two maps could be offered. The server lists ${maps.length} maps, ` +
+            `${withModes.length} with a game mode, ${withInfantry.length} of those with infantry only (${withInfantry.map((m) => m.id).join(', ') || 'none'}); ` +
+            `not offered because they were played lately: ${recent.join(', ')}.`,
+        );
+      }
+      return;
+    }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []));
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
@@ -3471,6 +3485,9 @@ const reviewApi = async (request: Request, vars: Record<string, string>, watcher
 // same for a batch with none of its events read.
 const REFUSAL_LOG_MS = 10 * 60_000;
 let refusalLoggedAt = 0;
+// The next-map vote's "no maps to offer" note is logged at most this often.
+const VOTE_LOG_MS = 10 * 60_000;
+let voteUnavailableLoggedAt = 0;
 let unreadLoggedAt = 0;
 
 // The game's kill feed (see weapons.ts). It is only taken with the KILL_FEED_TOKEN secret as the bearer; without the
