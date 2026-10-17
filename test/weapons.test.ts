@@ -275,7 +275,7 @@ describe('weaponName and weaponKind', () => {
 describe('weaponRole', () => {
   it('sorts the weapons the game is known to send by what they are for', () => {
     expect(
-      ['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.SMG_03', 'Id.Item.WEPN_028', 'Id.Item.M500'].map(
+      ['Id.Item.AK74M', 'Id.Item.WEPN_030', 'Id.Item.WEPN_033', 'Id.Item.Vector', 'Id.Item.SMG_03', 'Id.Item.WEPN_028', 'Id.Item.M500', 'Id.Item.WEPN_037'].map(
         weaponRole,
       ),
     ).toEqual([
@@ -286,10 +286,10 @@ describe('weaponRole', () => {
       'assault',
       'assault',
       'assault',
+      'assault',
     ]);
     expect(weaponRole('Id.Item.LMG_02')).toBe('machine-gun');
-    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.WEPN_035', 'Id.Item.WEPN_037', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
-      'marksman',
+    expect(['Id.Item.SV98', 'Id.Item.SR_04', 'Id.Item.WEPN_035', 'Id.Item.SKS', 'Id.Item.CombatBow'].map(weaponRole)).toEqual([
       'marksman',
       'marksman',
       'marksman',

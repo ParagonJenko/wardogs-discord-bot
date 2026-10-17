@@ -460,7 +460,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.SV98': 'marksman',
   'Id.Item.MK22': 'marksman',
   'Id.Item.WEPN_035': 'marksman',
-  'Id.Item.WEPN_037': 'marksman',
+  'Id.Item.WEPN_037': 'assault',
   'Id.Item.SR_04': 'marksman',
   'Id.Item.CombatBow': 'marksman',
   'Id.Item.Glock17': 'sidearm',
