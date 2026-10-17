@@ -89,12 +89,41 @@ const sample = <T>(items: readonly T[], count: number, random: () => number): T[
   return pool.slice(0, count);
 };
 
-// The maps a vote can offer: ones the server can play (with a game mode), other than the one being played. Fewer than two
-// is no vote.
-export const pickOptions = (maps: readonly MapChoice[], playing: string, count: number, random: () => number): VoteOption[] => {
+// Maps played lately that a vote does not offer again: the one being played and the ones before it.
+export const RECENT_MAPS = 4;
+export const RECENT_MAPS_KEY = 'mapVoteRecent';
+
+export const parseRecentMaps = (raw: unknown): string[] => {
+  const parsed = z.array(z.string()).safeParse(raw);
+  return parsed.success ? parsed.data.slice(-RECENT_MAPS) : [];
+};
+
+// The recent maps with this one last, once each.
+export const withPlayed = (recent: readonly string[], playing: string): string[] =>
+  [...recent.filter((m) => m !== playing), playing].slice(-RECENT_MAPS);
+
+// The maps a vote can offer: ones the server can play (with a game mode) that were not played lately, and never the one
+// being played, so the same map is not played twice in a row. When that leaves fewer than two, the older recent maps are
+// offered again before the vote is given up on. Fewer than two even then is no vote.
+export const pickOptions = (
+  maps: readonly MapChoice[],
+  playing: string,
+  recent: readonly string[],
+  count: number,
+  random: () => number,
+): VoteOption[] => {
   const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0);
-  if (playable.length < 2) return [];
-  return sample(playable, count, random).map((m) => ({ map: m.id, name: m.name }));
+  // Most recent first, so the oldest are the first let back in.
+  const newestFirst = [...recent].reverse();
+  const fresh = playable.filter((m) => !recent.includes(m.id));
+  const pool = [...fresh];
+  if (pool.length < Math.min(count, 2)) {
+    // Not enough maps that were not played lately: let back in the ones played longest ago, to make up two.
+    const back = playable.filter((m) => recent.includes(m.id)).sort((a, b) => newestFirst.indexOf(b.id) - newestFirst.indexOf(a.id));
+    pool.push(...back.slice(0, 2 - pool.length));
+  }
+  if (pool.length < 2) return [];
+  return sample(pool, count, random).map((m) => ({ map: m.id, name: m.name }));
 };
 
 const randomHex = (bytes: number): string =>

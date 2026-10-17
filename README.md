@@ -585,8 +585,8 @@ as `Staff page: rotations <action> "<name>" by "<staff>" (Discord user <ID>)`.
 
 With `MAP_VOTE` set to `on`, the website's `/vote` page lets visitors pick the next map.
 
-1. When a match goes live, the bot opens a vote between `MAP_VOTE_OPTIONS` random maps (2 to 6, default 4; never the map
-   being played, and only maps with a game mode) and tells the server in game where to vote.
+1. When a match goes live, the bot opens a vote between `MAP_VOTE_OPTIONS` random maps (2 to 6, default 4; only maps with a game mode,
+   and never the map being played or one of the last 4 played, so the same map doesn't come round again) and tells the server in game where to vote.
 2. The vote closes after `MAP_VOTE_MINUTES` (default 15), or earlier when a team reaches 75% of `SCORE_TO_WIN`, so it is
    always over while the match can still be told where to go next.
 3. The map with the most votes (a tie is settled by chance) is staged on the server, **infantry only**, the same as

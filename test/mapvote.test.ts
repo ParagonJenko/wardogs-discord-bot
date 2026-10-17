@@ -10,6 +10,7 @@ import {
   parseMapVote,
   pickOptions,
   publicVote,
+  withPlayed,
   type MapVote,
 } from '../src/mapvote.ts';
 import type { MapChoice } from '../src/rotationspage.ts';
@@ -30,14 +31,35 @@ const ballot = (n: number, map: string) => ({ ip: `ip${n}`, token: `token${n}`, 
 describe('pickOptions', () => {
   it('offers playable maps other than the one being played, up to the count', () => {
     const maps = [choice('Now'), choice('A'), choice('B'), choice('C'), choice('D'), choice('NoModes', 0)];
-    const options = pickOptions(maps, 'Now', 3, () => 0);
+    const options = pickOptions(maps, 'Now', ['Now'], 3, () => 0);
     expect(options).toHaveLength(3);
     expect(options.map((o) => o.map)).not.toContain('Now');
     expect(options.map((o) => o.map)).not.toContain('NoModes');
   });
 
+  it('does not offer maps played lately', () => {
+    const maps = ['Now', 'Old1', 'Old2', 'A', 'B', 'C'].map((id) => choice(id));
+    for (const roll of [0, 0.5, 0.99]) {
+      const offered = pickOptions(maps, 'Now', ['Old1', 'Old2', 'Now'], 4, () => roll).map((o) => o.map);
+      expect(offered.sort()).toEqual(['A', 'B', 'C']);
+    }
+  });
+
+  it('lets the maps played longest ago back in when too few are fresh, never the one being played', () => {
+    const maps = ['Now', 'Oldest', 'Older', 'Newer', 'A'].map((id) => choice(id));
+    const offered = pickOptions(maps, 'Now', ['Oldest', 'Older', 'Newer', 'Now'], 4, () => 0).map((o) => o.map);
+    expect(offered.sort()).toEqual(['A', 'Oldest']);
+  });
+
   it('offers nothing when fewer than two maps could be voted on', () => {
-    expect(pickOptions([choice('Now'), choice('A')], 'Now', 4, Math.random)).toEqual([]);
+    expect(pickOptions([choice('Now'), choice('A')], 'Now', ['Now'], 4, Math.random)).toEqual([]);
+  });
+});
+
+describe('withPlayed', () => {
+  it('puts the map last once, and keeps only the latest few', () => {
+    expect(withPlayed(['A', 'B'], 'A')).toEqual(['B', 'A']);
+    expect(withPlayed(['A', 'B', 'C', 'D'], 'E')).toEqual(['B', 'C', 'D', 'E']);
   });
 });
 

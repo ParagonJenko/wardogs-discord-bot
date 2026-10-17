@@ -13,9 +13,12 @@ import {
   NOTE,
   openVote,
   parseMapVote,
+  parseRecentMaps,
   pickOptions,
   publicVote,
+  RECENT_MAPS_KEY,
   VOTE_SETUP_OPTIONS,
+  withPlayed,
   type CastResult,
   type MapVote,
   type PublicVote,
@@ -1392,8 +1395,11 @@ export class Watcher extends DurableObject<Env> {
     // A match that is live and has no vote yet.
     if (match === null || match.liveAt === null || match.endedAt !== undefined) return;
     const catalog = await this.catalog(config);
-    const options = catalog === null ? [] : pickOptions(catalog.maps, playing, rule.options, Math.random);
+    // The maps played lately are not offered again, and this one joins them.
+    const recent = withPlayed(parseRecentMaps(await storage.get(RECENT_MAPS_KEY)), playing);
+    const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
     if (options.length === 0) return;
+    await storage.put(RECENT_MAPS_KEY, recent);
     const opened = await save(openVote(match, playing, options, rule, now));
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
     if (config.siteUrl) {
