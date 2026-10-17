@@ -48,7 +48,7 @@ describe('roles', () => {
   it('says gone for someone not in the server, and fails on a refusal', async () => {
     await expect(setRole('t', '777', '42', '900', true, answer(404))).resolves.toBe('gone');
     await expect(setRole('t', '777', '42', '900', true, answer(403, 'Missing Permissions'))).rejects.toThrow(
-      'Discord refused to give role 900: 403 Missing Permissions',
+      'Discord refused to give role 900 in server 777: 403 Missing Permissions',
     );
   });
 });

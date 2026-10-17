@@ -47,6 +47,7 @@ export const isMember = async (botToken: string, guildId: string, userId: string
   const response = await botCall(botToken, fetchFn)(`/guilds/${guildId}/members/${userId}`, 'GET');
   if (response.ok) return true;
   if (response.status === 404) return false;
+  console.error(`Player account: could not check if ${userId} is in server ${guildId}: ${response.status} ${await response.text()}`);
   return null;
 };
 
@@ -66,7 +67,7 @@ export const setRole = async (
   );
   if (response.ok) return 'done';
   if (response.status === 404) return 'gone';
-  throw new Error(`Discord refused to ${on ? 'give' : 'take'} role ${roleId}: ${response.status} ${await response.text()}`);
+  throw new Error(`Discord refused to ${on ? 'give' : 'take'} role ${roleId} in server ${guildId}: ${response.status} ${await response.text()}`);
 };
 
 // A private message. 'closed' when they do not take messages from the server's members.

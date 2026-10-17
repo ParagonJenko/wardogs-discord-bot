@@ -127,7 +127,7 @@ import {
   type CommandRequest,
   type Choice,
 } from './interactions.ts';
-import { fetchInviteCounts } from './invite.ts';
+import { fetchGuildCounts, fetchInviteCounts } from './invite.ts';
 import {
   createSessions,
   JOIN_LOG_KEY,
@@ -400,6 +400,7 @@ import {
   recordMatch,
   recordObservation,
   removeRecentMatch,
+  type DiscordCounts,
   type Observation,
   type PublicStats,
   type RecentMatch,
@@ -1119,9 +1120,13 @@ export class Watcher extends DurableObject<Env> {
     await this.watchFeed(config, seen.snapshot);
 
     const { inviteCode } = config;
-    if (inviteCode && discordDue(parseStats(await storage.get('stats')), Date.now())) {
+    const { botToken } = config.accounts;
+    const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
+    const asBot = botToken !== undefined && /^\d+$/.test(guildId);
+    if ((asBot || inviteCode) && discordDue(parseStats(await storage.get('stats')), Date.now())) {
       try {
-        const counts = await fetchInviteCounts(inviteCode, Date.now());
+        // The bot's token first: the public invite is rate limited by IP, which a Worker shares, so it is the fallback.
+        const counts = await this.discordCounts(asBot ? { botToken, guildId } : null, inviteCode);
         await this.updateStats((stats) => recordDiscord(stats, counts));
       } catch (error) {
         console.error(`Discord member count failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1131,6 +1136,17 @@ export class Watcher extends DurableObject<Env> {
     await this.keepSeason();
     // Live pages get the new score, players and map.
     await this.broadcastLive();
+  }
+
+  private async discordCounts(bot: { botToken: string; guildId: string } | null, inviteCode: string | undefined): Promise<DiscordCounts> {
+    if (bot === null) return fetchInviteCounts(inviteCode ?? '', Date.now());
+    try {
+      return await fetchGuildCounts(bot.botToken, bot.guildId, Date.now());
+    } catch (error) {
+      if (!inviteCode) throw error;
+      console.error(`Discord member count: the server lookup failed, using the invite: ${error instanceof Error ? error.message : String(error)}`);
+      return fetchInviteCounts(inviteCode, Date.now());
+    }
   }
 
   // The roundup of the week or month just ended, once, from ROUNDUP_HOUR (UTC) on the first day of the next one. A post
