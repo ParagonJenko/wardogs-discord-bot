@@ -44,6 +44,14 @@ describe('planInsert', () => {
     }
   });
 
+  it('writes the winner into the slot after the one being played, the rest where they were', () => {
+    for (const slot of [0, 1, 2, 3]) {
+      const maps = ['A', 'B', 'C', 'D'];
+      const plan = planInsert(rotation(maps, slot), slot, voted)!;
+      expect(fromTheStart(plan.staged, slot).map((e) => e.map)).toEqual([...maps.slice(0, slot + 1), 'V', ...maps.slice(slot + 1)]);
+    }
+  });
+
   it('is not done for a rotation that is off or random, an unknown slot, or no maps', () => {
     expect(planInsert(rotation(['A', 'B'], 0, { enabled: false }), 0, voted)).toBeNull();
     expect(planInsert(rotation(['A', 'B'], 0, { mode: 'Random' }), 0, voted)).toBeNull();
