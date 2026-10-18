@@ -1132,9 +1132,10 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
     await this.keepAccounts(config);
+    // Before the rotation and the vote change it: they can write another entry into the slot the server is on.
+    await this.serial(() => this.updateRestartMap(config, seen.snapshot));
     await this.serial(() => this.updateRotation(config, seen.snapshot));
     await this.updateMapVote(config, seen.snapshot);
-    await this.serial(() => this.updateRestartMap(config, seen.snapshot));
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
     await this.checkHeadshots(seen.snapshot);
     await this.watchFeed(config, seen.snapshot);
@@ -1655,8 +1656,7 @@ export class Watcher extends DurableObject<Env> {
       const slot = rotationSlot(rotation, status);
       const entry = playingEntry(rotation, slot);
       if (slot === null || entry === null) {
-        console.error(`Restart: the server is back on ${status.map}, but its rotation does not say which map is playing, so it is not checked for infantry only`);
-        await storage.put(RESTART_WATCH_KEY, settled(watch));
+        console.error(`Restart: the server is back on ${status.map}, but its rotation does not say which map is playing yet, so it is not checked for infantry only (tried again next check)`);
         return;
       }
       if (isInfantryOnly(entry.experiences)) {
@@ -1665,7 +1665,7 @@ export class Watcher extends DurableObject<Env> {
         return;
       }
       const playing = status.map || entry.map;
-      let target = infantryFromRotation(rotation, slot, playing);
+      let target = infantryFromRotation(rotation, slot);
       if (target === null) {
         const catalog = await this.catalog(config);
         const choices = catalog === null ? [] : infantryMaps(catalog.maps, playing);

@@ -87,17 +87,22 @@ describe('infantryFromRotation', () => {
       ],
       1,
     );
-    expect(infantryFromRotation(r, 1, 'B')).toEqual({ map: 'D', setup: { experiences: ['D_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' } });
-    expect(infantryFromRotation(r, 3, 'D')).toEqual({ map: 'A', setup: { experiences: INFANTRY, lighting: 'Night' } });
+    expect(infantryFromRotation(r, 1)).toEqual({ map: 'D', setup: { experiences: ['D_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' } });
+    expect(infantryFromRotation(r, 3)).toEqual({ map: 'A', setup: { experiences: INFANTRY, lighting: 'Night' } });
   });
 
-  it('does not pick the map that is playing', () => {
-    const r = rotation([{ map: 'A' }, { map: 'B', experiences: INFANTRY }], 0);
-    expect(infantryFromRotation(r, 0, 'B')).toBeNull();
+  it('can pick the playing map again when the rotation has it with an infantry only setup', () => {
+    const r = rotation([{ map: 'A' }, { map: 'B' }, { map: 'A', experiences: INFANTRY, lighting: 'Night' }], 0);
+    expect(infantryFromRotation(r, 0)).toEqual({ map: 'A', setup: { experiences: INFANTRY, lighting: 'Night' } });
+  });
+
+  it('writes a retired experience as its replacement', () => {
+    const r = rotation([{ map: 'Bakurani' }, { map: 'Bakurani', experiences: ['Bakurani_KOTH_01', 'KOTH_InfantryOnly'] }], 0);
+    expect(infantryFromRotation(r, 0)?.setup.experiences).toEqual(['Bakurani_KOTH_02', 'KOTH_InfantryOnly']);
   });
 
   it('is null when the rotation has no infantry only map', () => {
-    expect(infantryFromRotation(rotation([{ map: 'A' }, { map: 'B' }], 0), 0, 'A')).toBeNull();
+    expect(infantryFromRotation(rotation([{ map: 'A' }, { map: 'B' }], 0), 0)).toBeNull();
   });
 });
 
@@ -113,5 +118,11 @@ describe('infantryMaps', () => {
   it('keeps maps with a game mode and their own infantry only, other than the one playing', () => {
     const maps = [choice('A', ['infantry_only']), choice('B', ['hardcore']), choice('C', ['infantry_only'], 0), choice('D', ['infantry_only'])];
     expect(infantryMaps(maps, 'A').map((m) => m.id)).toEqual(['D']);
+  });
+
+  it('allows the playing map when no other map can be played infantry only', () => {
+    const maps = [choice('A', ['infantry_only']), choice('B', ['hardcore'])];
+    expect(infantryMaps(maps, 'A').map((m) => m.id)).toEqual(['A']);
+    expect(infantryMaps(maps, 'B').map((m) => m.id)).toEqual(['A']);
   });
 });

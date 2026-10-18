@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MODIFIERS } from './matchsetup.ts';
+import { currentExperience, MODIFIERS } from './matchsetup.ts';
 import type { MatchSetup, Rotation } from './rcon.ts';
 import type { MapChoice } from './rotationspage.ts';
 
@@ -50,17 +50,18 @@ export const playingEntry = (rotation: Rotation, slot: number | null): Rotation[
 
 export type InfantryMap = { map: string; setup: MatchSetup };
 
-// The next map in the rotation after `slot` that is played infantry only, other than the one playing, with the setup the
-// rotation gives it. Null when the rotation has none.
-export const infantryFromRotation = (rotation: Rotation, slot: number, playing: string): InfantryMap | null => {
+// The next entry in the rotation after `slot` that is played infantry only, with the setup the rotation gives it (a retired
+// experience swapped for its replacement, as /changemap does). A rotation can have the playing map again with another setup,
+// so only the playing slot itself is skipped. Null when the rotation has none.
+export const infantryFromRotation = (rotation: Rotation, slot: number): InfantryMap | null => {
   const n = rotation.entries.length;
-  for (let step = 1; step <= n; step += 1) {
+  for (let step = 1; step < n; step += 1) {
     const entry = rotation.entries[(slot + step) % n];
-    if (entry === undefined || entry.map === playing || !isInfantryOnly(entry.experiences)) continue;
+    if (entry === undefined || !isInfantryOnly(entry.experiences)) continue;
     return {
       map: entry.map,
       setup: {
-        experiences: entry.experiences ?? [],
+        experiences: (entry.experiences ?? []).map(currentExperience),
         ...(entry.lighting ? { lighting: entry.lighting } : {}),
         ...(entry.zoneAlternator ? { zoneAlternator: entry.zoneAlternator } : {}),
       },
@@ -69,6 +70,10 @@ export const infantryFromRotation = (rotation: Rotation, slot: number, playing: 
   return null;
 };
 
-// The maps that can be played infantry only (as the map vote offers them), other than the one playing.
-export const infantryMaps = (maps: readonly MapChoice[], playing: string): MapChoice[] =>
-  maps.filter((m) => m.id !== playing && m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
+// The maps that can be played infantry only (as the map vote offers them), other than the one playing, or the one playing
+// when it is the only one: it is then loaded again with infantry only.
+export const infantryMaps = (maps: readonly MapChoice[], playing: string): MapChoice[] => {
+  const eligible = maps.filter((m) => m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
+  const others = eligible.filter((m) => m.id !== playing);
+  return others.length > 0 ? others : eligible;
+};
