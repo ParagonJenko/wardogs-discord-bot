@@ -10,6 +10,7 @@ import {
   rankSeeders,
   ranks,
   recentDayKeys,
+  recentSeeders,
   recordActivity,
   recordMatchPlayers,
   recordSeed,
@@ -174,6 +175,17 @@ describe('totals and rankings', () => {
       ['b', 1, 150],
     ]);
     expect(rankSeeders([monday, tuesday], 1)).toHaveLength(1);
+  });
+
+  it('lists the top seeders of the last 7 days only', () => {
+    const old: PlayerDay = { z: row('Zed', { seedingMinutes: 500, seedDays: 5 }) };
+    const week = Array.from({ length: 7 }, (_, i): PlayerDay => (i === 6 ? { a: row('Ash', { seedingMinutes: 40, seedDays: 1 }) } : {}));
+    const seeders = recentSeeders([old, old, old, ...week], 5);
+
+    expect(seeders.days).toBe(7);
+    expect(seeders.rows.map((p) => [p.steamId, p.seedDays])).toEqual([['a', 1]]);
+    expect(recentSeeders([old], 5).rows.map((p) => p.steamId)).toEqual(['z']);
+    expect(recentSeeders([], 5).rows).toEqual([]);
   });
 
   it('builds the leaderboard, keeping Steam IDs for publicStats to swap for public ids', () => {

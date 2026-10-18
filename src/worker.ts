@@ -190,6 +190,7 @@ import {
   playerDayKey,
   rankSeeders,
   recentDayKeys,
+  recentSeeders,
   totals,
   recordActivity,
   recordMatchPlayers,
@@ -2842,16 +2843,17 @@ export class Watcher extends DurableObject<Env> {
     const since = stored.get('killFeedSince');
     const board = leaderboard(days.slice(-LEADERBOARD_DAYS).map((d) => d.players), LEADERBOARD_DAYS, LEADERBOARD_SIZE);
     const staff = staffSteamIds(parseStaffProfiles(stored.get(STAFF_PROFILES_KEY)));
+    const recent = recentSeeders(days.map((d) => d.players), SEEDERS_LISTED);
     const seeders = config.vip === null ? null : seederVip(parseVipState(stored.get('vip')), now, staff);
     const ids = await this.idsFor([
-      ...namedSteamIds(stats, board),
+      ...namedSteamIds(stats, board, recent),
       ...weaponHolders(weaponDays),
       ...(seeders ?? []).map((p) => p.steamId),
     ]);
     const idOf = publicIdOf(privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))), (steamId) => ids.get(steamId));
     const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
-    const extras = { leaderboard: board, vip: config.vip, seederVip: seeders, weapons, teams: teamBoard(records, LEADERBOARD_DAYS, now) };
+    const extras = { leaderboard: board, recentSeeders: recent, vip: config.vip, seederVip: seeders, weapons, teams: teamBoard(records, LEADERBOARD_DAYS, now) };
     return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, extras, idOf);
   }
 
