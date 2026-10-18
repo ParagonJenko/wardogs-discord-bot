@@ -62,6 +62,9 @@ const MAPS: Record<string, { name: string; emoji: string; colour: number }> = {
 
 export const mapName = (id: string): string => MAPS[id]?.name ?? id;
 
+// The maps above as Discord lists them for a command option: the name players see, and the id it stands for.
+export const MAP_CHOICES = Object.entries(MAPS).map(([id, map]) => ({ name: map.name, value: id }));
+
 // A map by its id, or by the name players see (records keep the name).
 const mapStyle = (idOrName: string) => MAPS[idOrName] ?? Object.values(MAPS).find((m) => m.name === idOrName);
 

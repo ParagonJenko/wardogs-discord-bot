@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Embed } from './discord.ts';
+import { MAP_CHOICES, type Embed } from './discord.ts';
 import { BAN_LENGTHS } from './moderation.ts';
 import { parseLightButton, parseVoteButton, parseWeatherButton } from './mapvote.ts';
 import { PRIVATE_NAME } from './privacy.ts';
@@ -358,6 +358,29 @@ export const COMMANDS = [
         options: [{ type: STRING, name: 'circle', description: 'Pick from the blocked circles', required: true, autocomplete: true }],
       },
       { type: SUBCOMMAND, name: 'list', description: 'The blocked circles' },
+    ],
+  },
+  {
+    name: 'voteoptions',
+    description: 'Switch rain, or a map, off or on in map votes (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      {
+        type: SUBCOMMAND,
+        name: 'rain',
+        description: 'Whether map votes can offer or choose rain',
+        options: [{ type: BOOLEAN, name: 'enabled', description: 'On: rain can win a vote. Off: no vote offers or chooses rain', required: true }],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'map',
+        description: 'Whether a map is offered in map votes',
+        options: [
+          { type: STRING, name: 'map', description: 'Pick the map', required: true, choices: MAP_CHOICES },
+          { type: BOOLEAN, name: 'enabled', description: 'On: the vote can offer it. Off: it is never offered, nor picked by Random', required: true },
+        ],
+      },
+      { type: SUBCOMMAND, name: 'show', description: 'What is switched off in map votes' },
     ],
   },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
