@@ -27,6 +27,7 @@ import {
   type Lighting,
   voteMessage,
   editVoteMessage,
+  deleteVoteMessage,
   postVoteMessage,
   pickOptions,
   publicVote,
@@ -250,6 +251,19 @@ describe('Discord messages', () => {
     const answer = (status: number) => (async () => new Response('no', { status })) as unknown as typeof fetch;
     await expect(editVoteMessage('tok', '1', '2', voteMessage(vote(), NOW), answer(404))).resolves.toBeUndefined();
     await expect(editVoteMessage('tok', '1', '2', voteMessage(vote(), NOW), answer(403))).rejects.toThrow(/403/);
+  });
+
+  it('deletes the old message with the bot token, tolerates one already gone, and fails on other refusals', async () => {
+    const seen: { url: string; method?: string; auth?: string }[] = [];
+    const answer = (status: number) =>
+      (async (url: string, init: RequestInit) => {
+        seen.push({ url, method: init.method, auth: (init.headers as Record<string, string>)['authorization'] });
+        return new Response(status === 204 ? null : 'no', { status });
+      }) as unknown as typeof fetch;
+    await expect(deleteVoteMessage('tok', '1', '2', answer(204))).resolves.toBeUndefined();
+    expect(seen[0]).toEqual({ url: 'https://discord.com/api/v10/channels/1/messages/2', method: 'DELETE', auth: 'Bot tok' });
+    await expect(deleteVoteMessage('tok', '1', '2', answer(404))).resolves.toBeUndefined();
+    await expect(deleteVoteMessage('tok', '1', '2', answer(403))).rejects.toThrow(/403/);
   });
 });
 

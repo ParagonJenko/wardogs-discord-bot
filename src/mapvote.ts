@@ -649,6 +649,16 @@ export const postVoteMessage = async (
   return z.object({ id: z.string() }).parse(await response.json()).id;
 };
 
+// Deletes a vote's message, such as the last match's when the next vote opens. One that is gone already is fine.
+export const deleteVoteMessage = async (botToken: string, channelId: string, messageId: string, fetchFn: typeof fetch = fetch): Promise<void> => {
+  const response = await fetchFn(`${DISCORD_API}/channels/${channelId}/messages/${messageId}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bot ${botToken}` },
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`Discord refused to delete the old vote message: ${response.status} ${await response.text()}`);
+};
+
 export const editVoteMessage = async (
   botToken: string,
   channelId: string,

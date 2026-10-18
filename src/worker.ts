@@ -14,6 +14,7 @@ import {
   conditionOptions,
   weatherOptions,
   closeScoreFor,
+  deleteVoteMessage,
   editVoteMessage,
   LAST_ZONES_KEY,
   MAP_VOTE_KEY,
@@ -1521,6 +1522,8 @@ export class Watcher extends DurableObject<Env> {
     const recent = withPlayed(played, playing);
     if (recent.join() !== played.join()) await storage.put(RECENT_MAPS_KEY, recent);
     let vote = parseMapVote(await storage.get(MAP_VOTE_KEY));
+    // The last match's vote, whose message goes when this match's vote is posted.
+    const previous = vote;
     const save = async (next: MapVote): Promise<MapVote> => {
       await storage.put(MAP_VOTE_KEY, next);
       return next;
@@ -1606,6 +1609,13 @@ export class Watcher extends DurableObject<Env> {
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
     await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
     console.info(`Map vote opened: ${opened.options.map((o) => o.map).join(', ')}`);
+    // Only the current vote is left in the channel. The new one is up first, and a failure here is only logged: the old
+    // message is just clutter, and its vote is no longer kept to try again.
+    if (previous?.message && previous.message.messageId !== messageId) {
+      await deleteVoteMessage(rule.botToken, previous.message.channelId, previous.message.messageId).catch((error: unknown) =>
+        console.error(`Map vote: could not delete the last vote's message: ${errorText(error)}`),
+      );
+    }
     if (config.inviteCode) {
       await sendBroadcast(
         config.rconUrl,
