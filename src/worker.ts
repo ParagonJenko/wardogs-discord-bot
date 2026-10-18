@@ -24,7 +24,6 @@ import {
   parseMapVote,
   parseRainRecord,
   parseRecentMaps,
-  rainBlocked,
   rainRecordFor,
   RAIN_KEY,
   voteLogLine,
@@ -1587,7 +1586,7 @@ export class Watcher extends DurableObject<Env> {
       if (vote.outcome === null) {
         if (!closeDue(vote, now, leading) && !over) return;
         const winner = chooseWinner(vote, Math.random);
-        const lighting = chooseConditions(vote, Math.random, rainBlocked(vote, winner));
+        const lighting = chooseConditions(vote, Math.random, vote.rain.all);
         vote = await save(
           ended(
             vote,
@@ -1601,7 +1600,7 @@ export class Watcher extends DurableObject<Env> {
                 },
           ),
         );
-        console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)${rainBlocked(vote, winner) ? ', no rain allowed' : ''}`);
+        console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)${vote.rain.all ? ', no rain allowed' : ''}`);
         await this.showVote(config, rule, vote);
       }
       // The queued winner waits for the end of the match: the server ended a match early when it was queued with a team on 95.
@@ -1628,7 +1627,10 @@ export class Watcher extends DurableObject<Env> {
     const maps = catalog?.maps ?? [];
     const playingId = mapIdOf(maps, playing);
     const recentIds = recent.map((m) => mapIdOf(maps, m));
-    const options = catalog === null ? [] : pickOptions(maps, playingId, recentIds, rule.options, Math.random);
+    // The map that last had rain is not offered (unless that leaves no vote), as the one being played is not.
+    const lastRain = rainNow !== null && !rainNow.rain && rainNow.ban !== null ? mapIdOf(maps, rainNow.ban) : null;
+    const avoid = lastRain === null ? [] : [lastRain];
+    const options = catalog === null ? [] : pickOptions(maps, playingId, recentIds, rule.options, Math.random, avoid);
     if (options.length === 0) {
       // Said at most every 10 minutes, so a server that can never offer two maps doesn't fill the logs once a minute.
       if (Date.now() - voteUnavailableLoggedAt >= VOTE_LOG_MS) {
@@ -1646,9 +1648,11 @@ export class Watcher extends DurableObject<Env> {
     }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     // The maps a Random map button picks from.
-    const pool = votePool(maps, playingId, recentIds, rule.options);
-    // No rain when the match being played has it, and none for the map that last had it.
-    const rain = { all: rainNow?.rain ?? false, map: rainNow?.ban == null ? null : mapIdOf(maps, rainNow.ban) };
+    const pool = votePool(maps, playingId, recentIds, rule.options, avoid);
+    // No rain when the match being played has it; and the map that last had it, if it was left out, is said.
+    const skipped =
+      lastRain !== null && !pool.some((m) => m.id === lastRain) && votePool(maps, playingId, recentIds, rule.options).some((m) => m.id === lastRain) ? lastRain : null;
+    const rain = { all: rainNow?.rain ?? false, skipped };
     const lightings = catalog?.lightings ?? [];
     const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(lightings), weatherOptions(rain.all ? lightings.filter((l) => !isRain(l)) : lightings), {
       pool: pool.map((m) => ({ map: m.id, name: m.name })),

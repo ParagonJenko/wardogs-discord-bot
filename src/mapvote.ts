@@ -81,9 +81,9 @@ export type VoteOutcome = {
   zoneName?: string | null;
 };
 
-// Where this vote may not choose rain: `all` when the match being played is in the rain, and `map` for the map that last had rain
-// (a map id), which rain is not chosen for when it wins. See rainBlocked.
-export type RainRule = { all: boolean; map: string | null };
+// What this vote does about rain: `all` when the match being played is in the rain, so no rain is chosen; and `skipped`, the map
+// (an id) that last had rain, which is not offered.
+export type RainRule = { all: boolean; skipped: string | null };
 
 export type MapVote = {
   // The match it is for: when the match started, which is also its id.
@@ -145,7 +145,7 @@ const MapVoteSchema = z.object({
     })
     .nullable()
     .default(null),
-  rain: z.object({ all: z.boolean(), map: z.string().nullable() }).default({ all: false, map: null }),
+  rain: z.object({ all: z.boolean(), skipped: z.string().nullable() }).default({ all: false, skipped: null }),
 });
 
 export const parseMapVote = (raw: unknown): MapVote | null => {
@@ -188,20 +188,30 @@ export const mapIdOf = (maps: readonly MapChoice[], map: string): string => {
 // The maps a vote can offer: ones the server can play (with a game mode and infantry only) that were not played lately, and never the one
 // being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
 // the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is none.
-export const votePool = (maps: readonly MapChoice[], playing: string, recent: readonly string[], count: number): MapChoice[] => {
+export const votePool = (
+  maps: readonly MapChoice[],
+  playing: string,
+  recent: readonly string[],
+  count: number,
+  avoid: readonly string[] = [],
+): MapChoice[] => {
   // Only maps that list infantry only themselves: every winner is played with it, and the id sent must be one that map has
   // (see applyVoteWinner), never one found on another map.
   const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
   // Most recent first, so the oldest are the first let back in.
   const newestFirst = [...recent].reverse();
-  const fresh = playable.filter((m) => !recent.includes(m.id));
-  const pool = [...fresh];
-  if (pool.length < Math.min(count, 2)) {
-    // Not enough maps that were not played lately: let back in the ones played longest ago, to make up two.
-    const back = playable.filter((m) => recent.includes(m.id)).sort((a, b) => newestFirst.indexOf(b.id) - newestFirst.indexOf(a.id));
-    pool.push(...back.slice(0, 2 - pool.length));
-  }
-  return pool.length < 2 ? [] : pool;
+  const poolOf = (from: readonly MapChoice[]): MapChoice[] => {
+    const pool = from.filter((m) => !recent.includes(m.id));
+    if (pool.length < Math.min(count, 2)) {
+      // Not enough maps that were not played lately: let back in the ones played longest ago, to make up two.
+      const back = from.filter((m) => recent.includes(m.id)).sort((a, b) => newestFirst.indexOf(b.id) - newestFirst.indexOf(a.id));
+      pool.push(...back.slice(0, 2 - pool.length));
+    }
+    return pool.length < 2 ? [] : pool;
+  };
+  // The maps to avoid (the one that last had rain) are left out, unless that leaves no vote.
+  const without = poolOf(playable.filter((m) => !avoid.includes(m.id)));
+  return without.length > 0 || avoid.length === 0 ? without : poolOf(playable);
 };
 
 // The maps on the buttons: `count` of the pool, chosen at random.
@@ -211,7 +221,8 @@ export const pickOptions = (
   recent: readonly string[],
   count: number,
   random: () => number,
-): VoteOption[] => sample(votePool(maps, playing, recent, count), count, random).map((m) => ({ map: m.id, name: m.name }));
+  avoid: readonly string[] = [],
+): VoteOption[] => sample(votePool(maps, playing, recent, count, avoid), count, random).map((m) => ({ map: m.id, name: m.name }));
 
 // The circles (control-zone layout) each map last had from a vote, by map id, so the next time it wins it gets another.
 export const LAST_ZONES_KEY = 'mapVoteZones';
@@ -357,7 +368,7 @@ export const openVote = (
   ballots: [],
   message: null,
   outcome: null,
-  rain: more.rain ?? { all: false, map: null },
+  rain: more.rain ?? { all: false, skipped: null },
 });
 
 export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
@@ -465,9 +476,6 @@ export const chooseConditions = (vote: MapVote, random: () => number, noRain = f
   const clear = time.key === RANDOM_CONDITION ? [] : time.lightings.filter((l) => weatherOf(l) === 'clear');
   return pick(clear.length > 0 ? clear : time.lightings);
 };
-
-// Whether rain may not be chosen for `winner`: the match being played is in the rain, or the winner is the map that last had it.
-export const rainBlocked = (vote: MapVote, winner: string | null): boolean => vote.rain.all || (winner !== null && vote.rain.map === winner);
 
 // Whether people can vote on this match right now: the vote is for this match, which has not ended, its time has not run out
 // and no team has reached the close score (the check that closes it comes later in the same pass). What points people at the
@@ -585,11 +593,10 @@ const conditionsAsked = (shown: PublicVote): string => {
   return asked.length === 1 ? ` and ${asked[0]}` : `, ${asked.slice(0, -1).join(', ')} and ${asked.at(-1)}`;
 };
 
-// Why there may be no rain, when there may not: it was last match, or it was last on one of the maps in the vote.
+// Why there may be no rain, or a map missing, when that is so: it was last match, or one map had it last.
 const rainNote = (vote: MapVote): string => {
-  if (vote.rain.all) return ' No rain this time: the last match was in the rain.';
-  const name = vote.rain.map === null ? undefined : vote.options.find((o) => o.map === vote.rain.map)?.name;
-  return name === undefined ? '' : ` Rain is not picked for **${name}**, which had it last.`;
+  const left = vote.rain.skipped === null ? '' : ` ${mapName(vote.rain.skipped)} is not in the vote: it had rain last.`;
+  return (vote.rain.all ? ' No rain this time: the last match was in the rain.' : '') + left;
 };
 
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
