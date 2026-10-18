@@ -43,9 +43,8 @@ import { planSetup } from './matchsetup.ts';
 import {
   infantryFromRotation,
   infantryMaps,
-  isInfantryOnly,
+  justStarted,
   parseRestartWatch,
-  playingEntry,
   RESTART_WATCH_KEY,
   settled,
   watchRestart,
@@ -1639,10 +1638,12 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // When the server comes back after not answering, it has restarted and starts from the first map of its rotation. The
-  // server is meant to play infantry only after a restart, so if it is on a map that is not, it is changed at once to an
-  // infantry only one (see restartmap.ts): the next one in the rotation that is, or else a map the catalogue lists with infantry
-  // only. Tried again each check for a few minutes if the server can't say. A failure is logged; it never stops what comes after it.
+  // When the server comes back after not answering, it has restarted. A cold start has been seen to load a Bakurani match that
+  // is not infantry only whatever the rotation says, and the server does not say which modifiers the match on now has, so the
+  // rotation's own entry can't be trusted to tell. While the new match has no points yet, it is changed at once to an infantry
+  // only map (see restartmap.ts): the first infantry only entry of the rotation, or else a map the catalogue lists with
+  // infantry only. A match with points is left to finish, as the server was only briefly unreachable. Tried again each check
+  // for a few minutes if that fails. A failure is logged; it never stops what comes after it.
   private async updateRestartMap(config: Config, snapshot: Snapshot | null): Promise<void> {
     const storage = this.ctx.storage;
     try {
@@ -1653,19 +1654,13 @@ export class Watcher extends DurableObject<Env> {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
       const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
-      const slot = rotationSlot(rotation, status);
-      const entry = playingEntry(rotation, slot);
-      if (slot === null || entry === null) {
-        console.error(`Restart: the server is back on ${status.map}, but its rotation does not say which map is playing yet, so it is not checked for infantry only (tried again next check)`);
-        return;
-      }
-      if (isInfantryOnly(entry.experiences)) {
-        console.info(`Restart: the server is back on ${entry.map}, infantry only`);
+      if (!justStarted(status.factionScores)) {
+        console.info(`Restart: the server is back on ${status.map}, with a match under way, so its map is left as it is`);
         await storage.put(RESTART_WATCH_KEY, settled(watch));
         return;
       }
-      const playing = status.map || entry.map;
-      let target = infantryFromRotation(rotation, slot);
+      const playing = status.map;
+      let target = infantryFromRotation(rotation);
       if (target === null) {
         const catalog = await this.catalog(config);
         const choices = catalog === null ? [] : infantryMaps(catalog.maps, playing);
@@ -1681,16 +1676,16 @@ export class Watcher extends DurableObject<Env> {
         if ('problem' in planned) throw new Error(planned.problem);
         target = { map: choice.id, setup: planned.setup };
       }
-      console.info(`Restart: the server is back on ${playing}, which is not infantry only; changing to ${target.map} ${JSON.stringify(target.setup)}`);
+      console.info(`Restart: the server is back on ${playing || 'a new match'}; changing to ${target.map} ${JSON.stringify(target.setup)}, infantry only`);
       await queueMap(rconUrl, rconPassword, target.map, http, target.setup);
-      await this.stageNextMap(target.map, playing);
+      await this.stageNextMap(target.map, playing || null);
       await endMatch(rconUrl, rconPassword, http);
       await storage.put(RESTART_WATCH_KEY, settled(watch));
       await sendBroadcast(rconUrl, rconPassword, `The server restarted: changing to ${mapName(target.map)}, infantry only.`, http).catch((error: unknown) =>
         console.error(`Restart announcement failed: ${errorText(error)}`),
       );
     } catch (error) {
-      console.error(`Restart: could not check the map for infantry only, trying again next check: ${errorText(error)}`);
+      console.error(`Restart: could not change the map to infantry only, trying again next check: ${errorText(error)}`);
     }
   }
 

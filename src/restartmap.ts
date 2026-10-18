@@ -3,9 +3,10 @@ import { currentExperience, MODIFIERS } from './matchsetup.ts';
 import type { MatchSetup, Rotation } from './rcon.ts';
 import type { MapChoice } from './rotationspage.ts';
 
-// When the game server restarts it starts from the first map of its rotation, which can be any map, infantry only or not.
-// The server is meant to play infantry only after a restart, so the bot notices it come back and, if it is playing a map
-// that is not infantry only, changes to one that is, as /changemap does. Nothing here touches the server or storage: the
+// A game server that cold starts (a restart, the daily one included) has been seen to load a Bakurani match that is not
+// infantry only, whatever its rotation says, and the server's API does not say which modifiers the match on now has. The
+// server is meant to play infantry only, so the bot notices a server come back from not answering and, while its new match
+// has no points yet, changes to an infantry only map, as /changemap does. Nothing here touches the server or storage: the
 // Watcher (worker.ts) fetches, changes the map and remembers.
 
 export const RESTART_WATCH_KEY = 'restartWatch';
@@ -44,19 +45,15 @@ const INFANTRY_ONLY = MODIFIERS[0].pattern;
 export const isInfantryOnly = (experiences: readonly string[] | undefined): boolean =>
   (experiences ?? []).some((id) => INFANTRY_ONLY.test(id));
 
-// The map of the rotation the server is playing now, as the rotation marks it or the slot says.
-export const playingEntry = (rotation: Rotation, slot: number | null): Rotation['entries'][number] | null =>
-  slot === null ? null : (rotation.entries[slot] ?? null);
-
 export type InfantryMap = { map: string; setup: MatchSetup };
 
-// The next entry in the rotation after `slot` that is played infantry only, with the setup the rotation gives it (a retired
-// experience swapped for its replacement, as /changemap does). A rotation can have the playing map again with another setup,
-// so only the playing slot itself is skipped. Null when the rotation has none.
-export const infantryFromRotation = (rotation: Rotation, slot: number): InfantryMap | null => {
+// The first entry of the rotation, from `from` on and going round, that is played infantry only, with the setup the rotation
+// gives it (a retired experience swapped for its replacement, as /changemap does). A restart starts from where the list
+// starts, so that is where the search starts. Null when the rotation has none.
+export const infantryFromRotation = (rotation: Rotation, from = 0): InfantryMap | null => {
   const n = rotation.entries.length;
-  for (let step = 1; step < n; step += 1) {
-    const entry = rotation.entries[(slot + step) % n];
+  for (let step = 0; step < n; step += 1) {
+    const entry = rotation.entries[(from + step) % n];
     if (entry === undefined || !isInfantryOnly(entry.experiences)) continue;
     return {
       map: entry.map,
@@ -69,6 +66,10 @@ export const infantryFromRotation = (rotation: Rotation, slot: number): Infantry
   }
   return null;
 };
+
+// Whether the match on now has only just started: a restart is not told from a failed check by the server answering again,
+// so a match with points on the board (or with no scores to read) is left to finish.
+export const justStarted = (scores: readonly { score: number }[]): boolean => scores.length > 0 && scores.every((s) => s.score === 0);
 
 // The maps that can be played infantry only (as the map vote offers them), other than the one playing, or the one playing
 // when it is the only one: it is then loaded again with infantry only.

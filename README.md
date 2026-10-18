@@ -562,13 +562,13 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
   and the bot tries again at every check until the server has it.
 - Changes made by hand on the server stay until the bot next puts a rotation on: the start of the next day, or a staff
   change. `/rotation` (for everyone) shows what the server is playing either way.
-- **After a server restart** the game starts from the first map of its rotation, which may not be infantry only. When the
-  bot sees the server stop answering and then answer again, it reads which map in the rotation is playing; if that map
-  does not have the infantry only modifier, it changes the map at once, as `/changemap` does: to the next map in the rotation
-  that is infantry only (with that entry's own mode, lighting and zones), or else a random map the catalogue lists with
-  infantry only. It says so in game. It tries again each check for 10 minutes if the server can't say, and does nothing if
-  the map is already infantry only. A restart quicker than one check (a minute) is not seen. The Node/Docker version does
-  not do this.
+- **After a server restart** the game has been seen to cold start a Bakurani match that is not infantry only, whatever the
+  rotation says, and the server does not report which modifiers the match on now has. When the bot sees the server stop
+  answering and then answer again, and the new match has no points yet, it changes the map at once to an infantry only one,
+  as `/changemap` does: the first infantry only entry of the rotation (with that entry's own mode, lighting and zones), or
+  else a random map the catalogue lists with infantry only. It says so in game. A match that already has points is left
+  alone, so a failed check does not end a live match. It tries again each check for 10 minutes if the change fails. A
+  restart quicker than one check (a minute) is not seen. The Node/Docker version does not do this.
 - **Retired game modes.** Season 2 (15 October 2026) renamed Bakurani's King of the Hill from `Bakurani_KOTH_01` to
   `Bakurani_KOTH_02`. Saved rotations that still have the old one show and are written with the new one, so the next
   rotation the bot puts on replaces it in `ServerSettings.ini` too, and `/setnextmap` uses the new one when the server's

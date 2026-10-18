@@ -3,10 +3,10 @@ import type { Rotation } from '../src/rcon.ts';
 import {
   infantryFromRotation,
   infantryMaps,
+  justStarted,
   isInfantryOnly,
   NO_RESTART,
   parseRestartWatch,
-  playingEntry,
   RESTART_WINDOW_MS,
   settled,
   watchRestart,
@@ -67,42 +67,45 @@ describe('isInfantryOnly', () => {
   });
 });
 
-describe('playingEntry', () => {
-  it('is the entry at the slot, or null without one', () => {
-    const r = rotation([{ map: 'A' }, { map: 'B' }], 1);
-    expect(playingEntry(r, 1)?.map).toBe('B');
-    expect(playingEntry(r, null)).toBeNull();
-    expect(playingEntry(r, 5)).toBeNull();
-  });
-});
-
 describe('infantryFromRotation', () => {
-  it('takes the next infantry only map after the slot, going round, with its setup', () => {
+  it('takes the first infantry only entry, with its setup', () => {
     const r = rotation(
       [
-        { map: 'A', experiences: INFANTRY, lighting: 'Night' },
-        { map: 'B' },
-        { map: 'C', experiences: ['C_KOTH_01'] },
-        { map: 'D', experiences: ['D_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' },
+        { map: 'A' },
+        { map: 'B', experiences: ['B_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' },
+        { map: 'C', experiences: INFANTRY, lighting: 'Night' },
       ],
-      1,
+      0,
     );
-    expect(infantryFromRotation(r, 1)).toEqual({ map: 'D', setup: { experiences: ['D_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' } });
-    expect(infantryFromRotation(r, 3)).toEqual({ map: 'A', setup: { experiences: INFANTRY, lighting: 'Night' } });
+    expect(infantryFromRotation(r)).toEqual({ map: 'B', setup: { experiences: ['B_KOTH_01', 'KOTH_InfantryOnly'], lighting: 'DayClear' } });
   });
 
-  it('can pick the playing map again when the rotation has it with an infantry only setup', () => {
-    const r = rotation([{ map: 'A' }, { map: 'B' }, { map: 'A', experiences: INFANTRY, lighting: 'Night' }], 0);
-    expect(infantryFromRotation(r, 0)).toEqual({ map: 'A', setup: { experiences: INFANTRY, lighting: 'Night' } });
+  it('can start part-way and go round', () => {
+    const r = rotation([{ map: 'A', experiences: INFANTRY }, { map: 'B' }, { map: 'C', experiences: INFANTRY }], 0);
+    expect(infantryFromRotation(r, 1)?.map).toBe('C');
+    expect(infantryFromRotation(r, 2)?.map).toBe('C');
+    expect(infantryFromRotation(r, 3)?.map).toBe('A');
   });
 
   it('writes a retired experience as its replacement', () => {
-    const r = rotation([{ map: 'Bakurani' }, { map: 'Bakurani', experiences: ['Bakurani_KOTH_01', 'KOTH_InfantryOnly'] }], 0);
-    expect(infantryFromRotation(r, 0)?.setup.experiences).toEqual(['Bakurani_KOTH_02', 'KOTH_InfantryOnly']);
+    const r = rotation([{ map: 'Bakurani', experiences: ['Bakurani_KOTH_01', 'KOTH_InfantryOnly'] }], 0);
+    expect(infantryFromRotation(r)?.setup.experiences).toEqual(['Bakurani_KOTH_02', 'KOTH_InfantryOnly']);
   });
 
   it('is null when the rotation has no infantry only map', () => {
-    expect(infantryFromRotation(rotation([{ map: 'A' }, { map: 'B' }], 0), 0)).toBeNull();
+    expect(infantryFromRotation(rotation([{ map: 'A' }, { map: 'B' }], 0))).toBeNull();
+    expect(infantryFromRotation(rotation([], 0))).toBeNull();
+  });
+});
+
+describe('justStarted', () => {
+  it('is a match where no side has a point', () => {
+    expect(justStarted([{ score: 0 }, { score: 0 }])).toBe(true);
+    expect(justStarted([{ score: 0 }, { score: 3 }])).toBe(false);
+  });
+
+  it('is not a match the server gave no scores for', () => {
+    expect(justStarted([])).toBe(false);
   });
 });
 

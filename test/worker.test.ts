@@ -37,13 +37,13 @@ type FakeRcon = {
   players: FakePlayer[];
   // Each request has its connection dropped, as when the server is off.
   down: boolean;
-  // Whether the rotation's map playing now is infantry only, and whether the rotation has another map that is.
-  infantry: boolean;
+  // Whether the match on now has no points yet, as after a cold start.
+  fresh: boolean;
   close: () => Promise<void>;
 };
 
 const startFakeRcon = async (password: string): Promise<FakeRcon> => {
-  const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false, infantry: true };
+  const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false, fresh: false };
   // ServerSettings.ini, which the bot writes the map rotation and the whitelist to.
   let config = { revision: 1, text: '' };
   const answer = (req: IncomingMessage, body: string): { status: number; body: unknown } => {
@@ -56,8 +56,8 @@ const startFakeRcon = async (password: string): Promise<FakeRcon> => {
           map: 'Kavkazi',
           players: { current: fake.players.length, max: 64 },
           factionScores: [
-            { name: 'Valkyra', score: 12 },
-            { name: 'Kharr', score: 9 },
+            { name: 'Valkyra', score: fake.fresh ? 0 : 12 },
+            { name: 'Kharr', score: fake.fresh ? 0 : 9 },
           ],
           rotation: { nowIndex: 0 },
         },
@@ -73,8 +73,10 @@ const startFakeRcon = async (password: string): Promise<FakeRcon> => {
       return { status: 200, body: { ok: true } };
     }
     if (req.method === 'GET' && req.url === '/v1/rotation') {
-      const playing = { map: 'Kavkazi', status: 'current', ...(fake.infantry ? { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly'] } : {}) };
-      const entries = fake.infantry ? [playing] : [playing, { map: 'Bakurani', experiences: ['Bakurani_KOTH_02', 'KOTH_InfantryOnly'] }];
+      const entries = [
+        { map: 'Kavkazi', status: 'current' },
+        { map: 'Bakurani', experiences: ['Bakurani_KOTH_02', 'KOTH_InfantryOnly'] },
+      ];
       return { status: 200, body: { enabled: true, mode: 'Sequential', entries } };
     }
     if (req.method === 'POST' && (req.url === '/v1/match/map' || req.url === '/v1/match/end')) return { status: 200, body: {} };
@@ -230,14 +232,16 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     } finally {
       rcon.down = false;
     }
-    // Back up: the next check reads it again.
+    // Back up: the next check reads it again. A match with points is left to finish, not ended as a cold start's would be.
     server.clearLogs();
+    rcon.requests.length = 0;
     expect(await runCron()).toMatchObject({ outcome: 'ok' });
+    expect(rcon.requests).not.toContain('POST /v1/match/end');
     expect(errors()).toEqual([]);
   });
 
-  it('changes a map that is not infantry only when the game server comes back from a restart', async () => {
-    rcon.infantry = false;
+  it('changes the map to an infantry only one when the game server cold starts', async () => {
+    rcon.fresh = true;
     try {
       // Not a restart while the server keeps answering.
       rcon.requests.length = 0;
@@ -257,7 +261,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect(await runCron()).toMatchObject({ outcome: 'ok' });
       expect(rcon.requests).not.toContain('POST /v1/match/end');
     } finally {
-      rcon.infantry = true;
+      rcon.fresh = false;
       rcon.down = false;
     }
   });
