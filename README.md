@@ -596,21 +596,21 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
-   Besides the maps (and a 🎲 Random map, which picks from every map the vote could have offered), three more rows of buttons
-   vote on the **time of day** (Morning, Day, Afternoon, Dusk, Night), the **weather** (Clear, Fog, Rain, Snow) and the
-   **circles** (the map's control-zone layout: Circle, Line and so on), each with 🎲 Random. Each person has one vote on each
-   of the four, each changed on its own. The time and weather are matched from the ids and names of the lightings the server
+   Besides the maps (and a 🎲 Random map, which picks from every map the vote could have offered), two more rows of buttons
+   vote on the **time of day** (Morning, Day, Afternoon, Dusk, Night) and the **weather** (Clear, Fog, Rain, Snow), each
+   with 🎲 Random. Each person has one vote on each of the three, each changed on its own. The time and weather are matched from the ids and names of the lightings the server
    lists: its ids start with Day and say the time after it (DayStart… and DayEarly… are Morning, DayLate… is Afternoon,
    DayEnd… is Dusk), and …Rain…, …Fog… and …Snow… are the weather, with everything else, overcast (…Gray…) included, Clear.
-   The circles are the layouts the maps have, the same by name on every map that has it, the most common first. A group the
-   server has no lighting or layout for isn't offered, at most four plus Random, and with fewer than two groups on a row
+   A group the server has no lighting for isn't offered, at most four plus Random, and with fewer than two groups on a row
    there is no such row. The winning time (a tie by chance) and weather give a random lighting that has both. Rain is liked
    by some and hated by others, so it wins only by having the most weather votes, and a tie in the weather goes to the
    safest: Clear, then Fog, then Rain. When no lighting has both, the weather wins: the lighting is one with that weather
    and the time nearest the one chosen (Dusk and Rain gives the afternoon rain). With only a time voted on, it is a clear
-   lighting at that time when there is one; with only weather, any time. The winning circles are the winning map's layout of
-   that name; a map without it gets one of its own by chance. Random picks from all of them. With no votes on a row, that
-   part stays as the rotation has it. It is all part of the same message, so nothing more is announced.
+   lighting at that time when there is one; with only weather, any time. With no votes on a row, that
+   part stays as the rotation has it. The **circles** (the map's control-zone layout) are not voted on: the winning map gets
+   one of its layouts by chance, never the layout a vote last gave that map (kept under `mapVoteZones`, and updated once the
+   winner is on the server). A map with only one layout keeps the rotation's. It is all part of the same message, so
+   nothing more is announced.
    Nothing is sent to the server that its own catalogue (`/v1/catalog/...`) does not list: only maps that list a game mode
    and infantry only themselves are offered, the infantry only id sent is that map's own, and every lighting is one the server
    listed. If the catalogue can't confirm the winner, nothing is staged (the vote retries until the match ends).
@@ -618,7 +618,7 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    `MAP_VOTE_MINUTES` (default 60, a backstop: a match lasts about 50 minutes). Closing picks the winner and takes the buttons
    away; nothing is sent to the server yet. A match already at that score when the bot sees it gets no vote.
 4. The map with the most votes (a tie is settled by chance) is put on the server, **infantry only**, with the lighting the
-   time of day, weather and circles votes chose. `MAP_VOTE_STAGING` says how:
+   time of day and weather votes chose, and random circles. `MAP_VOTE_STAGING` says how:
    - `rotation` (default): the map is put into the server's rotation as the next map, as soon as the vote closes, without
      cutting the match on now short. A build that serves the live rotation edit routes (`POST /v1/rotation/entries` and
      `POST /v1/rotation/entries/{index}/move`, listed in `GET /v1/capabilities`) gets it the way "Set as next map" in the
