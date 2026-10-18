@@ -643,6 +643,7 @@ describe('COMMANDS', () => {
       'vip',
       'rotations',
       'private',
+      'circles',
     ]);
     for (const command of COMMANDS.slice(5)) {
       expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });

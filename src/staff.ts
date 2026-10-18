@@ -1,3 +1,4 @@
+import type { BlockedCircles } from './circles.ts';
 import type { Config } from './config.ts';
 import {
   andList,
@@ -122,6 +123,11 @@ export type StaffRecords = {
   privateProfiles: () => Promise<PrivateProfiles>;
   makePrivate: (player: Named, by: string, byName?: string) => Promise<boolean>;
   makePublic: (steamId: string) => Promise<boolean>;
+  // The circles (control-zone layouts) staff blocked from map votes (see circles.ts), and blocking or unblocking one. False when it
+  // already was (or was not).
+  blockedCircles: () => Promise<BlockedCircles>;
+  blockCircle: (circle: { id: string; map: string; name: string }, by: string, byName?: string) => Promise<boolean>;
+  unblockCircle: (id: string) => Promise<boolean>;
 };
 
 export type StaffDeps = {
@@ -132,7 +138,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -186,6 +192,21 @@ const privateList = (profiles: PrivateProfiles): string => {
   const more = entries.length - lines.length;
   const count = `${entries.length} private profile${entries.length === 1 ? '' : 's'}`;
   return [`🔒 ${count}, the latest first:`, ...lines, ...(more > 0 ? [`And ${more} more.`] : [])].join('\n');
+};
+
+// Discord caps a message at 2000 characters, so /circles list names at most this many.
+const CIRCLES_LISTED = 15;
+
+// /circles list: the blocked circles by map, the latest first, with who blocked them and when.
+const circlesList = (circles: BlockedCircles): string => {
+  const entries = Object.entries(circles).sort(([, a], [, b]) => b.at - a.at);
+  if (entries.length === 0) return 'No blocked circles. /circles block blocks one.';
+  const lines = entries
+    .slice(0, CIRCLES_LISTED)
+    .map(([, c]) => `${mapEmoji(c.map)}**${mapName(c.map)}** · ${c.name}${c.by === 'unknown' ? '' : ` · by <@${c.by}>`} <t:${unix(c.at)}:R>`);
+  const more = entries.length - lines.length;
+  const count = `${entries.length} blocked circle${entries.length === 1 ? '' : 's'}`;
+  return [`🚫 ${count}, the latest first:`, ...lines, ...(more > 0 ? [`And ${more} more.`] : [])].join('\n');
 };
 
 // Online players first, so their current name wins, then everyone else once.
@@ -320,6 +341,23 @@ export const suggestStaff =
       if (name === 'private' && options['subcommand'] === 'remove') {
         const hidden = Object.entries(await records.privateProfiles()).map(([steamId, p]) => ({ steamId, name: p.name }));
         return matching(hidden, typed).map((p) => playerChoice(p));
+      }
+      if (name === 'circles' && options['subcommand'] === 'unblock') {
+        const lower = typed.trim().toLowerCase();
+        return Object.entries(await records.blockedCircles())
+          .filter(([id, c]) => [id, c.name, mapName(c.map)].some((label) => label.toLowerCase().includes(lower)))
+          .map(([id, c]) => ({ name: fit(`${mapName(c.map)} · ${c.name}`), value: id }));
+      }
+      if (name === 'circles' && options['subcommand'] === 'block' && focused === 'circle') {
+        // The layouts depend on the map, so they are listed once one is picked.
+        const map = options['map'] ?? '';
+        if (!/^[A-Za-z0-9_]+$/.test(map)) return [];
+        const lower = typed.trim().toLowerCase();
+        const blocked = await records.blockedCircles();
+        return (await fetchZones(rconUrl, rconPassword, map, http))
+          .filter((z) => z.name.trim().toLowerCase() !== 'none' && blocked[z.id] === undefined)
+          .filter((z) => z.id.toLowerCase().includes(lower) || z.name.toLowerCase().includes(lower))
+          .map((z) => ({ name: fit(z.name), value: z.id }));
       }
       if (name === 'vip' && options['subcommand'] === 'remove') {
         const [serverConfig, live, known, teams] = await Promise.all([
@@ -544,6 +582,36 @@ export const runStaffCommand =
               `as ${PRIVATE_NAME}, with no player page. Staff still see them as they are.`,
           }
         : { content: `${who(player)}'s profile is already private.` };
+    }
+
+    if (name === 'circles') {
+      if (options['subcommand'] === 'list') return { content: circlesList(await records.blockedCircles()) };
+      if (options['subcommand'] === 'unblock') {
+        const id = text('circle');
+        const blocked = (await records.blockedCircles())[id];
+        log.info(`/circles unblock by ${staff}: ${JSON.stringify(id)}`);
+        if (blocked === undefined || !(await records.unblockCircle(id))) return { content: "That circle isn't blocked. /circles list shows the blocked ones." };
+        return { content: `✅ **${blocked.name}** on ${mapEmoji(blocked.map)}**${mapName(blocked.map)}** is allowed again. Map votes can give it to a winning map.` };
+      }
+      // block: the circle is one of the map's layouts, picked by its id or typed by its name.
+      const map = text('map');
+      if (!/^[A-Za-z0-9_]+$/.test(map)) return { content: 'Pick the map from the list.' };
+      const layouts = (await fetchZones(rconUrl, rconPassword, map, http)).filter((z) => z.name.trim().toLowerCase() !== 'none');
+      const typed = text('circle').toLowerCase();
+      const circle = layouts.find((z) => z.id.toLowerCase() === typed) ?? layouts.find((z) => z.name.toLowerCase() === typed);
+      if (circle === undefined) return { content: `${mapName(map)} has no circles called "${text('circle')}". Pick one from the list.` };
+      log.info(`/circles block by ${staff}: ${JSON.stringify(circle.id)}`);
+      if (!(await records.blockCircle({ id: circle.id, map, name: circle.name }, by, userName))) {
+        return { content: `**${circle.name}** on ${mapName(map)} is already blocked.` };
+      }
+      const blockedNow = await records.blockedCircles();
+      const left = layouts.filter((z) => blockedNow[z.id] === undefined);
+      return {
+        content:
+          `🚫 **${circle.name}** on ${mapEmoji(map)}**${mapName(map)}** is blocked. Map votes won't give it to ${mapName(map)} when it wins. ` +
+          `/setnextmap and rotations can still use it.` +
+          (left.length === 0 ? ` ⚠️ Every circle on ${mapName(map)} is blocked now, so it keeps the one its rotation has.` : ''),
+      };
     }
 
     if (name === 'vip') {

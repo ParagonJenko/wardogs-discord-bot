@@ -156,6 +156,42 @@ describe('rain after rain', () => {
   });
 });
 
+describe('blocked circles in a vote', () => {
+  const layouts = [
+    { id: 'Z.Circle', name: 'Circle' },
+    { id: 'Z.Line', name: 'Line' },
+    { id: 'Z.Houses', name: 'Houses' },
+    { id: 'Z.None', name: 'None' },
+  ];
+  const rolls = [0, 0.3, 0.6, 0.99];
+
+  it('never draws a blocked circle', () => {
+    for (const roll of rolls) {
+      expect(randomZone(layouts, undefined, () => roll, ['Z.Line'])?.id).not.toBe('Z.Line');
+      expect(randomZone(layouts, 'Z.Circle', () => roll, ['Z.Line'])?.id).toBe('Z.Houses');
+    }
+  });
+
+  it('gives the only circle left, even the one it had last time, and none when every one is blocked', () => {
+    for (const roll of rolls) {
+      expect(randomZone(layouts, 'Z.Circle', () => roll, ['Z.Line', 'Z.Houses'])?.id).toBe('Z.Circle');
+    }
+    expect(randomZone(layouts, undefined, () => 0, ['Z.Circle', 'Z.Line', 'Z.Houses'])).toBeNull();
+  });
+
+  it('is as before when nothing is blocked, and a map with no choice still has none', () => {
+    expect(new Set(rolls.map((roll) => randomZone(layouts, undefined, () => roll)?.id)).size).toBeGreaterThan(1);
+    expect(randomZone([layouts[0]!, layouts[3]!], undefined, () => 0, [])).toBeNull();
+  });
+
+  it('keeps the circle an earlier try drew, unless it has been blocked since', () => {
+    const drawn = { at: NOW, winner: 'A', pending: true, zone: 'Z.Line' };
+    expect(zoneForTry(drawn, layouts, undefined, () => 0)?.id).toBe('Z.Line');
+    expect(zoneForTry(drawn, layouts, undefined, () => 0, ['Z.Circle'])?.id).toBe('Z.Line');
+    for (const roll of rolls) expect(zoneForTry(drawn, layouts, undefined, () => roll, ['Z.Line'])?.id).not.toBe('Z.Line');
+  });
+});
+
 describe('voteLogMessage', () => {
   const lightings = serverLightings;
   const closed = (picks: { user: string; map?: string; light?: string; weather?: string }[], outcome: MapVote['outcome']): MapVote => {

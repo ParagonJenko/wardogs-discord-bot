@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { BlockedCircles } from '../src/circles.ts';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
 import type { PrivateProfiles } from '../src/privacy.ts';
@@ -108,6 +109,9 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   privateProfiles: vi.fn(async (): Promise<PrivateProfiles> => ({})),
   makePrivate: vi.fn(async () => true),
   makePublic: vi.fn(async () => true),
+  blockedCircles: vi.fn(async (): Promise<BlockedCircles> => ({})),
+  blockCircle: vi.fn(async () => true),
+  unblockCircle: vi.fn(async () => true),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -625,6 +629,103 @@ describe('/private', () => {
     ]);
     await expect(suggest({ name: 'private', options: { subcommand: 'remove', steam_id: '' }, focused: 'steam_id' })).resolves.toEqual([
       { name: `Oldtimer · ${OLD}`, value: OLD },
+    ]);
+  });
+});
+
+describe('/circles', () => {
+  const zones = {
+    'GET /v1/catalog/maps/Europe/alternators': [
+      200,
+      {
+        alternators: [
+          { tag: 'ZoneAlternator.Ozeti.Default.Line', displayName: 'Line' },
+          { tag: 'ZoneAlternator.Ozeti.Default.Circle', displayName: 'Circle' },
+          { tag: 'ZoneAlternator.Ozeti.Default.None', displayName: 'None' },
+        ],
+      },
+    ],
+  } as Record<string, [number, unknown]>;
+
+  it('blocks a circle of a map, by id or by name, through the records, and logs who did it', async () => {
+    const { run, records, log } = setup(zones);
+
+    await expect(run('circles', { subcommand: 'block', map: 'Europe', circle: 'ZoneAlternator.Ozeti.Default.Line' })).resolves.toEqual({
+      content:
+        "🚫 **Line** on 🟦 **Ozeti** is blocked. Map votes won't give it to Ozeti when it wins. /setnextmap and rotations can still use it.",
+    });
+    await run('circles', { subcommand: 'block', map: 'Europe', circle: 'circle' });
+    expect(records.blockCircle).toHaveBeenCalledWith({ id: 'ZoneAlternator.Ozeti.Default.Line', map: 'Europe', name: 'Line' }, '42', undefined);
+    expect(records.blockCircle).toHaveBeenCalledWith({ id: 'ZoneAlternator.Ozeti.Default.Circle', map: 'Europe', name: 'Circle' }, '42', undefined);
+    expect(log.info.mock.calls[0]).toEqual(['/circles block by Discord user 42: "ZoneAlternator.Ozeti.Default.Line"']);
+  });
+
+  it('warns when every circle of the map is blocked, and refuses one the map does not have, or None', async () => {
+    const { run, records } = setup(zones);
+    records.blockedCircles.mockResolvedValue({
+      'ZoneAlternator.Ozeti.Default.Line': { map: 'Europe', name: 'Line', at: NOW, by: '1' },
+      'ZoneAlternator.Ozeti.Default.Circle': { map: 'Europe', name: 'Circle', at: NOW, by: '1' },
+    });
+
+    await expect(run('circles', { subcommand: 'block', map: 'Europe', circle: 'Circle' })).resolves.toEqual({
+      content: expect.stringContaining('⚠️ Every circle on Ozeti is blocked now, so it keeps the one its rotation has.'),
+    });
+    await expect(run('circles', { subcommand: 'block', map: 'Europe', circle: 'Triangle' })).resolves.toEqual({
+      content: 'Ozeti has no circles called "Triangle". Pick one from the list.',
+    });
+    await expect(run('circles', { subcommand: 'block', map: 'Europe', circle: 'None' })).resolves.toEqual({
+      content: 'Ozeti has no circles called "None". Pick one from the list.',
+    });
+    await expect(run('circles', { subcommand: 'block', map: '../x', circle: 'Line' })).resolves.toEqual({ content: 'Pick the map from the list.' });
+  });
+
+  it('says when a circle is already blocked, and unblocks one', async () => {
+    const { run, records } = setup(zones);
+    records.blockCircle.mockResolvedValue(false);
+    await expect(run('circles', { subcommand: 'block', map: 'Europe', circle: 'Line' })).resolves.toEqual({
+      content: '**Line** on Ozeti is already blocked.',
+    });
+
+    records.blockedCircles.mockResolvedValue({ 'ZoneAlternator.Ozeti.Default.Line': { map: 'Europe', name: 'Line', at: NOW, by: '1' } });
+    await expect(run('circles', { subcommand: 'unblock', circle: 'ZoneAlternator.Ozeti.Default.Line' })).resolves.toEqual({
+      content: '✅ **Line** on 🟦 **Ozeti** is allowed again. Map votes can give it to a winning map.',
+    });
+    expect(records.unblockCircle).toHaveBeenCalledWith('ZoneAlternator.Ozeti.Default.Line');
+    await expect(run('circles', { subcommand: 'unblock', circle: 'ZoneAlternator.Nowhere' })).resolves.toEqual({
+      content: "That circle isn't blocked. /circles list shows the blocked ones.",
+    });
+  });
+
+  it('lists the blocked circles, the latest first, with who blocked them and when', async () => {
+    const { run, records } = setup();
+    await expect(run('circles', { subcommand: 'list' })).resolves.toEqual({ content: 'No blocked circles. /circles block blocks one.' });
+    records.blockedCircles.mockResolvedValue({
+      a: { map: 'Europe', name: 'Line', at: NOW - 86_400_000, by: '42' },
+      b: { map: 'Kavkazi', name: 'Farmland Circle', at: NOW, by: 'unknown' },
+    });
+    await expect(run('circles', { subcommand: 'list' })).resolves.toEqual({
+      content: [
+        '🚫 2 blocked circles, the latest first:',
+        `🟧 **Bakurani** · Farmland Circle <t:${NOW / 1000}:R>`,
+        `🟦 **Ozeti** · Line · by <@42> <t:${(NOW - 86_400_000) / 1000}:R>`,
+      ].join('\n'),
+    });
+  });
+
+  it("offers a map's circles for block, without None or the blocked ones, and the blocked circles for unblock", async () => {
+    const { suggest, records } = setup(zones);
+    records.blockedCircles.mockResolvedValue({ 'ZoneAlternator.Ozeti.Default.Circle': { map: 'Europe', name: 'Circle', at: NOW, by: '1' } });
+
+    await expect(suggest({ name: 'circles', options: { subcommand: 'block', map: 'Europe', circle: '' }, focused: 'circle' })).resolves.toEqual([
+      { name: 'Line', value: 'ZoneAlternator.Ozeti.Default.Line' },
+    ]);
+    await expect(suggest({ name: 'circles', options: { subcommand: 'block', map: '', circle: '' }, focused: 'circle' })).resolves.toEqual([]);
+    await expect(suggest({ name: 'circles', options: { subcommand: 'unblock', circle: 'oz' }, focused: 'circle' })).resolves.toEqual([
+      { name: 'Ozeti · Circle', value: 'ZoneAlternator.Ozeti.Default.Circle' },
+    ]);
+    // The map is picked the same way as for /setnextmap.
+    await expect(suggest({ name: 'circles', options: { subcommand: 'block', map: 'oz' }, focused: 'map' })).resolves.toEqual([
+      { name: '🟦 Ozeti', value: 'Europe' },
     ]);
   });
 });
