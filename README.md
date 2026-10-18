@@ -666,6 +666,10 @@ Set up (Cloudflare):
 No new Developer Portal setting: button presses arrive at the same Interactions Endpoint URL as the slash commands. While
 `MAP_VOTE` is on and the token or channel is missing, no vote opens and the logs say why.
 
+Every counted vote is logged with who cast it and what for, such as `Map vote 1792338301490: "Ash" (9001) voted map Bakurani (was Ozeti) via discord`
+(the Discord user ID, their name in the server when it is known, and `discord` or `website`). The logs are the only place that is kept:
+the website and the API never get who voted.
+
 The website's `/vote` page shows the same counts, refreshed every few seconds, with a link to the channel. A visitor can't
 vote there, but a signed-in member of the server can (see [Player accounts](#player-accounts)): the same vote, one per Discord
 account. `GET /api/vote` gives the options, votes, result and the channel link, never who voted. The vote is in the Durable Object

@@ -889,6 +889,16 @@ describe('a press of a vote button', () => {
     expect(d.privateFollowUp).toHaveBeenCalledWith('111', 'tok', { content: 'You voted for **Bakurani**.', allowed_mentions: { parse: [] } });
   });
 
+  it("passes the voter's server name on, for the log of who voted for what", async () => {
+    const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: null, reply: 'ok' })) };
+    const named = { ...press(), member: { nick: 'Ash', user: { id: '9001', username: 'ash_01' } } };
+    const { body, signature, timestamp } = await signed(named);
+
+    await handleInteraction(body, signature, timestamp, d);
+
+    expect(d.castVote).toHaveBeenCalledWith({ poll: '42', map: 'Kavkazi', userId: '9001', userName: 'Ash' });
+  });
+
   it('counts a time of day button as a vote on the time of day', async () => {
     const d = { ...deps(), voteGuildId: '777', castVote: vi.fn(async () => ({ update: { embeds: [embed] }, reply: 'You voted for **Dusk**.' })) };
     const { body, signature, timestamp } = await signed({ ...press(), data: { custom_id: 'maplight:42:dusk' } });

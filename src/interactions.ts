@@ -417,7 +417,7 @@ type InteractionDeps = {
   // A press of a next-map vote button (see mapvote.ts): what to do with the vote. `update` is the vote message with the new
   // counts, when the vote changed; `reply` is for the voter alone. Without it, buttons are not answered.
   // `map` is a map button, `light` a time of day button, `weather` a weather button and `zone` a circles button: one of them.
-  castVote?: (press: { poll: string; map?: string; light?: string; weather?: string; userId: string }) => Promise<{ update: unknown | null; reply: string }>;
+  castVote?: (press: { poll: string; map?: string; light?: string; weather?: string; userId: string; userName?: string }) => Promise<{ update: unknown | null; reply: string }>;
   // The one server whose members may vote.
   voteGuildId?: string | undefined;
 };
@@ -596,7 +596,9 @@ const handleVotePress = async (interaction: z.infer<typeof InteractionSchema>, d
   }
   const token = interaction.token;
   try {
-    const { update, reply } = await deps.castVote({ ...press, userId });
+    // The name is only for the log of who voted for what.
+    const userName = interaction.member?.nick || interaction.member?.user?.global_name || interaction.member?.user?.username;
+    const { update, reply } = await deps.castVote({ ...press, userId, ...(userName ? { userName } : {}) });
     if (update === null) return { status: 200, body: privateMessage(reply) };
     return {
       status: 200,

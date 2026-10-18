@@ -23,6 +23,7 @@ import {
   parseLastZones,
   parseMapVote,
   parseRecentMaps,
+  voteLogLine,
   mapIdOf,
   pickOptions,
   postVoteMessage,
@@ -1471,7 +1472,15 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // A press of a vote button: counts it and answers with the vote message as it is now, and what to tell the voter.
-  async castMapVote(press: { poll: string; map?: string; light?: string; weather?: string; userId: string }): Promise<{ update: unknown | null; reply: string }> {
+  async castMapVote(press: {
+    poll: string;
+    map?: string;
+    light?: string;
+    weather?: string;
+    userId: string;
+    userName?: string;
+    via?: string;
+  }): Promise<{ update: unknown | null; reply: string }> {
     const config = loadConfig(stringVars(this.env));
     return this.voting(async () => {
       const now = Date.now();
@@ -1493,6 +1502,7 @@ export class Watcher extends DurableObject<Env> {
         return { update: null, reply: cast.result === 'closed' ? 'The vote has closed.' : 'That choice is not in this vote.' };
       }
       await this.ctx.storage.put(MAP_VOTE_KEY, cast.vote);
+      console.info(voteLogLine(cast.vote, press, vote.ballots.find((b) => b.user === press.userId)));
       const name =
         press.map !== undefined
           ? (cast.vote.options.find((o) => o.map === press.map)?.name ?? mapName(press.map))
@@ -3347,6 +3357,7 @@ export class Watcher extends DurableObject<Env> {
     const result = await this.castMapVote({
       poll: vote.poll,
       userId,
+      via: 'website',
       ...(vote.map === undefined ? {} : { map: vote.map }),
       ...(vote.light === undefined ? {} : { light: vote.light }),
       ...(vote.weather === undefined ? {} : { weather: vote.weather }),

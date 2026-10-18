@@ -30,6 +30,7 @@ import {
   deleteVoteMessage,
   postVoteMessage,
   mapIdOf,
+  voteLogLine,
   pickOptions,
   publicVote,
   withPlayed,
@@ -81,6 +82,39 @@ describe('pickOptions', () => {
 
   it('offers nothing when fewer than two maps could be voted on', () => {
     expect(pickOptions([choice('Now'), choice('A')], 'Now', ['Now'], 4, Math.random)).toEqual([]);
+  });
+});
+
+describe('voteLogLine', () => {
+  const base = { ...vote(), conditions: conditionOptions(serverLightings), weather: weatherOptions(serverLightings) };
+  const cast = (v: MapVote, ballotOf: Parameters<typeof castVote>[1], at: number): MapVote => {
+    const result = castVote(v, ballotOf, at);
+    if (!('vote' in result)) throw new Error(result.result);
+    return result.vote;
+  };
+
+  it('says who voted for which map, by name and Discord ID', () => {
+    const voted = cast(base, { user: '9001', map: 'B' }, NOW + 1);
+    expect(voteLogLine(voted, { userId: '9001', map: 'B', userName: 'Ash' }, undefined)).toBe('Map vote 42: "Ash" (9001) voted map Bravo via discord');
+  });
+
+  it('says what a changed vote replaced', () => {
+    const first = cast(base, { user: '9001', map: 'B' }, NOW + 1);
+    const moved = cast(first, { user: '9001', map: 'C' }, NOW + 2);
+    expect(voteLogLine(moved, { userId: '9001', map: 'C' }, first.ballots[0])).toBe('Map vote 42: 9001 voted map Charlie (was Bravo) via discord');
+  });
+
+  it('names the time of day and the weather, and where the vote came from', () => {
+    const voted = cast(cast(base, { user: '5', light: 'dusk' }, NOW + 1), { user: '5', weather: 'rain' }, NOW + 2);
+    expect(voteLogLine(voted, { userId: '5', light: 'dusk' }, undefined)).toBe('Map vote 42: 5 voted time of day Dusk via discord');
+    expect(voteLogLine(voted, { userId: '5', weather: 'rain', via: 'website' }, undefined)).toBe('Map vote 42: 5 voted weather Rain via website');
+  });
+
+  it('keeps a name with quotes or line breaks on one line', () => {
+    const voted = cast(base, { user: '1', map: 'A' }, NOW + 1);
+    const line = voteLogLine(voted, { userId: '1', map: 'A', userName: 'Bo "x"\nHacker' }, undefined);
+    expect(line).not.toContain('\n');
+    expect(line).toContain('"Bo \\"x\\"\\nHacker" (1)');
   });
 });
 

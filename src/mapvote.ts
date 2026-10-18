@@ -613,6 +613,26 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
   return { embeds: [embed], components, allowed_mentions: { parse: [] } };
 };
 
+// The log line for a counted vote: who (the Discord user ID, and their name when it is known), what they voted for, and what
+// it replaced. The logs are the only place who voted for what is kept apart from the vote itself, which the website never gets.
+export const voteLogLine = (
+  vote: MapVote,
+  press: { userId: string; map?: string; light?: string; weather?: string; userName?: string | undefined; via?: string | undefined },
+  before: Ballot | undefined,
+): string => {
+  const label = (key: string | null | undefined, rows: readonly { key: string; label: string }[]): string | null =>
+    key == null ? null : (rows.find((r) => r.key === key)?.label ?? key);
+  const [what, now, was] =
+    press.map !== undefined
+      ? ['map', vote.options.find((o) => o.map === press.map)?.name ?? press.map, vote.options.find((o) => o.map === before?.map)?.name ?? before?.map]
+      : press.weather !== undefined
+        ? ['weather', label(press.weather, vote.weather), label(before?.weather, vote.weather)]
+        : ['time of day', label(press.light, vote.conditions), label(before?.light, vote.conditions)];
+  // JSON.stringify keeps a name with quotes or line breaks on one line.
+  const who = press.userName ? `${JSON.stringify(press.userName.slice(0, 40))} (${press.userId})` : press.userId;
+  return `Map vote ${vote.id}: ${who} voted ${what} ${now}${was ? ` (was ${was})` : ''} via ${press.via ?? 'discord'}`;
+};
+
 // A button's custom_id: "mapvote:<vote id>:<map id>". Null for anything else.
 export const parseVoteButton = (customId: string | undefined): { poll: string; map: string } | null => {
   const found = /^mapvote:(\d{1,20}):([A-Za-z0-9_]{1,64})$/.exec(customId ?? '');
