@@ -594,6 +594,8 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    random maps (2 to 6, default 4; only maps with a game mode, and never the map being played, or one of the 4 played before it,
    so the same map doesn't come round again; a server with so few maps that fewer than two are left offers the ones played
    longest ago instead, never the one being played). It tells the server in game to vote in the Discord (needs `DISCORD_INVITE`).
+   The last match's vote message is deleted once the new one is posted, so the channel only has the current vote (the bot can
+   delete its own messages without any extra permission).
 2. Members press a button to vote. **One vote per Discord account**: pressing another button moves your vote. The message
    updates with the counts, and only you see a reply saying what was counted. Only members of `DISCORD_GUILD_ID` can vote.
    Besides the maps (and a 🎲 Random map, which picks from every map the vote could have offered), two more rows of buttons
