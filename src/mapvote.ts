@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { mapEmoji, mapName, type Embed } from './discord.ts';
+import { mapEmoji, mapName, type DiscordMessage, type Embed } from './discord.ts';
 import type { MatchFeed } from './matchfeed.ts';
 import type { MapChoice } from './rotationspage.ts';
 
@@ -81,6 +81,10 @@ export type VoteOutcome = {
   zoneName?: string | null;
 };
 
+// What this vote does about rain: `all` when the match being played is in the rain, so no rain is chosen; and `skipped`, the map
+// (an id) that last had rain, which is not offered.
+export type RainRule = { all: boolean; skipped: string | null };
+
 export type MapVote = {
   // The match it is for: when the match started, which is also its id.
   id: string;
@@ -102,6 +106,7 @@ export type MapVote = {
   // The Discord message the vote is in, to update as votes come and when it ends.
   message: { channelId: string; messageId: string } | null;
   outcome: VoteOutcome | null;
+  rain: RainRule;
 };
 
 const OptionSchema = z.object({ key: z.string(), label: z.string(), lightings: z.array(z.object({ id: z.string(), name: z.string() })) });
@@ -140,6 +145,7 @@ const MapVoteSchema = z.object({
     })
     .nullable()
     .default(null),
+  rain: z.object({ all: z.boolean(), skipped: z.string().nullable() }).default({ all: false, skipped: null }),
 });
 
 export const parseMapVote = (raw: unknown): MapVote | null => {
@@ -182,20 +188,30 @@ export const mapIdOf = (maps: readonly MapChoice[], map: string): string => {
 // The maps a vote can offer: ones the server can play (with a game mode and infantry only) that were not played lately, and never the one
 // being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
 // the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is none.
-export const votePool = (maps: readonly MapChoice[], playing: string, recent: readonly string[], count: number): MapChoice[] => {
+export const votePool = (
+  maps: readonly MapChoice[],
+  playing: string,
+  recent: readonly string[],
+  count: number,
+  avoid: readonly string[] = [],
+): MapChoice[] => {
   // Only maps that list infantry only themselves: every winner is played with it, and the id sent must be one that map has
   // (see applyVoteWinner), never one found on another map.
   const playable = maps.filter((m) => m.id !== playing && m.modes.length > 0 && m.modifiers.some((x) => x.key === 'infantry_only'));
   // Most recent first, so the oldest are the first let back in.
   const newestFirst = [...recent].reverse();
-  const fresh = playable.filter((m) => !recent.includes(m.id));
-  const pool = [...fresh];
-  if (pool.length < Math.min(count, 2)) {
-    // Not enough maps that were not played lately: let back in the ones played longest ago, to make up two.
-    const back = playable.filter((m) => recent.includes(m.id)).sort((a, b) => newestFirst.indexOf(b.id) - newestFirst.indexOf(a.id));
-    pool.push(...back.slice(0, 2 - pool.length));
-  }
-  return pool.length < 2 ? [] : pool;
+  const poolOf = (from: readonly MapChoice[]): MapChoice[] => {
+    const pool = from.filter((m) => !recent.includes(m.id));
+    if (pool.length < Math.min(count, 2)) {
+      // Not enough maps that were not played lately: let back in the ones played longest ago, to make up two.
+      const back = from.filter((m) => recent.includes(m.id)).sort((a, b) => newestFirst.indexOf(b.id) - newestFirst.indexOf(a.id));
+      pool.push(...back.slice(0, 2 - pool.length));
+    }
+    return pool.length < 2 ? [] : pool;
+  };
+  // The maps to avoid (the one that last had rain) are left out, unless that leaves no vote.
+  const without = poolOf(playable.filter((m) => !avoid.includes(m.id)));
+  return without.length > 0 || avoid.length === 0 ? without : poolOf(playable);
 };
 
 // The maps on the buttons: `count` of the pool, chosen at random.
@@ -205,7 +221,8 @@ export const pickOptions = (
   recent: readonly string[],
   count: number,
   random: () => number,
-): VoteOption[] => sample(votePool(maps, playing, recent, count), count, random).map((m) => ({ map: m.id, name: m.name }));
+  avoid: readonly string[] = [],
+): VoteOption[] => sample(votePool(maps, playing, recent, count, avoid), count, random).map((m) => ({ map: m.id, name: m.name }));
 
 // The circles (control-zone layout) each map last had from a vote, by map id, so the next time it wins it gets another.
 export const LAST_ZONES_KEY = 'mapVoteZones';
@@ -278,6 +295,30 @@ export const timeOf = (l: Lighting): string | null =>
 // The key of a lighting's weather: clear unless it says otherwise.
 export const weatherOf = (l: Lighting): string => WEATHER_CHECKS.find((key) => WEATHERS.find((w) => w.key === key)!.pattern.test(textOf(l))) ?? 'clear';
 
+export const isRain = (l: Lighting): boolean => weatherOf(l) === 'rain';
+
+// What is kept between matches to tell if rain was last: the match it is for (when it started), the map being played (as the
+// status names it), whether its lighting has rain, the map that last had rain before it and the map that last had rain up to
+// and including it (`lastRain`, which the next match starts from).
+export const RAIN_KEY = 'mapVoteRain';
+export type RainRecord = { matchStartedAt: number; map: string; rain: boolean; ban: string | null; lastRain: string | null };
+
+export const parseRainRecord = (raw: unknown): RainRecord | null => {
+  const parsed = z
+    .object({ matchStartedAt: z.number(), map: z.string(), rain: z.boolean(), ban: z.string().nullable(), lastRain: z.string().nullable() })
+    .safeParse(raw);
+  return parsed.success ? parsed.data : null;
+};
+
+// The record for a match that began, from the one before it and the lighting its map is being played with (undefined when the
+// rotation does not say, and then it counts as no rain).
+export const rainRecordFor = (previous: RainRecord | null, matchStartedAt: number, map: string, lighting: string | undefined): RainRecord => {
+  if (previous?.matchStartedAt === matchStartedAt) return previous;
+  const rain = lighting !== undefined && isRain({ id: lighting, name: lighting });
+  const lastRain = previous?.lastRain ?? null;
+  return { matchStartedAt, map, rain, ban: rain ? null : lastRain, lastRain: rain ? map : lastRain };
+};
+
 // A row for some groups of the server's lightings: the groups it has in the order shown, at most four kept by `priority`,
 // and Random across all the lightings. Nothing (no row) when there are fewer than two groups to choose between.
 const groupRow = (
@@ -311,7 +352,7 @@ export const openVote = (
   closeScore: number,
   conditions: ConditionOption[] = [],
   weather: ConditionOption[] = [],
-  more: { pool?: VoteOption[] } = {},
+  more: { pool?: VoteOption[]; rain?: RainRule } = {},
 ): MapVote => ({
   id: String(match.startedAt),
   matchStartedAt: match.startedAt,
@@ -327,6 +368,7 @@ export const openVote = (
   ballots: [],
   message: null,
   outcome: null,
+  rain: more.rain ?? { all: false, skipped: null },
 });
 
 export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
@@ -416,9 +458,13 @@ const nearestTime = (lightings: readonly Lighting[], time: string): Lighting[] =
 // time nearest the one chosen. With only a time, the lighting is a clear one when that time has one; with only weather, any
 // time. Rain is liked by some and hated by others, so it wins only by having the most votes: a tie in the weather goes to the
 // safest (Clear, then Fog, then Rain), not to chance.
-export const chooseConditions = (vote: MapVote, random: () => number): Lighting | null => {
-  const time = leader(vote.conditions, tallyConditions(vote), random);
-  const weather = leader(vote.weather, tallyWeather(vote), random, true);
+export const chooseConditions = (vote: MapVote, random: () => number, noRain = false): Lighting | null => {
+  // Without rain, no lighting with rain is chosen, and a vote for rain counts for nothing: a group left with no lighting is gone.
+  const without = (rows: ConditionOption[]): ConditionOption[] =>
+    noRain ? rows.map((r) => ({ ...r, lightings: r.lightings.filter((l) => !isRain(l)) })).filter((r) => r.lightings.length > 0) : rows;
+  const open = noRain ? { ...vote, conditions: without(vote.conditions), weather: without(vote.weather) } : vote;
+  const time = leader(open.conditions, tallyConditions(open), random);
+  const weather = leader(open.weather, tallyWeather(open), random, true);
   const pick = (lightings: readonly Lighting[]): Lighting | null => sample(lightings, 1, random)[0] ?? null;
   if (time !== null && weather !== null) {
     const ids = new Set(weather.lightings.map((l) => l.id));
@@ -547,6 +593,12 @@ const conditionsAsked = (shown: PublicVote): string => {
   return asked.length === 1 ? ` and ${asked[0]}` : `, ${asked.slice(0, -1).join(', ')} and ${asked.at(-1)}`;
 };
 
+// Why there may be no rain, or a map missing, when that is so: it was last match, or one map had it last.
+const rainNote = (vote: MapVote): string => {
+  const left = vote.rain.skipped === null ? '' : ` ${mapName(vote.rain.skipped)} is not in the vote: it had rain last.`;
+  return (vote.rain.all ? ' No rain this time: the last match was in the rain.' : '') + left;
+};
+
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
   const shown = publicVote(vote, now);
   const at = `<t:${Math.floor(vote.closesAt / 1000)}:R>`;
@@ -554,7 +606,7 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
   const where = siteUrl === undefined ? '' : ` Results also on ${siteUrl.replace(/\/$/, '')}/vote.`;
   const description = shown.open
     ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**${conditionsAsked(shown)}. ` +
-      `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${where}`
+      `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${rainNote(vote)}${where}`
     : shown.winner !== null
       ? shown.pending
         ? `**${shown.winner.name}** won. Putting it on the server…`
@@ -611,6 +663,80 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
     ...conditionRow(vote.weather, WEATHER_ID_PREFIX),
   ];
   return { embeds: [embed], components, allowed_mentions: { parse: [] } };
+};
+
+// The log line for a counted vote: who (the Discord user ID, and their name when it is known), what they voted for, and what
+// it replaced. The logs are the only place who voted for what is kept apart from the vote itself, which the website never gets.
+export const voteLogLine = (
+  vote: MapVote,
+  press: { userId: string; map?: string; light?: string; weather?: string; userName?: string | undefined; via?: string | undefined },
+  before: Ballot | undefined,
+): string => {
+  const label = (key: string | null | undefined, rows: readonly { key: string; label: string }[]): string | null =>
+    key == null ? null : (rows.find((r) => r.key === key)?.label ?? key);
+  const [what, now, was] =
+    press.map !== undefined
+      ? ['map', vote.options.find((o) => o.map === press.map)?.name ?? press.map, vote.options.find((o) => o.map === before?.map)?.name ?? before?.map]
+      : press.weather !== undefined
+        ? ['weather', label(press.weather, vote.weather), label(before?.weather, vote.weather)]
+        : ['time of day', label(press.light, vote.conditions), label(before?.light, vote.conditions)];
+  // JSON.stringify keeps a name with quotes or line breaks on one line.
+  const who = press.userName ? `${JSON.stringify(press.userName.slice(0, 40))} (${press.userId})` : press.userId;
+  return `Map vote ${vote.id}: ${who} voted ${what} ${now}${was ? ` (was ${was})` : ''} via ${press.via ?? 'discord'}`;
+};
+
+// One message for the moderation log with every ballot of a vote that closed: for the map, the time of day and the weather, each
+// choice with the people who voted for it, as mentions (Discord shows their names; nobody is pinged). Choices nobody voted for
+// are left out. Cut short, with a note, when it would not fit in one embed; the log of each vote has them all.
+const VOTE_LOG_CHARS = 3800;
+
+export const voteLogMessage = (vote: MapVote): DiscordMessage => {
+  const outcome = vote.outcome;
+  const winner = outcome?.winner ?? null;
+  const rows = (
+    title: string,
+    choices: readonly { key: string; label: string }[],
+    chosen: (b: Ballot) => string | null,
+  ): string[] => {
+    const lines = choices.flatMap((c) => {
+      const users = vote.ballots.filter((b) => chosen(b) === c.key).map((b) => `<@${b.user}>`);
+      return users.length === 0 ? [] : [`${c.label} (${users.length}): ${users.join(' ')}`];
+    });
+    return lines.length === 0 ? [] : [`**${title}**`, ...lines];
+  };
+  const lines = [
+    ...rows(
+      '🗺️ Map',
+      vote.options.map((o) => ({ key: o.map, label: `${mapEmoji(o.map)}${o.name}${o.map === winner ? ' ✅' : ''}` })),
+      (b) => b.map,
+    ),
+    ...rows('🕒 Time of day', vote.conditions, (b) => b.light),
+    ...rows('🌦️ Weather', vote.weather, (b) => b.weather),
+  ];
+  let text = '';
+  let shown = 0;
+  for (const line of lines) {
+    if (text.length + line.length + 1 > VOTE_LOG_CHARS) break;
+    text += `${line}\n`;
+    shown += 1;
+  }
+  const cut = lines.length - shown;
+  const result =
+    winner === null
+      ? 'No map won.'
+      : `**${mapEmoji(winner)}${vote.options.find((o) => o.map === winner)?.name ?? mapName(winner)}** won${outcome?.lightingName ? `, **${outcome.lightingName}**` : ''}.`;
+  return {
+    embeds: [
+      {
+        title: `🗳️ Map vote closed · after ${mapName(vote.fromMap)}`,
+        description: `${result} ${vote.ballots.length} ${vote.ballots.length === 1 ? 'person' : 'people'} voted.\n\n${text}${cut > 0 ? `…${cut} more lines cut: see the logs.` : ''}`.trim(),
+        color: winner === null ? OVER_COLOUR : WON_COLOUR,
+        footer: { text: `Vote ${vote.id}` },
+        timestamp: new Date(outcome?.at ?? vote.closesAt).toISOString(),
+      },
+    ],
+    allowed_mentions: { parse: [], roles: [] },
+  };
 };
 
 // A button's custom_id: "mapvote:<vote id>:<map id>". Null for anything else.
