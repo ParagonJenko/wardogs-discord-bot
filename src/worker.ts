@@ -23,6 +23,7 @@ import {
   parseLastZones,
   parseMapVote,
   parseRecentMaps,
+  mapIdOf,
   pickOptions,
   postVoteMessage,
   publicVote,
@@ -391,7 +392,9 @@ import {
   canMoveEntries,
   parseVoteInsert,
   planInsert,
+  moveInsert,
   planMove,
+  restoreDue,
   rotationFacts,
   stillInserted,
   VOTE_INSERT_KEY,
@@ -1408,7 +1411,12 @@ export class Watcher extends DurableObject<Env> {
         rotation.entries,
       );
       // The live status reads the new rotation at the next check.
-      if (put.written) await this.ctx.storage.delete('boardRotation');
+      if (put.written) {
+        await this.ctx.storage.delete('boardRotation');
+        // The whole rotation was replaced, so a vote's winner waiting to be taken out is gone with it, and putting the old
+        // rotation back later would undo this one.
+        await this.ctx.storage.delete(VOTE_INSERT_KEY);
+      }
       await this.ctx.storage.put('rotations', done);
       const next = !put.written
         ? ''
@@ -1598,7 +1606,11 @@ export class Watcher extends DurableObject<Env> {
     // A match already at its close score is nearly over: a vote would close at once, so none opens.
     const closeScore = closeScoreFor(config.scoreToWin, rule.closePercent);
     if (Math.max(0, ...match.factionScores.map((f) => f.score)) >= closeScore) return;
-    const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
+    // The status names the map ("Ozeti") where the catalogue has ids ("Europe"): the rules on what to offer go by id.
+    const maps = catalog?.maps ?? [];
+    const playingId = mapIdOf(maps, playing);
+    const recentIds = recent.map((m) => mapIdOf(maps, m));
+    const options = catalog === null ? [] : pickOptions(maps, playingId, recentIds, rule.options, Math.random);
     if (options.length === 0) {
       // Said at most every 10 minutes, so a server that can never offer two maps doesn't fill the logs once a minute.
       if (Date.now() - voteUnavailableLoggedAt >= VOTE_LOG_MS) {
@@ -1616,7 +1628,7 @@ export class Watcher extends DurableObject<Env> {
     }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     // The maps a Random map button picks from.
-    const pool = votePool(catalog?.maps ?? [], playing, recent, rule.options);
+    const pool = votePool(maps, playingId, recentIds, rule.options);
     const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []), weatherOptions(catalog?.lightings ?? []), {
       pool: pool.map((m) => ({ map: m.id, name: m.name })),
     });
@@ -1711,6 +1723,13 @@ export class Watcher extends DurableObject<Env> {
     const outcomeOf = (pending: boolean, at: number): VoteOutcome =>
       outcomeWithZone({ ...(vote.outcome ?? { at, winner }), at, winner, pending }, picked);
     try {
+      // An earlier vote's winner still waiting to be taken out (see restoreVoteInsert) goes now: this winner is planned from the
+      // rotation as it is, which must not have the old one in it.
+      const earlier = parseVoteInsert(await this.ctx.storage.get(VOTE_INSERT_KEY));
+      if (staging === 'rotation' && earlier !== null && earlier.voteId !== vote.id) {
+        await this.putBackRotation(config, earlier, playing);
+        if (parseVoteInsert(await this.ctx.storage.get(VOTE_INSERT_KEY)) !== null) throw new Error('the last vote\'s winner is still in the rotation');
+      }
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
       let rotationProblem = 'the server\'s rotation could not be read';
@@ -1775,8 +1794,9 @@ export class Watcher extends DurableObject<Env> {
 
   // Puts the winner into the server's rotation as the next map. The reason, as text, when the rotation can't take it: it
   // was not read, or is off or random. A build with the live edit routes moves (or adds) it into the slot after the one
-  // playing, as "Set as next map" in the server's own console does; it stays there, as it does from the console. Other
-  // builds get it through the config document (see writeVoteWinner). The server keeps playing the match on now.
+  // playing, as "Set as next map" in the server's own console does, and is taken out again once it has played (see
+  // restoreVoteInsert). Other builds get it through the config document (see writeVoteWinner). The server keeps playing the
+  // match on now.
   private async insertVoteWinner(config: Config, vote: MapVote, winner: RotationEntry, rotation: Rotation | null, notRead: string): Promise<true | string> {
     if (rotation === null) return notRead;
     const { rconUrl, rconPassword } = config;
@@ -1793,7 +1813,14 @@ export class Watcher extends DurableObject<Env> {
     // Done again from the rotation as it is, a retry finds the winner already in it and moves it no further than needed.
     const move = planMove(rotation, slot, winner);
     const { map, ...setup } = winner;
-    if (move.add) await addRotationEntry(rconUrl, rconPassword, map, http, setup);
+    if (move.add) {
+      // Kept first, as in writeVoteWinner: if the add goes through and this check then fails, the entry is still taken out
+      // once it has played. A retry finds the entry in the rotation and keeps what was kept.
+      const written = parseVoteInsert(await this.ctx.storage.get(VOTE_INSERT_KEY));
+      const insert = written?.voteId === vote.id ? null : moveInsert(vote, rotation, slot, winner, Date.now());
+      if (insert !== null) await this.ctx.storage.put(VOTE_INSERT_KEY, insert);
+      await addRotationEntry(rconUrl, rconPassword, map, http, setup);
+    }
     const step = move.to < move.from ? -1 : 1;
     for (let at = move.from; at !== move.to; at += step) await moveRotationEntry(rconUrl, rconPassword, at, step < 0 ? 'up' : 'down', http);
     // The live status reads the new rotation at the next check.
@@ -1855,12 +1882,19 @@ export class Watcher extends DurableObject<Env> {
     return true;
   }
 
-  // Once the server has moved on from the map the vote was for, the rotation is written back as it was, from the map that
-  // would have come next, if it is still the one that was written (staff or the daily rotation may have changed it since).
+  // Once the match after the vote's has run RESTORE_DELAY_MS, the rotation is written back as it was, from the
+  // map that would have come next, if it is still the one that was written (staff or the daily rotation may have changed it
+  // since). Not sooner: a write as the map loads changed the lighting the server played.
   private async restoreVoteInsert(config: Config, playing: string): Promise<void> {
     const storage = this.ctx.storage;
     const insert = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
-    if (insert === null || playing === insert.fromMap) return;
+    if (insert === null) return;
+    const match = parseState(await storage.get('state'))?.match ?? null;
+    if (restoreDue(insert, playing, match?.startedAt ?? null, Date.now())) await this.putBackRotation(config, insert, playing);
+  }
+
+  private async putBackRotation(config: Config, insert: VoteInsert, playing: string): Promise<void> {
+    const storage = this.ctx.storage;
     try {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);

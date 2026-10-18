@@ -9,7 +9,8 @@ import type { RotationEntry } from './rotations.ts';
 // that would have come next. Live servers have been seen to say nothing of the slot they are on (no entry marked "now",
 // no nowIndex): then the winner is written into every slot, so it is next whichever slot that is, and the rotation is
 // written back as it was, in its own order. Nothing here touches the server: the Watcher (worker.ts) fetches, writes and
-// remembers.
+// remembers. (Builds with the live edit routes add the winner to the end and move it into place instead; the same is remembered
+// for it, so it is taken out in the same way.)
 
 export const VOTE_INSERT_KEY = 'voteInsert';
 
@@ -40,6 +41,16 @@ export const parseVoteInsert = (raw: unknown): VoteInsert | null => {
   const parsed = VoteInsertSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 };
+
+// How long the match after the vote's has run before the rotation is put back. Writing the rotation as a map loads changes the
+// entry the server is on, so the map was right and its lighting was the old entry's (17 October, a clear vote played in rain).
+export const RESTORE_DELAY_MS = 10 * 60_000;
+
+// Whether the rotation can be put back: the server is on another map than the vote's, and the match it is playing, which began
+// after the insert was written (an earlier match's record is not it), has run RESTORE_DELAY_MS. Going by the match, not by when
+// the map was first seen, the wait starts again with each map change, restart or emptied server.
+export const restoreDue = (insert: VoteInsert, playing: string, matchStartedAt: number | null, now: number): boolean =>
+  playing !== insert.fromMap && matchStartedAt !== null && matchStartedAt > insert.at && now - matchStartedAt >= RESTORE_DELAY_MS;
 
 // A rotation entry as it is written back: the settings, not whether it is the one playing now.
 const entryOf = (entry: Rotation['entries'][number]): RotationEntry => ({
@@ -87,6 +98,29 @@ export const planInsert = (rotation: Rotation, slot: number | null, winner: Rota
 // The live edit routes, which builds that have them use for "Set as next map" in the server's own console.
 export const MOVE_ROUTES = ['POST /v1/rotation/entries', 'POST /v1/rotation/entries/*/move'];
 export const canMoveEntries = (routes: string[]): boolean => MOVE_ROUTES.every((route) => routes.includes(route));
+
+// What to remember about a winner added to the end of the live rotation and moved into place (see planMove), so it is taken out
+// again once it has played, as the config document path does: the rotation otherwise gains an entry with every vote, and plays
+// them all again as it comes round. Null when the rotation cannot be planned. `length` counts the winner's entry.
+export const moveInsert = (
+  vote: { id: string; fromMap: string },
+  rotation: Rotation,
+  slot: number | null,
+  winner: RotationEntry,
+  now: number,
+): VoteInsert | null => {
+  const plan = planInsert(rotation, slot, winner);
+  if (plan === null) return null;
+  return {
+    voteId: vote.id,
+    fromMap: vote.fromMap,
+    map: winner.map,
+    restore: plan.restore,
+    length: rotation.entries.length + 1,
+    at: now,
+    ...(plan.asIs ? { asIs: true } : {}),
+  };
+};
 
 // Two entries are played the same: map, the same experiences in any order, lighting and zones ("None" is no zones).
 const sameSetup = (entry: Rotation['entries'][number], winner: RotationEntry): boolean => {

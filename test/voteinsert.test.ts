@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { Rotation } from '../src/rcon.ts';
 import { fromTheStart } from '../src/rotations.ts';
-import { canMoveEntries, parseVoteInsert, planInsert, planMove, rotationFacts, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
+import {
+  canMoveEntries,
+  moveInsert,
+  parseVoteInsert,
+  planInsert,
+  planMove,
+  RESTORE_DELAY_MS,
+  restoreDue,
+  rotationFacts,
+  stillInserted,
+  whyNoInsert,
+} from '../src/voteinsert.ts';
 
 const rotation = (maps: string[], now: number, over: Partial<Rotation> = {}): Rotation => ({
   enabled: true,
@@ -151,5 +162,54 @@ describe('parseVoteInsert', () => {
     expect(parseVoteInsert({ ...saved, asIs: true })).toEqual({ ...saved, asIs: true });
     expect(parseVoteInsert({ voteId: 1 })).toBeNull();
     expect(parseVoteInsert(undefined)).toBeNull();
+  });
+});
+
+describe('restoreDue', () => {
+  const saved = { voteId: '1', fromMap: 'Bakurani', map: 'V', restore: [{ map: 'C' }], length: 2, at: 5_000 };
+  const START = 1_000_000;
+
+  it('is not due while the server is still on the map the vote was for', () => {
+    expect(restoreDue(saved, 'Bakurani', START, START + RESTORE_DELAY_MS)).toBe(false);
+  });
+
+  it('waits out the delay from the start of the match, so the winner\'s lighting is not changed as it loads', () => {
+    expect(restoreDue(saved, 'Zestafona', START, START + 5_000)).toBe(false);
+    expect(restoreDue(saved, 'Zestafona', START, START + RESTORE_DELAY_MS - 1)).toBe(false);
+    expect(restoreDue(saved, 'Zestafona', START, START + RESTORE_DELAY_MS)).toBe(true);
+  });
+
+  it('starts the wait again with a new match (a short match, a restart), as that has its own map to load', () => {
+    const next = START + 9 * 60_000 + 59_000;
+    expect(restoreDue(saved, 'Ozeti', next, next + 1_000)).toBe(false);
+    expect(restoreDue(saved, 'Ozeti', next, next + RESTORE_DELAY_MS)).toBe(true);
+  });
+
+  it('is not due on the record of a match from before the insert, or with no match yet', () => {
+    expect(restoreDue(saved, 'Zestafona', saved.at - 1, saved.at + RESTORE_DELAY_MS * 2)).toBe(false);
+    expect(restoreDue(saved, 'Zestafona', null, START + RESTORE_DELAY_MS)).toBe(false);
+  });
+});
+
+describe('moveInsert', () => {
+  const voted = { map: 'V', lighting: 'DayClear' };
+  const vote = { id: '9', fromMap: 'B' };
+
+  it('remembers the rotation to put back, in play order from the map that would have followed, and the length with the winner in it', () => {
+    const insert = moveInsert(vote, rotation(['A', 'B', 'C', 'D'], 1), 1, voted, 77)!;
+    expect(insert).toEqual({ voteId: '9', fromMap: 'B', map: 'V', restore: [{ map: 'C' }, { map: 'D' }, { map: 'A', lighting: 'DayClear' }, { map: 'B' }], length: 5, at: 77 });
+    // The same as the config document path would put back.
+    expect(insert.restore).toEqual(planInsert(rotation(['A', 'B', 'C', 'D'], 1), 1, voted)!.restore);
+  });
+
+  it('puts the rotation back as it is when the slot is not known', () => {
+    const insert = moveInsert(vote, rotation(['A', 'B', 'C'], 0), null, voted, 1)!;
+    expect(insert.asIs).toBe(true);
+    expect(insert.restore.map((e) => e.map)).toEqual(['A', 'B', 'C']);
+    expect(insert.length).toBe(4);
+  });
+
+  it('is nothing for a rotation that cannot take a winner', () => {
+    expect(moveInsert(vote, rotation(['A', 'B'], 0, { enabled: false }), 0, voted, 1)).toBeNull();
   });
 });
