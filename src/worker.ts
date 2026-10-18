@@ -25,16 +25,18 @@ import {
   pickOptions,
   postVoteMessage,
   publicVote,
-  randomZone,
+  outcomeWithZone,
   RECENT_MAPS_KEY,
   VOTE_SETUP_OPTIONS,
   voteLink,
   votingNow,
   voteMessage,
   withPlayed,
+  zoneForTry,
   type MapVote,
   type PublicVote,
   type VoteOutcome,
+  type ZoneChoice,
 } from './mapvote.ts';
 import { planSetup } from './matchsetup.ts';
 import { runCommand, suggestOptions } from './commands.ts';
@@ -1623,6 +1625,12 @@ export class Watcher extends DurableObject<Env> {
     const winner = vote.outcome?.winner ?? null;
     if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
     if (playing !== vote.fromMap) return { at, winner: null, pending: false, note: NOTE.late };
+    // The circles drawn for the winner: undefined until decided, then a layout or null (the map has no choice). The outcome
+    // always says the layout that is (or will be) put on, so a retry reuses it and a vote saved before this reports none it
+    // did not apply.
+    let picked: ZoneChoice | null | undefined;
+    const outcomeOf = (pending: boolean, at: number): VoteOutcome =>
+      outcomeWithZone({ ...(vote.outcome ?? { at, winner }), at, winner, pending }, picked);
     try {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
@@ -1642,9 +1650,10 @@ export class Watcher extends DurableObject<Env> {
       }
       const lighting = vote.outcome?.lighting;
       // The circles are not voted on: a layout of this map by chance, never the one a vote last gave it (nothing when the map
-      // has one layout only). It is kept only once the winner is on the server, so a retry does not count as the last one.
+      // has one layout only). A layout drawn by an earlier try of this vote is kept, so the server, the history and what is
+      // announced agree. The history is only updated once the winner is on the server.
       const lastZones = parseLastZones(await this.ctx.storage.get(LAST_ZONES_KEY));
-      const picked = randomZone(choice.zones, lastZones[winner], Math.random);
+      picked = zoneForTry(vote.outcome, choice.zones, lastZones[winner], Math.random);
       const zones = picked?.id;
       const planned = planSetup(winner, { ...VOTE_SETUP_OPTIONS, ...(lighting ? { lighting } : {}), ...(zones ? { zones } : {}) }, {
         rotation,
@@ -1666,7 +1675,7 @@ export class Watcher extends DurableObject<Env> {
         // The queue is only for staging "queue": a rotation that cannot take the winner is retried, never queued instead.
         if (staging === 'rotation') throw new Error(`the rotation cannot take it: ${inserted}`);
         // Not before the match is over: the server ended a match early when this was sent with a team on 95.
-        if (!over) return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
+        if (!over) return outcomeOf(true, vote.outcome?.at ?? at);
         await queueMap(rconUrl, rconPassword, winner, http, planned.setup);
       }
       await this.stageNextMap(winner, playing);
@@ -1678,10 +1687,10 @@ export class Watcher extends DurableObject<Env> {
       await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${setup.map((x) => `, ${x}`).join('')} (${votes > 0 ? `${votes} votes` : 'picked at random'}).`, http).catch((error: unknown) =>
         console.error(`Map vote result announcement failed: ${errorText(error)}`),
       );
-      return { ...vote.outcome, at, winner, pending: false, ...(picked === null ? {} : { zone: picked.id, zoneName: picked.name }) };
+      return outcomeOf(false, at);
     } catch (error) {
       console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
-      return { ...vote.outcome, at: vote.outcome?.at ?? at, winner, pending: true };
+      return outcomeOf(true, vote.outcome?.at ?? at);
     }
   }
 

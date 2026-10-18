@@ -20,6 +20,8 @@ import {
   parseWeatherButton,
   parseLastZones,
   randomZone,
+  zoneForTry,
+  outcomeWithZone,
   votePool,
   RANDOM_MAP,
   type Lighting,
@@ -551,6 +553,36 @@ describe('randomZone', () => {
     // "None" is never given when there are real layouts.
     const withNone = [{ id: 'Z.Circle', name: 'Circle' }, { id: 'Z.None', name: 'None' }, { id: 'Z.Line', name: 'Line' }];
     expect(new Set(rolls.map((roll) => randomZone(withNone, undefined, () => roll)?.id))).toEqual(new Set(['Z.Circle', 'Z.Line']));
+  });
+});
+
+describe('the circles across staging retries', () => {
+  const layouts = [
+    { id: 'Z.Circle', name: 'Circle' },
+    { id: 'Z.Line', name: 'Line' },
+    { id: 'Z.Factory', name: 'Factory' },
+  ];
+  const pending = { at: NOW, winner: 'Ozeti', pending: true };
+
+  it('reuses the layout an earlier try drew, even when the draw would now differ', () => {
+    const first = zoneForTry(pending, layouts, 'Z.Circle', () => 0);
+    const retry = zoneForTry(outcomeWithZone(pending, first), layouts, 'Z.Circle', () => 0.99);
+    expect(retry).toEqual(first);
+    expect(retry?.id).not.toBe('Z.Circle');
+  });
+
+  it('draws again when the layout kept is no longer listed, and still avoids the last', () => {
+    const kept = { ...pending, zone: 'Z.Gone', zoneName: 'Gone' };
+    for (const roll of [0, 0.5, 0.99]) expect(zoneForTry(kept, layouts, 'Z.Line', () => roll)?.id).not.toBe('Z.Line');
+  });
+
+  it('reports the layout that is put on, and none a vote saved before this carried but is not put on', () => {
+    expect(outcomeWithZone(pending, layouts[1]!)).toEqual({ ...pending, zone: 'Z.Line', zoneName: 'Line' });
+    const legacy = { ...pending, zone: 'Z.Line', zoneName: 'Line' };
+    expect(outcomeWithZone(legacy, null)).toEqual(pending);
+    expect(outcomeWithZone(legacy, layouts[2]!)).toEqual({ ...pending, zone: 'Z.Factory', zoneName: 'Factory' });
+    // Not decided yet (such as the catalogue could not be read): the outcome stays as it was.
+    expect(outcomeWithZone(legacy, undefined)).toEqual(legacy);
   });
 });
 

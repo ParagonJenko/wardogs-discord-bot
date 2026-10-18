@@ -217,6 +217,23 @@ export const randomZone = (zones: readonly ZoneChoice[], last: string | undefine
   return sample(others.length > 0 ? others : layouts, 1, random)[0] ?? null;
 };
 
+// The circles for the winner on this try: the layout an earlier try of this vote drew, when the map still lists it, so the
+// server, the history and what is announced agree across retries; otherwise a new draw (see randomZone).
+export const zoneForTry = (
+  outcome: VoteOutcome | null,
+  zones: readonly ZoneChoice[],
+  last: string | undefined,
+  random: () => number,
+): ZoneChoice | null => zones.find((zone) => zone.id === outcome?.zone) ?? randomZone(zones, last, random);
+
+// The outcome saying the layout that is (or will be) put on: `picked` is the draw, null when the map has no choice (no
+// layout is reported, even if a vote saved before this one did), or undefined when none was made yet (it stays as it was).
+export const outcomeWithZone = (outcome: VoteOutcome, picked: ZoneChoice | null | undefined): VoteOutcome => {
+  const { zone, zoneName, ...rest } = outcome;
+  if (picked === undefined) return outcome;
+  return picked === null ? rest : { ...rest, zone: picked.id, zoneName: picked.name };
+};
+
 // The time of day and the weather of a lighting, from its id and name. The server's ids all begin with Day and say the time
 // after it (DayStartClear, DayEarlyFog, DayClear, DayLateGray, DayLateRain, DayEndClear): Start is dawn and Early the
 // morning, so both are Morning; Late is the afternoon and End is dusk. The weather is Clear, Fog, Rain or Snow, and Gray
