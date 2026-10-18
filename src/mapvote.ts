@@ -746,19 +746,24 @@ export const voteLogMessage = (vote: MapVote): DiscordMessage => {
 };
 
 // Problems putting a vote's winner on the server, posted to the moderation log so staff hear of them: once for each kind of problem
-// in each vote, as the checks that try again would otherwise post every minute. Kept under 'mapVoteAlerts'.
+// in each vote, as the checks that try again would otherwise post every minute. Kept under 'mapVoteAlerts', by vote, for the last
+// few votes: one vote's winner can still be going on, or its rotation being put back, while the next vote's is tried.
 export const VOTE_ALERTS_KEY = 'mapVoteAlerts';
-export type VoteAlerts = { voteId: string; kinds: string[] };
+export type VoteAlerts = Record<string, string[]>;
+const VOTE_ALERTS_KEPT = 6;
 
 export const parseVoteAlerts = (raw: unknown): VoteAlerts => {
-  const parsed = z.object({ voteId: z.string(), kinds: z.array(z.string()) }).safeParse(raw);
-  return parsed.success ? parsed.data : { voteId: '', kinds: [] };
+  const parsed = z.record(z.string(), z.array(z.string())).safeParse(raw);
+  return parsed.success ? parsed.data : {};
 };
 
-// The alerts after `kind` was posted for `voteId`, or null when it already was.
+// The alerts after `kind` was posted for `voteId`, or null when it already was. The oldest votes are dropped.
 export const withVoteAlert = (seen: VoteAlerts, voteId: string, kind: string): VoteAlerts | null => {
-  if (seen.voteId !== voteId) return { voteId, kinds: [kind] };
-  return seen.kinds.includes(kind) ? null : { voteId, kinds: [...seen.kinds, kind] };
+  const kinds = seen[voteId] ?? [];
+  if (kinds.includes(kind)) return null;
+  const { [voteId]: _old, ...others } = seen;
+  const kept = Object.entries(others).slice(-(VOTE_ALERTS_KEPT - 1));
+  return Object.fromEntries([...kept, [voteId, [...kinds, kind]]]);
 };
 
 const ALERT_COLOUR = 0xe74c3c;

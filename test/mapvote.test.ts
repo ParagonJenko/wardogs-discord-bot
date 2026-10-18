@@ -251,14 +251,35 @@ describe('voteLogMessage', () => {
 describe('problems putting a winner on the server', () => {
   it('posts each kind of problem once for each vote', () => {
     const none = parseVoteAlerts(undefined);
-    expect(none).toEqual({ voteId: '', kinds: [] });
+    expect(none).toEqual({});
     const first = withVoteAlert(none, '42', 'failed')!;
-    expect(first).toEqual({ voteId: '42', kinds: ['failed'] });
+    expect(first).toEqual({ '42': ['failed'] });
     expect(withVoteAlert(first, '42', 'failed')).toBeNull();
-    expect(withVoteAlert(first, '42', 'every-slot')).toEqual({ voteId: '42', kinds: ['failed', 'every-slot'] });
-    // The next vote starts again.
-    expect(withVoteAlert(first, '43', 'failed')).toEqual({ voteId: '43', kinds: ['failed'] });
-    expect(parseVoteAlerts({ voteId: 1 })).toEqual({ voteId: '', kinds: [] });
+    expect(withVoteAlert(first, '42', 'every-slot')).toEqual({ '42': ['failed', 'every-slot'] });
+    expect(withVoteAlert(first, '43', 'failed')).toEqual({ '42': ['failed'], '43': ['failed'] });
+    expect(parseVoteAlerts({ '42': 1 })).toEqual({});
+  });
+
+  it("keeps one vote's problems when another vote's are tried in between, so none is posted twice", () => {
+    // Vote A's rotation keeps failing to be put back while vote B's winner keeps failing to go on.
+    let seen = parseVoteAlerts(undefined);
+    const posted: string[] = [];
+    for (let minute = 0; minute < 4; minute++) {
+      for (const [vote, kind] of [['A', 'restore'], ['B', 'failed']] as const) {
+        const next = withVoteAlert(seen, vote, kind);
+        if (next !== null) {
+          posted.push(`${vote}/${kind}`);
+          seen = next;
+        }
+      }
+    }
+    expect(posted).toEqual(['A/restore', 'B/failed']);
+  });
+
+  it('forgets the oldest votes, so it does not grow', () => {
+    let seen = parseVoteAlerts(undefined);
+    for (let i = 0; i < 20; i++) seen = withVoteAlert(seen, String(i), 'failed')!;
+    expect(Object.keys(seen)).toEqual(['14', '15', '16', '17', '18', '19']);
   });
 
   it('is one embed for the moderation log that pings nobody', () => {
