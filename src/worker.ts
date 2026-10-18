@@ -40,6 +40,16 @@ import {
   type ZoneChoice,
 } from './mapvote.ts';
 import { planSetup } from './matchsetup.ts';
+import {
+  infantryFromRotation,
+  infantryMaps,
+  isInfantryOnly,
+  parseRestartWatch,
+  playingEntry,
+  RESTART_WATCH_KEY,
+  settled,
+  watchRestart,
+} from './restartmap.ts';
 import { runCommand, suggestOptions } from './commands.ts';
 import { nextMap, parseBoardRef, parseReadRotation, parseStagedMap, rotationReadDue, showBoard, type ReadRotation, type StagedMap } from './board.ts';
 import {
@@ -238,6 +248,7 @@ import {
 import {
   addBan,
   addRotationEntry,
+  endMatch,
   fetchBans,
   fetchConfig,
   fetchExperiences,
@@ -1121,6 +1132,8 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
     await this.keepAccounts(config);
+    // Before the rotation and the vote change it: they can write another entry into the slot the server is on.
+    await this.serial(() => this.updateRestartMap(config, seen.snapshot));
     await this.serial(() => this.updateRotation(config, seen.snapshot));
     await this.updateMapVote(config, seen.snapshot);
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
@@ -1623,6 +1636,61 @@ export class Watcher extends DurableObject<Env> {
         `Vote for the next map in our Discord: ${discordLink(config.inviteCode)} - it plays infantry only. Open for ${rule.minutes} minutes.`,
         socketHttp(connect),
       ).catch((error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`));
+    }
+  }
+
+  // When the server comes back after not answering, it has restarted and starts from the first map of its rotation. The
+  // server is meant to play infantry only after a restart, so if it is on a map that is not, it is changed at once to an
+  // infantry only one (see restartmap.ts): the next one in the rotation that is, or else a map the catalogue lists with infantry
+  // only. Tried again each check for a few minutes if the server can't say. A failure is logged; it never stops what comes after it.
+  private async updateRestartMap(config: Config, snapshot: Snapshot | null): Promise<void> {
+    const storage = this.ctx.storage;
+    try {
+      const before = parseRestartWatch(await storage.get(RESTART_WATCH_KEY));
+      const { watch, due } = watchRestart(before, snapshot !== null, Date.now());
+      if (watch.downSince !== before.downSince || watch.pendingSince !== before.pendingSince) await storage.put(RESTART_WATCH_KEY, watch);
+      if (!due || snapshot === null) return;
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
+      const slot = rotationSlot(rotation, status);
+      const entry = playingEntry(rotation, slot);
+      if (slot === null || entry === null) {
+        console.error(`Restart: the server is back on ${status.map}, but its rotation does not say which map is playing yet, so it is not checked for infantry only (tried again next check)`);
+        return;
+      }
+      if (isInfantryOnly(entry.experiences)) {
+        console.info(`Restart: the server is back on ${entry.map}, infantry only`);
+        await storage.put(RESTART_WATCH_KEY, settled(watch));
+        return;
+      }
+      const playing = status.map || entry.map;
+      let target = infantryFromRotation(rotation, slot);
+      if (target === null) {
+        const catalog = await this.catalog(config);
+        const choices = catalog === null ? [] : infantryMaps(catalog.maps, playing);
+        const choice = choices[Math.floor(Math.random() * choices.length)];
+        if (catalog === null || choice === undefined) throw new Error('no map is known that can be played infantry only');
+        const planned = planSetup(choice.id, VOTE_SETUP_OPTIONS, {
+          rotation,
+          mapExperiences: [...choice.modes.map((m) => m.id), ...choice.modifiers.map((m) => m.id)],
+          experiences: catalog.experiences,
+          lightings: catalog.lightings,
+          zones: choice.zones,
+        });
+        if ('problem' in planned) throw new Error(planned.problem);
+        target = { map: choice.id, setup: planned.setup };
+      }
+      console.info(`Restart: the server is back on ${playing}, which is not infantry only; changing to ${target.map} ${JSON.stringify(target.setup)}`);
+      await queueMap(rconUrl, rconPassword, target.map, http, target.setup);
+      await this.stageNextMap(target.map, playing);
+      await endMatch(rconUrl, rconPassword, http);
+      await storage.put(RESTART_WATCH_KEY, settled(watch));
+      await sendBroadcast(rconUrl, rconPassword, `The server restarted: changing to ${mapName(target.map)}, infantry only.`, http).catch((error: unknown) =>
+        console.error(`Restart announcement failed: ${errorText(error)}`),
+      );
+    } catch (error) {
+      console.error(`Restart: could not check the map for infantry only, trying again next check: ${errorText(error)}`);
     }
   }
 

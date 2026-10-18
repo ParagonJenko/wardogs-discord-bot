@@ -37,11 +37,13 @@ type FakeRcon = {
   players: FakePlayer[];
   // Each request has its connection dropped, as when the server is off.
   down: boolean;
+  // Whether the rotation's map playing now is infantry only, and whether the rotation has another map that is.
+  infantry: boolean;
   close: () => Promise<void>;
 };
 
 const startFakeRcon = async (password: string): Promise<FakeRcon> => {
-  const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false };
+  const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false, infantry: true };
   // ServerSettings.ini, which the bot writes the map rotation and the whitelist to.
   let config = { revision: 1, text: '' };
   const answer = (req: IncomingMessage, body: string): { status: number; body: unknown } => {
@@ -71,8 +73,11 @@ const startFakeRcon = async (password: string): Promise<FakeRcon> => {
       return { status: 200, body: { ok: true } };
     }
     if (req.method === 'GET' && req.url === '/v1/rotation') {
-      return { status: 200, body: { enabled: true, mode: 'Sequential', entries: [{ map: 'Kavkazi', status: 'current' }] } };
+      const playing = { map: 'Kavkazi', status: 'current', ...(fake.infantry ? { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly'] } : {}) };
+      const entries = fake.infantry ? [playing] : [playing, { map: 'Bakurani', experiences: ['Bakurani_KOTH_02', 'KOTH_InfantryOnly'] }];
+      return { status: 200, body: { enabled: true, mode: 'Sequential', entries } };
     }
+    if (req.method === 'POST' && (req.url === '/v1/match/map' || req.url === '/v1/match/end')) return { status: 200, body: {} };
     if (req.method === 'POST' && (req.url === '/v1/broadcast' || /^\/v1\/players\/\d{17}\/message$/.test(req.url ?? ''))) {
       return { status: 200, body: {} };
     }
@@ -229,6 +234,32 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     server.clearLogs();
     expect(await runCron()).toMatchObject({ outcome: 'ok' });
     expect(errors()).toEqual([]);
+  });
+
+  it('changes a map that is not infantry only when the game server comes back from a restart', async () => {
+    rcon.infantry = false;
+    try {
+      // Not a restart while the server keeps answering.
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests).not.toContain('POST /v1/match/end');
+      rcon.down = true;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      rcon.down = false;
+      rcon.requests.length = 0;
+      server.clearLogs();
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests).toContain('POST /v1/match/map');
+      expect(rcon.requests).toContain('POST /v1/match/end');
+      expect(errors()).toEqual([]);
+      // Once only.
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests).not.toContain('POST /v1/match/end');
+    } finally {
+      rcon.infantry = true;
+      rcon.down = false;
+    }
   });
 
   describe('Discord interactions', () => {
