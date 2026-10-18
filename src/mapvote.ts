@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { mapEmoji, mapName, type Embed } from './discord.ts';
+import { mapEmoji, mapName, type DiscordMessage, type Embed } from './discord.ts';
 import type { MatchFeed } from './matchfeed.ts';
 import type { MapChoice } from './rotationspage.ts';
 
@@ -683,6 +683,60 @@ export const voteLogLine = (
   // JSON.stringify keeps a name with quotes or line breaks on one line.
   const who = press.userName ? `${JSON.stringify(press.userName.slice(0, 40))} (${press.userId})` : press.userId;
   return `Map vote ${vote.id}: ${who} voted ${what} ${now}${was ? ` (was ${was})` : ''} via ${press.via ?? 'discord'}`;
+};
+
+// One message for the moderation log with every ballot of a vote that closed: for the map, the time of day and the weather, each
+// choice with the people who voted for it, as mentions (Discord shows their names; nobody is pinged). Choices nobody voted for
+// are left out. Cut short, with a note, when it would not fit in one embed; the log of each vote has them all.
+const VOTE_LOG_CHARS = 3800;
+
+export const voteLogMessage = (vote: MapVote): DiscordMessage => {
+  const outcome = vote.outcome;
+  const winner = outcome?.winner ?? null;
+  const rows = (
+    title: string,
+    choices: readonly { key: string; label: string }[],
+    chosen: (b: Ballot) => string | null,
+  ): string[] => {
+    const lines = choices.flatMap((c) => {
+      const users = vote.ballots.filter((b) => chosen(b) === c.key).map((b) => `<@${b.user}>`);
+      return users.length === 0 ? [] : [`${c.label} (${users.length}): ${users.join(' ')}`];
+    });
+    return lines.length === 0 ? [] : [`**${title}**`, ...lines];
+  };
+  const lines = [
+    ...rows(
+      '🗺️ Map',
+      vote.options.map((o) => ({ key: o.map, label: `${mapEmoji(o.map)}${o.name}${o.map === winner ? ' ✅' : ''}` })),
+      (b) => b.map,
+    ),
+    ...rows('🕒 Time of day', vote.conditions, (b) => b.light),
+    ...rows('🌦️ Weather', vote.weather, (b) => b.weather),
+  ];
+  let text = '';
+  let shown = 0;
+  for (const line of lines) {
+    if (text.length + line.length + 1 > VOTE_LOG_CHARS) break;
+    text += `${line}\n`;
+    shown += 1;
+  }
+  const cut = lines.length - shown;
+  const result =
+    winner === null
+      ? 'No map won.'
+      : `**${mapEmoji(winner)}${vote.options.find((o) => o.map === winner)?.name ?? mapName(winner)}** won${outcome?.lightingName ? `, **${outcome.lightingName}**` : ''}.`;
+  return {
+    embeds: [
+      {
+        title: `🗳️ Map vote closed · after ${mapName(vote.fromMap)}`,
+        description: `${result} ${vote.ballots.length} ${vote.ballots.length === 1 ? 'person' : 'people'} voted.\n\n${text}${cut > 0 ? `…${cut} more lines cut: see the logs.` : ''}`.trim(),
+        color: winner === null ? OVER_COLOUR : WON_COLOUR,
+        footer: { text: `Vote ${vote.id}` },
+        timestamp: new Date(outcome?.at ?? vote.closesAt).toISOString(),
+      },
+    ],
+    allowed_mentions: { parse: [], roles: [] },
+  };
 };
 
 // A button's custom_id: "mapvote:<vote id>:<map id>". Null for anything else.

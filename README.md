@@ -676,6 +676,10 @@ Every counted vote is logged with who cast it and what for, such as `Map vote 17
 (the Discord user ID, their name in the server when it is known, and `discord` or `website`). The logs are the only place that is kept:
 the website and the API never get who voted.
 
+With `DISCORD_MODLOG_WEBHOOK_URL` set, the [moderation log](#moderation-log) also gets one message when a vote closes, with every
+ballot: for the map, the time of day and the weather, each choice that got votes with the people who voted for it, as mentions
+(Discord shows their names; nobody is pinged). A vote nobody voted in posts nothing. A very long list is cut short with a note.
+
 The website's `/vote` page shows the same counts, refreshed every few seconds, with a link to the channel. A visitor can't
 vote there, but a signed-in member of the server can (see [Player accounts](#player-accounts)): the same vote, one per Discord
 account. `GET /api/vote` gives the options, votes, result and the channel link, never who voted. The vote is in the Durable Object

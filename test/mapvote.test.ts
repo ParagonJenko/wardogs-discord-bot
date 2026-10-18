@@ -33,6 +33,7 @@ import {
   parseRainRecord,
   rainRecordFor,
   voteLogLine,
+  voteLogMessage,
   pickOptions,
   publicVote,
   withPlayed,
@@ -152,6 +153,58 @@ describe('rain after rain', () => {
     expect(parseRainRecord(saved)).toEqual(saved);
     expect(parseRainRecord({ ...saved, rain: 'yes' })).toBeNull();
     expect(parseRainRecord(undefined)).toBeNull();
+  });
+});
+
+describe('voteLogMessage', () => {
+  const lightings = serverLightings;
+  const closed = (picks: { user: string; map?: string; light?: string; weather?: string }[], outcome: MapVote['outcome']): MapVote => {
+    let v: MapVote = { ...vote(), conditions: conditionOptions(lightings), weather: weatherOptions(lightings) };
+    for (const [i, pick] of picks.entries()) {
+      const cast = castVote(v, pick, NOW + i + 1);
+      if (!('vote' in cast)) throw new Error(cast.result);
+      v = cast.vote;
+    }
+    return { ...v, outcome };
+  };
+
+  it('puts every ballot in one message, by choice, with the voters as mentions that ping nobody', () => {
+    const v = closed(
+      [{ user: '1', map: 'B' }, { user: '2', map: 'B' }, { user: '3', map: 'C' }, { user: '1', light: 'day' }, { user: '2', weather: 'clear' }, { user: '3', weather: 'clear' }],
+      { at: NOW + 50, winner: 'B', pending: true, lighting: 'DayClear', lightingName: 'Day, clear' },
+    );
+    const message = voteLogMessage(v);
+    expect(message.embeds).toHaveLength(1);
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    const embed = message.embeds[0]!;
+    expect(embed.title).toBe('🗳️ Map vote closed · after Bakurani');
+    expect(embed.description).toContain('**Bravo** won, **Day, clear**. 3 people voted.');
+    expect(embed.description).toContain('Bravo ✅ (2): <@1> <@2>');
+    expect(embed.description).toContain('Charlie (1): <@3>');
+    expect(embed.description).toContain('Day (1): <@1>');
+    expect(embed.description).toContain('Clear (2): <@2> <@3>');
+    expect(embed.footer?.text).toBe('Vote 42');
+  });
+
+  it('leaves out choices nobody voted for, and says when no map won', () => {
+    const v = closed([{ user: '9', light: 'dusk' }], { at: NOW + 5, winner: null, pending: false });
+    const text = voteLogMessage(v).embeds[0]!.description!;
+    expect(text).toContain('No map won. 1 person voted.');
+    expect(text).toContain('Dusk (1): <@9>');
+    expect(text).not.toContain('(0)');
+    expect(text).not.toContain('🗺️ Map');
+  });
+
+  it('is cut short with a note rather than past what one embed holds', () => {
+    const picks = Array.from({ length: 300 }, (_, i) => ({ user: String(100_000_000_000_000_000n + BigInt(i)), map: 'A' }));
+    const v = closed([...picks, ...picks.map((p) => ({ user: p.user, light: 'day' })), ...picks.map((p) => ({ user: p.user, weather: 'clear' }))], {
+      at: NOW + 5,
+      winner: 'A',
+      pending: true,
+    });
+    const description = voteLogMessage(v).embeds[0]!.description!;
+    expect(description.length).toBeLessThanOrEqual(4096);
+    expect(description).toContain('more lines cut');
   });
 });
 

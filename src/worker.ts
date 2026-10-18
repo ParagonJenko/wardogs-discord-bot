@@ -27,6 +27,7 @@ import {
   rainRecordFor,
   RAIN_KEY,
   voteLogLine,
+  voteLogMessage,
   isRain,
   type RainRecord,
   mapIdOf,
@@ -1602,6 +1603,12 @@ export class Watcher extends DurableObject<Env> {
         );
         console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)${vote.rain.all ? ', no rain allowed' : ''}`);
         await this.showVote(config, rule, vote);
+        // Every ballot in one message for the moderation log, when the vote had any.
+        if (config.modLogWebhookUrl !== undefined && vote.ballots.length > 0) {
+          postWebhook(config.modLogWebhookUrl, voteLogMessage(vote)).catch((error: unknown) =>
+            console.error(`Map vote: could not post the ballots to the moderation log: ${errorText(error)}`),
+          );
+        }
       }
       // The queued winner waits for the end of the match: the server ended a match early when it was queued with a team on 95.
       if (vote.outcome?.pending && (rule.staging === 'rotation' || over)) {
