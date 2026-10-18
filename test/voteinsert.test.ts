@@ -3,6 +3,7 @@ import type { Rotation } from '../src/rcon.ts';
 import { fromTheStart } from '../src/rotations.ts';
 import {
   canMoveEntries,
+  moveInsert,
   parseVoteInsert,
   planInsert,
   planMove,
@@ -187,5 +188,28 @@ describe('restoreDue', () => {
   it('is not due on the record of a match from before the insert, or with no match yet', () => {
     expect(restoreDue(saved, 'Zestafona', saved.at - 1, saved.at + RESTORE_DELAY_MS * 2)).toBe(false);
     expect(restoreDue(saved, 'Zestafona', null, START + RESTORE_DELAY_MS)).toBe(false);
+  });
+});
+
+describe('moveInsert', () => {
+  const voted = { map: 'V', lighting: 'DayClear' };
+  const vote = { id: '9', fromMap: 'B' };
+
+  it('remembers the rotation to put back, in play order from the map that would have followed, and the length with the winner in it', () => {
+    const insert = moveInsert(vote, rotation(['A', 'B', 'C', 'D'], 1), 1, voted, 77)!;
+    expect(insert).toEqual({ voteId: '9', fromMap: 'B', map: 'V', restore: [{ map: 'C' }, { map: 'D' }, { map: 'A', lighting: 'DayClear' }, { map: 'B' }], length: 5, at: 77 });
+    // The same as the config document path would put back.
+    expect(insert.restore).toEqual(planInsert(rotation(['A', 'B', 'C', 'D'], 1), 1, voted)!.restore);
+  });
+
+  it('puts the rotation back as it is when the slot is not known', () => {
+    const insert = moveInsert(vote, rotation(['A', 'B', 'C'], 0), null, voted, 1)!;
+    expect(insert.asIs).toBe(true);
+    expect(insert.restore.map((e) => e.map)).toEqual(['A', 'B', 'C']);
+    expect(insert.length).toBe(4);
+  });
+
+  it('is nothing for a rotation that cannot take a winner', () => {
+    expect(moveInsert(vote, rotation(['A', 'B'], 0, { enabled: false }), 0, voted, 1)).toBeNull();
   });
 });

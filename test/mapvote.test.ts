@@ -248,6 +248,13 @@ describe('voteMessage', () => {
     expect(message.embeds[0]?.description).toContain('Bravo');
     expect(message.embeds[0]?.fields?.[1]?.name).toContain('✅');
   });
+
+  it('does not say the winner waits for the end of the match while it is being put on the server', () => {
+    const pending = { ...cast(vote(), [[1, 'B']]), outcome: { at: NOW, winner: 'B', pending: true } };
+    const description = voteMessage(pending, NOW + 1).embeds[0]?.description;
+    expect(description).toContain('**Bravo** won');
+    expect(description).not.toContain('when the match ends');
+  });
 });
 
 describe('parseVoteButton', () => {

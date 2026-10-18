@@ -9,7 +9,8 @@ import type { RotationEntry } from './rotations.ts';
 // that would have come next. Live servers have been seen to say nothing of the slot they are on (no entry marked "now",
 // no nowIndex): then the winner is written into every slot, so it is next whichever slot that is, and the rotation is
 // written back as it was, in its own order. Nothing here touches the server: the Watcher (worker.ts) fetches, writes and
-// remembers.
+// remembers. (Builds with the live edit routes add the winner to the end and move it into place instead; the same is remembered
+// for it, so it is taken out in the same way.)
 
 export const VOTE_INSERT_KEY = 'voteInsert';
 
@@ -97,6 +98,29 @@ export const planInsert = (rotation: Rotation, slot: number | null, winner: Rota
 // The live edit routes, which builds that have them use for "Set as next map" in the server's own console.
 export const MOVE_ROUTES = ['POST /v1/rotation/entries', 'POST /v1/rotation/entries/*/move'];
 export const canMoveEntries = (routes: string[]): boolean => MOVE_ROUTES.every((route) => routes.includes(route));
+
+// What to remember about a winner added to the end of the live rotation and moved into place (see planMove), so it is taken out
+// again once it has played, as the config document path does: the rotation otherwise gains an entry with every vote, and plays
+// them all again as it comes round. Null when the rotation cannot be planned. `length` counts the winner's entry.
+export const moveInsert = (
+  vote: { id: string; fromMap: string },
+  rotation: Rotation,
+  slot: number | null,
+  winner: RotationEntry,
+  now: number,
+): VoteInsert | null => {
+  const plan = planInsert(rotation, slot, winner);
+  if (plan === null) return null;
+  return {
+    voteId: vote.id,
+    fromMap: vote.fromMap,
+    map: winner.map,
+    restore: plan.restore,
+    length: rotation.entries.length + 1,
+    at: now,
+    ...(plan.asIs ? { asIs: true } : {}),
+  };
+};
 
 // Two entries are played the same: map, the same experiences in any order, lighting and zones ("None" is no zones).
 const sameSetup = (entry: Rotation['entries'][number], winner: RotationEntry): boolean => {

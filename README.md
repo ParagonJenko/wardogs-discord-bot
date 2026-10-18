@@ -632,7 +632,9 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
      cutting the match on now short. A build that serves the live rotation edit routes (`POST /v1/rotation/entries` and
      `POST /v1/rotation/entries/{index}/move`, listed in `GET /v1/capabilities`) gets it the way "Set as next map" in the
      server's own console does: the rotation's entry with the winner's setup, or a new one added at the end, is moved
-     into the slot after the one playing (the top when that is the last, or the server doesn't say), and stays there.
+     into the slot after the one playing (the top when that is the last, or the server doesn't say). A winner that was
+     added is taken out again like the config document's, 10 minutes into the match after it, so the rotation does not gain
+     an entry with every vote.
      Other builds get it through the config document, the same way the daily rotation is put on (`PUT /v1/config`), in
      front of the map that would have come next. A write re-anchors the server's place in the rotation, so the bot reads
      back where it goes next and, when that is not the winner, writes the winner into every slot instead. Once the match after the vote's has run for 10 minutes, the rotation is written

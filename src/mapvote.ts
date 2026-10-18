@@ -557,7 +557,7 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
       `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${where}`
     : shown.winner !== null
       ? shown.pending
-        ? `**${shown.winner.name}** won. It goes on the server when the match ends…`
+        ? `**${shown.winner.name}** won. Putting it on the server…`
         : `**${shown.winner.name}** won and plays next, **infantry only**${shown.lightingName ? `, **${shown.lightingName}**` : ''}${shown.zoneName ? `, **${shown.zoneName}** circles` : ''}.`
       : (shown.note ?? 'The vote has closed. Counting the votes…');
   const embed: Embed = {
