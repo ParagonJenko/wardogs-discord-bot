@@ -22,8 +22,14 @@ import {
   openVote,
   parseLastZones,
   parseMapVote,
+  parseRainRecord,
   parseRecentMaps,
+  rainBlocked,
+  rainRecordFor,
+  RAIN_KEY,
   voteLogLine,
+  isRain,
+  type RainRecord,
   mapIdOf,
   pickOptions,
   postVoteMessage,
@@ -1549,6 +1555,8 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const now = Date.now();
     const match = parseState(await storage.get('state'))?.match ?? null;
+    // Whether this match is in the rain, noted as it begins (see trackRain).
+    const rainNow = match === null ? null : await this.trackRain(config, match.startedAt, playing);
     // Every map played is remembered, whether or not it had a vote.
     const played = parseRecentMaps(await storage.get(RECENT_MAPS_KEY));
     const recent = withPlayed(played, playing);
@@ -1579,7 +1587,7 @@ export class Watcher extends DurableObject<Env> {
       if (vote.outcome === null) {
         if (!closeDue(vote, now, leading) && !over) return;
         const winner = chooseWinner(vote, Math.random);
-        const lighting = chooseConditions(vote, Math.random);
+        const lighting = chooseConditions(vote, Math.random, rainBlocked(vote, winner));
         vote = await save(
           ended(
             vote,
@@ -1593,7 +1601,7 @@ export class Watcher extends DurableObject<Env> {
                 },
           ),
         );
-        console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)`);
+        console.info(`Map vote closed: ${winner ?? 'no votes'} (${vote.ballots.length} ballots)${rainBlocked(vote, winner) ? ', no rain allowed' : ''}`);
         await this.showVote(config, rule, vote);
       }
       // The queued winner waits for the end of the match: the server ended a match early when it was queued with a team on 95.
@@ -1639,8 +1647,12 @@ export class Watcher extends DurableObject<Env> {
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     // The maps a Random map button picks from.
     const pool = votePool(maps, playingId, recentIds, rule.options);
-    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []), weatherOptions(catalog?.lightings ?? []), {
+    // No rain when the match being played has it, and none for the map that last had it.
+    const rain = { all: rainNow?.rain ?? false, map: rainNow?.ban == null ? null : mapIdOf(maps, rainNow.ban) };
+    const lightings = catalog?.lightings ?? [];
+    const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(lightings), weatherOptions(rain.all ? lightings.filter((l) => !isRain(l)) : lightings), {
       pool: pool.map((m) => ({ map: m.id, name: m.name })),
+      rain,
     });
     const messageId = await postVoteMessage(rule.botToken, rule.channelId, voteMessage(opened, now, config.siteUrl));
     await storage.put(MAP_VOTE_KEY, { ...opened, message: { channelId: rule.channelId, messageId } });
@@ -1659,6 +1671,28 @@ export class Watcher extends DurableObject<Env> {
         `Vote for the next map in our Discord: ${discordLink(config.inviteCode)} - it plays infantry only. Open for ${rule.minutes} minutes.`,
         socketHttp(connect),
       ).catch((error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`));
+    }
+  }
+
+  // Notes, as a match begins, whether it is being played in the rain, from the lighting of the rotation's entry for the map being
+  // played (read before the rotation is put back, which changes that entry), and which map last had rain before it. The vote
+  // allows no rain after rain (see RainRule). Read once a match; null when the server cannot say, and then the vote has no rule.
+  private async trackRain(config: Config, matchStartedAt: number, playing: string): Promise<RainRecord | null> {
+    const storage = this.ctx.storage;
+    const previous = parseRainRecord(await storage.get(RAIN_KEY));
+    if (previous?.matchStartedAt === matchStartedAt) return previous;
+    if (playing === '') return null;
+    try {
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
+      const slot = rotationSlot(rotation, status);
+      const record = rainRecordFor(previous, matchStartedAt, playing, (slot === null ? undefined : rotation.entries[slot]?.lighting) ?? undefined);
+      await storage.put(RAIN_KEY, record);
+      return record;
+    } catch (error) {
+      console.error(`Map vote: could not tell if ${playing} is in the rain: ${errorText(error)}`);
+      return null;
     }
   }
 

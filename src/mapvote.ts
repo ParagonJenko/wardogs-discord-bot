@@ -81,6 +81,10 @@ export type VoteOutcome = {
   zoneName?: string | null;
 };
 
+// Where this vote may not choose rain: `all` when the match being played is in the rain, and `map` for the map that last had rain
+// (a map id), which rain is not chosen for when it wins. See rainBlocked.
+export type RainRule = { all: boolean; map: string | null };
+
 export type MapVote = {
   // The match it is for: when the match started, which is also its id.
   id: string;
@@ -102,6 +106,7 @@ export type MapVote = {
   // The Discord message the vote is in, to update as votes come and when it ends.
   message: { channelId: string; messageId: string } | null;
   outcome: VoteOutcome | null;
+  rain: RainRule;
 };
 
 const OptionSchema = z.object({ key: z.string(), label: z.string(), lightings: z.array(z.object({ id: z.string(), name: z.string() })) });
@@ -140,6 +145,7 @@ const MapVoteSchema = z.object({
     })
     .nullable()
     .default(null),
+  rain: z.object({ all: z.boolean(), map: z.string().nullable() }).default({ all: false, map: null }),
 });
 
 export const parseMapVote = (raw: unknown): MapVote | null => {
@@ -278,6 +284,30 @@ export const timeOf = (l: Lighting): string | null =>
 // The key of a lighting's weather: clear unless it says otherwise.
 export const weatherOf = (l: Lighting): string => WEATHER_CHECKS.find((key) => WEATHERS.find((w) => w.key === key)!.pattern.test(textOf(l))) ?? 'clear';
 
+export const isRain = (l: Lighting): boolean => weatherOf(l) === 'rain';
+
+// What is kept between matches to tell if rain was last: the match it is for (when it started), the map being played (as the
+// status names it), whether its lighting has rain, the map that last had rain before it and the map that last had rain up to
+// and including it (`lastRain`, which the next match starts from).
+export const RAIN_KEY = 'mapVoteRain';
+export type RainRecord = { matchStartedAt: number; map: string; rain: boolean; ban: string | null; lastRain: string | null };
+
+export const parseRainRecord = (raw: unknown): RainRecord | null => {
+  const parsed = z
+    .object({ matchStartedAt: z.number(), map: z.string(), rain: z.boolean(), ban: z.string().nullable(), lastRain: z.string().nullable() })
+    .safeParse(raw);
+  return parsed.success ? parsed.data : null;
+};
+
+// The record for a match that began, from the one before it and the lighting its map is being played with (undefined when the
+// rotation does not say, and then it counts as no rain).
+export const rainRecordFor = (previous: RainRecord | null, matchStartedAt: number, map: string, lighting: string | undefined): RainRecord => {
+  if (previous?.matchStartedAt === matchStartedAt) return previous;
+  const rain = lighting !== undefined && isRain({ id: lighting, name: lighting });
+  const lastRain = previous?.lastRain ?? null;
+  return { matchStartedAt, map, rain, ban: rain ? null : lastRain, lastRain: rain ? map : lastRain };
+};
+
 // A row for some groups of the server's lightings: the groups it has in the order shown, at most four kept by `priority`,
 // and Random across all the lightings. Nothing (no row) when there are fewer than two groups to choose between.
 const groupRow = (
@@ -311,7 +341,7 @@ export const openVote = (
   closeScore: number,
   conditions: ConditionOption[] = [],
   weather: ConditionOption[] = [],
-  more: { pool?: VoteOption[] } = {},
+  more: { pool?: VoteOption[]; rain?: RainRule } = {},
 ): MapVote => ({
   id: String(match.startedAt),
   matchStartedAt: match.startedAt,
@@ -327,6 +357,7 @@ export const openVote = (
   ballots: [],
   message: null,
   outcome: null,
+  rain: more.rain ?? { all: false, map: null },
 });
 
 export type CastResult = { vote: MapVote; result: 'counted' | 'changed' } | { result: 'closed' | 'unknown-map' };
@@ -416,9 +447,13 @@ const nearestTime = (lightings: readonly Lighting[], time: string): Lighting[] =
 // time nearest the one chosen. With only a time, the lighting is a clear one when that time has one; with only weather, any
 // time. Rain is liked by some and hated by others, so it wins only by having the most votes: a tie in the weather goes to the
 // safest (Clear, then Fog, then Rain), not to chance.
-export const chooseConditions = (vote: MapVote, random: () => number): Lighting | null => {
-  const time = leader(vote.conditions, tallyConditions(vote), random);
-  const weather = leader(vote.weather, tallyWeather(vote), random, true);
+export const chooseConditions = (vote: MapVote, random: () => number, noRain = false): Lighting | null => {
+  // Without rain, no lighting with rain is chosen, and a vote for rain counts for nothing: a group left with no lighting is gone.
+  const without = (rows: ConditionOption[]): ConditionOption[] =>
+    noRain ? rows.map((r) => ({ ...r, lightings: r.lightings.filter((l) => !isRain(l)) })).filter((r) => r.lightings.length > 0) : rows;
+  const open = noRain ? { ...vote, conditions: without(vote.conditions), weather: without(vote.weather) } : vote;
+  const time = leader(open.conditions, tallyConditions(open), random);
+  const weather = leader(open.weather, tallyWeather(open), random, true);
   const pick = (lightings: readonly Lighting[]): Lighting | null => sample(lightings, 1, random)[0] ?? null;
   if (time !== null && weather !== null) {
     const ids = new Set(weather.lightings.map((l) => l.id));
@@ -430,6 +465,9 @@ export const chooseConditions = (vote: MapVote, random: () => number): Lighting 
   const clear = time.key === RANDOM_CONDITION ? [] : time.lightings.filter((l) => weatherOf(l) === 'clear');
   return pick(clear.length > 0 ? clear : time.lightings);
 };
+
+// Whether rain may not be chosen for `winner`: the match being played is in the rain, or the winner is the map that last had it.
+export const rainBlocked = (vote: MapVote, winner: string | null): boolean => vote.rain.all || (winner !== null && vote.rain.map === winner);
 
 // Whether people can vote on this match right now: the vote is for this match, which has not ended, its time has not run out
 // and no team has reached the close score (the check that closes it comes later in the same pass). What points people at the
@@ -547,6 +585,13 @@ const conditionsAsked = (shown: PublicVote): string => {
   return asked.length === 1 ? ` and ${asked[0]}` : `, ${asked.slice(0, -1).join(', ')} and ${asked.at(-1)}`;
 };
 
+// Why there may be no rain, when there may not: it was last match, or it was last on one of the maps in the vote.
+const rainNote = (vote: MapVote): string => {
+  if (vote.rain.all) return ' No rain this time: the last match was in the rain.';
+  const name = vote.rain.map === null ? undefined : vote.options.find((o) => o.map === vote.rain.map)?.name;
+  return name === undefined ? '' : ` Rain is not picked for **${name}**, which had it last.`;
+};
+
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
   const shown = publicVote(vote, now);
   const at = `<t:${Math.floor(vote.closesAt / 1000)}:R>`;
@@ -554,7 +599,7 @@ export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteM
   const where = siteUrl === undefined ? '' : ` Results also on ${siteUrl.replace(/\/$/, '')}/vote.`;
   const description = shown.open
     ? `Vote for the map after **${mapEmoji(vote.fromMap)}${shown.fromName}**${conditionsAsked(shown)}. ` +
-      `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${where}`
+      `One vote each: press another to change yours. Closes ${closing} The winner plays next, **infantry only**.${rainNote(vote)}${where}`
     : shown.winner !== null
       ? shown.pending
         ? `**${shown.winner.name}** won. Putting it on the server…`

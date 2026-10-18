@@ -30,6 +30,9 @@ import {
   deleteVoteMessage,
   postVoteMessage,
   mapIdOf,
+  parseRainRecord,
+  rainBlocked,
+  rainRecordFor,
   voteLogLine,
   pickOptions,
   publicVote,
@@ -115,6 +118,41 @@ describe('voteLogLine', () => {
     const line = voteLogLine(voted, { userId: '1', map: 'A', userName: 'Bo "x"\nHacker' }, undefined);
     expect(line).not.toContain('\n');
     expect(line).toContain('"Bo \\"x\\"\\nHacker" (1)');
+  });
+});
+
+describe('rain after rain', () => {
+  it('has no rule on a vote that was saved before there was one', () => {
+    const { rain, ...old } = vote();
+    expect(rain).toEqual({ all: false, map: null });
+    expect(parseMapVote(old)?.rain).toEqual({ all: false, map: null });
+    expect(parseMapVote({ ...old, rain: { all: true, map: 'A' } })?.rain).toEqual({ all: true, map: 'A' });
+  });
+
+  it("notes whether a match is in the rain from its map's lighting, and carries the last map that had rain", () => {
+    const first = rainRecordFor(null, 100, 'Ozeti', 'DayClear');
+    expect(first).toEqual({ matchStartedAt: 100, map: 'Ozeti', rain: false, ban: null, lastRain: null });
+    // Rain: no rain is allowed in this vote, and this map is the last that had it.
+    const rainy = rainRecordFor(first, 200, 'Zestafona', 'DayLateRain');
+    expect(rainy).toEqual({ matchStartedAt: 200, map: 'Zestafona', rain: true, ban: null, lastRain: 'Zestafona' });
+    // The match after it is clear: rain is allowed again, but not for the map that had it last.
+    const clear = rainRecordFor(rainy, 300, 'Bakurani', 'DayClear');
+    expect(clear).toEqual({ matchStartedAt: 300, map: 'Bakurani', rain: false, ban: 'Zestafona', lastRain: 'Zestafona' });
+    // And it stays so until a map has rain again.
+    expect(rainRecordFor(clear, 400, 'Ozeti', undefined)).toMatchObject({ rain: false, ban: 'Zestafona', lastRain: 'Zestafona' });
+    expect(rainRecordFor(clear, 400, 'Ozeti', 'DayLateRain')).toMatchObject({ rain: true, ban: null, lastRain: 'Ozeti' });
+  });
+
+  it('keeps the record it has for a match it already noted', () => {
+    const noted = rainRecordFor(null, 100, 'Ozeti', 'DayLateRain');
+    expect(rainRecordFor(noted, 100, 'Ozeti', 'DayClear')).toBe(noted);
+  });
+
+  it('reads what was saved, and nothing else', () => {
+    const saved = { matchStartedAt: 1, map: 'A', rain: true, ban: null, lastRain: 'A' };
+    expect(parseRainRecord(saved)).toEqual(saved);
+    expect(parseRainRecord({ ...saved, rain: 'yes' })).toBeNull();
+    expect(parseRainRecord(undefined)).toBeNull();
   });
 });
 
@@ -477,6 +515,47 @@ describe('the time of day and weather votes', () => {
     expect(chosen(v)).toBe('DayLateRain');
     const random = voted({ light: 'random' });
     expect(new Set([0, 0.4, 0.99].map((roll) => chosen(random, roll))).size).toBeGreaterThan(1);
+  });
+
+  it('never chooses rain when it is not allowed, and counts a vote for rain as no vote', () => {
+    const noRain = (v: MapVote, roll = 0) => chooseConditions(v, () => roll, true)?.id;
+    for (const roll of [0, 0.5, 0.99]) {
+      // Rain with the most votes: it is left out, so the vote for clear is the one that counts.
+      expect(noRain(voted({ weather: 'rain' }, { weather: 'rain' }, { weather: 'clear' }), roll)).not.toBe('DayLateRain');
+      // Rain alone: no weather was voted on, so the lighting stays as the rotation has it.
+      expect(noRain(voted({ weather: 'rain' }), roll)).toBeUndefined();
+      // The afternoon has rain too, but a time alone gets a clear lighting anyway; with rain left out, so does Random.
+      expect(['DayLateClear', 'DayLateGray']).toContain(noRain(voted({ light: 'afternoon' }, { weather: 'rain' }), roll));
+      expect(noRain(voted({ light: 'random' }), roll)).not.toBe('DayLateRain');
+      expect(noRain(voted({ weather: 'random' }), roll)).not.toBe('DayLateRain');
+      // Fog in the afternoon (with gray) is still fine.
+      expect(['DayLateGrayFog', 'DayEarlyFog']).toContain(noRain(voted({ weather: 'fog' }), roll));
+    }
+  });
+
+  it('keeps rain out of every lighting Random can give, however many vote for it', () => {
+    const many = voted(...Array.from({ length: 6 }, () => ({ weather: 'random' })));
+    const rolls = Array.from({ length: 100 }, (_, i) => i / 100);
+    for (const roll of rolls) expect(weatherOf(chooseConditions(many, () => roll, true)!)).not.toBe('rain');
+    // Allowed, it still can.
+    expect(rolls.some((roll) => chooseConditions(many, () => roll)?.id === 'DayLateRain')).toBe(true);
+  });
+
+  it('blocks rain for every winner after a rainy match, and for the map that last had it', () => {
+    const base = withBoth();
+    expect(rainBlocked(base, 'A')).toBe(false);
+    expect(rainBlocked({ ...base, rain: { all: true, map: null } }, 'A')).toBe(true);
+    expect(rainBlocked({ ...base, rain: { all: false, map: 'A' } }, 'A')).toBe(true);
+    expect(rainBlocked({ ...base, rain: { all: false, map: 'A' } }, 'B')).toBe(false);
+    expect(rainBlocked({ ...base, rain: { all: false, map: 'A' } }, null)).toBe(false);
+  });
+
+  it('says in the Discord message why there may be no rain', () => {
+    const text = (rain: { all: boolean; map: string | null }) => voteMessage({ ...withBoth(), rain }, NOW + 1).embeds[0]?.description ?? '';
+    expect(text({ all: false, map: null })).not.toContain('rain');
+    expect(text({ all: true, map: null })).toContain('No rain this time');
+    expect(text({ all: false, map: 'B' })).toContain('Rain is not picked for **Bravo**');
+    expect(text({ all: false, map: 'Z' })).not.toContain('Rain is not picked');
   });
 
   it('shows the counts on the website and the chosen lighting once it is on the server', () => {

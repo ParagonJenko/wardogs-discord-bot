@@ -620,6 +620,12 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    one of its layouts by chance, never the layout a vote last gave that map (kept under `mapVoteZones`, and updated once the
    winner is on the server). A map with only one layout keeps the rotation's. It is all part of the same message, so
    nothing more is announced.
+   **No rain after rain.** The bot notes, as each match begins, whether its map is being played in the rain (the lighting of the
+   rotation's entry for the map being played, read before the rotation is put back; kept under `mapVoteRain`). When it is, the
+   vote has no Rain button and no rain lighting is chosen, whatever the votes for it. And rain is never chosen for the map that
+   last had it: a vote for rain counts for nothing if that map wins. The vote message says when either applies. Where no
+   lighting is voted on, the map keeps the lighting the rotation has for it, which can be rain. A server that cannot say
+   puts no rule on the vote.
    Nothing is sent to the server that its own catalogue (`/v1/catalog/...`) does not list: only maps that list a game mode
    and infantry only themselves are offered, the infantry only id sent is that map's own, and every lighting is one the server
    listed. If the catalogue can't confirm the winner, nothing is staged (the vote retries until the match ends).
