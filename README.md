@@ -677,6 +677,11 @@ Every counted vote is logged with who cast it and what for, such as `Map vote 17
 (the Discord user ID, their name in the server when it is known, and `discord` or `website`). The logs are the only place that is kept:
 the website and the API never get who voted.
 
+With `DISCORD_MODLOG_WEBHOOK_URL` set, the [moderation log](#moderation-log) also hears of problems putting a vote's winner on the
+server, once for each kind in each vote: the server not saying which rotation slot it is on (so the winner is in every slot, and
+the map after it is skipped once), the server going to the wrong slot after the write, the winner failing to go on (with the
+error; the bot tries again every minute), the match ending first, and the rotation not being put back.
+
 With `DISCORD_MODLOG_WEBHOOK_URL` set, the [moderation log](#moderation-log) also gets one message when a vote closes, with every
 ballot: for the map, the time of day and the weather, each choice that got votes with the people who voted for it, as mentions
 (Discord shows their names; nobody is pinged). A vote nobody voted in posts nothing. A very long list is cut short with a note.

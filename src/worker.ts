@@ -28,6 +28,10 @@ import {
   RAIN_KEY,
   voteLogLine,
   voteLogMessage,
+  voteProblemMessage,
+  parseVoteAlerts,
+  withVoteAlert,
+  VOTE_ALERTS_KEY,
   isRain,
   type RainRecord,
   mapIdOf,
@@ -402,6 +406,7 @@ import {
   planInsert,
   moveInsert,
   planMove,
+  RESTORE_DELAY_MS,
   restoreDue,
   rotationFacts,
   stillInserted,
@@ -1575,8 +1580,15 @@ export class Watcher extends DurableObject<Env> {
     // on the server while the end screen shows, and applyVoteWinner refuses once the server has moved to another map.
     if (vote !== null && (match === null || match.startedAt !== vote.matchStartedAt)) {
       if (vote.outcome === null || vote.outcome.pending) {
+        const lost = vote.outcome?.winner ?? null;
+        if (lost !== null) {
+          await this.alertVoteProblem(config, vote.id, 'late', "The winner wasn't put on the server in time", [
+            `**${mapName(lost)}** won the vote, but the match ended before it could be put on the server, so the rotation carries on as it was.`,
+          ]);
+        }
         vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
-        console.info(`Map vote: the match ended before the vote could be applied`);
+        if (lost === null) console.info(`Map vote: the match ended before the vote could be applied`);
+        else console.error(`Map vote: the match ended before the vote could be applied, so ${lost} was not put on the server`);
         await this.showVote(config, rule, vote);
       }
       vote = null;
@@ -1763,6 +1775,23 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
+  // Tells staff, in the moderation log, of a problem putting a vote's winner on the server: once for each kind of problem in each
+  // vote. A failure to post is only logged.
+  private async alertVoteProblem(config: Config, voteId: string, kind: string, title: string, lines: string[]): Promise<void> {
+    const url = config.modLogWebhookUrl;
+    if (url === undefined) return;
+    try {
+      const next = withVoteAlert(parseVoteAlerts(await this.ctx.storage.get(VOTE_ALERTS_KEY)), voteId, kind);
+      if (next === null) return;
+      await this.ctx.storage.put(VOTE_ALERTS_KEY, next);
+      postWebhook(url, voteProblemMessage(voteId, title, lines, Date.now())).catch((error: unknown) =>
+        console.error(`Map vote: could not post the problem to the moderation log: ${errorText(error)}`),
+      );
+    } catch (error) {
+      console.error(`Map vote: could not note the problem for the moderation log: ${errorText(error)}`);
+    }
+  }
+
   // Puts the winner on the server, infantry only. With staging "rotation" it goes into the server's rotation as the next map
   // (see insertVoteWinner), which can be done as soon as the vote closes; "queue" stages it as /setnextmap does, which waits
   // for `over` (the match is over). A failure keeps the outcome pending, and the next
@@ -1771,7 +1800,12 @@ export class Watcher extends DurableObject<Env> {
     const at = Date.now();
     const winner = vote.outcome?.winner ?? null;
     if (winner === null) return { at, winner: null, pending: false, note: NOTE.failed };
-    if (playing !== vote.fromMap) return { at, winner: null, pending: false, note: NOTE.late };
+    if (playing !== vote.fromMap) {
+      await this.alertVoteProblem(config, vote.id, 'late', "The winner wasn't put on the server in time", [
+        `**${mapName(winner)}** won the vote, but the match ended before it could be put on the server, so the rotation carries on as it was.`,
+      ]);
+      return { at, winner: null, pending: false, note: NOTE.late };
+    }
     // The circles drawn for the winner: undefined until decided, then a layout or null (the map has no choice). The outcome
     // always says the layout that is (or will be) put on, so a retry reuses it and a vote saved before this reports none it
     // did not apply.
@@ -1844,6 +1878,10 @@ export class Watcher extends DurableObject<Env> {
       return outcomeOf(false, at);
     } catch (error) {
       console.error(`Map vote: could not stage ${winner}, trying again next check: ${errorText(error)}`);
+      await this.alertVoteProblem(config, vote.id, 'failed', "The winner couldn't be put on the server", [
+        `**${mapName(winner)}** won the vote, but putting it on the server failed. The bot tries again every minute until the match ends.`,
+        `\`${errorText(error)}\``,
+      ]);
       return outcomeOf(true, vote.outcome?.at ?? at);
     }
   }
@@ -1923,7 +1961,13 @@ export class Watcher extends DurableObject<Env> {
     if (plan === null) return `${whyNoInsert(rotation) ?? 'it cannot be planned'} (${rotationFacts(rotation, status)})`;
     await write(plan);
     if (plan.asIs) {
-      console.info(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
+      // An error in the Worker's logs, not info, so it stands out there and can be alerted on.
+      console.error(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
+      await this.alertVoteProblem(config, vote.id, 'every-slot', "The server didn't say which rotation slot it is on", [
+        `**${mapName(winner.map)}** won the vote, but without the slot the server is on the bot can't put it after the map being played. It is in **every** slot of the rotation, so it plays next, and the map that would have come after it is skipped once.`,
+        `The rotation is put back about ${RESTORE_MINUTES} minutes into the next match.`,
+        `\`${rotationFacts(rotation, status)}\``,
+      ]);
       return true;
     }
     const [after, afterStatus] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
@@ -1932,9 +1976,14 @@ export class Watcher extends DurableObject<Env> {
     const every = planInsert(rotation, null, winner);
     if (every === null) return 'it cannot be planned';
     await write(every);
-    console.info(
+    console.error(
       `Map vote: after the write the server goes to ${after.entries[next]?.map ?? 'another map'} next, not ${winner.map}, so ${winner.map} is in every slot (${rotationFacts(after, afterStatus)})`,
     );
+    await this.alertVoteProblem(config, vote.id, 'every-slot', 'The server went to the wrong slot after the rotation was written', [
+      `**${mapName(winner.map)}** won the vote. After the write the server goes to **${mapName(after.entries[next]?.map ?? 'another map')}** next, so the winner is in **every** slot of the rotation instead, and the map that would have come after it is skipped once.`,
+      `The rotation is put back about ${RESTORE_MINUTES} minutes into the next match.`,
+      `\`${rotationFacts(after, afterStatus)}\``,
+    ]);
     return true;
   }
 
@@ -1966,6 +2015,10 @@ export class Watcher extends DurableObject<Env> {
       await storage.delete(VOTE_INSERT_KEY);
     } catch (error) {
       console.error(`Map vote: could not put the rotation back, trying again next check: ${errorText(error)}`);
+      await this.alertVoteProblem(config, insert.voteId, 'restore', "The rotation couldn't be put back", [
+        `**${mapName(insert.map)}**, which won the vote, is still in the rotation. The bot tries again every minute.`,
+        `\`${errorText(error)}\``,
+      ]);
     }
   }
 
@@ -4355,6 +4408,8 @@ const REFUSAL_LOG_MS = 10 * 60_000;
 let refusalLoggedAt = 0;
 // The next-map vote's "no maps to offer" note is logged at most this often.
 const VOTE_LOG_MS = 10 * 60_000;
+// How long into the match after a vote's the rotation is put back, in minutes, for the moderation log.
+const RESTORE_MINUTES = RESTORE_DELAY_MS / 60_000;
 let voteUnavailableLoggedAt = 0;
 let unreadLoggedAt = 0;
 

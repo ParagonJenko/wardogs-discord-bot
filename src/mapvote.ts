@@ -745,6 +745,43 @@ export const voteLogMessage = (vote: MapVote): DiscordMessage => {
   };
 };
 
+// Problems putting a vote's winner on the server, posted to the moderation log so staff hear of them: once for each kind of problem
+// in each vote, as the checks that try again would otherwise post every minute. Kept under 'mapVoteAlerts', by vote, for the last
+// few votes: one vote's winner can still be going on, or its rotation being put back, while the next vote's is tried.
+export const VOTE_ALERTS_KEY = 'mapVoteAlerts';
+export type VoteAlerts = Record<string, string[]>;
+const VOTE_ALERTS_KEPT = 6;
+
+export const parseVoteAlerts = (raw: unknown): VoteAlerts => {
+  const parsed = z.record(z.string(), z.array(z.string())).safeParse(raw);
+  return parsed.success ? parsed.data : {};
+};
+
+// The alerts after `kind` was posted for `voteId`, or null when it already was. The oldest votes are dropped.
+export const withVoteAlert = (seen: VoteAlerts, voteId: string, kind: string): VoteAlerts | null => {
+  const kinds = seen[voteId] ?? [];
+  if (kinds.includes(kind)) return null;
+  const { [voteId]: _old, ...others } = seen;
+  const kept = Object.entries(others).slice(-(VOTE_ALERTS_KEPT - 1));
+  return Object.fromEntries([...kept, [voteId, [...kinds, kind]]]);
+};
+
+const ALERT_COLOUR = 0xe74c3c;
+const ALERT_CHARS = 3800;
+
+export const voteProblemMessage = (voteId: string, title: string, lines: readonly string[], now: number): DiscordMessage => ({
+  embeds: [
+    {
+      title: `⚠️ ${title}`.slice(0, 250),
+      description: lines.join('\n').slice(0, ALERT_CHARS),
+      color: ALERT_COLOUR,
+      footer: { text: `Vote ${voteId}` },
+      timestamp: new Date(now).toISOString(),
+    },
+  ],
+  allowed_mentions: { parse: [], roles: [] },
+});
+
 // A button's custom_id: "mapvote:<vote id>:<map id>". Null for anything else.
 export const parseVoteButton = (customId: string | undefined): { poll: string; map: string } | null => {
   const found = /^mapvote:(\d{1,20}):([A-Za-z0-9_]{1,64})$/.exec(customId ?? '');

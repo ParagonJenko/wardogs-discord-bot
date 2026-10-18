@@ -34,6 +34,9 @@ import {
   rainRecordFor,
   voteLogLine,
   voteLogMessage,
+  voteProblemMessage,
+  parseVoteAlerts,
+  withVoteAlert,
   pickOptions,
   publicVote,
   withPlayed,
@@ -242,6 +245,59 @@ describe('voteLogMessage', () => {
     const description = voteLogMessage(v).embeds[0]!.description!;
     expect(description.length).toBeLessThanOrEqual(4096);
     expect(description).toContain('more lines cut');
+  });
+});
+
+describe('problems putting a winner on the server', () => {
+  it('posts each kind of problem once for each vote', () => {
+    const none = parseVoteAlerts(undefined);
+    expect(none).toEqual({});
+    const first = withVoteAlert(none, '42', 'failed')!;
+    expect(first).toEqual({ '42': ['failed'] });
+    expect(withVoteAlert(first, '42', 'failed')).toBeNull();
+    expect(withVoteAlert(first, '42', 'every-slot')).toEqual({ '42': ['failed', 'every-slot'] });
+    expect(withVoteAlert(first, '43', 'failed')).toEqual({ '42': ['failed'], '43': ['failed'] });
+    expect(parseVoteAlerts({ '42': 1 })).toEqual({});
+  });
+
+  it("keeps one vote's problems when another vote's are tried in between, so none is posted twice", () => {
+    // Vote A's rotation keeps failing to be put back while vote B's winner keeps failing to go on.
+    let seen = parseVoteAlerts(undefined);
+    const posted: string[] = [];
+    for (let minute = 0; minute < 4; minute++) {
+      for (const [vote, kind] of [['A', 'restore'], ['B', 'failed']] as const) {
+        const next = withVoteAlert(seen, vote, kind);
+        if (next !== null) {
+          posted.push(`${vote}/${kind}`);
+          seen = next;
+        }
+      }
+    }
+    expect(posted).toEqual(['A/restore', 'B/failed']);
+  });
+
+  it('forgets the oldest votes, so it does not grow', () => {
+    let seen = parseVoteAlerts(undefined);
+    for (let i = 0; i < 20; i++) seen = withVoteAlert(seen, String(i), 'failed')!;
+    expect(Object.keys(seen)).toEqual(['14', '15', '16', '17', '18', '19']);
+  });
+
+  it('is one embed for the moderation log that pings nobody', () => {
+    const message = voteProblemMessage('42', "The server didn't say which rotation slot it is on", ['It is in **every** slot.', '`rotation on`'], NOW);
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(message.embeds).toEqual([
+      {
+        title: "⚠️ The server didn't say which rotation slot it is on",
+        description: 'It is in **every** slot.\n`rotation on`',
+        color: 0xe74c3c,
+        footer: { text: 'Vote 42' },
+        timestamp: new Date(NOW).toISOString(),
+      },
+    ]);
+    expect(voteProblemMessage('1', 'x'.repeat(400), ['y'.repeat(9000)], NOW).embeds[0]).toMatchObject({
+      title: expect.stringMatching(/^.{1,256}$/),
+    });
+    expect(voteProblemMessage('1', 'x', ['y'.repeat(9000)], NOW).embeds[0]!.description!.length).toBeLessThanOrEqual(4096);
   });
 });
 
