@@ -228,6 +228,10 @@ export const rankSeeders = (days: PlayerDay[], count: number): RankedPlayer[] =>
 
 export type BoardKey = 'kills' | 'kd' | 'playtime' | 'seeding';
 
+// The seeding page's top seeders: the last week only, not the leaderboard's month.
+export const SEEDERS_DAYS = 7;
+export type RecentSeeders<Row = RankedPlayer> = { days: number; rows: Row[] };
+
 // Rows keep their Steam IDs until the stats go out, when publicStats swaps them for public ids.
 export type Leaderboard<Row = RankedPlayer> = { days: number; kdMinMatches: number } & Record<BoardKey, Row[]>;
 
@@ -266,6 +270,12 @@ export const leaderboard = (days: PlayerDay[], period: number, count: number): L
   const top = (key: BoardKey) => board(players, key, kdMatches).slice(0, count);
   return { days: period, kdMinMatches: kdMatches, kills: top('kills'), kd: top('kd'), playtime: top('playtime'), seeding: top('seeding') };
 };
+
+// The top seeders of the last SEEDERS_DAYS of `days` (oldest first, today last), ranked as the leaderboard ranks them.
+export const recentSeeders = (days: PlayerDay[], count: number): RecentSeeders => ({
+  days: SEEDERS_DAYS,
+  rows: board(totals(days.slice(-SEEDERS_DAYS)), 'seeding', 0).slice(0, count),
+});
 
 // A player's place on each board over `period` days (1 is the top), or null when the board leaves them out, and how
 // many players played in that time.

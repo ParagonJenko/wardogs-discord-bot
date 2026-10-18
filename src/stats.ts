@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
 import { mapName } from './discord.ts';
-import type { Leaderboard, RankedPlayer } from './players.ts';
+import type { Leaderboard, RankedPlayer, RecentSeeders } from './players.ts';
 import { publicPlayer, type PublicIdOf } from './privacy.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 import { topPlayers, type MatchState, type MatchSummary, type RankedStats } from './tracking.ts';
@@ -351,6 +351,7 @@ export const recordDiscord = (stats: SiteStats, discord: DiscordCounts): SiteSta
 // VIP from seeding now; null when automatic VIP is off. `teams`: which team wins most, from the match records.
 export type PublicExtras = {
   leaderboard: Leaderboard;
+  recentSeeders: RecentSeeders;
   vip: VipRule | null;
   seederVip: SeederVip[] | null;
   weapons: WeaponBoard | null;
@@ -373,6 +374,7 @@ export type PublicStats = Omit<SiteStats, 'hours' | 'crashes' | 'matches' | 'cur
   matches: PublicMatch[];
   currentMatch: (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null;
   leaderboard: Leaderboard<Public<RankedPlayer>>;
+  recentSeeders: RecentSeeders<Public<RankedPlayer>>;
   vip: VipRule | null;
   seederVip: Public<SeederVip>[] | null;
   weapons: WeaponBoard | null;
@@ -389,7 +391,7 @@ export const publicCurrentMatch = (
 ): (Omit<CurrentMatch, 'top'> & { top: Public<RankedStats>[] }) | null => (match === null ? null : { ...match, top: named(match.top, idOf) });
 
 // Everyone the public stats name, so their public ids can be worked out before publicStats needs them.
-export const namedSteamIds = (stats: SiteStats, leaderboard: Leaderboard): string[] => {
+export const namedSteamIds = (stats: SiteStats, leaderboard: Leaderboard, recentSeeders: RecentSeeders): string[] => {
   const rows = [
     ...stats.matches.flatMap((m) => m.top),
     ...(stats.currentMatch?.top ?? []),
@@ -397,6 +399,7 @@ export const namedSteamIds = (stats: SiteStats, leaderboard: Leaderboard): strin
     ...leaderboard.kd,
     ...leaderboard.playtime,
     ...leaderboard.seeding,
+    ...recentSeeders.rows,
   ];
   return [...new Set(rows.flatMap((p) => (p.steamId === undefined ? [] : [p.steamId])))];
 };
@@ -439,7 +442,7 @@ export const publicStats = (
   { hours, crashes: _crashes, matches, currentMatch, ...stats }: SiteStats,
   thresholds: Thresholds,
   now: number,
-  { leaderboard, vip, seederVip, weapons, teams }: PublicExtras,
+  { leaderboard, recentSeeders, vip, seederVip, weapons, teams }: PublicExtras,
   idOf: PublicIdOf,
 ): PublicStats => ({
   generatedAt: now,
@@ -456,6 +459,7 @@ export const publicStats = (
     playtime: named(leaderboard.playtime, idOf),
     seeding: named(leaderboard.seeding, idOf),
   },
+  recentSeeders: { days: recentSeeders.days, rows: named(recentSeeders.rows, idOf) },
   vip,
   seederVip: seederVip === null ? null : named(seederVip, idOf),
   weapons,
