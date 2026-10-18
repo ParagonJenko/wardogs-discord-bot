@@ -1587,7 +1587,8 @@ export class Watcher extends DurableObject<Env> {
           ]);
         }
         vote = await save(ended(vote, { at: now, winner: null, pending: false, note: NOTE.late }));
-        console.info(`Map vote: the match ended before the vote could be applied`);
+        if (lost === null) console.info(`Map vote: the match ended before the vote could be applied`);
+        else console.error(`Map vote: the match ended before the vote could be applied, so ${lost} was not put on the server`);
         await this.showVote(config, rule, vote);
       }
       vote = null;
@@ -1960,7 +1961,8 @@ export class Watcher extends DurableObject<Env> {
     if (plan === null) return `${whyNoInsert(rotation) ?? 'it cannot be planned'} (${rotationFacts(rotation, status)})`;
     await write(plan);
     if (plan.asIs) {
-      console.info(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
+      // An error in the Worker's logs, not info, so it stands out there and can be alerted on.
+      console.error(`Map vote: the server did not say which rotation slot it is on, so ${winner.map} is in every slot (${rotationFacts(rotation, status)})`);
       await this.alertVoteProblem(config, vote.id, 'every-slot', "The server didn't say which rotation slot it is on", [
         `**${mapName(winner.map)}** won the vote, but without the slot the server is on the bot can't put it after the map being played. It is in **every** slot of the rotation, so it plays next, and the map that would have come after it is skipped once.`,
         `The rotation is put back about ${RESTORE_MINUTES} minutes into the next match.`,
@@ -1974,7 +1976,7 @@ export class Watcher extends DurableObject<Env> {
     const every = planInsert(rotation, null, winner);
     if (every === null) return 'it cannot be planned';
     await write(every);
-    console.info(
+    console.error(
       `Map vote: after the write the server goes to ${after.entries[next]?.map ?? 'another map'} next, not ${winner.map}, so ${winner.map} is in every slot (${rotationFacts(after, afterStatus)})`,
     );
     await this.alertVoteProblem(config, vote.id, 'every-slot', 'The server went to the wrong slot after the rotation was written', [
