@@ -86,6 +86,15 @@ describe('pickOptions', () => {
     expect(pickOptions(maps, 'Now', ['Now'], 4, () => 0).map((o) => o.map).sort()).toEqual(['A', 'B']);
   });
 
+  it('never offers a map staff switched off, in the buttons or the pool Random picks from', () => {
+    const maps = ['Now', 'A', 'B', 'Off'].map((id) => choice(id));
+    for (const roll of [0, 0.5, 0.99]) expect(pickOptions(maps, 'Now', ['Now'], 4, () => roll, [], ['Off']).map((o) => o.map).sort()).toEqual(['A', 'B']);
+    expect(votePool(maps, 'Now', ['Now'], 4, [], ['Off']).map((m) => m.id).sort()).toEqual(['A', 'B']);
+    // Not even to make up two: with one map left there is no vote, whereas a map merely avoided is let back in.
+    expect(pickOptions(maps, 'Now', ['Now'], 4, () => 0, [], ['A', 'Off'])).toEqual([]);
+    expect(pickOptions(maps, 'Now', ['Now'], 4, () => 0, ['A', 'B', 'Off']).length).toBeGreaterThan(1);
+  });
+
   it('offers nothing when fewer than two maps could be voted on', () => {
     expect(pickOptions([choice('Now'), choice('A')], 'Now', ['Now'], 4, Math.random)).toEqual([]);
   });
@@ -127,9 +136,10 @@ describe('voteLogLine', () => {
 describe('rain after rain', () => {
   it('has no rule on a vote that was saved before there was one', () => {
     const { rain, ...old } = vote();
-    expect(rain).toEqual({ all: false, skipped: null });
-    expect(parseMapVote(old)?.rain).toEqual({ all: false, skipped: null });
-    expect(parseMapVote({ ...old, rain: { all: true, skipped: 'A' } })?.rain).toEqual({ all: true, skipped: 'A' });
+    expect(rain).toEqual({ all: false, skipped: null, off: false });
+    expect(parseMapVote(old)?.rain).toEqual({ all: false, skipped: null, off: false });
+    // A rule saved before staff could turn rain off: it was not off.
+    expect(parseMapVote({ ...old, rain: { all: true, skipped: 'A' } })?.rain).toEqual({ all: true, skipped: 'A', off: false });
   });
 
   it("notes whether a match is in the rain from its map's lighting, and carries the last map that had rain", () => {
@@ -705,11 +715,23 @@ describe('the time of day and weather votes', () => {
   });
 
   it('says in the Discord message why there may be no rain, or a map is missing', () => {
-    const text = (rain: { all: boolean; skipped: string | null }) => voteMessage({ ...withBoth(), rain }, NOW + 1).embeds[0]?.description ?? '';
+    const text = (rain: { all: boolean; skipped: string | null; off?: boolean }) => voteMessage({ ...withBoth(), rain: { off: false, ...rain } }, NOW + 1).embeds[0]?.description ?? '';
     expect(text({ all: false, skipped: null })).not.toContain('rain');
     expect(text({ all: true, skipped: null })).toContain('No rain this time');
     expect(text({ all: false, skipped: 'Kavkazi' })).toContain('Bakurani is not in the vote: it had rain last.');
     expect(text({ all: false, skipped: 'Kavkazi' })).not.toContain('No rain');
+  });
+
+  it('says staff turned rain off, and not that the last match was in the rain', () => {
+    const text = voteMessage({ ...withBoth(), rain: { all: true, skipped: null, off: true } }, NOW + 1).embeds[0]?.description ?? '';
+    expect(text).toContain('No rain: staff turned it off.');
+    expect(text).not.toContain('the last match was in the rain');
+  });
+
+  it('never gives rain when staff turned it off, even with every vote for it', () => {
+    const v = voted({ weather: 'rain' }, { weather: 'rain' });
+    const noRain = { ...v, rain: { all: true, skipped: null, off: true } };
+    for (const roll of [0, 0.5, 0.99]) expect(chooseConditions(noRain, () => roll, noRain.rain.all)?.id).not.toBe('DayLateRain');
   });
 
   it('shows the counts on the website and the chosen lighting once it is on the server', () => {

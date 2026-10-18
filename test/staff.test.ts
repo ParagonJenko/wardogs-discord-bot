@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BlockedCircles } from '../src/circles.ts';
+import type { VoteOptions } from '../src/voteoptions.ts';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
 import type { PrivateProfiles } from '../src/privacy.ts';
@@ -112,6 +113,9 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   blockedCircles: vi.fn(async (): Promise<BlockedCircles> => ({})),
   blockCircle: vi.fn(async () => true),
   unblockCircle: vi.fn(async () => true),
+  voteOptions: vi.fn(async (): Promise<VoteOptions> => ({ noRain: null, offMaps: {} })),
+  setVoteRain: vi.fn(async () => true),
+  setVoteMap: vi.fn(async () => ({ changed: true, votable: 3 as number | null })),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -630,6 +634,59 @@ describe('/private', () => {
     await expect(suggest({ name: 'private', options: { subcommand: 'remove', steam_id: '' }, focused: 'steam_id' })).resolves.toEqual([
       { name: `Oldtimer · ${OLD}`, value: OLD },
     ]);
+  });
+});
+
+describe('/voteoptions', () => {
+  it('turns rain off or on through the records, says when it already was, and logs who did it', async () => {
+    const { run, records, log } = setup();
+
+    await expect(run('voteoptions', { subcommand: 'rain', enabled: 'false' })).resolves.toEqual({ content: expect.stringContaining('Rain is off in map votes') });
+    expect(records.setVoteRain).toHaveBeenCalledWith(false, '42', undefined);
+    expect(log.info.mock.calls[0]).toEqual(['/voteoptions rain off by Discord user 42']);
+    await expect(run('voteoptions', { subcommand: 'rain', enabled: 'true' })).resolves.toEqual({ content: expect.stringContaining('Rain is on in map votes again') });
+    records.setVoteRain.mockResolvedValue(false);
+    await expect(run('voteoptions', { subcommand: 'rain', enabled: 'true' })).resolves.toEqual({ content: 'Rain is already on in map votes.' });
+  });
+
+  it('turns a map off or on, and warns when too few maps are left for a vote', async () => {
+    const { run, records } = setup();
+
+    await expect(run('voteoptions', { subcommand: 'map', map: 'NorthAmerica', enabled: 'false' })).resolves.toEqual({
+      content:
+        '🚫 🟪 **Zestafona** is off in map votes, from the next vote: it is not offered, and the Random map never picks it. /setnextmap and rotations can still use it.',
+    });
+    expect(records.setVoteMap).toHaveBeenCalledWith('NorthAmerica', false, '42', undefined);
+    records.setVoteMap.mockResolvedValue({ changed: true, votable: 2 });
+    await expect(run('voteoptions', { subcommand: 'map', map: 'NorthAmerica', enabled: 'false' })).resolves.toEqual({
+      content: expect.stringContaining('Only 2 maps can be voted on now, so a vote opens only while a map that is off is being played.'),
+    });
+    records.setVoteMap.mockResolvedValue({ changed: true, votable: 1 });
+    await expect(run('voteoptions', { subcommand: 'map', map: 'Europe', enabled: 'false' })).resolves.toEqual({
+      content: expect.stringContaining('Only 1 map can be voted on now, so no vote will open.'),
+    });
+    records.setVoteMap.mockResolvedValue({ changed: true, votable: 3 });
+    await expect(run('voteoptions', { subcommand: 'map', map: 'NorthAmerica', enabled: 'true' })).resolves.toEqual({
+      content: '✅ 🟪 **Zestafona** is on in map votes again, from the next vote.',
+    });
+    records.setVoteMap.mockResolvedValue({ changed: false, votable: 3 });
+    await expect(run('voteoptions', { subcommand: 'map', map: 'NorthAmerica', enabled: 'true' })).resolves.toEqual({
+      content: '🟪 **Zestafona** is already on in map votes.',
+    });
+    await expect(run('voteoptions', { subcommand: 'map', map: 'x y', enabled: 'false' })).resolves.toEqual({ content: 'Pick the map from the list.' });
+  });
+
+  it('shows what is switched off', async () => {
+    const { run, records } = setup();
+    await expect(run('voteoptions', { subcommand: 'show' })).resolves.toEqual({ content: expect.stringContaining('Nothing is switched off in map votes') });
+    records.voteOptions.mockResolvedValue({
+      noRain: { at: NOW, by: '7' },
+      offMaps: { NorthAmerica: { at: NOW, by: '8' } },
+    });
+    const { content } = (await run('voteoptions', { subcommand: 'show' })) as { content: string };
+    expect(content).toContain('1 map, and rain');
+    expect(content).toContain('☔ Rain · by <@7>');
+    expect(content).toContain('🟪 **Zestafona** · by <@8>');
   });
 });
 

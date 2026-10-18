@@ -329,6 +329,7 @@ The Node/Docker version does not serve the season roundup.
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
 | `/private …`    | Staff only           | [Private profiles](#private-profiles): `add` makes a player's profile private, `remove` makes it public again, `list` shows them |
 | `/circles …`    | Staff only           | [Blocked circles](#blocked-circles): `block` keeps a circle (control zone layout) from map votes, `unblock` allows it again, `list` shows them |
+| `/voteoptions …` | Staff only          | [Vote options](#vote-options): `rain` and `map` switch rain, or a map (such as Zestafona), off or on in map votes, `show` lists what is off |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
 
@@ -699,6 +700,21 @@ before. `/circles unblock` lists the blocked circles and allows one again, and `
 who blocked them. They are kept under `blockedCircles`. A map left with one circle that is not blocked gets it every time, and a map
 with every circle blocked keeps the circle its rotation has. A vote that has drawn its circle and is still being put on the server keeps it, even if it is blocked meanwhile. Blocking only changes what a vote draws: `/setnextmap`, `/changemap`
 and saved rotations can still use a blocked circle. New commands need registering once (`npm run register`).
+
+### Vote options
+
+Staff can switch things off in map votes with `/voteoptions`:
+
+- `/voteoptions rain enabled:false` – no vote offers or chooses a rain lighting (the Rain button is gone, Random never gives rain, and
+  a time of day alone never gives a rainy lighting). `enabled:true` allows rain again; a vote still gives no rain right after a match
+  in the rain.
+- `/voteoptions map map:<map> enabled:false` – the map is never offered, and the Random map never picks it, such as Zestafona.
+  `enabled:true` offers it again. The reply warns when too few maps are left: a vote needs two maps to offer besides the one being
+  played, so with only two maps on, a vote opens only while a map that is off is being played, and with fewer none opens.
+- `/voteoptions show` lists what is off, with who switched it off and when.
+
+A change applies from the next vote that opens; a vote that is open keeps its options. The choices are kept under `mapVoteOptions`.
+`/setnextmap`, `/changemap` and saved rotations can still use whatever is off. New commands need registering once (`npm run register`).
 
 ## Player accounts
 

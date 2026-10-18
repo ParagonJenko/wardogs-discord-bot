@@ -11,6 +11,7 @@ import {
   closeDue,
   isOpen as isOpenVote,
   matchIsOver,
+  canBeVoted,
   conditionOptions,
   weatherOptions,
   closeScoreFor,
@@ -52,6 +53,7 @@ import {
   type ZoneChoice,
 } from './mapvote.ts';
 import { planSetup } from './matchsetup.ts';
+import { VOTE_OPTIONS_KEY, offMapIds, parseVoteOptions, withMap, withRain, type VoteOptions } from './voteoptions.ts';
 import { BLOCKED_CIRCLES_KEY, blockCircle, blockedCircleIds, parseBlockedCircles, unblockCircle, type BlockedCircles } from './circles.ts';
 import {
   infantryFromRotation,
@@ -1650,7 +1652,10 @@ export class Watcher extends DurableObject<Env> {
     // The map that last had rain is not offered (unless that leaves no vote), as the one being played is not.
     const lastRain = rainNow !== null && !rainNow.rain && rainNow.ban !== null ? mapIdOf(maps, rainNow.ban) : null;
     const avoid = lastRain === null ? [] : [lastRain];
-    const options = catalog === null ? [] : pickOptions(maps, playingId, recentIds, rule.options, Math.random, avoid);
+    // What staff switched off with /voteoptions: maps are never offered, and rain is never chosen.
+    const staffOptions = parseVoteOptions(await storage.get(VOTE_OPTIONS_KEY));
+    const off = offMapIds(staffOptions);
+    const options = catalog === null ? [] : pickOptions(maps, playingId, recentIds, rule.options, Math.random, avoid, off);
     if (options.length === 0) {
       // Said at most every 10 minutes, so a server that can never offer two maps doesn't fill the logs once a minute.
       if (Date.now() - voteUnavailableLoggedAt >= VOTE_LOG_MS) {
@@ -1661,18 +1666,20 @@ export class Watcher extends DurableObject<Env> {
         console.error(
           `Map vote: no vote opened, as fewer than two maps could be offered. The server lists ${maps.length} maps, ` +
             `${withModes.length} with a game mode, ${withInfantry.length} of those with infantry only (${withInfantry.map((m) => m.id).join(', ') || 'none'}); ` +
-            `not offered because they were played lately: ${recent.join(', ')}.`,
+            `not offered because they were played lately: ${recent.join(', ')}` +
+            `${off.length > 0 ? `; switched off by staff with /voteoptions: ${off.join(', ')}` : ''}.`,
         );
       }
       return;
     }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     // The maps a Random map button picks from.
-    const pool = votePool(maps, playingId, recentIds, rule.options, avoid);
+    const pool = votePool(maps, playingId, recentIds, rule.options, avoid, off);
     // No rain when the match being played has it; and the map that last had it, if it was left out, is said.
     const skipped =
-      lastRain !== null && !pool.some((m) => m.id === lastRain) && votePool(maps, playingId, recentIds, rule.options).some((m) => m.id === lastRain) ? lastRain : null;
-    const rain = { all: rainNow?.rain ?? false, skipped };
+      lastRain !== null && !pool.some((m) => m.id === lastRain) && votePool(maps, playingId, recentIds, rule.options, [], off).some((m) => m.id === lastRain) ? lastRain : null;
+    const noRain = staffOptions.noRain !== null;
+    const rain = { all: (rainNow?.rain ?? false) || noRain, skipped, off: noRain };
     const lightings = catalog?.lightings ?? [];
     const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(lightings), weatherOptions(rain.all ? lightings.filter((l) => !isRain(l)) : lightings), {
       pool: pool.map((m) => ({ map: m.id, name: m.name })),
@@ -3739,6 +3746,27 @@ export class Watcher extends DurableObject<Env> {
     return next !== null;
   }
 
+  // What staff switched off for map votes (see voteoptions.ts), and switching rain or a map off or on. False when it already was.
+  // A map's reply also says how many maps a vote can offer now (null when the server's maps could not be read).
+  async voteOptions(): Promise<VoteOptions> {
+    return parseVoteOptions(await this.ctx.storage.get(VOTE_OPTIONS_KEY));
+  }
+
+  async setVoteRain(on: boolean, by: string, byName?: string): Promise<boolean> {
+    const next = withRain(await this.voteOptions(), on, by, byName, Date.now());
+    if (next !== null) await this.ctx.storage.put(VOTE_OPTIONS_KEY, next);
+    return next !== null;
+  }
+
+  async setVoteMap(map: string, on: boolean, by: string, byName?: string): Promise<{ changed: boolean; votable: number | null }> {
+    const current = await this.voteOptions();
+    const next = withMap(current, map, on, by, byName, Date.now());
+    if (next !== null) await this.ctx.storage.put(VOTE_OPTIONS_KEY, next);
+    const catalog = await this.catalog(loadConfig(stringVars(this.env))).catch(() => null);
+    const off = offMapIds(next ?? current);
+    return { changed: next !== null, votable: catalog === null ? null : catalog.maps.filter((m) => canBeVoted(m) && !off.includes(m.id)).length };
+  }
+
   async setProfilePublic(steamId: string): Promise<boolean> {
     const next = makePublic(await this.privateProfiles(), steamId);
     if (next !== null) await this.ctx.storage.put(PRIVATE_PROFILES_KEY, next);
@@ -4112,6 +4140,9 @@ const commandTools = (
     blockedCircles: () => watcher().blockedCircles(),
     blockCircle: (circle, by, byName) => watcher().setCircleBlocked(circle, by, byName),
     unblockCircle: (id) => watcher().setCircleUnblocked(id),
+    voteOptions: () => watcher().voteOptions(),
+    setVoteRain: (on, by, byName) => watcher().setVoteRain(on, by, byName),
+    setVoteMap: (map, on, by, byName) => watcher().setVoteMap(map, on, by, byName),
   };
   return {
     run: runCommand({

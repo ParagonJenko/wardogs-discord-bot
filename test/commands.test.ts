@@ -25,6 +25,9 @@ const records: StaffRecords = {
   blockedCircles: vi.fn(),
   blockCircle: vi.fn(),
   unblockCircle: vi.fn(),
+  voteOptions: vi.fn(),
+  setVoteRain: vi.fn(),
+  setVoteMap: vi.fn(),
 };
 
 const config: Config = {

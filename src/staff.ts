@@ -1,4 +1,5 @@
 import type { BlockedCircles } from './circles.ts';
+import { offMapIds, type VoteOptions } from './voteoptions.ts';
 import type { Config } from './config.ts';
 import {
   andList,
@@ -128,6 +129,11 @@ export type StaffRecords = {
   blockedCircles: () => Promise<BlockedCircles>;
   blockCircle: (circle: { id: string; map: string; name: string }, by: string, byName?: string) => Promise<boolean>;
   unblockCircle: (id: string) => Promise<boolean>;
+  // What staff switched off for map votes (see voteoptions.ts), and switching rain or a map off or on. False when it already was.
+  // `votable` is how many maps a vote can offer now, or null when the server's maps could not be read.
+  voteOptions: () => Promise<VoteOptions>;
+  setVoteRain: (on: boolean, by: string, byName?: string) => Promise<boolean>;
+  setVoteMap: (map: string, on: boolean, by: string, byName?: string) => Promise<{ changed: boolean; votable: number | null }>;
 };
 
 export type StaffDeps = {
@@ -138,7 +144,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -207,6 +213,25 @@ const circlesList = (circles: BlockedCircles): string => {
   const more = entries.length - lines.length;
   const count = `${entries.length} blocked circle${entries.length === 1 ? '' : 's'}`;
   return [`🚫 ${count}, the latest first:`, ...lines, ...(more > 0 ? [`And ${more} more.`] : [])].join('\n');
+};
+
+// /voteoptions show: what is switched off in map votes, with who did it and when.
+const voteOptionsList = (options: VoteOptions): string => {
+  const lines = [
+    ...(options.noRain === null ? [] : [`☔ Rain${options.noRain.by === 'unknown' ? '' : ` · by <@${options.noRain.by}>`} <t:${unix(options.noRain.at)}:R>`]),
+    ...Object.entries(options.offMaps).map(
+      ([map, c]) => `${mapEmoji(map)}**${mapName(map)}**${c.by === 'unknown' ? '' : ` · by <@${c.by}>`} <t:${unix(c.at)}:R>`,
+    ),
+  ];
+  if (lines.length === 0) return 'Nothing is switched off in map votes. /voteoptions rain and /voteoptions map switch things off.';
+  return [`🚫 Switched off in map votes (${offMapIds(options).length} map${offMapIds(options).length === 1 ? '' : 's'}${options.noRain === null ? '' : ', and rain'}):`, ...lines].join('\n');
+};
+
+// A vote needs two maps to offer besides the one being played, so with few maps left it rarely opens, or never does.
+const votableWarning = (votable: number | null): string => {
+  if (votable === null || votable > 2) return '';
+  if (votable < 2) return ` ⚠️ Only ${votable} map${votable === 1 ? '' : 's'} can be voted on now, so no vote will open.`;
+  return ' ⚠️ Only 2 maps can be voted on now, so a vote opens only while a map that is off is being played.';
 };
 
 // Online players first, so their current name wins, then everyone else once.
@@ -611,6 +636,33 @@ export const runStaffCommand =
           `🚫 **${circle.name}** on ${mapEmoji(map)}**${mapName(map)}** is blocked. Map votes won't give it to ${mapName(map)} when it wins. ` +
           `/setnextmap and rotations can still use it.` +
           (left.length === 0 ? ` ⚠️ Every circle on ${mapName(map)} is blocked now, so it keeps the one its rotation has.` : ''),
+      };
+    }
+
+    if (name === 'voteoptions') {
+      if (options['subcommand'] === 'show') return { content: voteOptionsList(await records.voteOptions()) };
+      const enabled = options['enabled'] === 'true';
+      const onOff = enabled ? 'on' : 'off';
+      if (options['subcommand'] === 'rain') {
+        log.info(`/voteoptions rain ${onOff} by ${staff}`);
+        if (!(await records.setVoteRain(enabled, by, userName))) return { content: `Rain is already ${onOff} in map votes.` };
+        return {
+          content: enabled
+            ? '🌧️ Rain is on in map votes again, from the next vote. (A vote still gives no rain right after a match in the rain.)'
+            : "☔ Rain is off in map votes, from the next vote: no vote offers or chooses a rain lighting. /setnextmap and rotations can still use rain.",
+        };
+      }
+      const map = text('map');
+      if (!/^[A-Za-z0-9_]+$/.test(map)) return { content: 'Pick the map from the list.' };
+      log.info(`/voteoptions map ${map} ${onOff} by ${staff}`);
+      const { changed, votable } = await records.setVoteMap(map, enabled, by, userName);
+      const title = `${mapEmoji(map)}**${mapName(map)}**`;
+      if (!changed) return { content: `${title} is already ${onOff} in map votes.` };
+      return {
+        content: enabled
+          ? `✅ ${title} is on in map votes again, from the next vote.`
+          : `🚫 ${title} is off in map votes, from the next vote: it is not offered, and the Random map never picks it. /setnextmap and rotations can still use it.` +
+            votableWarning(votable),
       };
     }
 
