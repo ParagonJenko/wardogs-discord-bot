@@ -23,6 +23,7 @@ import {
   parseLastZones,
   parseMapVote,
   parseRecentMaps,
+  mapIdOf,
   pickOptions,
   postVoteMessage,
   publicVote,
@@ -392,6 +393,7 @@ import {
   parseVoteInsert,
   planInsert,
   planMove,
+  restoreStep,
   rotationFacts,
   stillInserted,
   VOTE_INSERT_KEY,
@@ -1598,7 +1600,11 @@ export class Watcher extends DurableObject<Env> {
     // A match already at its close score is nearly over: a vote would close at once, so none opens.
     const closeScore = closeScoreFor(config.scoreToWin, rule.closePercent);
     if (Math.max(0, ...match.factionScores.map((f) => f.score)) >= closeScore) return;
-    const options = catalog === null ? [] : pickOptions(catalog.maps, playing, recent, rule.options, Math.random);
+    // The status names the map ("Ozeti") where the catalogue has ids ("Europe"): the rules on what to offer go by id.
+    const maps = catalog?.maps ?? [];
+    const playingId = mapIdOf(maps, playing);
+    const recentIds = recent.map((m) => mapIdOf(maps, m));
+    const options = catalog === null ? [] : pickOptions(maps, playingId, recentIds, rule.options, Math.random);
     if (options.length === 0) {
       // Said at most every 10 minutes, so a server that can never offer two maps doesn't fill the logs once a minute.
       if (Date.now() - voteUnavailableLoggedAt >= VOTE_LOG_MS) {
@@ -1616,7 +1622,7 @@ export class Watcher extends DurableObject<Env> {
     }
     // Posted first: a vote nobody can see is not opened, and the next check tries again.
     // The maps a Random map button picks from.
-    const pool = votePool(catalog?.maps ?? [], playing, recent, rule.options);
+    const pool = votePool(maps, playingId, recentIds, rule.options);
     const opened = openVote(match, playing, options, rule, now, closeScore, conditionOptions(catalog?.lightings ?? []), weatherOptions(catalog?.lightings ?? []), {
       pool: pool.map((m) => ({ map: m.id, name: m.name })),
     });
@@ -1711,6 +1717,13 @@ export class Watcher extends DurableObject<Env> {
     const outcomeOf = (pending: boolean, at: number): VoteOutcome =>
       outcomeWithZone({ ...(vote.outcome ?? { at, winner }), at, winner, pending }, picked);
     try {
+      // An earlier vote's winner still waiting to be taken out (see restoreVoteInsert) goes now: this winner is planned from the
+      // rotation as it is, which must not have the old one in it.
+      const earlier = parseVoteInsert(await this.ctx.storage.get(VOTE_INSERT_KEY));
+      if (staging === 'rotation' && earlier !== null && earlier.voteId !== vote.id) {
+        await this.putBackRotation(config, earlier, playing);
+        if (parseVoteInsert(await this.ctx.storage.get(VOTE_INSERT_KEY)) !== null) throw new Error('the last vote\'s winner is still in the rotation');
+      }
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);
       let rotationProblem = 'the server\'s rotation could not be read';
@@ -1855,12 +1868,20 @@ export class Watcher extends DurableObject<Env> {
     return true;
   }
 
-  // Once the server has moved on from the map the vote was for, the rotation is written back as it was, from the map that
-  // would have come next, if it is still the one that was written (staff or the daily rotation may have changed it since).
+  // Once the server has been on the map after the vote's for RESTORE_DELAY_MS, the rotation is written back as it was, from the
+  // map that would have come next, if it is still the one that was written (staff or the daily rotation may have changed it
+  // since). Not sooner: a write as the map loads changed the lighting the server played.
   private async restoreVoteInsert(config: Config, playing: string): Promise<void> {
     const storage = this.ctx.storage;
     const insert = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
-    if (insert === null || playing === insert.fromMap) return;
+    if (insert === null) return;
+    const step = restoreStep(insert, playing, Date.now());
+    if (step.do === 'save') await storage.put(VOTE_INSERT_KEY, step.insert);
+    if (step.do === 'restore') await this.putBackRotation(config, insert, playing);
+  }
+
+  private async putBackRotation(config: Config, insert: VoteInsert, playing: string): Promise<void> {
+    const storage = this.ctx.storage;
     try {
       const { rconUrl, rconPassword } = config;
       const http = socketHttp(connect);

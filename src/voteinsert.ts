@@ -16,8 +16,18 @@ export const VOTE_INSERT_KEY = 'voteInsert';
 // What was written for a vote, to take back out. `restore` is the rotation in play order from the map that would have
 // followed the one being played, which the winner went in front of; `length` is how many maps the server's rotation has
 // with the winner in it. With `asIs` (the slot was not known), `restore` is the rotation in its own order, written back
-// as it is.
-export type VoteInsert = { voteId: string; fromMap: string; map: string; restore: RotationEntry[]; length: number; at: number; asIs?: boolean };
+// as it is. `movedAt` is when the server was first seen on another map than `fromMap`, which starts the wait before the
+// rotation is put back (see restoreStep).
+export type VoteInsert = {
+  voteId: string;
+  fromMap: string;
+  map: string;
+  restore: RotationEntry[];
+  length: number;
+  at: number;
+  asIs?: boolean;
+  movedAt?: number;
+};
 
 const EntrySchema = z.object({
   map: z.string(),
@@ -34,11 +44,30 @@ const VoteInsertSchema = z.object({
   length: z.number(),
   at: z.number(),
   asIs: z.boolean().optional(),
+  movedAt: z.number().optional(),
 });
 
 export const parseVoteInsert = (raw: unknown): VoteInsert | null => {
   const parsed = VoteInsertSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
+};
+
+// How long the server is on the winner before the rotation is put back. Writing the rotation as the map loads changes the
+// entry the server is on, so the map was right and its lighting was the old entry's (17 October, a clear vote played in rain).
+export const RESTORE_DELAY_MS = 10 * 60_000;
+
+export type RestoreStep = { do: 'nothing' } | { do: 'save'; insert: VoteInsert } | { do: 'restore' };
+
+// What to do about a written insert when the server is playing `playing`: nothing while it is on the map the vote was for
+// or the wait is not over, save the insert with the time the server moved on, or put the rotation back.
+export const restoreStep = (insert: VoteInsert, playing: string, now: number): RestoreStep => {
+  if (playing === insert.fromMap) {
+    // Back on that map (the server restarted): the wait starts again when it moves on.
+    const { movedAt, ...rest } = insert;
+    return movedAt === undefined ? { do: 'nothing' } : { do: 'save', insert: rest };
+  }
+  if (insert.movedAt === undefined) return { do: 'save', insert: { ...insert, movedAt: now } };
+  return now - insert.movedAt >= RESTORE_DELAY_MS ? { do: 'restore' } : { do: 'nothing' };
 };
 
 // A rotation entry as it is written back: the settings, not whether it is the one playing now.

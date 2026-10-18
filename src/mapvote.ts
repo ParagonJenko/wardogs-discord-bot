@@ -172,6 +172,13 @@ export const parseRecentMaps = (raw: unknown): string[] => {
 export const withPlayed = (recent: readonly string[], playing: string): string[] =>
   [...recent.filter((m) => m !== playing), playing].slice(-RECENT_MAPS);
 
+// The id of a map the server reports by name or id: the status says "Ozeti" where the catalogue says "Europe". An unknown map
+// stays as it was. The never-twice-in-a-row and played-lately rules below compare ids, so they need this.
+export const mapIdOf = (maps: readonly MapChoice[], map: string): string => {
+  const lower = map.trim().toLowerCase();
+  return (maps.find((m) => m.id.toLowerCase() === lower) ?? maps.find((m) => m.name.toLowerCase() === lower))?.id ?? map;
+};
+
 // The maps a vote can offer: ones the server can play (with a game mode and infantry only) that were not played lately, and never the one
 // being played, so the same map is not played twice in a row. When that leaves fewer than two (a server with few maps),
 // the maps played longest ago are offered again, oldest first, rather than no vote at all. Fewer than two even then is none.

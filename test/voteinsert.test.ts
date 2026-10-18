@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { Rotation } from '../src/rcon.ts';
 import { fromTheStart } from '../src/rotations.ts';
-import { canMoveEntries, parseVoteInsert, planInsert, planMove, rotationFacts, stillInserted, whyNoInsert } from '../src/voteinsert.ts';
+import {
+  canMoveEntries,
+  parseVoteInsert,
+  planInsert,
+  planMove,
+  RESTORE_DELAY_MS,
+  restoreStep,
+  rotationFacts,
+  stillInserted,
+  whyNoInsert,
+} from '../src/voteinsert.ts';
 
 const rotation = (maps: string[], now: number, over: Partial<Rotation> = {}): Rotation => ({
   enabled: true,
@@ -149,7 +159,33 @@ describe('parseVoteInsert', () => {
     const saved = { voteId: '1', fromMap: 'B', map: 'V', restore: [{ map: 'C', lighting: 'X' }], length: 2, at: 5 };
     expect(parseVoteInsert(saved)).toEqual(saved);
     expect(parseVoteInsert({ ...saved, asIs: true })).toEqual({ ...saved, asIs: true });
+    expect(parseVoteInsert({ ...saved, movedAt: 9 })).toEqual({ ...saved, movedAt: 9 });
     expect(parseVoteInsert({ voteId: 1 })).toBeNull();
     expect(parseVoteInsert(undefined)).toBeNull();
+  });
+});
+
+describe('restoreStep', () => {
+  const saved = { voteId: '1', fromMap: 'Bakurani', map: 'V', restore: [{ map: 'C' }], length: 2, at: 5 };
+  const T = 1_000_000;
+
+  it('does nothing while the server is still on the map the vote was for', () => {
+    expect(restoreStep(saved, 'Bakurani', T)).toEqual({ do: 'nothing' });
+  });
+
+  it('starts the wait when the server is first seen on another map, and does not put the rotation back then', () => {
+    expect(restoreStep(saved, 'Zestafona', T)).toEqual({ do: 'save', insert: { ...saved, movedAt: T } });
+  });
+
+  it('waits out the delay before putting the rotation back, so the winner\'s lighting is not changed as it loads', () => {
+    const moved = { ...saved, movedAt: T };
+    expect(restoreStep(moved, 'Zestafona', T + 5_000)).toEqual({ do: 'nothing' });
+    expect(restoreStep(moved, 'Zestafona', T + RESTORE_DELAY_MS - 1)).toEqual({ do: 'nothing' });
+    expect(restoreStep(moved, 'Zestafona', T + RESTORE_DELAY_MS)).toEqual({ do: 'restore' });
+  });
+
+  it('starts the wait again when the server goes back to the map and moves on once more', () => {
+    const moved = { ...saved, movedAt: T };
+    expect(restoreStep(moved, 'Bakurani', T + 1)).toEqual({ do: 'save', insert: saved });
   });
 });

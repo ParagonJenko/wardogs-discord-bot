@@ -29,6 +29,7 @@ import {
   editVoteMessage,
   deleteVoteMessage,
   postVoteMessage,
+  mapIdOf,
   pickOptions,
   publicVote,
   withPlayed,
@@ -80,6 +81,29 @@ describe('pickOptions', () => {
 
   it('offers nothing when fewer than two maps could be voted on', () => {
     expect(pickOptions([choice('Now'), choice('A')], 'Now', ['Now'], 4, Math.random)).toEqual([]);
+  });
+});
+
+describe('mapIdOf', () => {
+  const maps = [{ ...choice('Europe'), name: 'Ozeti' }, { ...choice('NorthAmerica'), name: 'Zestafona' }];
+
+  it('finds the id of a map the server reports by its name or its id, ignoring case', () => {
+    expect(mapIdOf(maps, 'Ozeti')).toBe('Europe');
+    expect(mapIdOf(maps, 'zestafona')).toBe('NorthAmerica');
+    expect(mapIdOf(maps, 'Europe')).toBe('Europe');
+  });
+
+  it('keeps a map the catalogue does not list as it was', () => {
+    expect(mapIdOf(maps, 'Nowhere')).toBe('Nowhere');
+    expect(mapIdOf([], 'Ozeti')).toBe('Ozeti');
+  });
+
+  it('lets the map being played and the ones played lately be left out of a vote, whatever they are called', () => {
+    const all = [...maps, choice('Kavkazi'), choice('Other')];
+    const offered = pickOptions(all, mapIdOf(all, 'Ozeti'), ['Zestafona', 'Ozeti'].map((m) => mapIdOf(all, m)), 4, () => 0).map((o) => o.map);
+    expect(offered).toEqual(expect.arrayContaining(['Kavkazi', 'Other']));
+    expect(offered).not.toContain('Europe');
+    expect(offered).not.toContain('NorthAmerica');
   });
 });
 
