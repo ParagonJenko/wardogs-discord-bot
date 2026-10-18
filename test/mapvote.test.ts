@@ -34,6 +34,9 @@ import {
   rainRecordFor,
   voteLogLine,
   voteLogMessage,
+  voteProblemMessage,
+  parseVoteAlerts,
+  withVoteAlert,
   pickOptions,
   publicVote,
   withPlayed,
@@ -242,6 +245,38 @@ describe('voteLogMessage', () => {
     const description = voteLogMessage(v).embeds[0]!.description!;
     expect(description.length).toBeLessThanOrEqual(4096);
     expect(description).toContain('more lines cut');
+  });
+});
+
+describe('problems putting a winner on the server', () => {
+  it('posts each kind of problem once for each vote', () => {
+    const none = parseVoteAlerts(undefined);
+    expect(none).toEqual({ voteId: '', kinds: [] });
+    const first = withVoteAlert(none, '42', 'failed')!;
+    expect(first).toEqual({ voteId: '42', kinds: ['failed'] });
+    expect(withVoteAlert(first, '42', 'failed')).toBeNull();
+    expect(withVoteAlert(first, '42', 'every-slot')).toEqual({ voteId: '42', kinds: ['failed', 'every-slot'] });
+    // The next vote starts again.
+    expect(withVoteAlert(first, '43', 'failed')).toEqual({ voteId: '43', kinds: ['failed'] });
+    expect(parseVoteAlerts({ voteId: 1 })).toEqual({ voteId: '', kinds: [] });
+  });
+
+  it('is one embed for the moderation log that pings nobody', () => {
+    const message = voteProblemMessage('42', "The server didn't say which rotation slot it is on", ['It is in **every** slot.', '`rotation on`'], NOW);
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+    expect(message.embeds).toEqual([
+      {
+        title: "⚠️ The server didn't say which rotation slot it is on",
+        description: 'It is in **every** slot.\n`rotation on`',
+        color: 0xe74c3c,
+        footer: { text: 'Vote 42' },
+        timestamp: new Date(NOW).toISOString(),
+      },
+    ]);
+    expect(voteProblemMessage('1', 'x'.repeat(400), ['y'.repeat(9000)], NOW).embeds[0]).toMatchObject({
+      title: expect.stringMatching(/^.{1,256}$/),
+    });
+    expect(voteProblemMessage('1', 'x', ['y'.repeat(9000)], NOW).embeds[0]!.description!.length).toBeLessThanOrEqual(4096);
   });
 });
 
