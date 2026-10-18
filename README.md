@@ -692,7 +692,7 @@ Staff can block circles (a map's control zone layout) they don't like with `/cir
 circles. A map vote never gives a blocked circle to the winning map; it draws another of that map's circles by chance, as
 before. `/circles unblock` lists the blocked circles and allows one again, and `/circles list` shows them, the latest first, with
 who blocked them. They are kept under `blockedCircles`. A map left with one circle that is not blocked gets it every time, and a map
-with every circle blocked keeps the circle its rotation has. Blocking only changes what a vote draws: `/setnextmap`, `/changemap`
+with every circle blocked keeps the circle its rotation has. A vote that has drawn its circle and is still being put on the server keeps it, even if it is blocked meanwhile. Blocking only changes what a vote draws: `/setnextmap`, `/changemap`
 and saved rotations can still use a blocked circle. New commands need registering once (`npm run register`).
 
 ## Player accounts

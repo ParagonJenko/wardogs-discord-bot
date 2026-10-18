@@ -184,11 +184,12 @@ describe('blocked circles in a vote', () => {
     expect(randomZone([layouts[0]!, layouts[3]!], undefined, () => 0, [])).toBeNull();
   });
 
-  it('keeps the circle an earlier try drew, unless it has been blocked since', () => {
+  it('keeps the circle an earlier try drew, even if it was blocked since, as it may be on the server already', () => {
     const drawn = { at: NOW, winner: 'A', pending: true, zone: 'Z.Line' };
     expect(zoneForTry(drawn, layouts, undefined, () => 0)?.id).toBe('Z.Line');
-    expect(zoneForTry(drawn, layouts, undefined, () => 0, ['Z.Circle'])?.id).toBe('Z.Line');
-    for (const roll of rolls) expect(zoneForTry(drawn, layouts, undefined, () => roll, ['Z.Line'])?.id).not.toBe('Z.Line');
+    expect(zoneForTry(drawn, layouts, undefined, () => 0, ['Z.Line'])?.id).toBe('Z.Line');
+    // A try with no earlier draw does not give a blocked one.
+    for (const roll of rolls) expect(zoneForTry(null, layouts, undefined, () => roll, ['Z.Line'])?.id).not.toBe('Z.Line');
   });
 });
 
