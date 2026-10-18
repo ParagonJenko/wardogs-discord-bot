@@ -48,6 +48,7 @@ import {
   type ZoneChoice,
 } from './mapvote.ts';
 import { planSetup } from './matchsetup.ts';
+import { BLOCKED_CIRCLES_KEY, blockCircle, blockedCircleIds, parseBlockedCircles, unblockCircle, type BlockedCircles } from './circles.ts';
 import {
   infantryFromRotation,
   infantryMaps,
@@ -1806,7 +1807,7 @@ export class Watcher extends DurableObject<Env> {
       // has one layout only). A layout drawn by an earlier try of this vote is kept, so the server, the history and what is
       // announced agree. The history is only updated once the winner is on the server.
       const lastZones = parseLastZones(await this.ctx.storage.get(LAST_ZONES_KEY));
-      picked = zoneForTry(vote.outcome, choice.zones, lastZones[winner], Math.random);
+      picked = zoneForTry(vote.outcome, choice.zones, lastZones[winner], Math.random, blockedCircleIds(await this.blockedCircles()));
       const zones = picked?.id;
       const planned = planSetup(winner, { ...VOTE_SETUP_OPTIONS, ...(lighting ? { lighting } : {}), ...(zones ? { zones } : {}) }, {
         rotation,
@@ -3668,6 +3669,23 @@ export class Watcher extends DurableObject<Env> {
     return next !== null;
   }
 
+  // The circles staff blocked (see circles.ts), and blocking or unblocking one. False when it already was (or was not).
+  async blockedCircles(): Promise<BlockedCircles> {
+    return parseBlockedCircles(await this.ctx.storage.get(BLOCKED_CIRCLES_KEY));
+  }
+
+  async setCircleBlocked(circle: { id: string; map: string; name: string }, by: string, byName?: string): Promise<boolean> {
+    const next = blockCircle(await this.blockedCircles(), circle, by, byName, Date.now());
+    if (next !== null) await this.ctx.storage.put(BLOCKED_CIRCLES_KEY, next);
+    return next !== null;
+  }
+
+  async setCircleUnblocked(id: string): Promise<boolean> {
+    const next = unblockCircle(await this.blockedCircles(), id);
+    if (next !== null) await this.ctx.storage.put(BLOCKED_CIRCLES_KEY, next);
+    return next !== null;
+  }
+
   async setProfilePublic(steamId: string): Promise<boolean> {
     const next = makePublic(await this.privateProfiles(), steamId);
     if (next !== null) await this.ctx.storage.put(PRIVATE_PROFILES_KEY, next);
@@ -4038,6 +4056,9 @@ const commandTools = (
     privateProfiles: () => watcher().privateProfiles(),
     makePrivate: (player, by, byName) => watcher().setProfilePrivate(player, by, byName),
     makePublic: (steamId) => watcher().setProfilePublic(steamId),
+    blockedCircles: () => watcher().blockedCircles(),
+    blockCircle: (circle, by, byName) => watcher().setCircleBlocked(circle, by, byName),
+    unblockCircle: (id) => watcher().setCircleUnblocked(id),
   };
   return {
     run: runCommand({

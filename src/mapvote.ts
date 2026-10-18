@@ -232,23 +232,29 @@ export const parseLastZones = (raw: unknown): Record<string, string> => {
   return parsed.success ? parsed.data : {};
 };
 
-// The circles for the winning map: one of its layouts by chance, never `last` (the one a vote last gave this map). Null when
-// the map has fewer than two layouts to choose between (a "None" layout is not one), and then the rotation's stays.
-export const randomZone = (zones: readonly ZoneChoice[], last: string | undefined, random: () => number): ZoneChoice | null => {
+// The circles for the winning map: one of its layouts by chance, never `last` (the one a vote last gave this map) nor one of
+// the `blocked` ones (the ids staff blocked, see circles.ts). Null when the map has fewer than two layouts to choose between (a
+// "None" layout is not one), or every layout is blocked, and then the rotation's stays. A map left with one layout that is not
+// blocked gets it each time.
+export const randomZone = (zones: readonly ZoneChoice[], last: string | undefined, random: () => number, blocked: readonly string[] = []): ZoneChoice | null => {
   const layouts = zones.filter((zone) => zone.name.trim() !== '' && zone.name.trim().toLowerCase() !== 'none');
   if (layouts.length < 2) return null;
-  const others = layouts.filter((zone) => zone.id !== last);
-  return sample(others.length > 0 ? others : layouts, 1, random)[0] ?? null;
+  const allowed = layouts.filter((zone) => !blocked.includes(zone.id));
+  if (allowed.length === 0) return null;
+  const others = allowed.filter((zone) => zone.id !== last);
+  return sample(others.length > 0 ? others : allowed, 1, random)[0] ?? null;
 };
 
 // The circles for the winner on this try: the layout an earlier try of this vote drew, when the map still lists it, so the
-// server, the history and what is announced agree across retries; otherwise a new draw (see randomZone).
+// server, the history and what is announced agree across retries; otherwise a new draw (see randomZone). An earlier draw stays
+// even if staff blocked it since: it may already be on the server, and a retry does not write it again.
 export const zoneForTry = (
   outcome: VoteOutcome | null,
   zones: readonly ZoneChoice[],
   last: string | undefined,
   random: () => number,
-): ZoneChoice | null => zones.find((zone) => zone.id === outcome?.zone) ?? randomZone(zones, last, random);
+  blocked: readonly string[] = [],
+): ZoneChoice | null => zones.find((zone) => zone.id === outcome?.zone) ?? randomZone(zones, last, random, blocked);
 
 // The outcome saying the layout that is (or will be) put on: `picked` is the draw, null when the map has no choice (no
 // layout is reported, even if a vote saved before this one did), or undefined when none was made yet (it stays as it was).

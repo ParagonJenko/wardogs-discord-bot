@@ -328,6 +328,7 @@ The Node/Docker version does not serve the season roundup.
 | `/vip remove`   | Staff only           | Takes a player off the whitelist, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
 | `/private …`    | Staff only           | [Private profiles](#private-profiles): `add` makes a player's profile private, `remove` makes it public again, `list` shows them |
+| `/circles …`    | Staff only           | [Blocked circles](#blocked-circles): `block` keeps a circle (control zone layout) from map votes, `unblock` allows it again, `list` shows them |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
 
@@ -684,6 +685,15 @@ The website's `/vote` page shows the same counts, refreshed every few seconds, w
 vote there, but a signed-in member of the server can (see [Player accounts](#player-accounts)): the same vote, one per Discord
 account. `GET /api/vote` gives the options, votes, result and the channel link, never who voted. The vote is in the Durable Object
 under `mapVote`; the code is in `src/mapvote.ts`.
+
+### Blocked circles
+
+Staff can block circles (a map's control zone layout) they don't like with `/circles block`: pick the map, then one of its
+circles. A map vote never gives a blocked circle to the winning map; it draws another of that map's circles by chance, as
+before. `/circles unblock` lists the blocked circles and allows one again, and `/circles list` shows them, the latest first, with
+who blocked them. They are kept under `blockedCircles`. A map left with one circle that is not blocked gets it every time, and a map
+with every circle blocked keeps the circle its rotation has. A vote that has drawn its circle and is still being put on the server keeps it, even if it is blocked meanwhile. Blocking only changes what a vote draws: `/setnextmap`, `/changemap`
+and saved rotations can still use a blocked circle. New commands need registering once (`npm run register`).
 
 ## Player accounts
 

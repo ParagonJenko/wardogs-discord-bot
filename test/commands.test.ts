@@ -22,6 +22,9 @@ const records: StaffRecords = {
   privateProfiles: vi.fn(),
   makePrivate: vi.fn(),
   makePublic: vi.fn(),
+  blockedCircles: vi.fn(),
+  blockCircle: vi.fn(),
+  unblockCircle: vi.fn(),
 };
 
 const config: Config = {

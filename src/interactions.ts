@@ -337,6 +337,29 @@ export const COMMANDS = [
       { type: SUBCOMMAND, name: 'list', description: 'Who has a private profile' },
     ],
   },
+  {
+    name: 'circles',
+    description: 'Circles (control zone layouts) that map votes never give a winning map (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      {
+        type: SUBCOMMAND,
+        name: 'block',
+        description: 'Never give this circle to a map that wins a vote',
+        options: [
+          { type: STRING, name: 'map', description: 'Pick the map from the list', required: true, autocomplete: true },
+          { type: STRING, name: 'circle', description: 'Pick the circle from the list', required: true, autocomplete: true },
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'unblock',
+        description: 'Allow a blocked circle again',
+        options: [{ type: STRING, name: 'circle', description: 'Pick from the blocked circles', required: true, autocomplete: true }],
+      },
+      { type: SUBCOMMAND, name: 'list', description: 'The blocked circles' },
+    ],
+  },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
 
 const PING = 1;
