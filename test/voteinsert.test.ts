@@ -7,7 +7,7 @@ import {
   planInsert,
   planMove,
   RESTORE_DELAY_MS,
-  restoreStep,
+  restoreDue,
   rotationFacts,
   stillInserted,
   whyNoInsert,
@@ -159,33 +159,33 @@ describe('parseVoteInsert', () => {
     const saved = { voteId: '1', fromMap: 'B', map: 'V', restore: [{ map: 'C', lighting: 'X' }], length: 2, at: 5 };
     expect(parseVoteInsert(saved)).toEqual(saved);
     expect(parseVoteInsert({ ...saved, asIs: true })).toEqual({ ...saved, asIs: true });
-    expect(parseVoteInsert({ ...saved, movedAt: 9 })).toEqual({ ...saved, movedAt: 9 });
     expect(parseVoteInsert({ voteId: 1 })).toBeNull();
     expect(parseVoteInsert(undefined)).toBeNull();
   });
 });
 
-describe('restoreStep', () => {
-  const saved = { voteId: '1', fromMap: 'Bakurani', map: 'V', restore: [{ map: 'C' }], length: 2, at: 5 };
-  const T = 1_000_000;
+describe('restoreDue', () => {
+  const saved = { voteId: '1', fromMap: 'Bakurani', map: 'V', restore: [{ map: 'C' }], length: 2, at: 5_000 };
+  const START = 1_000_000;
 
-  it('does nothing while the server is still on the map the vote was for', () => {
-    expect(restoreStep(saved, 'Bakurani', T)).toEqual({ do: 'nothing' });
+  it('is not due while the server is still on the map the vote was for', () => {
+    expect(restoreDue(saved, 'Bakurani', START, START + RESTORE_DELAY_MS)).toBe(false);
   });
 
-  it('starts the wait when the server is first seen on another map, and does not put the rotation back then', () => {
-    expect(restoreStep(saved, 'Zestafona', T)).toEqual({ do: 'save', insert: { ...saved, movedAt: T } });
+  it('waits out the delay from the start of the match, so the winner\'s lighting is not changed as it loads', () => {
+    expect(restoreDue(saved, 'Zestafona', START, START + 5_000)).toBe(false);
+    expect(restoreDue(saved, 'Zestafona', START, START + RESTORE_DELAY_MS - 1)).toBe(false);
+    expect(restoreDue(saved, 'Zestafona', START, START + RESTORE_DELAY_MS)).toBe(true);
   });
 
-  it('waits out the delay before putting the rotation back, so the winner\'s lighting is not changed as it loads', () => {
-    const moved = { ...saved, movedAt: T };
-    expect(restoreStep(moved, 'Zestafona', T + 5_000)).toEqual({ do: 'nothing' });
-    expect(restoreStep(moved, 'Zestafona', T + RESTORE_DELAY_MS - 1)).toEqual({ do: 'nothing' });
-    expect(restoreStep(moved, 'Zestafona', T + RESTORE_DELAY_MS)).toEqual({ do: 'restore' });
+  it('starts the wait again with a new match (a short match, a restart), as that has its own map to load', () => {
+    const next = START + 9 * 60_000 + 59_000;
+    expect(restoreDue(saved, 'Ozeti', next, next + 1_000)).toBe(false);
+    expect(restoreDue(saved, 'Ozeti', next, next + RESTORE_DELAY_MS)).toBe(true);
   });
 
-  it('starts the wait again when the server goes back to the map and moves on once more', () => {
-    const moved = { ...saved, movedAt: T };
-    expect(restoreStep(moved, 'Bakurani', T + 1)).toEqual({ do: 'save', insert: saved });
+  it('is not due on the record of a match from before the insert, or with no match yet', () => {
+    expect(restoreDue(saved, 'Zestafona', saved.at - 1, saved.at + RESTORE_DELAY_MS * 2)).toBe(false);
+    expect(restoreDue(saved, 'Zestafona', null, START + RESTORE_DELAY_MS)).toBe(false);
   });
 });

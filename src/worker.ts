@@ -393,7 +393,7 @@ import {
   parseVoteInsert,
   planInsert,
   planMove,
-  restoreStep,
+  restoreDue,
   rotationFacts,
   stillInserted,
   VOTE_INSERT_KEY,
@@ -1868,16 +1868,15 @@ export class Watcher extends DurableObject<Env> {
     return true;
   }
 
-  // Once the server has been on the map after the vote's for RESTORE_DELAY_MS, the rotation is written back as it was, from the
+  // Once the match after the vote's has run RESTORE_DELAY_MS, the rotation is written back as it was, from the
   // map that would have come next, if it is still the one that was written (staff or the daily rotation may have changed it
   // since). Not sooner: a write as the map loads changed the lighting the server played.
   private async restoreVoteInsert(config: Config, playing: string): Promise<void> {
     const storage = this.ctx.storage;
     const insert = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
     if (insert === null) return;
-    const step = restoreStep(insert, playing, Date.now());
-    if (step.do === 'save') await storage.put(VOTE_INSERT_KEY, step.insert);
-    if (step.do === 'restore') await this.putBackRotation(config, insert, playing);
+    const match = parseState(await storage.get('state'))?.match ?? null;
+    if (restoreDue(insert, playing, match?.startedAt ?? null, Date.now())) await this.putBackRotation(config, insert, playing);
   }
 
   private async putBackRotation(config: Config, insert: VoteInsert, playing: string): Promise<void> {

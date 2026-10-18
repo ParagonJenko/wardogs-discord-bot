@@ -635,13 +635,13 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
      into the slot after the one playing (the top when that is the last, or the server doesn't say), and stays there.
      Other builds get it through the config document, the same way the daily rotation is put on (`PUT /v1/config`), in
      front of the map that would have come next. A write re-anchors the server's place in the rotation, so the bot reads
-     back where it goes next and, when that is not the winner, writes the winner into every slot instead. Once the server has been on another map for 10 minutes, the rotation is written
+     back where it goes next and, when that is not the winner, writes the winner into every slot instead. Once the match after the vote's has run for 10 minutes, the rotation is written
      back as it was, from the map that would have come next, if no one has changed it since (not sooner: a write as the map
      loads changed the lighting the server played). It needs the rotation on and in
      order; otherwise nothing is put on and each check tries again (it never falls back to `queue`). The slot the server
      is on is the entry `/v1/rotation` marks `now`, or `nowIndex` in `/v1/status`, or else the one before the entry marked
      `next` (or `nextIndex`). Live servers have been seen to send none of these: then the winner is written into every
-     slot of the rotation, so it comes next whichever slot the server is on, and 10 minutes after it starts the rotation is
+     slot of the rotation, so it comes next whichever slot the server is on, and 10 minutes into the match after it, the rotation is
      written back as it was. The map the rotation had after the winner's slot is skipped that once.
    - `queue`: staged with `POST /v1/match/map` (what `/setnextmap` does) once the match is over, never before: staging it
      mid-round was followed by the server ending the match early (17 October, on 96 of 100). The match is over when the kill
