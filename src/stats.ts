@@ -31,8 +31,10 @@ export type HourTotals = {
 };
 
 // For each UTC hour over the last `days` days: the average players, null for an hour with no readings, and the share of
-// readings (0 to 1) with at least the busy threshold, null for an hour with no readings checked against it.
-export type Hourly = { days: number; players: (number | null)[]; busy: (number | null)[] };
+// readings (0 to 1) with at least the busy threshold, null for an hour with no readings checked against it. The same
+// figures again for the weekdays (Monday to Friday) and the weekends (Saturday and Sunday) alone, by UTC day.
+export type HourlyFigures = { players: (number | null)[]; busy: (number | null)[] };
+export type Hourly = HourlyFigures & { days: number; weekdays: HourlyFigures; weekends: HourlyFigures };
 
 export type Thresholds = { seeding: number; live: number; busy: number };
 
@@ -417,7 +419,10 @@ const median = (values: number[]): number | null => {
 // players summed over its readings in that hour, and its busy share its busy readings over the readings checked
 // against `busyThreshold`. Days with no readings in the hour are left out, and from the busy shares so are days
 // counted under another threshold, or before busy readings were counted. Averages are rounded to a tenth and shares
-// to a hundredth to keep the JSON short.
+// to a hundredth to keep the JSON short. The weekdays and weekends are worked out the same way from their own days
+// (UTC), as the server is busy at different hours on each.
+const isWeekend = (day: string): boolean => [0, 6].includes(new Date(`${day}T00:00:00Z`).getUTCDay());
+
 export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number): Hourly => {
   const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
   const kept = hours.filter((h) => h.day >= oldest);
@@ -431,10 +436,15 @@ export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: 
       const middle = median(daily);
       return middle === null ? null : Math.round(middle * places) / places;
     });
+  const figures = (keep: (h: HourTotals) => boolean): HourlyFigures => ({
+    players: typical(kept.filter(keep), (h) => h.players, (h) => h.readings, 10),
+    busy: typical(sameThreshold.filter(keep), (h) => h.busy, (h) => h.checked, 100),
+  });
   return {
     days: DAYS_KEPT,
-    players: typical(kept, (h) => h.players, (h) => h.readings, 10),
-    busy: typical(sameThreshold, (h) => h.busy, (h) => h.checked, 100),
+    ...figures(() => true),
+    weekdays: figures((h) => !isWeekend(h.day)),
+    weekends: figures((h) => isWeekend(h.day)),
   };
 };
 
