@@ -424,7 +424,13 @@ describe('publicStats', () => {
       ...stats,
       generatedAt: MIDNIGHT,
       thresholds,
-      hourly: { days: DAYS_KEPT, players: Array(24).fill(null), busy: Array(24).fill(null) },
+      hourly: {
+        days: DAYS_KEPT,
+        players: Array(24).fill(null),
+        busy: Array(24).fill(null),
+        weekdays: { players: Array(24).fill(null), busy: Array(24).fill(null) },
+        weekends: { players: Array(24).fill(null), busy: Array(24).fill(null) },
+      },
       leaderboard,
       recentSeeders,
       vip,
@@ -586,6 +592,28 @@ describe('hourlyAverages', () => {
     expect(hourlyAverages(first.hours, later, 60).busy[20]).toBeNull();
     expect(hourlyAverages(stats.hours, later + HOUR, 60).busy[20]).toBe(0.5);
     expect(hourlyAverages(stats.hours, later + HOUR, BUSY).busy[20]).toBeNull();
+  });
+
+  it('works out the weekdays and the weekends from their own days', () => {
+    // MIDNIGHT is a Wednesday, so days 3 and 4 are the Saturday and the Sunday.
+    const evening = (day: number, players: number) => observation(MIDNIGHT + day * DAY + 20 * HOUR, players);
+    const morning = (day: number, players: number) => observation(MIDNIGHT + day * DAY + 10 * HOUR, players);
+    const stats = [evening(0, 98), evening(1, 98), evening(2, 98), evening(3, 20), evening(4, 20), morning(3, 98), morning(4, 98)].reduce(
+      (acc, obs) => recordObservation(acc, obs, 1, LEVELS),
+      emptyStats(),
+    );
+
+    const { weekdays, weekends, busy } = hourlyAverages(stats.hours, MIDNIGHT + 4 * DAY + 21 * HOUR, BUSY);
+
+    expect(weekdays.players[20]).toBe(98);
+    expect(weekdays.busy[20]).toBe(1);
+    expect(weekdays.players[10]).toBeNull();
+    expect(weekends.players[20]).toBe(20);
+    expect(weekends.busy[20]).toBe(0);
+    expect(weekends.busy[10]).toBe(1);
+    expect(weekends.players[3]).toBeNull();
+    // All seven days still give the overall figures.
+    expect(busy[20]).toBe(1);
   });
 
   it('leaves out days older than that, as after a long outage', () => {
