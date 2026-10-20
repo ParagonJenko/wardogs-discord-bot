@@ -1471,7 +1471,7 @@ them: the game sends them in a new form, and the bot needs changing.
   from whoever fired it says nothing about their aim. Each weapon still has its own longest kill.
 - **Names.** The game sends tags like `Id.Item.AK74M`. The bot names the ones it knows (AK74), from
   [Warcon](https://github.com/warcon-app/warcon)'s list. Some Warcon has no name for: `Id.Item.WEPN_030` is the FAL,
-  `WEPN_033` the Bushmaster M17S, `SMG_03` the PP-19 Vityaz, `WEPN_028` the MP5, `WEPN_026` the M1911, `WEPN_027` the
+  `WEPN_033` the Bushmaster M17S, `WEPN_034` the M14, `SMG_03` the PP-19 Vityaz, `WEPN_028` the MP5, `WEPN_026` the M1911, `WEPN_027` the
   Deagle, `WEPN_032` the GGX 18, `WEPN_037` the TCX-SPR, `WEPN_031` the PP-19 Bizon and
   `Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun` the M2 Browning, as staff found in game; `Id.Item.WEPN_035` the
   Scout Rifle TD,

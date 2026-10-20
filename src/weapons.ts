@@ -257,6 +257,7 @@ const NAMES: Record<string, string> = {
   // Not in Warcon's list. Staff matched these with the game's own kill feed.
   'Id.Item.WEPN_030': 'FAL',
   'Id.Item.WEPN_033': 'Bushmaster M17S',
+  'Id.Item.WEPN_034': 'M14',
   'Id.Item.M4': 'M4',
   'Id.Item.MP9': 'AMP-9',
   // Not in Warcon's list, nor the pistols below. Staff matched them with the game's own kill feed.
@@ -294,6 +295,7 @@ const NAMES: Record<string, string> = {
   // Not in Warcon's list. As Wardogs Zone names it (wardogs.zone/database/launcher_04).
   'Id.Item.Launcher_04': '9K333 Verba',
   'Id.Item.M67Grenade': 'M67 frag grenade',
+  'Id.Item.Molotov': 'Molotov',
   'Id.Item.C4Explosive': 'C4 charge',
   'Id.Item.IED.Explosive': 'IED',
   'Id.Item.ATMine': 'AT mine',
@@ -448,6 +450,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.WEPN_029': 'assault',
   'Id.Item.WEPN_030': 'assault',
   'Id.Item.WEPN_033': 'assault',
+  'Id.Item.WEPN_034': 'marksman',
   'Id.Item.M4': 'assault',
   'Id.Item.MP43': 'assault',
   'Id.Item.MP9': 'assault',
@@ -478,6 +481,7 @@ const ROLES: Record<string, WeaponRole> = {
   'Id.Item.MMGL': 'demolition',
   'Id.Item.Launcher_04': 'demolition',
   'Id.Item.M67Grenade': 'demolition',
+  'Id.Item.Molotov': 'demolition',
   'Id.Item.C4Explosive': 'demolition',
   'Id.Item.IED.Explosive': 'demolition',
   'Id.Item.ATMine': 'demolition',
