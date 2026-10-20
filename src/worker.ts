@@ -3824,12 +3824,20 @@ export class Watcher extends DurableObject<Env> {
   async adminRetention(days: number): Promise<Retention> {
     const now = Date.now();
     const first = Date.parse(dayOf(now - (days - 1) * DAY_MS));
-    const [sessions, records] = await Promise.all([Promise.resolve(sessionRows(this.sessionSql(), first)), this.matchRecords(now)]);
+    const [records, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['online', 'state', JOIN_LOG_KEY])]);
+    const matches = records.map((r) => ({ map: r.map, startedAt: r.startedAt, liveAt: r.liveAt, endedAt: r.endedAt }));
+    // Sessions from when the earliest match in the period went live, for those who left early from one that began before it.
+    const from = Math.min(first, ...matches.filter((m) => m.endedAt >= first).map((m) => m.liveAt));
+    const online = this.onlineNow(now, stored.get('online'));
+    const inGame = online === null ? {} : (parseJoinLog(stored.get(JOIN_LOG_KEY))?.inGame ?? {});
+    const current = parseState(stored.get('state'))?.match ?? null;
     return buildRetention({
       now,
       days,
-      sessions,
-      matches: records.map((r) => ({ map: r.map, startedAt: r.startedAt, liveAt: r.liveAt, endedAt: r.endedAt })),
+      sessions: sessionRows(this.sessionSql(), from),
+      matches,
+      ongoing: Object.entries(inGame).map(([steamId, entry]) => ({ steamId, since: entry.since })),
+      live: current !== null && current.endedAt === undefined && !matches.some((m) => m.startedAt === current.startedAt) ? (current.liveAt ?? current.startedAt) : null,
     });
   }
 

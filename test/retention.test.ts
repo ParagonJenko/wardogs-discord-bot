@@ -55,7 +55,36 @@ describe('buildRetention', () => {
     expect(r.leaves.total).toBe(3);
     expect(r.leaves.timing).toEqual({ early: 0, mid: 1, late: 1, end: 1, between: 0 });
     expect(r.leaves.finale.end).toBe(1);
+    // Narva: a and c left before its last minutes; d was last seen at 90, after it ended, so stayed.
     expect(r.matches[1]).toMatchObject({ map: 'Narva', present: 4, leftBefore: 2 });
+    // Mutaha (70 to 130): d was gone by minute 100, so left early even though when is not known.
+    expect(r.matches[0]).toMatchObject({ map: 'Mutaha', leftBefore: 1 });
+  });
+
+  it('counts those still in game as having stayed, and gap leaves only when the gap settles it', () => {
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [first],
+      sessions: [session('a', 0, 20), session('b', 0, 59, 40), session('c', 0, 10, 5)],
+      ongoing: [{ steamId: 'd', since: T0 }, { steamId: 'e', since: null }],
+    });
+    // a left early, c's gap was early too, b's gap straddles the cutoff so it is left out, d stayed, e's join is unknown.
+    expect(r.matches[0]).toMatchObject({ present: 3, leftBefore: 2 });
+  });
+
+  it('reaches sessions back before the period and leaves out the match on now', () => {
+    const live = T0 + 130 * MIN;
+    const r = buildRetention({
+      now: NOW,
+      days: 1,
+      matches: [first],
+      sessions: [session('a', 0, 140)],
+      live,
+    });
+    // Narva is not the night's last while the next match is on, and a leave in the match on now is not placed yet.
+    expect(r.matches[0]).toMatchObject({ lastOfNight: false });
+    expect(r.leaves.total).toBe(0);
   });
 
   it('has nothing to say with no sessions', () => {
