@@ -80,7 +80,7 @@ describe('buildRetention', () => {
       days: 1,
       matches: [first],
       sessions: [session('a', 0, 140)],
-      live,
+      live: { startedAt: live, liveAt: live },
     });
     // Narva is not the night's last while the next match is on, and a leave in the match on now is not placed yet.
     expect(r.matches[0]).toMatchObject({ lastOfNight: false });
@@ -171,5 +171,66 @@ describe('what else the Play time tab works out', () => {
     expect(r.heat.minutes[tuesday19]).toBe(30);
     expect(r.heat.minutes[tuesday19 + 1]).toBe(30);
     expect(r.heat.leaves[tuesday19 + 1]).toBe(1);
+  });
+});
+
+describe('review fixes', () => {
+  const stay = (steamId: string, joined: number, left: number, extra: Partial<SessionRow> = {}): SessionRow => ({
+    steamId,
+    joinedAt: T0 + joined * MIN,
+    leftAt: T0 + left * MIN,
+    leftFrom: null,
+    ...extra,
+  });
+
+  it('counts a player who reconnected while seeding once, and not one with no known join', () => {
+    const seeded = { map: 'Narva', startedAt: T0 - 20 * MIN, liveAt: T0, endedAt: T0 + 60 * MIN };
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [seeded],
+      sessions: [stay('a', -18, -15), stay('a', -10, 30), stay('b', -18, 30, { joinedAt: null })],
+    });
+    expect(r.seeding).toMatchObject({ seeders: 1, reachedLive: 1 });
+  });
+
+  it('places a join in the seeding of the match on now', () => {
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [first],
+      sessions: [stay('a', 125, 135)],
+      live: { startedAt: T0 + 120 * MIN, liveAt: null },
+    });
+    expect(r.joins.find((j) => j.timing === 'seeding')?.sessions).toBe(1);
+  });
+
+  it("counts only the period's hours in the heatmap", () => {
+    // Joined 23:30 the day before, left 00:30: only the half hour in the period is counted.
+    const midnight = Date.UTC(2026, 9, 20);
+    const r = buildRetention({
+      now: NOW,
+      days: 1,
+      matches: [],
+      sessions: [{ steamId: 'a', joinedAt: midnight - 30 * MIN, leftAt: midnight + 30 * MIN, leftFrom: null }],
+    });
+    expect(r.heat.minutes.reduce((a, b) => a + b, 0)).toBe(30);
+  });
+
+  it('leaves out stays that ended while a ban held, and those a kick just before midnight ended', () => {
+    const midnight = Date.UTC(2026, 9, 20);
+    const r = buildRetention({
+      now: NOW,
+      days: 1,
+      matches: [],
+      sessions: [
+        { steamId: 'a', joinedAt: midnight - 5 * MIN, leftAt: midnight + MIN, leftFrom: null },
+        { steamId: 'b', joinedAt: T0, leftAt: T0 + 5 * MIN, leftFrom: null },
+        { steamId: 'c', joinedAt: T0, leftAt: T0 + 5 * MIN, leftFrom: null },
+      ],
+      removed: [{ steamId: 'a', at: midnight - MIN }, { steamId: 'b', at: T0 - 60 * MIN, until: null }, { steamId: 'c', at: T0 - 60 * MIN, until: T0 - 30 * MIN }],
+    });
+    expect(r.excluded).toBe(2);
+    expect(r.sessions).toBe(1);
   });
 });

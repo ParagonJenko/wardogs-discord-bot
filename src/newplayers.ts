@@ -5,6 +5,10 @@ import type { PlayerDay } from './players.ts';
 // kept that many, someone who played a while ago and not since is counted as new. `lookbackDays` is how many days of play
 // records it has, up to today.
 //
+// A day counts for a player only if they were on the server that day (some time seeding or live). A finished match is
+// credited to everyone in it on the day it ends, so a player who left before midnight can have a match-only entry on the
+// next day, which is not a return.
+//
 // A cohort is the new players of one week (UTC, Monday first). Someone came back within `n` days when they were seen on
 // any of the n days after their first. A return is only counted once those days are over, so a cohort has fewer
 // players counted for the longer windows than for the shorter.
@@ -38,11 +42,12 @@ export const weekOf = (day: string): string => {
 
 // `days` are the days kept, oldest first, each with its players; `today` is the UTC day now, whose return days are not over.
 export const buildNewPlayers = (days: { day: string; players: PlayerDay }[], today: string): NewPlayers => {
-  const withPlayers = days.filter((d) => Object.keys(d.players).length > 0);
+  const onServer = (d: { players: PlayerDay }): string[] => Object.entries(d.players).flatMap(([id, t]) => (t.seedingMinutes + t.liveMinutes > 0 ? [id] : []));
+  const withPlayers = days.filter((d) => onServer(d).length > 0);
   const [firstDay] = withPlayers;
   if (firstDay === undefined) return { lookbackDays: 0, cohorts: [], firstSeen: new Map() };
   const seen = new Map<string, string[]>();
-  for (const d of withPlayers) for (const steamId of Object.keys(d.players)) seen.set(steamId, [...(seen.get(steamId) ?? []), d.day]);
+  for (const d of withPlayers) for (const steamId of onServer(d)) seen.set(steamId, [...(seen.get(steamId) ?? []), d.day]);
   // The first day's players could have played before it, so are not new.
   const firstSeen = new Map<string, string>();
   for (const [steamId, on] of seen) {

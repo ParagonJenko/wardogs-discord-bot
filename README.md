@@ -1042,9 +1042,11 @@ Also in the same answer, over the same period:
 - **Short stays** (under 10 minutes) by new players and everyone else.
 - **Leaves by hour of the week** (UTC, Monday first) and time on the server by hour, for the heatmap.
 - **Kicks and bans** by staff are left out of all of it: a leave within 30 seconds before to 3 minutes after one, from the
-  [moderation log](#moderation-log). `excluded` says how many.
+  [moderation log](#moderation-log), and every leave while a ban on the bot's list holds (a ban made while the player was away is only put on
+  the server, with a kick, when they next join, and is not logged then). `excluded` says how many.
 - **New players** (`newPlayers`), by the week they were first seen: how many came back within 1, 7 and 30 days, counted
-  only once those days are over. New means not seen in the days the bot keeps (90), so until it has kept that many,
+  only once those days are over. A day counts only if they were on the server some of it, not just credited a match that ended
+  after they left. New means not seen in the days the bot keeps (90), so until it has kept that many,
   someone who played a while ago and not since looks new. `lookbackDays` says how many days it has.
 
 `GET /api/admin/growth` also gives `funnel`: of the players who signed in on the website and linked Steam, how many have
