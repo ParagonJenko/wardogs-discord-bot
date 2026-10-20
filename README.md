@@ -1687,14 +1687,13 @@ with their kills in place of their place:
 - **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none. They keep their place,
   so the others are told the place the match summary gives them.
 - Only for a match the bot saw go live and start, like the match summary.
-- **The MVP** needs `TOP_PLAYER_MESSAGES` of at least 1 and a kill. An award winner who isn't top of the scoreboard is
-  not the MVP.
+- **The MVP** needs `TOP_PLAYER_MESSAGES` of at least 1 and a kill. Everyone level with the top is an MVP, even past
+  `TOP_PLAYER_MESSAGES`. An award winner who isn't top of the scoreboard is not the MVP.
 - The line is picked at random from the end-of-match lines (or the MVP lines), passing over the ones used lately so
   players mostly get different ones; staff change them on the [Lines tab](#lines-tab) (End of match: Top players, and
   End of match: MVP). `{name}` (as in the [welcome](#welcome)), `{earned}` (such as "2nd on the scoreboard (23 kills)
   and best demolitions (8 kills)", or "31 kills and best demolitions (8 kills)" for the MVP) and `{site}` are filled
-  in. The line is the whole message, so it should say where the website is. With no MVP lines, the MVP gets a top
-  players line.
+  in. The line is the whole message, so it should say where the website is.
 - A message that fails to send is logged (`End-of-match message to "<name>" (<Steam ID>) failed: …`) and not tried
   again. Each one sent is logged as `Sent end-of-match message to "<name>" (<Steam ID>): …`.
 - It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`. It isn't a warning:

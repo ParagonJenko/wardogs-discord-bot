@@ -90,11 +90,13 @@ export const honours = (match: MatchState, live: LiveMatch | null, rule: MatchEn
     const known = earned.get(steamId) ?? { steamId, name, earned: [], mvp };
     earned.set(steamId, { ...known, earned: [...known.earned, phrase] });
   };
-  const top = topPlayers(match.players, rule.count);
-  const [first] = top;
-  top.forEach((p, index) => {
+  // The whole scoreboard, so players level with the top share the MVP even past `rule.count`.
+  const ranked = topPlayers(match.players, Object.keys(match.players).length);
+  const [first] = ranked;
+  ranked.forEach((p, index) => {
     if (p.steamId === undefined || p.kills === 0) return;
-    const mvp = first !== undefined && byKills(p, first) === 0;
+    const mvp = rule.count > 0 && first !== undefined && byKills(p, first) === 0;
+    if (!mvp && index >= rule.count) return;
     add(p.steamId, p.name, mvp ? killCount(p.kills) : place(index + 1, p.kills), mvp);
   });
   if (rule.awards && live !== null) {

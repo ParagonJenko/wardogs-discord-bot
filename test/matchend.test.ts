@@ -107,6 +107,15 @@ describe('honours', () => {
     ]);
   });
 
+  it('shares the MVP with a player level with the top past the count, and names them first', () => {
+    const level: MatchState = { ...match, players: { a: tracked('Ash', 9, 2), b: tracked('Bo', 9, 2), c: tracked('Cy', 4) } };
+
+    expect(honours(level, null, { ...rule, count: 1 })).toEqual([
+      { steamId: 'a', name: 'Ash', earned: ['9 kills'], mvp: true },
+      { steamId: 'b', name: 'Bo', earned: ['9 kills'], mvp: true },
+    ]);
+  });
+
   it('has no MVP without the scoreboard places, or without a kill', () => {
     expect(honours(match, feed, { ...rule, count: 0 }).some((h) => h.mvp)).toBe(false);
     expect(honours({ ...match, players: { e: tracked('Eve', 0) } }, null, rule)).toEqual([]);

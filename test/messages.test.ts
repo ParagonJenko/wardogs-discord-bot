@@ -328,6 +328,9 @@ describe('nameOf', () => {
     expect(nameOf('A'.repeat(30))).toBe(`${'A'.repeat(NAME_LONGEST - 1)}…`);
     expect(nameOf('A'.repeat(NAME_LONGEST))).toBe('A'.repeat(NAME_LONGEST));
     expect(nameOf('   ')).toBe('soldier');
+    // Never half an emoji.
+    expect(nameOf(`${'A'.repeat(NAME_LONGEST - 2)}😀X`)).toBe(`${'A'.repeat(NAME_LONGEST - 2)}…`);
+    expect(nameOf(`${'A'.repeat(NAME_LONGEST - 3)}😀XY`)).toBe(`${'A'.repeat(NAME_LONGEST - 3)}😀…`);
   });
 });
 

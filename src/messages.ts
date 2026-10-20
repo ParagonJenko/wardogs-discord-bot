@@ -293,7 +293,10 @@ const NO_NAME = 'soldier';
 export const nameOf = (name: string): string => {
   const tidy = name.replace(/\s+/g, ' ').trim();
   if (tidy === '') return NO_NAME;
-  return tidy.length > NAME_LONGEST ? `${tidy.slice(0, NAME_LONGEST - 1)}…` : tidy;
+  if (tidy.length <= NAME_LONGEST) return tidy;
+  // Not between the two halves of an emoji or other character outside the BMP.
+  const cut = tidy.slice(0, NAME_LONGEST - 1);
+  return `${/[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut}…`;
 };
 
 // How {rank} names each board, in the order a player's best place is picked from when two are level.
