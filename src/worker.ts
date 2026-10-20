@@ -198,6 +198,7 @@ import {
   type JoinEvent,
   type JoinLog,
 } from './joinlog.ts';
+import { buildRetention, sessionRows, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
@@ -3819,6 +3820,27 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put(DISCORD_CLICKS_KEY, withClick(parseClicks(await this.ctx.storage.get(DISCORD_CLICKS_KEY)), sourceOf(src), dayOf(Date.now())));
   }
 
+  // The Play time tab: how long players stay each day and when in a match they leave, over the last `days` UTC days.
+  async adminRetention(days: number): Promise<Retention> {
+    const now = Date.now();
+    const first = Date.parse(dayOf(now - (days - 1) * DAY_MS));
+    const [records, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['online', 'state', JOIN_LOG_KEY])]);
+    const matches = records.map((r) => ({ map: r.map, startedAt: r.startedAt, liveAt: r.liveAt, endedAt: r.endedAt }));
+    // Sessions from when the earliest match in the period went live, for those who left early from one that began before it.
+    const from = Math.min(first, ...matches.filter((m) => m.endedAt >= first).map((m) => m.liveAt));
+    const online = this.onlineNow(now, stored.get('online'));
+    const inGame = online === null ? {} : (parseJoinLog(stored.get(JOIN_LOG_KEY))?.inGame ?? {});
+    const current = parseState(stored.get('state'))?.match ?? null;
+    return buildRetention({
+      now,
+      days,
+      sessions: sessionRows(this.sessionSql(), from),
+      matches,
+      ongoing: Object.entries(inGame).map(([steamId, entry]) => ({ steamId, since: entry.since })),
+      live: current !== null && current.endedAt === undefined && !matches.some((m) => m.startedAt === current.startedAt) ? (current.liveAt ?? current.startedAt) : null,
+    });
+  }
+
   // For the staff page: clicks on the invite by place, and how many players have accounts.
   async discordGrowth(): Promise<{ clicks: ClickSummary; accounts: Growth; members: number | null }> {
     const stored = await this.ctx.storage.get([DISCORD_CLICKS_KEY, 'stats']);
@@ -4721,6 +4743,15 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page kills failed: ${errorText(error)}`);
       return Response.json({ error: 'The kill feed is unavailable' }, { status: 503, headers });
+    }
+  }
+  // The Play time tab: how long players stay each day, and when they leave.
+  if (route === 'GET /api/admin/retention') {
+    try {
+      return Response.json(await watcher().adminRetention(days), { headers });
+    } catch (error) {
+      console.error(`Staff page play time failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't load the numbers just now." }, { status: 503, headers });
     }
   }
   // The Discord growth card: clicks on the invite by place, and how many players have accounts.
