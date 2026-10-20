@@ -26,6 +26,8 @@ import {
   RANDOM_MAP,
   type Lighting,
   voteMessage,
+  voteOpenBroadcast,
+  voteResultBroadcast,
   editVoteMessage,
   deleteVoteMessage,
   postVoteMessage,
@@ -984,5 +986,23 @@ describe('matchIsOver', () => {
   it('is over without the feed once a team has the winning score', () => {
     expect(matchIsOver(vote(), null, 99, 100)).toBe(false);
     expect(matchIsOver(vote(), null, 100, 100)).toBe(true);
+  });
+});
+
+describe('what the game is told about the vote', () => {
+  it('sends players to the vote page on the website, or the Discord without one, and says when it closes', () => {
+    expect(voteOpenBroadcast('https://gaminginit.com/', 'discord.gg/abc', 75, 60)).toBe(
+      'Map vote is open! Pick the next map (infantry only) at gaminginit.com/vote. Closes at 75 points or in 60 min.',
+    );
+    expect(voteOpenBroadcast(undefined, 'discord.gg/abc', 0, 60)).toBe(
+      'Map vote is open! Pick the next map (infantry only) in our Discord: discord.gg/abc. Closes in 60 min.',
+    );
+    expect(voteOpenBroadcast(undefined, null, 75, 60)).toBeNull();
+  });
+
+  it('names the winner, how it plays and how many voted for it', () => {
+    expect(voteResultBroadcast('Ozeti', ['Night', 'Small zones'], 5)).toBe("Vote's in! Ozeti plays next, infantry only, Night, Small zones (5 votes).");
+    expect(voteResultBroadcast('Ozeti', [], 1)).toBe("Vote's in! Ozeti plays next, infantry only (1 vote).");
+    expect(voteResultBroadcast('Ozeti', [], 0)).toBe("Vote's in! Ozeti plays next, infantry only (no votes, picked at random).");
   });
 });

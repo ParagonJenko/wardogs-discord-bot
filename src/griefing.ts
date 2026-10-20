@@ -102,7 +102,7 @@ const GriefDaySchema = z.object({
 });
 
 // The in-game message to a player who just team killed. The rules note is added after it, as /warn does.
-export const TEAM_KILL_WARNING = 'Team killing is against the rules. Please apologise in team chat.';
+export const TEAM_KILL_WARNING = "Team kill! That's against the rules. Say sorry in team chat.";
 
 export const emptyGriefDay = (): GriefDay => ({ players: {}, incidents: [] });
 
