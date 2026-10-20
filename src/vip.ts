@@ -4,7 +4,8 @@ import { appendSection, refusal, sectionLines, sectionRange } from './ini.ts';
 import { totals, type PlayerDay } from './players.ts';
 import type { ConfigResult, ServerConfig } from './rcon.ts';
 
-// Automatic VIP: players who seed on enough days in a week get a whitelist slot for a week. The bot adds them to
+// Automatic VIP: players who seed on enough days in a week get a whitelist slot for a week (or, with VIP_MODE "day",
+// one seed day gets it for 3 days; see VipRule). The bot adds them to
 // the whitelist in ServerSettings.ini (live builds have no other way to change it) and takes them off again when
 // their week is up, unless they have earned another. It only ever removes players it added itself, so whitelist slots
 // an admin gave out by hand are left alone. The server reads the list when it restarts.
@@ -261,7 +262,7 @@ export const syncVip = async ({ rule, days, state, now, staff = new Map(), rcon,
     added: plan.add,
     renewed: plan.renewed,
   });
-  if (plan.renewed.length > 0) log.info(`VIP renewed for another week: ${names(plan.renewed)}.`);
+  if (plan.renewed.length > 0) log.info(`VIP renewed: ${names(plan.renewed)}.`);
   if (spots.adopted.length > 0) log.info(`Staff spots taken over from the whitelist: ${names(spots.adopted)}.`);
   const add = [...plan.add, ...spots.add].map((p) => p.steamId);
   const remove = [...plan.remove, ...spots.remove];

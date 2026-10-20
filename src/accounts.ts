@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { VipRule } from './config.ts';
+import { seedTerms } from './discord.ts';
 import type { VipGrant } from './vip.ts';
 
 // Player accounts: a player signs in to the website with Discord, and links the Steam account they play on (from the
@@ -259,7 +260,7 @@ export const adopt = (account: Account, grant: VipView | null | undefined, now: 
 export const dmText = (kind: DmKind, expiresAt: number | null, rule: Pick<AccountRule, 'siteUrl' | 'vip'>): string => {
   const until = expiresAt === null ? '' : `<t:${unix(expiresAt)}:f>`;
   const site = rule.siteUrl === undefined ? null : rule.siteUrl.replace(/\/+$/, '');
-  const keep = rule.vip === null ? '' : ` Seed on ${rule.vip.seedDays} days in a week to keep it.`;
+  const keep = rule.vip === null ? '' : ` Seed ${seedTerms(rule.vip)} to keep it.`;
   const more = site === null ? '' : ` ${site}/seeding`;
   const off = site === null ? '' : `\n-# Turn these messages off at ${site}/account`;
   const body = {

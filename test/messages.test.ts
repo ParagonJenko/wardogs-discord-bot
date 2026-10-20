@@ -213,6 +213,12 @@ describe('seedingMessage', () => {
     );
   });
 
+  it('says how long the whitelist slot lasts when one seed day earns it', () => {
+    expect(seedingMessage(19, 20, noSite, { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 }, first)).toBe(
+      "We're seeding! 1 more player and we go live. Seed for over 10 min and get a whitelist slot for 3 days.",
+    );
+  });
+
   it('points at the top seeders board without VIP, and just thanks seeders without a website either', () => {
     expect(seedingMessage(5, 20, site, null, first)).toBe("We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com");
     expect(seedingMessage(5, 20, noSite, null, first)).toBe("We're seeding! 15 more players and we go live. Thanks for helping get it live!");

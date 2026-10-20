@@ -1559,6 +1559,8 @@ Players who seed get a whitelist slot, so they skip the queue when the server is
 
 - **Seed on 3 days in a week** (`VIP_SEED_DAYS` successful seeds in the last 7 UTC days, including today), and the
   bot adds you to the server's whitelist for **a week**.
+- Or, with `VIP_MODE` `"day"`: **seed on one day** and get the whitelist for **3 days**. A seed in the last 3 UTC days
+  (including today) when the 3 days are up keeps it for another 3. What follows says "week"; in this mode read "3 days".
 - Staff who linked their Steam account on the [staff page](#staff-steam-accounts) never earn it: it is for the players
   who seed.
 - When the week is up, you come off the list, unless you earned it again during that week. Then it runs for
@@ -1574,6 +1576,7 @@ Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
 | Variable           | What                                                                   | Default in `wrangler.jsonc` |
 | ------------------ | ---------------------------------------------------------------------- | --------------------------- |
 | `VIP_SEED_DAYS`    | Days with a successful seed needed in a week. `0` turns automatic VIP off | `3`                      |
+| `VIP_MODE`         | `"week"` (seed on `VIP_SEED_DAYS` days in a week, VIP for a week) or `"day"` (seed on one day, VIP for 3 days). `"day"` is on whatever `VIP_SEED_DAYS` says | `"week"` |
 | `VIP_SEED_MINUTES` | A seed counts when a player is on for more than this, and it goes live | `10`                        |
 
 How it changes the server:
@@ -1600,8 +1603,10 @@ How it changes the server:
   stays from staff when it is extended, and a seeder's stays from seeding.
 - Staff can give or take away VIP by hand with [`/vip add` and `/vip remove`](#staff-commands).
 
-Turning it off (`VIP_SEED_DAYS` `"0"`) stops players earning it. VIP the bot already gave, by seeding or through
+Turning it off (`VIP_SEED_DAYS` `"0"` with `VIP_MODE` `"week"`) stops players earning it. VIP the bot already gave, by seeding or through
 `/vip add`, still ends on time.
+Switching `VIP_MODE` leaves VIP already given as it is: it ends when it was due to, and is then kept or not by the new
+rule.
 Automatic VIP is Cloudflare only.
 
 ## In-game messages
@@ -1705,7 +1710,7 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
   only then do seeding messages start. Until then nobody gets one, however many rejoin.
 - It is the same whether the server is filling up from empty or building back up after dropping from live.
 - The opening line is picked at random from the seeding lines (staff change them on the [Lines tab](#lines-tab));
-  `{needed}` is filled in, such as "15 more players". The reward after it comes from `VIP_SEED_DAYS` and `VIP_SEED_MINUTES`, so it always matches what
+  `{needed}` is filled in, such as "15 more players". The reward after it comes from `VIP_SEED_DAYS`, `VIP_MODE` and `VIP_SEED_MINUTES`, so it always matches what
   the bot does.
 - When a match message (below) is due on the same check, it goes first and the seeding message waits a minute.
 - Set `SEEDING_MESSAGE_MINUTES` to another number of minutes in the `vars` block of `wrangler.jsonc`, or `"0"` to

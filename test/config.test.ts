@@ -191,6 +191,15 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, VIP_SEED_DAYS: '8' })).toThrow(/VIP_SEED_DAYS/);
   });
 
+  it('gives VIP for 3 days for one seed day with VIP_MODE "day", whatever VIP_SEED_DAYS says', () => {
+    const day = { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 };
+
+    expect(loadConfig({ ...required, VIP_MODE: 'day', VIP_SEED_DAYS: '3' }).vip).toEqual(day);
+    expect(loadConfig({ ...required, VIP_MODE: 'day' }).vip).toEqual(day);
+    expect(loadConfig({ ...required, VIP_MODE: 'week', VIP_SEED_DAYS: '3' }).vip).toEqual({ seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 });
+    expect(() => loadConfig({ ...required, VIP_MODE: 'month' })).toThrow(/VIP_MODE/);
+  });
+
   it('reads overrides from the environment', () => {
     const config = loadConfig({
       ...required,

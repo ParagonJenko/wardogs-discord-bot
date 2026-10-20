@@ -185,6 +185,9 @@ describe('the messages', () => {
     const unix = Math.floor(until / 1000);
     expect(dmText('earned', until, rule)).toContain(`<t:${unix}:f>`);
     expect(dmText('earned', until, rule)).toContain('Seed on 3 days in a week to keep it.');
+    expect(dmText('ended', until, { ...rule, vip: { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 } })).toContain(
+      'Seed once in 3 days to keep it.',
+    );
     expect(dmText('expiring', until, rule)).toContain(`<t:${unix}:R>`);
     expect(dmText('expiring', until, rule)).toContain('https://gaminginit.com/seeding');
     expect(dmText('ended', until, rule)).toContain('has ended');

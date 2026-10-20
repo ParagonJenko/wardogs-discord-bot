@@ -910,6 +910,17 @@ describe('buildSeedersEmbed', () => {
 });
 
 describe('buildVipMessage', () => {
+  it('says one seed earns a slot for 3 days when one seed day is enough', () => {
+    const day = { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 };
+    const message = buildVipMessage([{ name: 'Ash' }], [{ name: 'Bo' }], day);
+
+    expect(embedOf(message)?.description).toBe('🎉 **Ash** earned a whitelist slot for 3 days by seeding. Thank you!');
+    expect(embedOf(message)?.fields).toEqual([
+      { name: 'Kept for another 3 days', value: 'Bo' },
+      { name: 'Earn one too', value: `Seed once and get a whitelist slot for 3 days.\n${rule}` },
+    ]);
+  });
+
   it('thanks who earned a whitelist slot, and says how to earn one', () => {
     const message = buildVipMessage([{ name: 'Ash_1' }], [], vip, 'https://gaminginit.com');
 
