@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
+import type { BoardKey, Leaderboard } from './players.ts';
 import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
@@ -277,13 +278,73 @@ export const welcomeLinks = (siteHost: string | null, discord: string | null): s
   return links.length === 0 ? '' : ` ${links.join(' | ')}`;
 };
 
-export const welcomePick = (rule: WelcomeRule, random: () => number = Math.random, lines: Lines = DEFAULT_LINES, recent: Recent = {}): Picked => {
-  const pick = pickLine('welcome', lines.welcome, {}, random, recent);
+// "1st", "2nd", "3rd", "4th", "11th", "21st".
+export const ordinal = (n: number): string => {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  return `${n}${teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
+};
+
+// {name} in a private message is cut short at this, so a long name can't push the rest off the game's line.
+export const NAME_LONGEST = 20;
+// For a player whose name is blank.
+const NO_NAME = 'soldier';
+
+// A player's name as a private message says it: on one line, and no longer than NAME_LONGEST.
+export const nameOf = (name: string): string => {
+  const tidy = name.replace(/\s+/g, ' ').trim();
+  if (tidy === '') return NO_NAME;
+  return tidy.length > NAME_LONGEST ? `${tidy.slice(0, NAME_LONGEST - 1)}…` : tidy;
+};
+
+// How {rank} names each board, in the order a player's best place is picked from when two are level.
+const RANK_BOARDS: [BoardKey, string][] = [
+  ['kills', 'kills'],
+  ['kd', 'K/D'],
+  ['playtime', 'time played'],
+  ['seeding', 'seeding'],
+];
+
+// {rank} at its longest, for the Lines tab: the leaderboard shows the top 10.
+export const LONGEST_RANK = '10th for time played';
+
+// Each player's best place on the leaderboard, as the welcome says it ("3rd for kills"), by Steam ID.
+export const leaderboardPlaces = (board: Pick<Leaderboard, BoardKey>): Map<string, string> => {
+  const best = new Map<string, { place: number; says: string }>();
+  for (const [key, words] of RANK_BOARDS) {
+    board[key].forEach((p, index) => {
+      const known = best.get(p.steamId);
+      if (known === undefined || index + 1 < known.place) best.set(p.steamId, { place: index + 1, says: `${ordinal(index + 1)} for ${words}` });
+    });
+  }
+  return new Map([...best].map(([steamId, { says }]) => [steamId, says]));
+};
+
+// Who a welcome is for: their name in game, and their best place on the leaderboard (null when they are not on it).
+export type Welcomed = { name: string; rank: string | null };
+
+// A player on the leaderboard gets the welcome back, when there are lines for it; everyone else the welcome.
+export const welcomePick = (
+  rule: WelcomeRule,
+  random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
+  recent: Recent = {},
+  who: Welcomed = { name: '', rank: null },
+): Picked => {
+  const name = nameOf(who.name);
+  const pick =
+    who.rank !== null && lines.welcomeBack.length > 0
+      ? pickLine('welcomeBack', lines.welcomeBack, { name, rank: who.rank }, random, recent)
+      : pickLine('welcome', lines.welcome, { name }, random, recent);
   return { ...pick, text: fit(`${pick.text}${welcomeLinks(rule.siteHost, rule.discord)}`) };
 };
 
-export const welcomeMessage = (rule: WelcomeRule, random: () => number = Math.random, lines: Lines = DEFAULT_LINES, recent: Recent = {}): string =>
-  welcomePick(rule, random, lines, recent).text;
+export const welcomeMessage = (
+  rule: WelcomeRule,
+  random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
+  recent: Recent = {},
+  who?: Welcomed,
+): string => welcomePick(rule, random, lines, recent, who).text;
 
 // Who was in game at the last reading (Steam IDs); who joined and is still waiting for their welcome, with when the bot
 // first saw them; and who was welcomed in the last WELCOME_AGAIN_MS, or was on when the bot started watching, with when.

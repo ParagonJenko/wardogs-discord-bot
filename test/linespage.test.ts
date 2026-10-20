@@ -14,7 +14,7 @@ import {
 } from '../src/linespage.ts';
 import type { LiveMatch } from '../src/live.ts';
 import { LONGEST_EARNED, matchEndMessages } from '../src/matchend.ts';
-import { fillLine, milestones, seedingMessage, welcomeMessage } from '../src/messages.ts';
+import { fillLine, milestones, NAME_LONGEST, seedingMessage, welcomeMessage } from '../src/messages.ts';
 import type { MatchState } from '../src/tracking.ts';
 
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
@@ -104,11 +104,15 @@ describe('editLines', () => {
 
   it('checks end-of-match lines with {earned} at the longest it can be', () => {
     const fits = `${'x'.repeat(200 - ` ${LONGEST_EARNED} gaminginit.com`.length)} {earned} {site}`;
+    const named = `${'x'.repeat(200 - ` ${'x'.repeat(NAME_LONGEST)} ${LONGEST_EARNED} gaminginit.com`.length)} {name} {earned} {site}`;
+
+    expect(save({}, 'matchEnd', [named])).toHaveProperty('saved');
+    expect(save({}, 'matchEnd', [`x${named}`])).toEqual({ problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.' });
 
     expect(save({}, 'matchEnd', [fits])).toHaveProperty('saved');
     expect(save({}, 'matchEnd', [`x${fits}`])).toEqual({ problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.' });
     expect(save({}, 'matchEnd', ['GG {place}'])).toEqual({
-      problem: "Line 1 has {place}, which the bot can't fill in. It can fill in {earned} and {site}.",
+      problem: "Line 1 has {place}, which the bot can't fill in. It can fill in {name}, {earned} and {site}.",
     });
   });
 
@@ -252,11 +256,14 @@ describe('buildLinesPage', () => {
       shown('tenMinutes', DEFAULT_LINES.tenMinutes[0] ?? ''),
     );
     expect(seedingMessage(1, 20, { everyMs: 1, siteHost: 'gaminginit.com' }, vip, first)).toBe(shown('seeding', DEFAULT_LINES.seeding[0] ?? ''));
-    expect(welcomeMessage({ afterMs: 1, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' }, first)).toBe(
-      shown('welcome', DEFAULT_LINES.welcome[0] ?? ''),
+    const welcome = { afterMs: 1, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
+    expect(welcomeMessage(welcome, first, undefined, {}, { name: 'Ghost', rank: null })).toBe(shown('welcome', DEFAULT_LINES.welcome[0] ?? ''));
+    expect(welcomeMessage(welcome, first, undefined, {}, { name: 'Ghost', rank: '3rd for kills' })).toBe(
+      shown('welcomeBack', DEFAULT_LINES.welcomeBack[0] ?? ''),
     );
-    const won = { ...match([]), players: { a: { name: 'Ash', kills: 25, deaths: 0, lastKills: 25, lastDeaths: 0 } } };
-    const ash = { steamId: 'a', name: 'Ash', faction: null, kills: 25, deaths: 0, headshots: 0, teamKills: 0, streak: 0, bestStreak: 0 };
+    const tracked = (name: string, kills: number) => ({ name, kills, deaths: 0, lastKills: kills, lastDeaths: 0 });
+    const won = { ...match([]), players: { t: tracked('Top', 30), a: tracked('Ghost', 25) } };
+    const ash = { steamId: 'a', name: 'Ghost', faction: null, kills: 25, deaths: 0, headshots: 0, teamKills: 0, streak: 0, bestStreak: 0 };
     const feed: LiveMatch = {
       ...{ matchId: 'm', map: 'Europe', startedAt: 0, lastAt: 0, lastTime: 0, pairs: {}, firstBlood: null, feed: [] },
       ...{ kills: 25, headshots: 0, teamKills: 0, otherDeaths: 0, endedAt: null, result: null },
@@ -266,6 +273,8 @@ describe('buildLinesPage', () => {
     expect(matchEndMessages(won, feed, new Set(['a']), new Set(), end, first).messages[0]?.text).toBe(
       shown('matchEnd', DEFAULT_LINES.matchEnd[0] ?? ''),
     );
+    const mvp = { ...match([]), players: { a: tracked('Ghost', 31) } };
+    expect(matchEndMessages(mvp, feed, new Set(['a']), new Set(), end, first).messages[0]?.text).toBe(shown('mvp', DEFAULT_LINES.mvp[0] ?? ''));
   });
 
   it("passes every one of the bot's own lines", () => {

@@ -1614,10 +1614,16 @@ Automatic VIP is Cloudflare only.
 ### Welcome
 
 Each player who joins gets a private message in game (like `/warn`, only they see it) 2 minutes after the bot sees
-them join (`WELCOME_MESSAGE_MINUTES`), with the basic rules and where the Discord and the website are:
+them join (`WELCOME_MESSAGE_MINUTES`), by name, with the basic rules and where the Discord and the website are:
 
-> Welcome! Rules: no cheating or exploits, no team killing or griefing, no racism or abuse, and listen to admins. Full
-> rules on our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com
+> Welcome, Ghost! Rules: no cheats, exploits, team killing, griefing, racism or abuse. Listen to admins. All rules on
+> our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com
+
+A player on the website's leaderboard (the top 10 of any board over its 30 days) is welcomed back with their best place
+instead (Cloudflare only):
+
+> Welcome back, Ghost! You're 3rd for kills on the leaderboard. Same rules: no cheats, no team killing, listen to
+> admins. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com
 
 - The bot sees joins at its check each minute, so the welcome arrives 2 to 3 minutes after the player joins.
 - **Not again for 6 hours:** a player who rejoins within 6 hours of their welcome (a map change, a crash) doesn't get
@@ -1627,8 +1633,13 @@ them join (`WELCOME_MESSAGE_MINUTES`), with the basic rules and where the Discor
   `DISCORD_SHORT_LINK` (`/discord`) it is the website's short link instead (`Discord: gaminginit.com/discord`), which counts the
   click and is short enough to type. Players who linked their account on the website and are in the server get no Discord
   link: see [Player accounts](#player-accounts).
-- The rules line is on the [Lines tab](#lines-tab) (Welcome), so staff can change it without a deploy. The default is
-  in `src/lines.ts`.
+- **The name** (`{name}`) is the player's name in game, cut short with "…" after 20 characters so the message fits the
+  game's line. A blank name is "soldier".
+- **The leaderboard place** (`{rank}`) is their best place on any of the boards: "3rd for kills", "1st for K/D", "5th
+  for time played" or "2nd for seeding". Where two are level, kills comes first, then K/D, time played and seeding.
+  [Private profiles](#staff-commands) are left off, as the leaderboard doesn't name them, so they get the usual welcome.
+- The lines are on the [Lines tab](#lines-tab) (Welcome: Everyone, and Welcome: On the leaderboard), so staff can change
+  them without a deploy. The defaults are in `src/lines.ts`.
 - A welcome that fails to send is logged (`Welcome to "<name>" (<Steam ID>) failed: …`) and not tried again. Each one
   sent is logged as `Sent welcome to "<name>" (<Steam ID>): …`.
 - It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`.
@@ -1638,10 +1649,15 @@ them join (`WELCOME_MESSAGE_MINUTES`), with the basic rules and where the Discor
 ### End of match
 
 The moment a team wins a match, its best players each get a private message in game (like `/warn`, only they see
-it), while everyone is still on the scoreboard: what they earned, and where to see their stats.
+it), by name, while everyone is still on the scoreboard: what they earned, and where to see their stats.
 
-> GG! This match: 1st on the scoreboard (63 kills), best assaulter (40 kills) and most headshots (21). See your stats
-> at gaminginit.com
+> GG Ghost! This match: 2nd on the scoreboard (41 kills) and best demolitions (8 kills). See your stats at gaminginit.com
+
+The MVP, the top of the scoreboard (most kills, then fewest deaths; players level share it), gets an MVP line instead,
+with their kills in place of their place:
+
+> GG Ghost, you were the MVP! 63 kills, best assaulter (40 kills) and most headshots (21). See your stats at
+> gaminginit.com
 
 - **The top 5 on the scoreboard** (`TOP_PLAYER_MESSAGES`), ranked as in the match summary: most kills, then fewest
   deaths. A player without a kill has no place.
@@ -1671,10 +1687,14 @@ it), while everyone is still on the scoreboard: what they earned, and where to s
 - **Private profiles** (see [`/private`](#staff-commands)) have no player page, so they get none. They keep their place,
   so the others are told the place the match summary gives them.
 - Only for a match the bot saw go live and start, like the match summary.
-- The line is picked at random from the end-of-match lines, passing over the ones used lately so players mostly get
-  different ones; staff change them on the [Lines tab](#lines-tab) (End of match). `{earned}` (such as "2nd on the
-  scoreboard (23 kills) and best demolitions (8 kills)") and `{site}` are filled in. The line is the whole message, so
-  it should say where the website is.
+- **The MVP** needs `TOP_PLAYER_MESSAGES` of at least 1 and a kill. An award winner who isn't top of the scoreboard is
+  not the MVP.
+- The line is picked at random from the end-of-match lines (or the MVP lines), passing over the ones used lately so
+  players mostly get different ones; staff change them on the [Lines tab](#lines-tab) (End of match: Top players, and
+  End of match: MVP). `{name}` (as in the [welcome](#welcome)), `{earned}` (such as "2nd on the scoreboard (23 kills)
+  and best demolitions (8 kills)", or "31 kills and best demolitions (8 kills)" for the MVP) and `{site}` are filled
+  in. The line is the whole message, so it should say where the website is. With no MVP lines, the MVP gets a top
+  players line.
 - A message that fails to send is logged (`End-of-match message to "<name>" (<Steam ID>) failed: …`) and not tried
   again. Each one sent is logged as `Sent end-of-match message to "<name>" (<Steam ID>): …`.
 - It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`. It isn't a warning:
@@ -1762,15 +1782,16 @@ is won at a score other than 100. They need `SITE_URL`; without it none are sent
 ### Lines tab
 
 The [staff page](#staff-page) has a tab for the lines the bot says in game, so staff can reword them, add new ones or
-take some out without a deploy. Each list (seeding, welcome, 10 minutes in, halfway and 90 points for each faction,
-level scores, any other team, end of match) has its own editor:
+take some out without a deploy. Each list (seeding, welcome and welcome back, 10 minutes in, halfway and 90 points for
+each faction, level scores, any other team, end of match and MVP) has its own editor:
 
 - Each line shows the whole message as it goes out in game, with what the bot adds before and after it (such as
   "Halfway there!" and the seeding call to action) and its placeholders filled in, and how many of the game's 200
   characters it uses. A line that doesn't fit, or has a placeholder the bot can't fill in for that list, can't be saved.
   The count takes each placeholder at the longest it can be when the message goes out, not as the preview shows it:
-  the halfway `{score}` as the winning score (the leader can be anywhere from half of it up), and `{team}` as 16
-  characters (the server may spell a faction its own way, and any other team could be called anything).
+  the halfway `{score}` as the winning score (the leader can be anywhere from half of it up), `{team}` as 16
+  characters (the server may spell a faction its own way, and any other team could be called anything), `{name}` as 20
+  characters and `{rank}` as "10th for time played".
   The lines are checked against the bot's settings now (`SITE_URL`, VIP, `SCORE_TO_WIN`, `LIVE_THRESHOLD`); if those
   change and a saved line no longer fits, the page marks it, and the bot cuts it short with "…" until it is changed.
 - Nothing changes until staff press Save. The next message of that kind uses the new lines.

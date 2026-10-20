@@ -2,9 +2,9 @@ import { mapName } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
 import type { LiveMatch, LivePlayer } from './live.ts';
 import { sameMap } from './matchfeed.ts';
-import { fit, pickLine, remember, type Recent } from './messages.ts';
+import { fit, nameOf, ordinal, pickLine, remember, type Recent } from './messages.ts';
 import type { FactionScore } from './rcon.ts';
-import { matchMap, topPlayers, type MatchState } from './tracking.ts';
+import { byKills, matchMap, topPlayers, type MatchState } from './tracking.ts';
 import { countsForLongest, weaponRole, type WeaponRole } from './weapons.ts';
 
 // The end of a match: the moment a team wins, each of its best players in game gets a private message with what they
@@ -21,11 +21,7 @@ export const MAX_TOP_PLAYERS = 100;
 // A message names at most this many things a player earned, so it fits the game's one line: their place first.
 export const MAX_EARNED = 3;
 
-// "1st", "2nd", "3rd", "4th", "11th", "21st".
-export const ordinal = (n: number): string => {
-  const teen = n % 100 >= 11 && n % 100 <= 13;
-  return `${n}${teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
-};
+export { ordinal };
 
 export const killCount = (count: number): string => `${count} kill${count === 1 ? '' : 's'}`;
 
@@ -81,19 +77,25 @@ export const feedRecordOf = (live: LiveMatch | null, match: MatchState): LiveMat
     ? live
     : null;
 
-export type Honours = { steamId: string; name: string; earned: string[] };
+// `mvp` is set for the top of the scoreboard: most kills, then fewest deaths, with players level sharing it. Their place
+// is said as their kills ("31 kills"), as the MVP lines say they were top.
+export type Honours = { steamId: string; name: string; earned: string[]; mvp: boolean };
 
 // What each player earned in a match, as a message says it: a place in the top `rule.count` on the scoreboard, and
 // with `rule.awards` the awards from the kill feed's match (`live`, null without one). The scoreboard first, then the
 // award winners, each with their place first and at most MAX_EARNED things. A player without a kill has no place.
 export const honours = (match: MatchState, live: LiveMatch | null, rule: MatchEndRule): Honours[] => {
   const earned = new Map<string, Honours>();
-  const add = (steamId: string, name: string, phrase: string): void => {
-    const known = earned.get(steamId) ?? { steamId, name, earned: [] };
+  const add = (steamId: string, name: string, phrase: string, mvp = false): void => {
+    const known = earned.get(steamId) ?? { steamId, name, earned: [], mvp };
     earned.set(steamId, { ...known, earned: [...known.earned, phrase] });
   };
-  topPlayers(match.players, rule.count).forEach((p, index) => {
-    if (p.steamId !== undefined && p.kills > 0) add(p.steamId, p.name, place(index + 1, p.kills));
+  const top = topPlayers(match.players, rule.count);
+  const [first] = top;
+  top.forEach((p, index) => {
+    if (p.steamId === undefined || p.kills === 0) return;
+    const mvp = first !== undefined && byKills(p, first) === 0;
+    add(p.steamId, p.name, mvp ? killCount(p.kills) : place(index + 1, p.kills), mvp);
   });
   if (rule.awards && live !== null) {
     for (const award of AWARDS) {
@@ -113,11 +115,20 @@ export const LONGEST_EARNED = listOf(
   [place(MAX_TOP_PLAYERS, 9999), ...AWARDS.map((a) => a.says(9999))].sort((a, b) => b.length - a.length).slice(0, MAX_EARNED),
 );
 
+// The MVP's {earned} at its longest: their kills first, then the two longest awards.
+export const LONGEST_MVP_EARNED = listOf([
+  killCount(9999),
+  ...AWARDS.map((a) => a.says(9999))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, MAX_EARNED - 1),
+]);
+
 export type MatchEndMessage = { steamId: string; name: string; text: string };
 
-// The messages for a match just won, to each player who earned something and is in game now (`online`). A private
-// profile (`hidden`) has no player page, so gets none, but keeps their place: the others are told the place the match
-// summary gives them. Each line is remembered as it is picked, so players mostly get different ones.
+// The messages for a match just won, to each player who earned something and is in game now (`online`), by name. The
+// MVP gets an MVP line, when there are any. A private profile (`hidden`) has no player page, so gets none, but keeps
+// their place: the others are told the place the match summary gives them. Each line is remembered as it is picked, so
+// players mostly get different ones.
 export const matchEndMessages = (
   match: MatchState,
   live: LiveMatch | null,
@@ -132,7 +143,9 @@ export const matchEndMessages = (
   const messages: MatchEndMessage[] = [];
   for (const h of honours(match, live, rule)) {
     if (!online.has(h.steamId) || hidden.has(h.steamId)) continue;
-    const pick = pickLine('matchEnd', lines.matchEnd, { earned: listOf(h.earned), site: rule.siteHost }, random, lately);
+    const values = { name: nameOf(h.name), earned: listOf(h.earned), site: rule.siteHost };
+    const pick =
+      h.mvp && lines.mvp.length > 0 ? pickLine('mvp', lines.mvp, values, random, lately) : pickLine('matchEnd', lines.matchEnd, values, random, lately);
     lately = remember(lately, pick);
     messages.push({ steamId: h.steamId, name: h.name, text: fit(pick.text) });
   }

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { MATCH_END } from '../src/lines.ts';
+import { DEFAULT_LINES, MATCH_END, MVP } from '../src/lines.ts';
 import type { LiveMatch, LivePlayer } from '../src/live.ts';
-import { feedRecordOf, hasWinner, honours, killCount, LONGEST_EARNED, matchEndMessages, ordinal, type MatchEndRule } from '../src/matchend.ts';
-import { MAX_LENGTH } from '../src/messages.ts';
+import {
+  feedRecordOf,
+  hasWinner,
+  honours,
+  killCount,
+  LONGEST_EARNED,
+  LONGEST_MVP_EARNED,
+  matchEndMessages,
+  ordinal,
+  type MatchEndRule,
+} from '../src/matchend.ts';
+import { MAX_LENGTH, NAME_LONGEST } from '../src/messages.ts';
 import type { MatchState, TrackedPlayer } from '../src/tracking.ts';
 
 const rule: MatchEndRule = { count: 3, awards: true, siteHost: 'gaminginit.com' };
@@ -79,18 +89,33 @@ describe('the words', () => {
 describe('honours', () => {
   it('names the top of the scoreboard, then the award winners, each once with their place first', () => {
     expect(honours(match, feed, rule)).toEqual([
-      { steamId: 'a', name: 'Ash', earned: ['1st on the scoreboard (9 kills)', 'best assaulter (9 kills)', 'most headshots (5)'] },
-      { steamId: 'b', name: 'Bo', earned: ['2nd on the scoreboard (4 kills)'] },
-      { steamId: 'c', name: 'Cy', earned: ['3rd on the scoreboard (4 kills)'] },
-      { steamId: 'f', name: 'Fay', earned: ['best machine gunner (7 kills)', 'best kill streak (6)'] },
-      { steamId: 'd', name: 'Dee', earned: ['best demolitions (5 kills)', 'longest kill (412 m)'] },
+      { steamId: 'a', name: 'Ash', earned: ['9 kills', 'best assaulter (9 kills)', 'most headshots (5)'], mvp: true },
+      { steamId: 'b', name: 'Bo', earned: ['2nd on the scoreboard (4 kills)'], mvp: false },
+      { steamId: 'c', name: 'Cy', earned: ['3rd on the scoreboard (4 kills)'], mvp: false },
+      { steamId: 'f', name: 'Fay', earned: ['best machine gunner (7 kills)', 'best kill streak (6)'], mvp: false },
+      { steamId: 'd', name: 'Dee', earned: ['best demolitions (5 kills)', 'longest kill (412 m)'], mvp: false },
     ]);
+  });
+
+  it('makes everyone level with the top of the scoreboard an MVP', () => {
+    const level: MatchState = { ...match, players: { a: tracked('Ash', 9, 2), b: tracked('Bo', 9, 2), c: tracked('Cy', 9, 3) } };
+
+    expect(honours(level, null, rule).map((h) => [h.steamId, h.mvp, h.earned[0]])).toEqual([
+      ['a', true, '9 kills'],
+      ['b', true, '9 kills'],
+      ['c', false, '3rd on the scoreboard (9 kills)'],
+    ]);
+  });
+
+  it('has no MVP without the scoreboard places, or without a kill', () => {
+    expect(honours(match, feed, { ...rule, count: 0 }).some((h) => h.mvp)).toBe(false);
+    expect(honours({ ...match, players: { e: tracked('Eve', 0) } }, null, rule)).toEqual([]);
   });
 
   it('names at most 3 things a player earned', () => {
     const all = live([fed('a', 'Ash', { headshots: 9, bestStreak: 9, longest: 300, longestCause: 'Id.Item.M4', weapons: { 'Id.Item.M4': 9, 'Id.Item.M249': 4 } })]);
 
-    expect(honours(match, all, rule)[0]?.earned).toEqual(['1st on the scoreboard (9 kills)', 'best assaulter (9 kills)', 'best machine gunner (4 kills)']);
+    expect(honours(match, all, rule)[0]?.earned).toEqual(['9 kills', 'best assaulter (9 kills)', 'best machine gunner (4 kills)']);
   });
 
   it('gives no place to a player without a kill, and none at all for a count of 0', () => {
@@ -106,7 +131,7 @@ describe('honours', () => {
   it('gives the longest kill however short it is', () => {
     const close = live([fed('x', 'Xi', { longest: 0.4, longestCause: 'Id.Item.M4' })]);
 
-    expect(honours(match, close, { ...rule, count: 0 })).toEqual([{ steamId: 'x', name: 'Xi', earned: ['longest kill (0 m)'] }]);
+    expect(honours(match, close, { ...rule, count: 0 })).toEqual([{ steamId: 'x', name: 'Xi', earned: ['longest kill (0 m)'], mvp: false }]);
   });
 
   it('does not count a longest kill with a weapon that locks on, or a mine', () => {
@@ -117,18 +142,34 @@ describe('honours', () => {
 });
 
 describe('matchEndMessages', () => {
-  const [line0, line1, line2] = MATCH_END;
-  const fill = (line: string | undefined, earned: string) => (line ?? '').replace('{earned}', earned).replace('{site}', 'gaminginit.com');
+  const [line0, line1] = MATCH_END;
+  const [mvp0] = MVP;
+  const fill = (line: string | undefined, earned: string, name: string) =>
+    (line ?? '').replace('{earned}', earned).replace('{site}', 'gaminginit.com').replace('{name}', name);
 
-  it('sends each player in game one message with all they earned, each with a line it has not used lately', () => {
+  it('sends each player in game one message by name with all they earned, each with a line it has not used lately', () => {
     const { messages, recent } = matchEndMessages(match, feed, new Set(['a', 'b', 'd']), new Set(), rule, () => 0);
 
     expect(messages).toEqual([
-      { steamId: 'a', name: 'Ash', text: fill(line0, '1st on the scoreboard (9 kills), best assaulter (9 kills) and most headshots (5)') },
-      { steamId: 'b', name: 'Bo', text: fill(line1, '2nd on the scoreboard (4 kills)') },
-      { steamId: 'd', name: 'Dee', text: fill(line2, 'best demolitions (5 kills) and longest kill (412 m)') },
+      { steamId: 'a', name: 'Ash', text: fill(mvp0, '9 kills, best assaulter (9 kills) and most headshots (5)', 'Ash') },
+      { steamId: 'b', name: 'Bo', text: fill(line0, '2nd on the scoreboard (4 kills)', 'Bo') },
+      { steamId: 'd', name: 'Dee', text: fill(line1, 'best demolitions (5 kills) and longest kill (412 m)', 'Dee') },
     ]);
-    expect(recent['matchEnd']).toEqual([line0, line1, line2]);
+    expect(recent['mvp']).toEqual([mvp0]);
+    expect(recent['matchEnd']).toEqual([line0, line1]);
+  });
+
+  it("gives the MVP the top players' line when there are no MVP lines", () => {
+    const { messages } = matchEndMessages(match, null, new Set(['a']), new Set(), rule, () => 0, { ...DEFAULT_LINES, mvp: [] });
+
+    expect(messages[0]?.text).toBe(fill(line0, '9 kills', 'Ash'));
+  });
+
+  it('cuts a long name short', () => {
+    const long: MatchState = { ...match, players: { a: tracked('A'.repeat(40), 9) } };
+    const { messages } = matchEndMessages(long, null, new Set(['a']), new Set(), rule, () => 0);
+
+    expect(messages[0]?.text).toContain(`${'A'.repeat(NAME_LONGEST - 1)}…`);
   });
 
   it('sends a private profile nothing, and the others the place the match summary gives them', () => {
@@ -138,10 +179,14 @@ describe('matchEndMessages', () => {
     expect(messages[0]?.text).toContain('2nd on the scoreboard');
   });
 
-  it('fits every line in the game without cutting it, with the most a player can earn', () => {
-    expect(MATCH_END.every((line) => line.includes('{site}') && line.includes('{earned}'))).toBe(true);
-    for (const line of MATCH_END) {
-      expect(fill(line, LONGEST_EARNED).length).toBeLessThanOrEqual(MAX_LENGTH);
+  it('fits every line in the game without cutting it, with the most a player can earn and the longest name', () => {
+    const longest = 'x'.repeat(NAME_LONGEST);
+    for (const [list, earned] of [
+      [MATCH_END, LONGEST_EARNED],
+      [MVP, LONGEST_MVP_EARNED],
+    ] as const) {
+      expect(list.every((line) => line.includes('{site}') && line.includes('{earned}') && line.includes('{name}'))).toBe(true);
+      for (const line of list) expect(fill(line, earned, longest).length).toBeLessThanOrEqual(MAX_LENGTH);
     }
   });
 });

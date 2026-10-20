@@ -924,8 +924,8 @@ describe('poller stats', () => {
 describe('welcomes', () => {
   const welcome = { afterMs: 2 * 60_000, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
   const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => player(id)) as [Player, Player, Player, Player];
-  const rules = DEFAULT_LINES.welcome[0] ?? '';
-  const text = `${rules} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`;
+  const rulesFor = (id: string) => (DEFAULT_LINES.welcome[0] ?? '').replace('{name}', `P${id}`);
+  const textFor = (id: string) => `${rulesFor(id)} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`;
 
   // A minute a check; records the minute, the player and the message of each welcome.
   const welcomePoller = (
@@ -933,6 +933,7 @@ describe('welcomes', () => {
     overrides: Partial<Config> = {},
     lines?: () => Promise<Lines>,
     linked?: () => Promise<ReadonlySet<string>>,
+    ranks?: () => Promise<ReadonlyMap<string, string>>,
   ) => {
     const queue = [...snapshots];
     let clock = 0;
@@ -953,6 +954,7 @@ describe('welcomes', () => {
       random: () => 0,
       ...(lines === undefined ? {} : { lines }),
       ...(linked === undefined ? {} : { linked }),
+      ...(ranks === undefined ? {} : { ranks }),
     });
     const run = async (times: number) => {
       for (let i = 0; i < times; i++) await tick();
@@ -972,10 +974,48 @@ describe('welcomes', () => {
     await run(7);
 
     expect(sent).toEqual([
-      [4, 'c', text],
-      [5, 'd', text],
+      [4, 'c', textFor('c')],
+      [5, 'd', textFor('d')],
     ]);
-    expect(log.info).toHaveBeenCalledWith(`Sent welcome to "Pc" (c): ${text}`);
+    expect(log.info).toHaveBeenCalledWith(`Sent welcome to "Pc" (c): ${textFor('c')}`);
+  });
+
+  it('welcomes a player on the leaderboard back, by name and with their place', async () => {
+    const ranks = vi.fn(async () => new Map([['c', '2nd for kills']]));
+    const { run, sent } = welcomePoller(
+      [snapshot([a, b]), snapshot([a, b, c]), snapshot([a, b, c, d]), ...Array.from({ length: 4 }, () => snapshot([a, b, c, d]))],
+      {},
+      undefined,
+      undefined,
+      ranks,
+    );
+
+    await run(7);
+
+    const back = (DEFAULT_LINES.welcomeBack[0] ?? '').replace('{name}', 'Pc').replace('{rank}', '2nd for kills');
+    expect(sent).toEqual([
+      [4, 'c', `${back} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`],
+      [5, 'd', textFor('d')],
+    ]);
+    // Only read when a welcome is due.
+    expect(ranks).toHaveBeenCalledTimes(2);
+  });
+
+  it('still welcomes everyone when it cannot read the leaderboard', async () => {
+    const { run, sent, log } = welcomePoller(
+      [snapshot([a, b]), snapshot([a, b, c]), ...Array.from({ length: 4 }, () => snapshot([a, b, c]))],
+      {},
+      undefined,
+      undefined,
+      async () => {
+        throw new Error('storage down');
+      },
+    );
+
+    await run(5);
+
+    expect(sent).toEqual([[4, 'c', textFor('c')]]);
+    expect(log.error).toHaveBeenCalledWith('Reading the leaderboard failed, so welcomes leave it out: storage down');
   });
 
   it('leaves the Discord invite out for a player who linked their account on the website, and gives it to the rest', async () => {
@@ -989,8 +1029,8 @@ describe('welcomes', () => {
     await run(7);
 
     expect(sent).toEqual([
-      [4, 'c', `${rules} Website: gaminginit.com`],
-      [5, 'd', text],
+      [4, 'c', `${rulesFor('c')} Website: gaminginit.com`],
+      [5, 'd', textFor('d')],
     ]);
   });
 
@@ -1006,7 +1046,7 @@ describe('welcomes', () => {
 
     await run(5);
 
-    expect(sent).toEqual([[4, 'c', text]]);
+    expect(sent).toEqual([[4, 'c', textFor('c')]]);
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('storage down'));
   });
 
@@ -1034,7 +1074,7 @@ describe('welcomes', () => {
 
     await run(10);
 
-    expect(sent).toEqual([[4, 'b', text]]);
+    expect(sent).toEqual([[4, 'b', textFor('b')]]);
   });
 
   it("says staff's welcome lines", async () => {
@@ -1072,8 +1112,10 @@ describe('welcomes', () => {
 
 describe('end-of-match messages', () => {
   const rule = { count: 3, awards: true, siteHost: 'gaminginit.com' };
-  const [line0, line1, line2] = DEFAULT_LINES.matchEnd;
-  const fill = (line: string | undefined, earned: string) => (line ?? '').replace('{earned}', earned).replace('{site}', 'gaminginit.com');
+  const [line0, line1] = DEFAULT_LINES.matchEnd;
+  const [mvp0] = DEFAULT_LINES.mvp;
+  const fill = (line: string | undefined, earned: string, id: string) =>
+    (line ?? '').replace('{earned}', earned).replace('{site}', 'gaminginit.com').replace('{name}', `P${id}`);
   const [a, b, c, d, f] = ['a', 'b', 'c', 'd', 'f'];
   const kills = (counts: [string, number][]) => counts.map(([id, k]) => player(id, k));
   const scored = (players: Player[], points: number[], map = 'Kavkazi'): Snapshot => {
@@ -1085,9 +1127,10 @@ describe('end-of-match messages', () => {
   const live = [snapshot(crowd(5)), snapshot(crowd(22, kills([[a, 1], [b, 1], [c, 1], [d, 1]])))];
   const playing = (points: number[], extra: Player[] = []) => scored(crowd(22, [...kills([[a, 9], [b, 4], [c, 2], [d, 1]]), ...extra]), points);
   const nextMap = (ids: string[]) => snapshot(crowd(22, ids.map((id) => player(id))), 'Europe');
-  const first = fill(line0, '1st on the scoreboard (9 kills)');
-  const second = fill(line1, '2nd on the scoreboard (4 kills)');
-  const third = fill(line2, '3rd on the scoreboard (2 kills)');
+  // a tops the scoreboard: the MVP.
+  const first = fill(mvp0, '9 kills', a);
+  const second = fill(line0, '2nd on the scoreboard (4 kills)', b);
+  const third = fill(line1, '3rd on the scoreboard (2 kills)', c);
 
   const fedPlayer = (steamId: string, weapons: Record<string, number>): LivePlayer => ({
     ...{ steamId, name: `P${steamId}`, faction: null, kills: 0, deaths: 0, headshots: 0, teamKills: 0 },
@@ -1156,7 +1199,7 @@ describe('end-of-match messages', () => {
 
     expect(sent).toEqual([
       [4, a, first],
-      [4, c, fill(line1, '3rd on the scoreboard (2 kills)')],
+      [4, c, fill(line0, '3rd on the scoreboard (2 kills)', c)],
     ]);
   });
 
@@ -1168,7 +1211,7 @@ describe('end-of-match messages', () => {
 
     expect(sent).toEqual([
       [3, a, first],
-      [3, f, fill(line1, 'best machine gunner (7 kills)')],
+      [3, f, fill(line0, 'best machine gunner (7 kills)', f)],
     ]);
     expect(liveMatch).toHaveBeenCalledWith(expect.objectContaining({ startedAt: 60_000 }));
   });
@@ -1191,19 +1234,19 @@ describe('end-of-match messages', () => {
     await run(3);
 
     expect(sent).toEqual([
-      [3, b, fill(line0, '2nd on the scoreboard (4 kills)')],
-      [3, c, fill(line1, '3rd on the scoreboard (2 kills)')],
+      [3, b, fill(line0, '2nd on the scoreboard (4 kills)', b)],
+      [3, c, fill(line1, '3rd on the scoreboard (2 kills)', c)],
     ]);
   });
 
   it("says staff's lines", async () => {
     const { run, sent } = endPoller([...live, playing([100, 60])], { matchEndMessages: { ...rule, count: 1 } }, {
-      lines: async () => ({ ...DEFAULT_LINES, matchEnd: ['{earned}! {site}'] }),
+      lines: async () => ({ ...DEFAULT_LINES, matchEnd: ['{earned}! {site}'], mvp: ['MVP {name}: {earned}! {site}'] }),
     });
 
     await run(3);
 
-    expect(sent).toEqual([[3, a, '1st on the scoreboard (9 kills)! gaminginit.com']]);
+    expect(sent).toEqual([[3, a, 'MVP Pa: 9 kills! gaminginit.com']]);
   });
 
   it('logs a failed message and does not send it again', async () => {

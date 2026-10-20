@@ -2,14 +2,16 @@ import { z } from 'zod';
 import { readJsonBody } from './body.ts';
 import type { Config, VipRule } from './config.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import { killCount, LONGEST_EARNED } from './matchend.ts';
+import { killCount, LONGEST_EARNED, LONGEST_MVP_EARNED } from './matchend.ts';
 import {
   discordLink,
   fillLine,
   HALFWAY_START,
   halfwayCall,
+  LONGEST_RANK,
   MAX_LENGTH,
   morePlayers,
+  NAME_LONGEST,
   nearlyCall,
   nearlyScore,
   seedingReward,
@@ -104,6 +106,10 @@ const halfwayValues = (team: string, context: LinesContext) => teamValues(team, 
 const nearlyValues = (team: string, context: LinesContext) =>
   teamValues(team, nearlyScore(context.scoreToWin), nearlyScore(context.scoreToWin));
 
+// {name} in the private messages: a name in the preview, checked at the longest a name is cut to.
+const PREVIEW_NAME = 'Ghost';
+const nameValues = { values: { name: PREVIEW_NAME }, longest: { name: 'x'.repeat(NAME_LONGEST) } };
+
 // Placeholders whose value is the same in the preview and in game.
 const exact = (values: Record<string, string>) => ({ values, longest: values });
 const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vote)}`;
@@ -129,12 +135,27 @@ export const LISTS: ListDefinition[] = [
   {
     id: 'welcome',
     group: 'Welcome',
-    name: 'Welcome',
-    note: 'A private message to each player a couple of minutes after they join, and not again for 6 hours. Say the basic rules: the Discord and the website go after it.',
+    name: 'Everyone',
+    note: 'A private message to each player a couple of minutes after they join, and not again for 6 hours. {name} is their name in game. Say the basic rules: the Discord and the website go after it.',
     kind: 'welcome',
     get: (lines) => lines.welcome,
     set: (lines, welcome) => ({ ...lines, welcome }),
-    frame: (context) => ({ ...exact({}), before: '', after: welcomeLinks(context.siteHost, context.discord) }),
+    frame: (context) => ({ ...nameValues, before: '', after: welcomeLinks(context.siteHost, context.discord) }),
+  },
+  {
+    id: 'welcomeBack',
+    group: 'Welcome',
+    name: 'On the leaderboard',
+    note: "In place of the welcome, for a player in the top 10 of any of the leaderboard's boards over 30 days. {rank} is their best place, such as \"3rd for kills\". The Discord and the website go after it.",
+    kind: 'welcome',
+    get: (lines) => lines.welcomeBack,
+    set: (lines, welcomeBack) => ({ ...lines, welcomeBack }),
+    frame: (context) => ({
+      values: { ...nameValues.values, rank: '3rd for kills' },
+      longest: { ...nameValues.longest, rank: LONGEST_RANK },
+      before: '',
+      after: welcomeLinks(context.siteHost, context.discord),
+    }),
   },
   {
     id: 'tenMinutes',
@@ -219,15 +240,34 @@ export const LISTS: ListDefinition[] = [
   {
     id: 'matchEnd',
     group: 'End of match',
-    name: 'End of match',
-    note: "A private message to each of the match's best players the moment a team wins: the top on the scoreboard (TOP_PLAYER_MESSAGES) and the award winners (AWARD_MESSAGES). The line is the whole message, so say where the website is.",
+    name: 'Top players',
+    note: "A private message to each of the match's best players the moment a team wins: the top on the scoreboard (TOP_PLAYER_MESSAGES) and the award winners (AWARD_MESSAGES). {name} is their name in game. The line is the whole message, so say where the website is.",
     kind: 'end',
     get: (lines) => lines.matchEnd,
     set: (lines, matchEnd) => ({ ...lines, matchEnd }),
     // Lines are checked with {earned} at the longest it can be: a place and two awards, with more kills than any match has.
     frame: (context) => ({
-      values: { earned: listOf([`1st on the scoreboard (${killCount(25)})`, `best demolitions (${killCount(8)})`]), site: site(context) },
-      longest: { earned: LONGEST_EARNED, site: site(context) },
+      values: {
+        ...nameValues.values,
+        earned: listOf([`2nd on the scoreboard (${killCount(25)})`, `best demolitions (${killCount(8)})`]),
+        site: site(context),
+      },
+      longest: { ...nameValues.longest, earned: LONGEST_EARNED, site: site(context) },
+      before: '',
+      after: '',
+    }),
+  },
+  {
+    id: 'mvp',
+    group: 'End of match',
+    name: 'MVP',
+    note: 'In place of the top players line, for the top of the scoreboard (most kills, then fewest deaths; players level share it). {earned} starts with their kills, not their place. The line is the whole message, so say where the website is.',
+    kind: 'end',
+    get: (lines) => lines.mvp,
+    set: (lines, mvp) => ({ ...lines, mvp }),
+    frame: (context) => ({
+      values: { ...nameValues.values, earned: listOf([killCount(31), `best demolitions (${killCount(8)})`]), site: site(context) },
+      longest: { ...nameValues.longest, earned: LONGEST_MVP_EARNED, site: site(context) },
       before: '',
       after: '',
     }),
