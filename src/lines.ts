@@ -5,12 +5,22 @@
 //
 // Placeholders: {team} is the faction's name, {score} its points and {site} the website (SITE_URL, such as
 // gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players". {earned} is
-// what a player earned in a match, such as "2nd on the scoreboard (23 kills) and best demolitions (8 kills)".
+// what a player earned in a match, such as "2nd on the scoreboard (23 kills) and best demolitions (8 kills)". In the
+// private messages, {name} is the player's name in game, cut short at NAME_LONGEST (see messages.ts), and {rank} their best
+// place on the website's leaderboard, such as "3rd for kills".
 
 // A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
 // The bot puts the Discord and the website after the line.
 export const WELCOME = [
-  'Welcome! Rules: no cheating or exploits, no team killing or griefing, no racism or abuse, and listen to admins. Full rules on our Discord.',
+  'Welcome, {name}! Rules: no cheats, exploits, team killing, griefing, racism or abuse. Listen to admins. All rules on our Discord.',
+];
+
+// The welcome for a player on the website's leaderboard (the top 10 of any board over 30 days), in place of the one above.
+// {rank} is their best place, such as "3rd for kills". The bot puts the Discord and the website after the line.
+export const WELCOME_BACK = [
+  "Welcome back, {name}! You're {rank} on the leaderboard. Same rules: no cheats, no team killing, listen to admins.",
+  "{name} is back! {rank} on the leaderboard. Keep it clean: no cheats, no team killing, listen to admins.",
+  "Welcome back, {name}. {rank} on the leaderboard, and everyone's coming for it. No cheats, no team killing.",
 ];
 
 // Every few minutes while the server seeds. The bot puts what seeding earns after the line. The ones that say why to
@@ -55,10 +65,19 @@ export const TEN_MINUTES = [
 // A private message to each of a match's best players the moment a team wins it (see matchend.ts): {earned} names their
 // place on the scoreboard and their awards. These are the whole message, so they point at the website.
 export const MATCH_END = [
-  'GG! This match: {earned}. See your stats at {site}',
-  'GG! You got {earned}. See where you rank on the leaderboard at {site}',
-  'Nice match: {earned}. Your K/D, wins and play time are on your player page at {site}',
-  'Bragging rights: {earned}. It is all on the leaderboard at {site}',
+  'GG {name}! This match: {earned}. See your stats at {site}',
+  'GG {name}! You got {earned}. See where you rank on the leaderboard at {site}',
+  'Nice match, {name}: {earned}. Your K/D and wins are on your player page at {site}',
+  'Bragging rights, {name}: {earned}. It is all on the leaderboard at {site}',
+];
+
+// In place of the one above, to the match's MVP: the top of the scoreboard (most kills, then fewest deaths; players level
+// share it). Their {earned} starts with their kills, such as "31 kills and best demolitions (8 kills)", not their place.
+export const MVP = [
+  'GG {name}, you were the MVP! {earned}. See your stats at {site}',
+  'MVP of the match: {name}, with {earned}. See where you rank on the leaderboard at {site}',
+  '{name} carried. MVP with {earned}. Your player page is at {site}',
+  'Top of the scoreboard, {name}! MVP with {earned}. Bragging rights at {site}',
 ];
 
 // The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
@@ -157,6 +176,7 @@ export const NEARLY_OTHER = ['{team} has {score} points!'];
 // Every list, as the bot says them: these, or the ones staff put in their place.
 export type Lines = {
   welcome: string[];
+  welcomeBack: string[];
   seeding: string[];
   tenMinutes: string[];
   // By faction (see factionKey).
@@ -166,10 +186,12 @@ export type Lines = {
   nearly: Record<string, string[]>;
   nearlyOther: string[];
   matchEnd: string[];
+  mvp: string[];
 };
 
 export const DEFAULT_LINES: Lines = {
   welcome: WELCOME,
+  welcomeBack: WELCOME_BACK,
   seeding: SEEDING,
   tenMinutes: TEN_MINUTES,
   halfway: HALFWAY,
@@ -178,4 +200,5 @@ export const DEFAULT_LINES: Lines = {
   nearly: NEARLY,
   nearlyOther: NEARLY_OTHER,
   matchEnd: MATCH_END,
+  mvp: MVP,
 };

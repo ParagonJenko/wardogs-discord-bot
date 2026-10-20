@@ -235,7 +235,7 @@ import {
 import type { OutageEvent } from './outages.ts';
 import { feedRecordOf } from './matchend.ts';
 import { createFeedJoins, createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
-import { discordLink, JOIN_WAIT_MS } from './messages.ts';
+import { discordLink, JOIN_WAIT_MS, leaderboardPlaces } from './messages.ts';
 import {
   ALERT_LOG_KEY,
   buildReview,
@@ -1130,6 +1130,7 @@ export class Watcher extends DurableObject<Env> {
       lines: () => this.lines(),
       staff: () => this.staffSteam(),
       linked: () => this.linkedSteam(),
+      ranks: () => this.leaderboardRanks(),
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
       matchFeed: () => this.matchFeed(),
@@ -3478,6 +3479,15 @@ export class Watcher extends DurableObject<Env> {
       mine: { map: ballot?.map ?? null, light: ballot?.light ?? null, weather: ballot?.weather ?? null },
       vote: saved === null ? null : publicVote(saved, Date.now()),
     };
+  }
+
+  // Each player's best place on the website's leaderboard ("3rd for kills"), for the welcome back. Not private profiles,
+  // which the leaderboard doesn't name.
+  private async leaderboardRanks(): Promise<Map<string, string>> {
+    const [days, hidden] = await Promise.all([this.recentDays(Date.now()), this.privateSteam()]);
+    const places = leaderboardPlaces(leaderboard(days.slice(-LEADERBOARD_DAYS).map((d) => d.players), LEADERBOARD_DAYS, LEADERBOARD_SIZE));
+    for (const steamId of hidden) places.delete(steamId);
+    return places;
   }
 
   // Players in the server who linked their Steam account: their welcome in game leaves the invite out.

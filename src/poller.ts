@@ -106,6 +106,9 @@ type PollerDeps = {
   staff?: () => Promise<ReadonlySet<string>>;
   // Steam IDs of players who linked their Discord account on the website: their welcome leaves the Discord invite out.
   linked?: () => Promise<ReadonlySet<string>>;
+  // Each player's best place on the website's leaderboard ("3rd for kills"), by Steam ID: they get the welcome back. Only
+  // asked when a welcome is due.
+  ranks?: () => Promise<ReadonlyMap<string, string>>;
   // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
   // players: the live alert's top seeders and the match summary; and when the end-of-match messages go out, as private
   // profiles get none.
@@ -340,6 +343,7 @@ export const createPoller = ({
   voting,
   outage: tellOutage,
   linked,
+  ranks,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
@@ -371,11 +375,24 @@ export const createPoller = ({
         log.error(`Reading who linked their Discord account failed, so welcomes still give the invite: ${errorText(error)}`);
       }
     }
+    // Players on the leaderboard are welcomed back with their place.
+    let places: ReadonlyMap<string, string> = new Map();
+    if (due.length > 0 && ranks !== undefined) {
+      try {
+        places = await ranks();
+      } catch (error) {
+        log.error(`Reading the leaderboard failed, so welcomes leave it out: ${errorText(error)}`);
+      }
+    }
     for (const steamId of due) {
-      const pick = welcomePick(linkedIds.has(steamId) ? { ...rule, discord: null } : rule, random, wording, lately);
+      const name = players.find((p) => p.steamId === steamId)?.name ?? '';
+      const pick = welcomePick(linkedIds.has(steamId) ? { ...rule, discord: null } : rule, random, wording, lately, {
+        name,
+        rank: places.get(steamId) ?? null,
+      });
       const text = pick.text;
       lately = remember(lately, pick);
-      const who = `${JSON.stringify(players.find((p) => p.steamId === steamId)?.name ?? '')} (${steamId})`;
+      const who = `${JSON.stringify(name)} (${steamId})`;
       try {
         await messagePlayer(steamId, text);
         log.info(`Sent welcome to ${who}: ${text}`);

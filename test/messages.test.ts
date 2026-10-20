@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import * as lines from '../src/lines.ts';
 import {
   joinMessageDue,
+  leaderboardPlaces,
   markWelcomed,
+  NAME_LONGEST,
+  nameOf,
   fitWithCall,
   MAX_LENGTH,
   milestones,
@@ -272,26 +275,88 @@ describe('watchJoins', () => {
 
 describe('welcomeMessage', () => {
   const both = { afterMs: 2 * MINUTE, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
-  const rules = lines.WELCOME[0] ?? '';
+  const rules = (lines.WELCOME[0] ?? '').replace('{name}', 'Ash');
+  const ash = { name: 'Ash', rank: null };
 
-  it('says the basic rules, then the Discord and the website', () => {
-    expect(welcomeMessage(both)).toBe(
-      'Welcome! Rules: no cheating or exploits, no team killing or griefing, no racism or abuse, and listen to admins. ' +
-        'Full rules on our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com',
+  it('says their name and the basic rules, then the Discord and the website', () => {
+    expect(welcomeMessage(both, Math.random, undefined, {}, ash)).toBe(
+      'Welcome, Ash! Rules: no cheats, exploits, team killing, griefing, racism or abuse. Listen to admins. ' +
+        'All rules on our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com',
     );
   });
 
   it('leaves out a link it does not have', () => {
-    expect(welcomeMessage({ ...both, discord: null })).toBe(`${rules} Website: gaminginit.com`);
-    expect(welcomeMessage({ ...both, siteHost: null })).toBe(`${rules} Discord: discord.gg/qsJFYGhSJ4`);
-    expect(welcomeMessage({ ...both, siteHost: null, discord: null })).toBe(rules);
+    expect(welcomeMessage({ ...both, discord: null }, Math.random, undefined, {}, ash)).toBe(`${rules} Website: gaminginit.com`);
+    expect(welcomeMessage({ ...both, siteHost: null }, Math.random, undefined, {}, ash)).toBe(`${rules} Discord: discord.gg/qsJFYGhSJ4`);
+    expect(welcomeMessage({ ...both, siteHost: null, discord: null }, Math.random, undefined, {}, ash)).toBe(rules);
   });
 
-  it('fits every line in the game with both links, without cutting it', () => {
-    lines.WELCOME.forEach((line, i) => {
-      const text = welcomeMessage(both, () => i / lines.WELCOME.length);
-      expect(text.startsWith(line)).toBe(true);
-      expect(text.length).toBeLessThanOrEqual(MAX_LENGTH);
+  it('welcomes a player on the leaderboard back, with their place', () => {
+    const pick = welcomePick(both, () => 0, undefined, {}, { name: 'Ash', rank: '3rd for kills' });
+
+    expect(pick.list).toBe('welcomeBack');
+    expect(pick.text).toBe(
+      "Welcome back, Ash! You're 3rd for kills on the leaderboard. Same rules: no cheats, no team killing, listen to admins. " +
+        'Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com',
+    );
+  });
+
+  it('gives a player on the leaderboard the welcome when there are no welcome back lines', () => {
+    const pick = welcomePick(both, () => 0, { ...lines.DEFAULT_LINES, welcomeBack: [] }, {}, { name: 'Ash', rank: '3rd for kills' });
+
+    expect(pick.list).toBe('welcome');
+  });
+
+  it('fits every line in the game with both links and the longest name and place, without cutting it', () => {
+    const name = 'x'.repeat(NAME_LONGEST);
+    for (const [list, rank] of [
+      [lines.WELCOME, null],
+      [lines.WELCOME_BACK, '10th for time played'],
+    ] as const) {
+      list.forEach((line, i) => {
+        const text = welcomeMessage(both, () => i / list.length, undefined, {}, { name, rank });
+        expect(text.startsWith(line.replace('{name}', name).replace('{rank}', rank ?? ''))).toBe(true);
+        expect(text.length).toBeLessThanOrEqual(MAX_LENGTH);
+      });
+    }
+  });
+});
+
+describe('nameOf', () => {
+  it('puts a name on one line, cuts a long one short, and stands in for a blank one', () => {
+    expect(nameOf('  Ash \n Ketchum ')).toBe('Ash Ketchum');
+    expect(nameOf('A'.repeat(30))).toBe(`${'A'.repeat(NAME_LONGEST - 1)}…`);
+    expect(nameOf('A'.repeat(NAME_LONGEST))).toBe('A'.repeat(NAME_LONGEST));
+    expect(nameOf('   ')).toBe('soldier');
+    // Never half an emoji.
+    expect(nameOf(`${'A'.repeat(NAME_LONGEST - 2)}😀X`)).toBe(`${'A'.repeat(NAME_LONGEST - 2)}…`);
+    expect(nameOf(`${'A'.repeat(NAME_LONGEST - 3)}😀XY`)).toBe(`${'A'.repeat(NAME_LONGEST - 3)}😀…`);
+  });
+});
+
+describe('leaderboardPlaces', () => {
+  const row = (steamId: string) => ({ steamId, name: steamId, seedingMinutes: 0, liveMinutes: 0, seedDays: 0, matches: 0, kills: 0, deaths: 0 });
+
+  it("gives each player their best place, the first board's when two are level", () => {
+    const places = leaderboardPlaces({
+      kills: [row('a'), row('b'), row('c')],
+      kd: [row('b'), row('a')],
+      playtime: [row('c'), row('d')],
+      seeding: [row('e'), row('d'), row('a'), row('b'), row('f'), row('g'), row('h'), row('i'), row('j'), row('k')],
+    });
+
+    expect(Object.fromEntries(places)).toEqual({
+      a: '1st for kills',
+      b: '1st for K/D',
+      c: '1st for time played',
+      d: '2nd for time played',
+      e: '1st for seeding',
+      f: '5th for seeding',
+      g: '6th for seeding',
+      h: '7th for seeding',
+      i: '8th for seeding',
+      j: '9th for seeding',
+      k: '10th for seeding',
     });
   });
 });
