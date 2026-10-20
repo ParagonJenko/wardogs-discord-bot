@@ -309,13 +309,21 @@ export const isMemberNow = async (deps: BookDeps, userId: string): Promise<boole
   return looked ?? account.member === true;
 };
 
-// Steam accounts of players who are in the server and linked: their welcome in game has no invite in it.
-export const linkedMembers = async (storage: BookStorage): Promise<Set<string>> => {
+// Steam accounts that are linked (`all`), and those of them whose players are in the server (`members`): their welcome in
+// game has no invite in it, and nobody linked is asked to link.
+export const steamLinks = async (storage: BookStorage): Promise<{ members: Set<string>; all: Set<string> }> => {
   const links = await storage.list({ prefix: 'steamLink:' });
   const members = new Set<string>();
-  for (const [key, value] of links) if (parseSteamLink(value)?.m === true) members.add(key.slice('steamLink:'.length));
-  return members;
+  const all = new Set<string>();
+  for (const [key, value] of links) {
+    const steamId = key.slice('steamLink:'.length);
+    all.add(steamId);
+    if (parseSteamLink(value)?.m === true) members.add(steamId);
+  }
+  return { members, all };
 };
+
+export const linkedMembers = async (storage: BookStorage): Promise<Set<string>> => (await steamLinks(storage)).members;
 
 // One pass of what the bot owes accounts: roles to give or take, and VIP messages to send. It looks at the accounts in
 // 'accountWork' and at the owners of the Steam accounts that have VIP (so a new VIP is found), at most PER_PASS of them and

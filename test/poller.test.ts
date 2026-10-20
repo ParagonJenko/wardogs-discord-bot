@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config.ts';
 import type { DiscordMessage } from '../src/discord.ts';
 import { DEFAULT_LINES, type Lines } from '../src/lines.ts';
+import type { Milestone } from '../src/achievements.ts';
 import type { LiveMatch, LivePlayer } from '../src/live.ts';
+import type { EndExtras } from '../src/matchend.ts';
 import { NO_MATCH_FEED, type MatchFeed } from '../src/matchfeed.ts';
 import type { OutageEvent } from '../src/outages.ts';
 import {
@@ -41,6 +43,7 @@ const config: Config = {
   inviteCode: undefined,
   siteUrl: undefined,
   accounts: { linkedRoleId: undefined, vipRoleId: undefined, botToken: undefined },
+  drives: { playerOfMonthRoleId: undefined, challengeRoleId: undefined },
   serverId: undefined,
   pollIntervalMs: 60_000,
   rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 0, seedHoldMs: 0 },
@@ -376,6 +379,51 @@ describe('poller', () => {
 
     expect(titles(sent)).toEqual(['🔻 UK Wardogs #1 dropped below 20 players']);
     await expect(store.load()).resolves.toMatchObject({ alerts: { phase: 'seeding' } });
+  });
+});
+
+describe('thanks for seeding', () => {
+  const ash = player('ash');
+  const bo = player('bo');
+  const staffer = player('staff');
+  // Bo seeds for 3 minutes and leaves; Ash and a staff member seed on until it goes live.
+  const timeline = [
+    snapshot([]),
+    ...Array.from({ length: 3 }, () => snapshot([ash, bo, staffer])),
+    ...Array.from({ length: 9 }, () => snapshot([ash, staffer])),
+    snapshot(crowd(25, [ash, staffer])),
+  ];
+  const run = async (overrides: Partial<Config>) => {
+    const queue = [...timeline];
+    let clock = 0;
+    const sent: [steamId: string, text: string][] = [];
+    const tick = createPoller({
+      config: { ...config, ...overrides },
+      fetchSnapshot: async () => queue.shift() ?? snapshot([]),
+      send: vi.fn(async () => {}),
+      now: () => (clock += 60_000),
+      log: { info: vi.fn(), error: vi.fn() },
+      store: memoryStore(),
+      messagePlayer: vi.fn(async (steamId: string, text: string) => {
+        sent.push([steamId, text]);
+      }),
+      staff: async () => new Set(['staff']),
+      random: () => 0,
+    });
+    for (let i = 0; i < timeline.length; i++) await tick();
+    return sent;
+  };
+
+  it('thanks each seeder still in game the moment it goes live, by name, not staff or a short seed', async () => {
+    const sent = await run({ seedingMessages: { everyMs: 5 * 60_000, siteHost: null } });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.[0]).toBe('ash');
+    expect(sent[0]?.[1]).toMatch(/^We're live, Pash! Thanks for seeding for \d+ minutes\. You made this happen\.$/);
+  });
+
+  it('thanks nobody while the seeding messages are off', async () => {
+    expect(await run({})).toEqual([]);
   });
 });
 
@@ -934,6 +982,7 @@ describe('welcomes', () => {
     lines?: () => Promise<Lines>,
     linked?: () => Promise<ReadonlySet<string>>,
     ranks?: () => Promise<ReadonlyMap<string, string>>,
+    nudging?: { nudges: () => Promise<ReadonlySet<string>>; nudged: (steamIds: string[]) => Promise<void> },
   ) => {
     const queue = [...snapshots];
     let clock = 0;
@@ -955,6 +1004,7 @@ describe('welcomes', () => {
       ...(lines === undefined ? {} : { lines }),
       ...(linked === undefined ? {} : { linked }),
       ...(ranks === undefined ? {} : { ranks }),
+      ...(nudging ?? {}),
     });
     const run = async (times: number) => {
       for (let i = 0; i < times; i++) await tick();
@@ -999,6 +1049,27 @@ describe('welcomes', () => {
     ]);
     // Only read when a welcome is due.
     expect(ranks).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks a regular who has not linked to, and says who was asked', async () => {
+    const nudged = vi.fn(async (_steamIds: string[]) => {});
+    const { run, sent } = welcomePoller(
+      [snapshot([a, b]), snapshot([a, b, c]), snapshot([a, b, c, d]), ...Array.from({ length: 4 }, () => snapshot([a, b, c, d]))],
+      {},
+      undefined,
+      undefined,
+      async () => new Map([['c', '2nd for kills']]),
+      { nudges: async () => new Set(['c']), nudged },
+    );
+
+    await run(7);
+
+    const ask = (DEFAULT_LINES.linkNudge[0] ?? '').replace('{name}', 'Pc').replace('{site}', 'gaminginit.com');
+    expect(sent).toEqual([
+      [4, 'c', `${ask} Discord: discord.gg/qsJFYGhSJ4`],
+      [5, 'd', textFor('d')],
+    ]);
+    expect(nudged.mock.calls).toEqual([[['c']]]);
   });
 
   it('still welcomes everyone when it cannot read the leaderboard', async () => {
@@ -1147,6 +1218,8 @@ describe('end-of-match messages', () => {
     lines?: () => Promise<Lines>;
     privateProfiles?: () => Promise<ReadonlySet<string>>;
     liveMatch?: (match: MatchState) => Promise<LiveMatch | null>;
+    endExtras?: (match: MatchState) => Promise<EndExtras>;
+    milestonesTold?: (told: ReadonlyMap<string, Milestone>) => Promise<void>;
     store?: StateStore;
     from?: number;
   };
@@ -1237,6 +1310,36 @@ describe('end-of-match messages', () => {
       [3, b, fill(line0, '2nd on the scoreboard (4 kills)', b)],
       [3, c, fill(line1, '3rd on the scoreboard (2 kills)', c)],
     ]);
+  });
+
+  it('tells a player who earned nothing else of their milestone, once, and says it was told', async () => {
+    const milestone = { kind: 'matches' as const, value: 100 };
+    const endExtras = vi.fn(async (): Promise<EndExtras> => ({ bests: new Map(), milestones: new Map([[d, milestone]]), nearly: new Map() }));
+    const milestonesTold = vi.fn(async (_told: ReadonlyMap<string, Milestone>) => {});
+    const { run, sent } = endPoller([...live, playing([100, 60]), playing([100, 60])], {}, { endExtras, milestonesTold });
+
+    await run(4);
+
+    expect(sent.map(([, steamId]) => steamId)).toEqual([a, b, c, d]);
+    expect(sent[3]?.[2]).toBe(
+      (DEFAULT_LINES.milestone[0] ?? '').replace('{name}', 'Pd').replace('{milestone}', 'your 100th match').replace('{site}', 'gaminginit.com'),
+    );
+    expect(milestonesTold).toHaveBeenCalledWith(new Map([[d, milestone]]));
+    expect(endExtras).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends the rest when the records cannot be read, and logs it', async () => {
+    const endExtras = vi.fn(async (): Promise<EndExtras> => {
+      throw new Error('storage gone');
+    });
+    const { run, sent, log } = endPoller([...live, playing([100, 60])], {}, { endExtras });
+
+    await run(3);
+
+    expect(sent.map(([, steamId]) => steamId)).toEqual([a, b, c]);
+    expect(log.error).toHaveBeenCalledWith(
+      'Reading the records for the end of the match failed, so milestones and personal bests are left out: storage gone',
+    );
   });
 
   it("says staff's lines", async () => {

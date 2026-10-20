@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import type { BoardKey, Leaderboard } from './players.ts';
+import type { BoardKey, Leaderboard, SeedCredit } from './players.ts';
 import type { MatchState } from './tracking.ts';
 
 // Messages broadcast in game during a match, pointing players at the website for the leaderboard, the Discord and
@@ -322,10 +322,12 @@ export const leaderboardPlaces = (board: Pick<Leaderboard, BoardKey>): Map<strin
   return new Map([...best].map(([steamId, { says }]) => [steamId, says]));
 };
 
-// Who a welcome is for: their name in game, and their best place on the leaderboard (null when they are not on it).
-export type Welcomed = { name: string; rank: string | null };
+// Who a welcome is for: their name in game, their best place on the leaderboard (null when they are not on it), and
+// whether to ask them to link their account on the website (`nudge`, missing for no).
+export type Welcomed = { name: string; rank: string | null; nudge?: boolean };
 
-// A player on the leaderboard gets the welcome back, when there are lines for it; everyone else the welcome.
+// A regular who should link their account is asked to (it names the website, so only the Discord goes after it); a
+// player on the leaderboard gets the welcome back; everyone else the welcome. Each only when there are lines for it.
 export const welcomePick = (
   rule: WelcomeRule,
   random: () => number = Math.random,
@@ -334,11 +336,49 @@ export const welcomePick = (
   who: Welcomed = { name: '', rank: null },
 ): Picked => {
   const name = nameOf(who.name);
+  if (who.nudge === true && rule.siteHost !== null && lines.linkNudge.length > 0) {
+    const pick = pickLine('linkNudge', lines.linkNudge, { name, site: rule.siteHost }, random, recent);
+    return { ...pick, text: fit(`${pick.text}${welcomeLinks(null, rule.discord)}`) };
+  }
   const pick =
     who.rank !== null && lines.welcomeBack.length > 0
       ? pickLine('welcomeBack', lines.welcomeBack, { name, rank: who.rank }, random, recent)
       : pickLine('welcome', lines.welcome, { name }, random, recent);
   return { ...pick, text: fit(`${pick.text}${welcomeLinks(rule.siteHost, rule.discord)}`) };
+};
+
+// "1 minute", "25 minutes".
+export const minutesText = (count: number): string => `${count} minute${count === 1 ? '' : 's'}`;
+
+// The most seeders thanked when the server goes live, so they all go out with the rest of the check.
+export const MAX_SEEDER_THANKS = 15;
+
+export type SeederThanks = { steamId: string; name: string; text: string };
+
+// The thanks to each seeder still in game (`online`) the moment the server goes live, by name: those on for more than
+// `minMinutes` while it seeded (a seed that counts), not staff, who never seed, longest first.
+export const seederThanks = (
+  credits: SeedCredit[],
+  online: ReadonlySet<string>,
+  staff: ReadonlySet<string>,
+  minMinutes: number,
+  random: () => number = Math.random,
+  lines: Lines = DEFAULT_LINES,
+  recent: Recent = {},
+): { messages: SeederThanks[]; recent: Recent } => {
+  let lately = recent;
+  const messages: SeederThanks[] = [];
+  if (lines.seederThanks.length === 0) return { messages, recent };
+  const thanked = credits
+    .filter((c) => c.minutes > minMinutes && online.has(c.steamId) && !staff.has(c.steamId))
+    .sort((a, b) => b.minutes - a.minutes)
+    .slice(0, MAX_SEEDER_THANKS);
+  for (const c of thanked) {
+    const pick = pickLine('seederThanks', lines.seederThanks, { name: nameOf(c.name), minutes: minutesText(c.minutes) }, random, lately);
+    lately = remember(lately, pick);
+    messages.push({ steamId: c.steamId, name: c.name, text: fit(pick.text) });
+  }
+  return { messages, recent: lately };
 };
 
 export const welcomeMessage = (

@@ -26,9 +26,14 @@ It also posts:
   edited every minute with the state, players, map, next map, score and top players.
 - **[Weekly and monthly roundups](#roundups)** (Cloudflare only): the team of the week or month, the top 3 players for
   kills, K/D, kills in a match, wins, MVPs, time played and seeding, the highlights, and awards: the best assaulter,
-  support player, machine gunner, marksman, demolitions and vehicle crew, and shout-outs.
+  support player, machine gunner, marksman, demolitions and vehicle crew, and shout-outs. After them, the
+  [player of the month and the weekly challenge](#player-of-the-month-and-weekly-challenge), each with a role.
 - **[Player accounts](#player-accounts)** (Cloudflare only): players sign in to the website with Discord, link their Steam
   account, and get a role and a message when their seeder VIP is earned or about to end. Sign-in can also add them to the server.
+  Linked players who have been away are asked back when the server seeds.
+- **[Private messages in game](#in-game-messages)**, by name: a welcome (a welcome back with their leaderboard place, or a
+  nudge to link their account), thanks to the seeders when the server goes live, and at the end of a match their place and
+  awards, or a milestone, a personal best, how close they are to the leaderboard, or their nemesis.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban, team
   move and VIP added or removed with its reason and who did it, bans made or lifted outside the bot, possible griefing as it happens, players
   in game with one of the [riskiest Steam accounts](#risky-steam-accounts) or a day of unlikely headshots, and the server crashing
@@ -251,6 +256,24 @@ npx wrangler secret put DISCORD_ROUNDUP_WEBHOOK_URL
 ```
 
 The Node/Docker version does not post roundups.
+
+### Player of the month and weekly challenge
+
+Straight after each roundup, the bot posts one more message in the same channel:
+
+- **👑 Player of the month**, after the monthly roundup: the player with the most MVPs in the month (top of a match's
+  scoreboard, as the roundups count them). With `DISCORD_PLAYER_OF_MONTH_ROLE_ID`, that role moves to them for the month.
+- **🎯 Weekly challenge**, after the weekly roundup: last week's challenge and who won it, and this week's challenge.
+  With `DISCORD_CHALLENGE_ROLE_ID`, that role moves to the winner for the week. The challenges go round one a week: most
+  kills, most kills in one match, most wins, most MVPs, most seed days (never staff), most time played. A winner is only
+  named for a challenge that was announced, so the first week it runs only says this week's.
+
+A role goes to the winner's linked Discord account (see [Player accounts](#player-accounts)) and is taken from whoever
+had it. A winner without one in the server is told to link their account at the website's `/account` page to get the
+role next time. A [private profile](#private-profiles) is named `[private profile]`. Both roles need
+`DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`, and the bot's role above them with **Manage Roles**; without a role set, the
+messages still go out. Who holds each role, and which week's challenge was announced, is kept in `drives`. A message
+that fails is logged and not tried again, so the roundup is never posted twice.
 
 ## Season roundup
 
@@ -781,8 +804,19 @@ now. At most 15 accounts and 40 calls to Discord a pass; the rest go to the fron
 on it for days (VIP) cannot starve the others. Someone known to be out of the server is left alone until they sign in. Without `DISCORD_BOT_TOKEN` it does
 nothing, and players can still sign in and link.
 
+**Asking players back.** The first time each day the server is seeding (outside the quiet hours), the bot sends a private Discord
+message to linked players who haven't been on the server for 14 days (but were in the 90 days the bot keeps):
+
+> Hey Ghost, it's been a while! The WARDOGS server is seeding now with 6 on. Jump in and help get it live. Join by ID: `ABC123`.
+> Seed on 3 days in a week for a VIP whitelist slot.
+
+At most 5 a day, those seen most lately first, and each player at most once in 30 days (`returnedAt` on their account). It goes by
+the same setting as the VIP messages on the `/account` page, and not to anyone who turned them off, closed their private messages
+or is out of the server. The day is saved before any goes out (`returnDay`), so a batch that fails part-way is not sent twice. Needs
+`DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`.
+
 **The welcome.** A player who linked their account and is in the server is not sent the Discord invite in their welcome in game.
-Everyone else is. With `DISCORD_SHORT_LINK` (`/discord`), the welcome says `gaminginit.com/discord` instead of the invite code,
+Everyone else is. A regular who hasn't linked is asked to, at most once a week (see [Welcome](#welcome)). With `DISCORD_SHORT_LINK` (`/discord`), the welcome says `gaminginit.com/discord` instead of the invite code,
 which is hard to type in game. It is on in `wrangler.jsonc`, and the path is the website's (`public/_redirects`): merge the website
 change too, and if the bot is deployed first the short link does not work until the website is.
 
@@ -1638,8 +1672,14 @@ instead (Cloudflare only):
 - **The leaderboard place** (`{rank}`) is their best place on any of the boards: "3rd for kills", "1st for K/D", "5th
   for time played" or "2nd for seeding". Where two are level, kills comes first, then K/D, time played and seeding.
   [Private profiles](#staff-commands) are left off, as the leaderboard doesn't name them, so they get the usual welcome.
-- The lines are on the [Lines tab](#lines-tab) (Welcome: Everyone, and Welcome: On the leaderboard), so staff can change
-  them without a deploy. The defaults are in `src/lines.ts`.
+- **Link your account** (Cloudflare only, while [player accounts](#player-accounts) are set up): a regular, with 5 or
+  more matches in 30 days, who hasn't linked their account on the website is asked to instead, at most once a week. It
+  comes before the welcome back. Staff are never asked. Who was asked is kept for a week (`linkNudges`).
+
+  > Welcome back, Ghost! Link your Discord at gaminginit.com/account for a role and VIP alerts. Rules: no cheats, no team
+  > killing. Discord: discord.gg/qsJFYGhSJ4
+- The lines are on the [Lines tab](#lines-tab) (Welcome: Everyone, Welcome: On the leaderboard, and Welcome: Link your
+  account), so staff can change them without a deploy. The defaults are in `src/lines.ts`.
 - A welcome that fails to send is logged (`Welcome to "<name>" (<Steam ID>) failed: …`) and not tried again. Each one
   sent is logged as `Sent welcome to "<name>" (<Steam ID>): …`.
 - It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`.
@@ -1689,11 +1729,31 @@ with their kills in place of their place:
 - Only for a match the bot saw go live and start, like the match summary.
 - **The MVP** needs `TOP_PLAYER_MESSAGES` of at least 1 and a kill. Everyone level with the top is an MVP, even past
   `TOP_PLAYER_MESSAGES`. An award winner who isn't top of the scoreboard is not the MVP.
+- **A personal best** (Cloudflare only): more kills than in any match of theirs in the last 90 days, from 5 matches and
+  10 kills. A player with a place or an award has "a personal best" after their place in `{earned}`.
+- **Everyone else in game who played** (Cloudflare only, apart from the nemesis) gets the first they have of these:
+
+  | Message                   | When                                                                                  | Example |
+  | ------------------------- | ------------------------------------------------------------------------------------- | ------- |
+  | Milestone                 | The match took them past their 10th, 25th, 50th, 100th… match, their 100th, 250th, 500th, 1,000th… kill, or 10, 25, 50, 100… hours played. Told once each | Ghost, that's your 100th match on our server! Thanks for playing. See your stats at gaminginit.com |
+  | Personal best             | As above                                                                              | New personal best, Ghost: 42 kills in one match. See your stats at gaminginit.com |
+  | Nearly on the leaderboard | 25 or fewer more kills would put them in the leaderboard's top 10 for kills (30 days) | Ghost, you're 3 kills off the top 10 for kills. One more match? Leaderboard at gaminginit.com |
+  | Nemesis                   | One player killed them 4 times or more in the match (from the kill feed). Never names a private profile | Viper got you 6 times this match, Ghost. Payback next round? |
+
+  Milestones count every day the bot has recorded. The bot keeps each player's totals of the days before today
+  (`lifetime:<0-31>`, by the last two digits of their Steam ID, with the milestones they were told of) and adds each day
+  to them once it is over. The first time, it adds up every day it has, and counts milestones already passed as told, so
+  nobody is told of an old one. When a match takes a player past two kinds at once, matches come first, then kills, then
+  hours; the other waits for a later match. A milestone is saved as told just before its message goes out.
+- **At most 20 messages** go out at the end of a match, so they fit in the check: the places and awards first, then
+  milestones, personal bests, nearly on the leaderboard and nemeses, and among each, those with the most kills first.
 - The line is picked at random from the end-of-match lines (or the MVP lines), passing over the ones used lately so
   players mostly get different ones; staff change them on the [Lines tab](#lines-tab) (End of match: Top players, and
   End of match: MVP). `{name}` (as in the [welcome](#welcome)), `{earned}` (such as "2nd on the scoreboard (23 kills)
   and best demolitions (8 kills)", or "31 kills and best demolitions (8 kills)" for the MVP) and `{site}` are filled
-  in. The line is the whole message, so it should say where the website is.
+  in. The line is the whole message, so it should say where the website is. The others have their own lists (End of
+  match: Milestone, Personal best, Nearly on the leaderboard and Nemesis), with `{milestone}`, `{kills}`, `{short}`,
+  `{nemesis}` and `{count}`.
 - A message that fails to send is logged (`End-of-match message to "<name>" (<Steam ID>) failed: …`) and not tried
   again. Each one sent is logged as `Sent end-of-match message to "<name>" (<Steam ID>): …`.
 - It uses the RCON password's write access (`POST /v1/players/<Steam ID>/message`), like `/warn`. It isn't a warning:
@@ -1701,6 +1761,18 @@ with their kills in place of their place:
 - Set `TOP_PLAYER_MESSAGES` to another number of players (up to 100) in the `vars` block of `wrangler.jsonc`, or `"0"`
   for none, and `AWARD_MESSAGES` to `"off"` to leave the award winners out. They need `SITE_URL`; without it none are
   sent.
+
+### Thanks for seeding
+
+The moment the server goes live, each seeder still in game gets a private message thanking them by name:
+
+> We're live, Ghost! Thanks for seeding for 25 minutes. You made this happen.
+
+- Those on for more than `VIP_SEED_MINUTES` while it seeded (a seed that counts), longest first, at most 15. Never
+  [staff](#staff-steam-accounts).
+- Only while the [seeding messages](#seeding-and-match-messages) are on (`SEEDING_MESSAGE_MINUTES` is not `"0"`).
+- The lines are on the [Lines tab](#lines-tab) (Seeding: Thanks when live), with `{name}` and `{minutes}`.
+- One that fails is logged (`Seeding thanks to "<name>" (<Steam ID>) failed: …`) and not tried again.
 
 ### Seeding and match messages
 
@@ -1781,8 +1853,9 @@ is won at a score other than 100. They need `SITE_URL`; without it none are sent
 ### Lines tab
 
 The [staff page](#staff-page) has a tab for the lines the bot says in game, so staff can reword them, add new ones or
-take some out without a deploy. Each list (seeding, welcome and welcome back, 10 minutes in, halfway and 90 points for
-each faction, level scores, any other team, end of match and MVP) has its own editor:
+take some out without a deploy. Each list (seeding and the thanks when live, welcome, welcome back and link your
+account, 10 minutes in, halfway and 90 points for each faction, level scores, any other team, end of match, MVP,
+milestone, personal best, nearly on the leaderboard and nemesis) has its own editor:
 
 - Each line shows the whole message as it goes out in game, with what the bot adds before and after it (such as
   "Halfway there!" and the seeding call to action) and its placeholders filled in, and how many of the game's 200

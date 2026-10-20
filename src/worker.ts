@@ -1,7 +1,7 @@
 import { connect } from 'cloudflare:sockets';
 import { z } from 'zod';
 import { DurableObject } from 'cloudflare:workers';
-import { withSeedCall } from './alerts.ts';
+import { isQuiet, withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import {
   castVote,
@@ -86,7 +86,7 @@ import {
   forget,
   growth,
   isMemberNow,
-  linkedMembers,
+  steamLinks,
   linkWithProof,
   recordSignIn,
   setAlerts,
@@ -100,7 +100,27 @@ import {
   type Growth,
   type SignInResult,
 } from './accountbook.ts';
-import { parseSteamLink, readAccountAction, readWebVote, steamLinkKey, type AccountAction, type AccountView, type WebVote } from './accounts.ts';
+import {
+  ACCOUNT_PREFIX,
+  accountKey,
+  LINK_NUDGES_KEY,
+  parseAccount,
+  RETURN_DAY_KEY,
+  RETURN_PER_DAY,
+  returnDue,
+  returnText,
+  type Account,
+  nudgesDue,
+  parseNudges,
+  parseSteamLink,
+  readAccountAction,
+  readWebVote,
+  steamLinkKey,
+  withNudged,
+  type AccountAction,
+  type AccountView,
+  type WebVote,
+} from './accounts.ts';
 import { addMember, isMember as botIsMember, sendDirectMessage, setRole } from './accountsdiscord.ts';
 import { DISCORD_CLICKS_KEY, parseClicks, sourceOf, summarise as summariseClicks, withClick, type ClickSummary } from './discordclicks.ts';
 import { steamLoginUrl, verifySteamClaim } from './steamopenid.ts';
@@ -233,7 +253,31 @@ import {
   type SavedLines,
 } from './linespage.ts';
 import type { OutageEvent } from './outages.ts';
-import { feedRecordOf } from './matchend.ts';
+import {
+  buildChallengeMessage,
+  buildPlayerOfMonthMessage,
+  challengeFor,
+  DRIVES_KEY,
+  mostMvps,
+  parseDrives,
+  type Holder,
+  type RoleOutcome,
+} from './drives.ts';
+import {
+  dueMilestone,
+  foldDays,
+  LIFETIME_SHARDS,
+  LIFETIME_THROUGH_KEY,
+  lifetimeKey,
+  markTold,
+  nearlyTopTen,
+  parseShard,
+  personalBests,
+  shardOf,
+  type LifetimeShard,
+  type Milestone,
+} from './achievements.ts';
+import { feedRecordOf, type EndExtras } from './matchend.ts';
 import { createFeedJoins, createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
 import { discordLink, JOIN_WAIT_MS, leaderboardPlaces } from './messages.ts';
 import {
@@ -960,6 +1004,8 @@ export class Watcher extends DurableObject<Env> {
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
       matchFeed: () => this.matchFeed(),
+      endExtras: (match) => this.endExtras(match),
+      milestonesTold: (told) => this.milestonesTold(told),
     });
     this.ctx.waitUntil(this.alerting(endCheck));
   }
@@ -1131,6 +1177,10 @@ export class Watcher extends DurableObject<Env> {
       staff: () => this.staffSteam(),
       linked: () => this.linkedSteam(),
       ranks: () => this.leaderboardRanks(),
+      nudges: () => this.linkNudges(),
+      nudged: (steamIds) => this.linkNudged(steamIds),
+      endExtras: (match) => this.endExtras(match),
+      milestonesTold: (told) => this.milestonesTold(told),
       privateProfiles: () => this.privateSteam(),
       liveMatch: (match) => this.liveMatchOf(match),
       matchFeed: () => this.matchFeed(),
@@ -1152,6 +1202,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.updateVip(config));
     await this.keepAccounts(config);
+    await this.askBack(config, seen.snapshot);
     // Before the rotation and the vote change it: they can write another entry into the slot the server is on.
     await this.serial(() => this.updateRestartMap(config, seen.snapshot));
     await this.serial(() => this.updateRotation(config, seen.snapshot));
@@ -1208,12 +1259,87 @@ export class Watcher extends DurableObject<Env> {
           posted = markPosted(posted, period);
           await storage.put('roundups', posted);
           console.info(roundup === null ? `No ${label}: nobody played` : `Posted the ${label}`);
+          // After the roundup is saved as posted, so a drive that fails never posts the roundup twice. It is not tried again.
+          try {
+            await this.postDrive(config, period, now, rule.webhookUrl);
+          } catch (error) {
+            console.error(`The ${period.kind === 'week' ? 'weekly challenge' : 'player of the month'} after the ${label} failed: ${errorText(error)}`);
+          }
         } catch (error) {
           console.error(`The ${label} failed, trying again next check: ${errorText(error)}`);
         }
       }
     } catch (error) {
       console.error(`Roundups failed: ${errorText(error)}`);
+    }
+  }
+
+  // After a roundup (see drives.ts): the player of the month after the monthly one, and the weekly challenge's winner and
+  // the next challenge after the weekly one. Each winner's role moves to them.
+  private async postDrive(config: Config, period: Period, now: number, webhookUrl: string): Promise<void> {
+    const storage = this.ctx.storage;
+    const [days, matches, hidden, stored] = await Promise.all([
+      this.recentDays(now),
+      this.matchRecords(now),
+      this.privateSteam(),
+      storage.get(DRIVES_KEY),
+    ]);
+    const covered = new Set(periodDays(period));
+    const sources = {
+      days: days.filter((d) => covered.has(d.day)).map((d) => d.players),
+      matches: matches.filter((m) => m.endedAt >= period.start && m.endedAt < period.end),
+    };
+    const drives = parseDrives(stored);
+    const { playerOfMonthRoleId, challengeRoleId } = config.drives;
+    if (period.kind === 'month') {
+      const winner = mostMvps(sources);
+      if (winner === null) return;
+      const moved = await this.moveRole(config, playerOfMonthRoleId, drives.month, winner.steamId);
+      await postWebhook(webhookUrl, buildPlayerOfMonthMessage(period.start, winner, hidden, moved.outcome, playerOfMonthRoleId, config.siteUrl));
+      await storage.put(DRIVES_KEY, { ...drives, month: moved.holder });
+      console.info(`Posted the player of the month: ${JSON.stringify(winner.name)} (${winner.steamId}), role ${moved.outcome}`);
+      return;
+    }
+    // A winner only for a challenge people were told of.
+    const last = drives.announced === dayOf(period.start) ? challengeFor(period.start) : null;
+    const winner = last?.winner(sources) ?? null;
+    const moved =
+      last === null ? { holder: drives.challenge, outcome: 'none' as const } : await this.moveRole(config, challengeRoleId, drives.challenge, winner?.steamId ?? null);
+    const next = challengeFor(period.end);
+    await postWebhook(
+      webhookUrl,
+      buildChallengeMessage(last === null ? null : { challenge: last, winner }, next, hidden, moved.outcome, challengeRoleId, config.siteUrl),
+    );
+    await storage.put(DRIVES_KEY, { ...drives, challenge: moved.holder, announced: dayOf(period.end) });
+    console.info(`Posted the weekly challenge: ${next.id}${winner === null ? '' : `, last week's won by ${JSON.stringify(winner.name)} (${winner.steamId})`}`);
+  }
+
+  // Moves a drive's role from whoever had it to the winner's linked Discord account (`steamId`; null takes it from them
+  // and gives it to nobody). 'unlinked' when the winner has no linked account in the server. Without the bot's token or
+  // the role, no role moves. A change Discord refuses is logged.
+  private async moveRole(
+    config: Config,
+    roleId: string | undefined,
+    previous: Holder | null,
+    steamId: string | null,
+  ): Promise<{ holder: Holder | null; outcome: RoleOutcome }> {
+    const userId = steamId === null ? null : (parseSteamLink(await this.ctx.storage.get(steamLinkKey(steamId)))?.u ?? null);
+    const holder = steamId === null ? null : { steamId, userId };
+    const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
+    const { botToken } = config.accounts;
+    if (roleId === undefined || botToken === undefined || !/^\d+$/.test(guildId)) return { holder, outcome: 'none' };
+    if (previous?.userId != null && previous.userId !== userId) {
+      await setRole(botToken, guildId, previous.userId, roleId, false).catch((error: unknown) =>
+        console.error(`Taking role ${roleId} from ${previous.userId} failed: ${errorText(error)}`),
+      );
+    }
+    if (steamId === null) return { holder, outcome: 'none' };
+    if (userId === null) return { holder, outcome: 'unlinked' };
+    try {
+      return { holder, outcome: (await setRole(botToken, guildId, userId, roleId, true)) === 'done' ? 'given' : 'unlinked' };
+    } catch (error) {
+      console.error(`Giving role ${roleId} to ${userId} failed: ${errorText(error)}`);
+      return { holder, outcome: 'none' };
     }
   }
 
@@ -3304,7 +3430,7 @@ export class Watcher extends DurableObject<Env> {
   private accounting = oneAtATime();
   private accountsSyncedAt = 0;
   // Steam accounts of players in the server who linked, for the welcome message: read now and then, not at every welcome.
-  private linkedCache: { at: number; ids: Set<string> } | null = null;
+  private linkedCache: { at: number; links: { members: Set<string>; all: Set<string> } } | null = null;
 
   private bookStorage(): BookStorage {
     const storage = this.ctx.storage;
@@ -3373,6 +3499,52 @@ export class Watcher extends DurableObject<Env> {
     this.ctx.waitUntil(
       this.accounting(() => this.syncAccountsNow(config, true)).catch((error: unknown) => console.error(`Player accounts: the pass failed: ${errorText(error)}`)),
     );
+  }
+
+  // Asks linked players who have been away back, by Discord message, the first time each day the server seeds outside the
+  // quiet hours (see returnDue). The day is saved before any goes out, so a batch that fails part-way is not sent twice.
+  private async askBack(config: Config, snapshot: Snapshot | null): Promise<void> {
+    const { botToken } = config.accounts;
+    const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
+    if (botToken === undefined || !/^\d+$/.test(guildId) || snapshot === null) return;
+    const now = Date.now();
+    const players = snapshot.status.players;
+    if (players < config.rules.seeding || players >= config.rules.live || isQuiet(now, config.quietHours)) return;
+    const storage = this.ctx.storage;
+    const today = dayOf(now);
+    try {
+      if ((await storage.get(RETURN_DAY_KEY)) === today) return;
+      await storage.put(RETURN_DAY_KEY, today);
+      await this.accounting(async () => {
+        const [days, all] = await Promise.all([this.recentDays(now), storage.list({ prefix: ACCOUNT_PREFIX, limit: 20_000 })]);
+        const lastSeen = new Map<string, string>();
+        for (const d of days) for (const steamId of Object.keys(d.players)) lastSeen.set(steamId, d.day);
+        const due = [...all]
+          .flatMap(([key, raw]) => {
+            const account = parseAccount(raw);
+            const seen = account?.steamId == null ? null : (lastSeen.get(account.steamId) ?? null);
+            return account !== null && seen !== null && returnDue(account, seen, now)
+              ? [{ userId: key.slice(ACCOUNT_PREFIX.length), account, seen }]
+              : [];
+          })
+          .sort((a, b) => b.seen.localeCompare(a.seen))
+          .slice(0, RETURN_PER_DAY);
+        const rule = { siteUrl: config.siteUrl, vip: config.vip, serverId: config.serverId };
+        for (const { userId, account } of due) {
+          let next: Account = { ...account, returnedAt: now };
+          try {
+            const result = await sendDirectMessage(botToken, userId, returnText(account.name, players, rule));
+            if (result === 'closed') next = { ...next, dmClosed: true };
+            console.info(`Player account: ${result === 'sent' ? 'asked' : 'could not message'} ${userId} back to seed`);
+          } catch (error) {
+            console.error(`Player account: asking ${userId} back failed: ${errorText(error)}`);
+          }
+          await storage.put(accountKey(userId), next);
+        }
+      });
+    } catch (error) {
+      console.error(`Asking players back failed: ${errorText(error)}`);
+    }
   }
 
   // A player signed in with Discord on the website. `login.steamId` is the Steam account on their Discord profile.
@@ -3490,13 +3662,111 @@ export class Watcher extends DurableObject<Env> {
     return places;
   }
 
+  // ---- Milestones, personal bests and the leaderboard at the end of a match (see achievements.ts) ----
+
+  // Adds the days that closed since the last fold to everyone's lifetime totals. The first fold adds every day the bot has.
+  private async foldLifetime(now: number): Promise<void> {
+    const storage = this.ctx.storage;
+    const today = dayOf(now);
+    const through = await storage.get(LIFETIME_THROUGH_KEY);
+    if (through === today) return;
+    const first = typeof through !== 'string';
+    const listed = await storage.list({ prefix: 'players:', ...(first ? {} : { start: `players:${String(through)}` }), end: `players:${today}` });
+    const keys = Array.from({ length: LIFETIME_SHARDS }, (_, i) => lifetimeKey(i));
+    const stored = await storage.get(keys);
+    const shards = foldDays(
+      keys.map((key) => parseShard(stored.get(key))),
+      [...listed.values()].map(parsePlayerDay),
+      first,
+    );
+    await storage.put({ ...Object.fromEntries(keys.map((key, i) => [key, shards[i] ?? {}])), [LIFETIME_THROUGH_KEY]: today });
+    console.info(`Lifetime totals: added ${listed.size} day${listed.size === 1 ? '' : 's'}`);
+  }
+
+  // What the records say about the players of a match ending: the milestone each has passed and not been told of, their
+  // best match lately, and how close they are to the leaderboard's top 10 for kills. The match itself counts, once, whether
+  // or not it has been recorded yet.
+  private async endExtras(match: MatchState): Promise<EndExtras> {
+    const now = Date.now();
+    await this.foldLifetime(now);
+    const ids = Object.keys(match.players);
+    const recordKey = matchRecordKey(match.startedAt);
+    const [stored, days, records] = await Promise.all([
+      this.ctx.storage.get([...new Set(ids.map((id) => lifetimeKey(shardOf(id)))), recordKey]),
+      this.recentDays(now),
+      this.matchRecords(now),
+    ]);
+    const recorded = stored.has(recordKey);
+    const thisMatch = recorded ? [] : [recordMatchPlayers({}, match)];
+    const today = days.at(-1)?.players ?? {};
+    const shards = new Map<number, LifetimeShard>();
+    const shard = (steamId: string): LifetimeShard => {
+      const index = shardOf(steamId);
+      const known = shards.get(index) ?? parseShard(stored.get(lifetimeKey(index)));
+      shards.set(index, known);
+      return known;
+    };
+    const milestones = new Map<string, Milestone>();
+    for (const [steamId, p] of Object.entries(match.players)) {
+      const entry = shard(steamId)[steamId];
+      const day = today[steamId];
+      const due = dueMilestone(
+        {
+          matches: (entry?.matches ?? 0) + (day?.matches ?? 0) + (recorded ? 0 : 1),
+          kills: (entry?.kills ?? 0) + (day?.kills ?? 0) + (recorded ? 0 : p.kills),
+          minutes: (entry?.minutes ?? 0) + (day?.seedingMinutes ?? 0) + (day?.liveMinutes ?? 0),
+        },
+        entry?.told ?? {},
+      );
+      if (due !== null) milestones.set(steamId, due);
+    }
+    return {
+      bests: personalBests(records, match.startedAt),
+      milestones,
+      nearly: nearlyTopTen(totals([...days.slice(-LEADERBOARD_DAYS).map((d) => d.players), ...thisMatch])),
+    };
+  }
+
+  private async milestonesTold(told: ReadonlyMap<string, Milestone>): Promise<void> {
+    const storage = this.ctx.storage;
+    const indexes = [...new Set([...told.keys()].map(shardOf))];
+    const stored = await storage.get(indexes.map(lifetimeKey));
+    const shards = markTold(new Map(indexes.map((i) => [i, parseShard(stored.get(lifetimeKey(i)))])), told);
+    await storage.put(Object.fromEntries([...shards].map(([i, s]) => [lifetimeKey(i), s])));
+  }
+
+  // Linked Steam accounts, and those of players in the server, read now and then, not at every welcome.
+  private async steamLinked(): Promise<{ members: Set<string>; all: Set<string> }> {
+    const now = Date.now();
+    if (this.linkedCache !== null && now - this.linkedCache.at < ACCOUNTS_EVERY_MS) return this.linkedCache.links;
+    const links = await steamLinks(this.bookStorage());
+    this.linkedCache = { at: now, links };
+    return links;
+  }
+
   // Players in the server who linked their Steam account: their welcome in game leaves the invite out.
   private async linkedSteam(): Promise<Set<string>> {
+    return (await this.steamLinked()).members;
+  }
+
+  // Regulars who have not linked their account and were not asked to in the last week: their welcome asks them to. None
+  // while players cannot sign in on the website.
+  private async linkNudges(): Promise<Set<string>> {
+    if ('missing' in adminAuthConfig(stringVars(this.env))) return new Set();
     const now = Date.now();
-    if (this.linkedCache !== null && now - this.linkedCache.at < ACCOUNTS_EVERY_MS) return this.linkedCache.ids;
-    const ids = await linkedMembers(this.bookStorage());
-    this.linkedCache = { at: now, ids };
-    return ids;
+    const [days, links, staff, asked] = await Promise.all([
+      this.recentDays(now),
+      this.steamLinked(),
+      this.staffSteam(),
+      this.ctx.storage.get(LINK_NUDGES_KEY),
+    ]);
+    const matches = new Map(totals(days.slice(-LEADERBOARD_DAYS).map((d) => d.players)).map((p) => [p.steamId, p.matches]));
+    return nudgesDue(matches, links.all, staff, parseNudges(asked), now);
+  }
+
+  private async linkNudged(steamIds: string[]): Promise<void> {
+    const storage = this.ctx.storage;
+    await storage.put(LINK_NUDGES_KEY, withNudged(parseNudges(await storage.get(LINK_NUDGES_KEY)), steamIds, Date.now()));
   }
 
   // A click on the Discord invite (see discordclicks.ts).

@@ -9,7 +9,10 @@ import {
   LONGEST_EARNED,
   LONGEST_MVP_EARNED,
   matchEndMessages,
+  MAX_END_MESSAGES,
+  nemesisOf,
   ordinal,
+  type EndExtras,
   type MatchEndRule,
 } from '../src/matchend.ts';
 import { MAX_LENGTH, NAME_LONGEST } from '../src/messages.ts';
@@ -160,9 +163,9 @@ describe('matchEndMessages', () => {
     const { messages, recent } = matchEndMessages(match, feed, new Set(['a', 'b', 'd']), new Set(), rule, () => 0);
 
     expect(messages).toEqual([
-      { steamId: 'a', name: 'Ash', text: fill(mvp0, '9 kills, best assaulter (9 kills) and most headshots (5)', 'Ash') },
-      { steamId: 'b', name: 'Bo', text: fill(line0, '2nd on the scoreboard (4 kills)', 'Bo') },
-      { steamId: 'd', name: 'Dee', text: fill(line1, 'best demolitions (5 kills) and longest kill (412 m)', 'Dee') },
+      { steamId: 'a', name: 'Ash', text: fill(mvp0, '9 kills, best assaulter (9 kills) and most headshots (5)', 'Ash'), kind: 'honours' },
+      { steamId: 'b', name: 'Bo', text: fill(line0, '2nd on the scoreboard (4 kills)', 'Bo'), kind: 'honours' },
+      { steamId: 'd', name: 'Dee', text: fill(line1, 'best demolitions (5 kills) and longest kill (412 m)', 'Dee'), kind: 'honours' },
     ]);
     expect(recent['mvp']).toEqual([mvp0]);
     expect(recent['matchEnd']).toEqual([line0, line1]);
@@ -225,6 +228,76 @@ describe('feedRecordOf', () => {
 
     expect(feedRecordOf(record(31 * MINUTE, 39 * MINUTE), ended)).toBeNull();
     expect(feedRecordOf(record(11 * MINUTE, 30 * MINUTE), ended)).not.toBeNull();
+  });
+});
+
+describe('the others at the end of a match', () => {
+  // a tops the scoreboard; the rest earned no place (a count of 1) and no award (none are on).
+  const round: MatchState = {
+    ...match,
+    players: { a: tracked('Ash', 20), b: tracked('Bo', 15), c: tracked('Cy', 12), d: tracked('Dee', 11), e: tracked('Eve', 1), f: tracked('Fay', 0) },
+  };
+  const one: MatchEndRule = { count: 1, awards: false, siteHost: 'gaminginit.com' };
+  const everyone = new Set(Object.keys(round.players));
+  const extras: EndExtras = {
+    milestones: new Map([['b', { kind: 'kills', value: 1000 }]]),
+    bests: new Map([
+      ['a', 18],
+      ['b', 10],
+      ['c', 11],
+      ['d', 20],
+    ]),
+    nearly: new Map([
+      ['c', 3],
+      ['d', 5],
+      ['e', 20],
+    ]),
+  };
+  // a killed e 6 times and f 5 times.
+  const pairs: LiveMatch = { ...live([fed('a', 'Ash'), fed('e', 'Eve'), fed('f', 'Fay')]), pairs: { '0:1': 6, '0:2': 5 } };
+  const fill = (line: string | undefined, values: Record<string, string>) =>
+    Object.entries({ site: 'gaminginit.com', ...values }).reduce((text, [k, v]) => text.replace(`{${k}}`, v), line ?? '');
+
+  it('gives each the first they have of a milestone, a personal best, nearly on the leaderboard and a nemesis', () => {
+    const { messages, milestones } = matchEndMessages(round, pairs, everyone, new Set(), one, () => 0, DEFAULT_LINES, {}, extras);
+
+    expect(messages.map((m) => [m.steamId, m.kind, m.text])).toEqual([
+      ['a', 'honours', fill(MVP[0], { name: 'Ash', earned: '20 kills and a personal best' })],
+      ['b', 'milestone', fill(DEFAULT_LINES.milestone[0], { name: 'Bo', milestone: 'your 1,000th kill' })],
+      ['c', 'personalBest', fill(DEFAULT_LINES.personalBest[0], { name: 'Cy', kills: '12 kills' })],
+      ['d', 'nearly', fill(DEFAULT_LINES.nearlyTop[0], { name: 'Dee', short: '5 kills' })],
+      ['e', 'nearly', fill(DEFAULT_LINES.nearlyTop[1], { name: 'Eve', short: '20 kills' })],
+      ['f', 'nemesis', fill(DEFAULT_LINES.nemesis[0], { name: 'Fay', nemesis: 'Ash', count: '5 times' })],
+    ]);
+    expect(milestones).toEqual(new Map([['b', { kind: 'kills', value: 1000 }]]));
+  });
+
+  it('sends nothing more without the records or the kill feed', () => {
+    expect(matchEndMessages(round, null, everyone, new Set(), one, () => 0).messages.map((m) => m.steamId)).toEqual(['a']);
+  });
+
+  it('sends at most 20, the scoreboard first and then those with the most kills', () => {
+    const crowd: MatchState = {
+      ...match,
+      players: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`p${i}`, tracked(`P${i}`, 60 - i)])),
+    };
+    const near: EndExtras = { ...extras, milestones: new Map([['p29', { kind: 'matches', value: 10 }]]), nearly: new Map(Object.keys(crowd.players).map((id) => [id, 1])) };
+    const { messages, milestones } = matchEndMessages(crowd, null, new Set(Object.keys(crowd.players)), new Set(), one, () => 0, DEFAULT_LINES, {}, near);
+
+    expect(messages).toHaveLength(MAX_END_MESSAGES);
+    expect(messages[0]?.steamId).toBe('p0');
+    // The milestone comes before the others that are nearly on the leaderboard, though p29 did least.
+    expect(messages.map((m) => m.steamId)).toContain('p29');
+    expect(messages.map((m) => m.steamId)).not.toContain('p20');
+    expect(milestones.has('p29')).toBe(true);
+  });
+
+  it("tells nobody of a private profile's kills, and needs 4", () => {
+    expect(nemesisOf(pairs, 'e', new Set())).toEqual({ name: 'Ash', kills: 6 });
+    expect(nemesisOf(pairs, 'e', new Set(['a']))).toBeNull();
+    expect(nemesisOf({ ...pairs, pairs: { '0:1': 3 } }, 'e', new Set())).toBeNull();
+    expect(nemesisOf({ ...pairs, pairs: { '1:1': 9 } }, 'e', new Set())).toBeNull();
+    expect(nemesisOf(pairs, 'nobody', new Set())).toBeNull();
   });
 });
 

@@ -4,11 +4,16 @@ import {
   applied,
   dmText,
   linkSteam,
+  nudgesDue,
   parseAccount,
+  parseNudges,
   planAccount,
   readAccountAction,
   readWebVote,
+  returnDue,
+  returnText,
   signedIn,
+  withNudged,
   unlinkSteam,
   WARN_MS,
   type Account,
@@ -26,6 +31,58 @@ const linked = (): Account => {
   if ('problem' in result) throw new Error(result.problem);
   return result;
 };
+
+describe('asking regulars to link', () => {
+  const matches = new Map([
+    ['reg', 5],
+    ['casual', 4],
+    ['linked', 9],
+    ['staff', 9],
+    ['asked', 9],
+  ]);
+
+  it('asks regulars who are not linked, not staff and not asked in the last week', () => {
+    const due = nudgesDue(matches, new Set(['linked']), new Set(['staff']), { asked: NOW - DAY }, NOW);
+    expect(due).toEqual(new Set(['reg']));
+    expect(nudgesDue(matches, new Set(), new Set(), { asked: NOW - 7 * DAY }, NOW).has('asked')).toBe(true);
+  });
+
+  it('remembers who was asked for a week', () => {
+    expect(withNudged({ old: NOW - 8 * DAY, lately: NOW - DAY }, ['reg'], NOW)).toEqual({ lately: NOW - DAY, reg: NOW });
+    expect(parseNudges('nonsense')).toEqual({});
+  });
+});
+
+describe('asking players back', () => {
+  const away = (days: number): string => new Date(NOW - days * DAY).toISOString().slice(0, 10);
+
+  it('asks a linked player away 14 days, once a month, while they want messages and can get them', () => {
+    expect(returnDue(linked(), away(15), NOW)).toBe(true);
+    expect(returnDue(linked(), away(10), NOW)).toBe(false);
+    expect(returnDue(linked(), null, NOW)).toBe(false);
+    expect(returnDue(fresh(), away(15), NOW)).toBe(false);
+    expect(returnDue({ ...linked(), alerts: false }, away(15), NOW)).toBe(false);
+    expect(returnDue({ ...linked(), dmClosed: true }, away(15), NOW)).toBe(false);
+    expect(returnDue({ ...linked(), member: false }, away(15), NOW)).toBe(false);
+    expect(returnDue({ ...linked(), returnedAt: NOW - 20 * DAY }, away(15), NOW)).toBe(false);
+    expect(returnDue({ ...linked(), returnedAt: NOW - 30 * DAY }, away(15), NOW)).toBe(true);
+  });
+
+  it('says the server is seeding, how to join, what seeding earns and how to turn it off', () => {
+    expect(returnText('Sarge_', 6, { siteUrl: 'https://gaminginit.com/', vip: rule.vip, serverId: 'ABC123' })).toBe(
+      "Hey Sarge\\_, it's been a while! The WARDOGS server is seeding now with 6 on. Jump in and help get it live. Join by ID: `ABC123`. " +
+        'Seed on 3 days in a week for a VIP whitelist slot.\n-# Turn these messages off at https://gaminginit.com/account',
+    );
+    expect(returnText('Sarge', 6, { siteUrl: undefined, vip: null, serverId: undefined })).toBe(
+      "Hey Sarge, it's been a while! The WARDOGS server is seeding now with 6 on. Jump in and help get it live.",
+    );
+  });
+
+  it('reads accounts saved before it as never asked', () => {
+    const { returnedAt: _, ...old } = linked();
+    expect(parseAccount(old)?.returnedAt).toBe(0);
+  });
+});
 
 describe('signing in', () => {
   it('starts an account with VIP messages on, and keeps a Steam account across sign-ins', () => {
