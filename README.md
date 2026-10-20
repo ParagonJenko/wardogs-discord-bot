@@ -1052,6 +1052,36 @@ Also in the same answer, over the same period:
 `GET /api/admin/growth` also gives `funnel`: of the players who signed in on the website and linked Steam, how many have
 played a match in the last 90 days, and how many 5 or more (counts only).
 
+### Lifetime records
+
+The stays, kill feed and hourly figures only keep a few weeks, so each UTC day is summed up once it is over and kept for
+good, in the Durable Object's SQLite database (`src/lifetime.ts`). A few MB a year. The first check after midnight UTC
+adds yesterday (`lifetimeRolled`); the first time, it adds every day the player records go back to (90). A failed try is
+repeated hourly. Nothing is deleted, and a value already kept is never replaced by a null, so doing a day again after its
+stays are gone keeps what was kept.
+
+| Table | A row is | Holds |
+| ----- | -------- | ----- |
+| `daily_stats` | a day | unique, new and returning players, player minutes, matches, peak players; stays, average and median stay, short stays by new players and others; leaves by when in a match; seeding (matches seeded, minutes, seeders, those there at go-live); Discord invite clicks, accounts and linked accounts |
+| `match_stats` | a match | map, length, seeding minutes, peak players, top two scores, last of the night, players in game at the start, who left early, seeders |
+| `player_days` | a player on a day they were on the server | minutes and matches |
+| `players` | a player | first and last day, days played, minutes, matches (built from `player_days`) |
+| `daily_heat` | a day | leaves and minutes by hour of the week (JSON) |
+
+The columns from the stays are null for days before the bot kept them (30 days, from when the join log began); the ones
+from the player records are always there. A day's peak is the busiest of its matches' peaks. Kicks and bans by staff are
+left out of the stays, as in [Play time](#play-time). A player counts for a day only if they were on the server some of it:
+a finished match is credited to everyone in it on the day it ends, even someone who left before midnight. Staff are counted
+as players. The Steam IDs stay in `player_days` and `players` and are never in an answer.
+
+`GET /api/admin/lifetime` (signed-in staff) gives what the page's Lifetime view shows: `summary` (days kept, players ever,
+new and active in the last 30 days, regulars with 5 or more days in 30, regulars who stopped, player hours, matches), the
+`daily` rows (the latest 800), `weekly` and `monthly` unique players with new players, regulars (3 days in a week, 5 in a
+month), player minutes, matches and stickiness (the average day's players as a share of the period's), `cohorts` (new
+players by week and how many came back within 1, 7, 30 and 90 days, once those days are over), `maps` over their lifetime, and
+the all-time `heat`. `GET /api/admin/lifetime.csv?table=daily|matches|weekly|monthly|cohorts` gives a table as CSV, with
+no Steam IDs, for a spreadsheet or a notebook.
+
 ### Kills and headshots
 
 Many headshots, day after day, can be a sign of cheating. The staff page shows who gets them, from the

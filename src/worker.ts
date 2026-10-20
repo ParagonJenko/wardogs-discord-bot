@@ -200,6 +200,7 @@ import {
   type JoinLog,
 } from './joinlog.ts';
 import { buildFunnel, type Funnel } from './funnel.ts';
+import { createLifetime, dayPlayers, exportTable, firstStayDay, rebuildPlayers, readLifetime, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type TableName } from './lifetime.ts';
 import { buildNewPlayers, type Cohort } from './newplayers.ts';
 import { buildRetention, REMOVAL_AFTER_MS, sessionRows, type Removal, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
@@ -748,6 +749,11 @@ export class Watcher extends DurableObject<Env> {
   // The same for the sessions table.
   private sessionTable = false;
   private sessionsPrunedOn: string | null = null;
+  // The long-term tables are made once, and the UTC day they were last brought up to.
+  private lifetimeTables = false;
+  private lifetimeRolledOn: string | null = null;
+  // When a try was last made, so a day that can't be done yet (no player records, or a failure) is tried hourly, not every check.
+  private lifetimeTriedAt: number | null = null;
 
   private rcon(): { config: Config; http: HttpClient } {
     return { config: loadConfig(stringVars(this.env)), http: socketHttp(connect) };
@@ -1208,6 +1214,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.watchBans(config, seen.snapshot));
+    await this.serial(() => this.rollupLifetime(Date.now()));
     await this.serial(() => this.updateVip(config));
     await this.keepAccounts(config);
     await this.askBack(config, seen.snapshot);
@@ -3823,8 +3830,118 @@ export class Watcher extends DurableObject<Env> {
     await this.ctx.storage.put(DISCORD_CLICKS_KEY, withClick(parseClicks(await this.ctx.storage.get(DISCORD_CLICKS_KEY)), sourceOf(src), dayOf(Date.now())));
   }
 
+  // The SQLite database's long-term tables (see lifetime.ts), made the first time.
+  private lifetimeSql(): Sql {
+    const sql = this.ctx.storage.sql;
+    if (!this.lifetimeTables) {
+      createLifetime(sql);
+      this.lifetimeTables = true;
+    }
+    return sql;
+  }
+
+  // Sums up each UTC day that is over, once, for good (see lifetime.ts): the first check after midnight does yesterday, and
+  // the first time ever it does every day the player records go back to. The days not done yet are read from the player
+  // records, the match records and the stays in one go. A failure is only logged, and tried again at the next check.
+  private async rollupLifetime(now: number): Promise<void> {
+    const yesterday = dayOf(now - DAY_MS);
+    if (this.lifetimeRolledOn === yesterday) return;
+    if (this.lifetimeTriedAt !== null && now - this.lifetimeTriedAt < LIFETIME_RETRY_MS) return;
+    this.lifetimeTriedAt = now;
+    try {
+      const kv = this.ctx.storage.kv;
+      const through = kv.get<string>(LIFETIME_ROLLED_KEY);
+      if (through === yesterday) {
+        this.lifetimeRolledOn = yesterday;
+        return;
+      }
+      const [kept, records, stored] = await Promise.all([this.recentDays(now), this.matchRecords(now), this.ctx.storage.list({ prefix: 'mod:' })]);
+      const bans = parseBanBook(await this.ctx.storage.get('bans'));
+      const clicks = parseClicks(await this.ctx.storage.get(DISCORD_CLICKS_KEY));
+      const firstWithPlayers = kept.find((d) => Object.keys(d.players).length > 0)?.day;
+      if (firstWithPlayers === undefined) return;
+      const todo = kept.filter((d) => d.day >= firstWithPlayers && d.day <= yesterday && (through === undefined || d.day > through));
+      if (todo.length === 0) {
+        kv.put(LIFETIME_ROLLED_KEY, yesterday);
+        this.lifetimeRolledOn = yesterday;
+        return;
+      }
+      const sql = this.lifetimeSql();
+      const from = Date.parse(`${todo[0]?.day ?? yesterday}T00:00:00Z`) - DAY_MS;
+      const sessions = sessionRows(this.sessionSql(), from);
+      const staysFrom = firstStayDay(this.sessionSql());
+      const matches = records.map((r) => ({ map: r.map, startedAt: r.startedAt, liveAt: r.liveAt, endedAt: r.endedAt, scores: r.factionScores.map((f) => f.score) }));
+      const removed: Removal[] = [
+        ...[...stored].flatMap(([key, value]) => parseModLog(value).flatMap((e) => (e.action === 'kick' || e.action === 'ban' ? [{ steamId: key.slice('mod:'.length), at: e.at }] : []))),
+        ...Object.entries(bans).map(([steamId, ban]): Removal => ({ steamId, at: ban.at, until: ban.until })),
+      ];
+      const snapshot = await this.accountCounts();
+      this.ctx.storage.transactionSync(() => {
+        for (const d of todo) writePlayerDays(sql, d.day, dayPlayers(d.players));
+        rebuildPlayers(sql);
+        for (const d of todo) {
+          const start = Date.parse(`${d.day}T00:00:00Z`);
+          const end = start + DAY_MS;
+          const retention =
+            staysFrom !== null && d.day >= staysFrom
+              ? buildRetention({ now: end - 1, days: 1, until: end, sessions, matches, removed, newOn: null, clampHeat: false })
+              : null;
+          const input: DayInput = {
+            day: d.day,
+            stays:
+              retention === null
+                ? null
+                : {
+                    sessions: retention.sessions,
+                    averageMinutes: retention.averageMinutes,
+                    medianMinutes: retention.medianMinutes,
+                    bounce: retention.bounce,
+                    leaves: { timing: retention.leaves.timing, finale: retention.leaves.finale },
+                    excluded: retention.excluded,
+                    detail: retention.detail,
+                    heat: retention.heat,
+                  },
+            matches: records.filter((r) => r.endedAt >= start && r.endedAt < end).map((r) => ({ startedAt: r.startedAt, map: r.map, liveAt: r.liveAt, endedAt: r.endedAt, peakPlayers: r.peakPlayers, scores: r.factionScores.map((f) => f.score) })),
+            discord: {
+              clicks: Object.values(clicks[d.day] ?? {}).reduce((a, b) => a + b, 0) || (d.day in clicks ? 0 : null),
+              // The counts are as of now, so only the latest day gets them.
+              accounts: d.day === yesterday ? snapshot.accounts : null,
+              linked: d.day === yesterday ? snapshot.linked : null,
+            },
+          };
+          writeDay(sql, input);
+        }
+        kv.put(LIFETIME_ROLLED_KEY, yesterday);
+      });
+      this.lifetimeRolledOn = yesterday;
+      console.info(`Long-term records: ${todo.length} day${todo.length === 1 ? '' : 's'} added, up to ${yesterday}`);
+    } catch (error) {
+      console.error(`Long-term records failed: ${errorText(error)}`);
+    }
+  }
+
+  // How many players have accounts and linked Steam, for the day's row.
+  private async accountCounts(): Promise<{ accounts: number | null; linked: number | null }> {
+    try {
+      const counts = await growth(this.bookStorage());
+      return { accounts: counts.accounts, linked: counts.linked };
+    } catch {
+      return { accounts: null, linked: null };
+    }
+  }
+
+  // The Lifetime view: everything kept for good, up to yesterday.
+  adminLifetime(): Lifetime {
+    return readLifetime(this.lifetimeSql(), dayOf(Date.now()));
+  }
+
+  // One of the long-term tables as CSV, for analysis.
+  adminLifetimeCsv(table: TableName): string {
+    return toCsv(exportTable(this.lifetimeSql(), dayOf(Date.now()), table));
+  }
+
   // The Play time tab: how long players stay each day and when in a match they leave, over the last `days` UTC days.
-  async adminRetention(days: number): Promise<Retention & { newPlayers: { lookbackDays: number; cohorts: Cohort[] } }> {
+  async adminRetention(days: number): Promise<Omit<Retention, 'detail'> & { newPlayers: { lookbackDays: number; cohorts: Cohort[] } }> {
     const now = Date.now();
     const first = Date.parse(dayOf(now - (days - 1) * DAY_MS));
     const [records, stored, kept, logs] = await Promise.all([
@@ -3864,7 +3981,8 @@ export class Watcher extends DurableObject<Env> {
       removed,
       newOn: newPlayers.firstSeen,
     });
-    return { ...retention, newPlayers: { lookbackDays: newPlayers.lookbackDays, cohorts: newPlayers.cohorts } };
+    const { detail: _detail, ...shown } = retention;
+    return { ...shown, newPlayers: { lookbackDays: newPlayers.lookbackDays, cohorts: newPlayers.cohorts } };
   }
 
   // For the staff page: clicks on the invite by place, and how many players have accounts.
@@ -4762,6 +4880,26 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
       return Response.json({ error: "Couldn't save that just now. Try again in a minute." }, { status: 503, headers });
     }
   }
+  // The Lifetime view, and its tables as CSV.
+  if (route === 'GET /api/admin/lifetime') {
+    try {
+      return Response.json(await watcher().adminLifetime(), { headers });
+    } catch (error) {
+      console.error(`Staff page lifetime failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't load the numbers just now." }, { status: 503, headers });
+    }
+  }
+  if (route === 'GET /api/admin/lifetime.csv') {
+    const table = TABLE_NAMES.find((t) => t === url.searchParams.get('table'));
+    if (table === undefined) return Response.json({ error: 'Not a table' }, { status: 400, headers });
+    try {
+      const csv = await watcher().adminLifetimeCsv(table);
+      return new Response(csv, { headers: { ...headers, 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="wardogs-${table}.csv"` } });
+    } catch (error) {
+      console.error(`Staff page lifetime export failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't load the numbers just now." }, { status: 503, headers });
+    }
+  }
   const asked = Number(url.searchParams.get('days'));
   const days = ADMIN_PERIODS.find((d) => d === asked) ?? ADMIN_DEFAULT_DAYS;
   // The Kill feed tab: the latest kills and the headshots list, or one player's kills.
@@ -4803,6 +4941,10 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     return Response.json({ error: 'The staff page is unavailable' }, { status: 503, headers });
   }
 };
+
+// The UTC day the long-term records (lifetime.ts) are done up to.
+const LIFETIME_ROLLED_KEY = 'lifetimeRolled';
+const LIFETIME_RETRY_MS = 60 * 60_000;
 
 // The alert review's longest period, and its usual one.
 const REVIEW_PERIOD_DAYS = 30;

@@ -234,3 +234,23 @@ describe('review fixes', () => {
     expect(r.sessions).toBe(1);
   });
 });
+
+describe('a day that is over', () => {
+  it('counts only the stays that ended in it, and the matches in it', () => {
+    const midnight = Date.UTC(2026, 9, 20);
+    const nextDay = midnight + 24 * 60 * MIN;
+    const sessions: SessionRow[] = [
+      { steamId: 'a', joinedAt: midnight - 60 * MIN, leftAt: midnight + 30 * MIN, leftFrom: null },
+      { steamId: 'b', joinedAt: nextDay - 10 * MIN, leftAt: nextDay + 20 * MIN, leftFrom: null },
+    ];
+    const r = buildRetention({ now: nextDay - 1, days: 1, until: nextDay, matches: [first], sessions });
+    expect(r.sessions).toBe(1);
+    expect(r.daily.map((d) => d.day)).toEqual(['2026-10-20']);
+    // a's hour before midnight is the day before's to show, so only its half hour after is counted; b ended the next day.
+    expect(r.heat.minutes.reduce((a, b) => a + b, 0)).toBe(30);
+    // For the long-term records, a is kept whole, as the day before did not count it.
+    const whole = buildRetention({ now: nextDay - 1, days: 1, until: nextDay, matches: [first], sessions, clampHeat: false });
+    expect(whole.heat.minutes.reduce((a, b) => a + b, 0)).toBe(90);
+    expect(r.detail.matches).toHaveLength(1);
+  });
+});
