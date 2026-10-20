@@ -220,6 +220,8 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Item.SR_04')).toBe('AMR 50');
     expect(weaponName('Id.Item.WEPN_030')).toBe('FAL');
     expect(weaponName('Id.Item.WEPN_033')).toBe('Bushmaster M17S');
+    expect(weaponName('Id.Item.WEPN_034')).toBe('M14');
+    expect(weaponName('Id.Item.Molotov')).toBe('Molotov');
     expect(weaponName('Id.Item.WEPN_035')).toBe('Scout Rifle TD');
     expect(weaponName('Id.Item.WEPN_037')).toBe('TCX-SPR');
     expect(weaponName('Vehicle.Variant.Stationary.STN_05')).toBe('Stingray');
