@@ -35,6 +35,10 @@
     // left out. They need DISCORD_BOT_TOKEN.
     "DISCORD_LINKED_ROLE_ID": "1561072498135539873",
     "DISCORD_VIP_ROLE_ID": "1561072072967585913",
+    // The roles the player of the month and the weekly challenge winner get on their linked account, after the roundups. The
+    // bot's own role must be above them, with Manage Roles. Either may be left out: the posts still go out.
+    "DISCORD_PLAYER_OF_MONTH_ROLE_ID": "1562112822601584650",
+    "DISCORD_CHALLENGE_ROLE_ID": "1562112936728731658",
     // Optional: the server's ID for Join by ID in the game's server browser. The alerts, /serverstatus and the live
     // status show it, with how to join.
     "SERVER_ID": "2615de90-da95-4950-913a-246b1db49237",
