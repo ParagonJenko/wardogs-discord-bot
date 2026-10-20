@@ -262,6 +262,7 @@ import {
   parseDrives,
   type Holder,
   type RoleOutcome,
+  type StaleRole,
 } from './drives.ts';
 import {
   dueMilestone,
@@ -274,6 +275,7 @@ import {
   parseShard,
   personalBests,
   shardOf,
+  unfoldMatch,
   type LifetimeShard,
   type Milestone,
 } from './achievements.ts';
@@ -1289,14 +1291,19 @@ export class Watcher extends DurableObject<Env> {
       days: days.filter((d) => covered.has(d.day)).map((d) => d.players),
       matches: matches.filter((m) => m.endedAt >= period.start && m.endedAt < period.end),
     };
-    const drives = parseDrives(stored);
+    const saved = parseDrives(stored);
+    const drives = { ...saved, stale: await this.takeStaleRoles(config, saved.stale) };
     const { playerOfMonthRoleId, challengeRoleId } = config.drives;
+    // Who holds a role is saved before the post, so a post that fails never loses track of who has it.
     if (period.kind === 'month') {
       const winner = mostMvps(sources);
-      if (winner === null) return;
+      if (winner === null) {
+        if (drives.stale.length !== saved.stale.length) await storage.put(DRIVES_KEY, drives);
+        return;
+      }
       const moved = await this.moveRole(config, playerOfMonthRoleId, drives.month, winner.steamId);
+      await storage.put(DRIVES_KEY, { ...drives, month: moved.holder, stale: [...drives.stale, ...moved.stale] });
       await postWebhook(webhookUrl, buildPlayerOfMonthMessage(period.start, winner, hidden, moved.outcome, playerOfMonthRoleId, config.siteUrl));
-      await storage.put(DRIVES_KEY, { ...drives, month: moved.holder });
       console.info(`Posted the player of the month: ${JSON.stringify(winner.name)} (${winner.steamId}), role ${moved.outcome}`);
       return;
     }
@@ -1304,42 +1311,73 @@ export class Watcher extends DurableObject<Env> {
     const last = drives.announced === dayOf(period.start) ? challengeFor(period.start) : null;
     const winner = last?.winner(sources) ?? null;
     const moved =
-      last === null ? { holder: drives.challenge, outcome: 'none' as const } : await this.moveRole(config, challengeRoleId, drives.challenge, winner?.steamId ?? null);
+      last === null
+        ? { holder: drives.challenge, outcome: 'none' as const, stale: [] }
+        : await this.moveRole(config, challengeRoleId, drives.challenge, winner?.steamId ?? null);
+    const held = { ...drives, challenge: moved.holder, stale: [...drives.stale, ...moved.stale] };
+    await storage.put(DRIVES_KEY, held);
     const next = challengeFor(period.end);
     await postWebhook(
       webhookUrl,
       buildChallengeMessage(last === null ? null : { challenge: last, winner }, next, hidden, moved.outcome, challengeRoleId, config.siteUrl),
     );
-    await storage.put(DRIVES_KEY, { ...drives, challenge: moved.holder, announced: dayOf(period.end) });
+    // Only once people were told of it, so its winner is named next week.
+    await storage.put(DRIVES_KEY, { ...held, announced: dayOf(period.end) });
     console.info(`Posted the weekly challenge: ${next.id}${winner === null ? '' : `, last week's won by ${JSON.stringify(winner.name)} (${winner.steamId})`}`);
+  }
+
+  // The bot's token and the server, when it can give roles.
+  private roleGiver(config: Config): { botToken: string; guildId: string } | null {
+    const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
+    const { botToken } = config.accounts;
+    return botToken === undefined || !/^\d+$/.test(guildId) ? null : { botToken, guildId };
+  }
+
+  // Tries again to take the roles Discord would not take before. Gives back those it still could not.
+  private async takeStaleRoles(config: Config, stale: StaleRole[]): Promise<StaleRole[]> {
+    const giver = this.roleGiver(config);
+    if (giver === null || stale.length === 0) return stale;
+    const left: StaleRole[] = [];
+    for (const role of stale) {
+      try {
+        await setRole(giver.botToken, giver.guildId, role.userId, role.roleId, false);
+      } catch (error) {
+        console.error(`Taking role ${role.roleId} from ${role.userId} failed again: ${errorText(error)}`);
+        left.push(role);
+      }
+    }
+    return left;
   }
 
   // Moves a drive's role from whoever had it to the winner's linked Discord account (`steamId`; null takes it from them
   // and gives it to nobody). 'unlinked' when the winner has no linked account in the server. Without the bot's token or
-  // the role, no role moves. A change Discord refuses is logged.
+  // the role, no role moves. A role Discord would not take is given back as `stale`, to try again.
   private async moveRole(
     config: Config,
     roleId: string | undefined,
     previous: Holder | null,
     steamId: string | null,
-  ): Promise<{ holder: Holder | null; outcome: RoleOutcome }> {
+  ): Promise<{ holder: Holder | null; outcome: RoleOutcome; stale: StaleRole[] }> {
     const userId = steamId === null ? null : (parseSteamLink(await this.ctx.storage.get(steamLinkKey(steamId)))?.u ?? null);
     const holder = steamId === null ? null : { steamId, userId };
-    const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
-    const { botToken } = config.accounts;
-    if (roleId === undefined || botToken === undefined || !/^\d+$/.test(guildId)) return { holder, outcome: 'none' };
+    const giver = this.roleGiver(config);
+    if (roleId === undefined || giver === null) return { holder, outcome: 'none', stale: [] };
+    const stale: StaleRole[] = [];
     if (previous?.userId != null && previous.userId !== userId) {
-      await setRole(botToken, guildId, previous.userId, roleId, false).catch((error: unknown) =>
-        console.error(`Taking role ${roleId} from ${previous.userId} failed: ${errorText(error)}`),
-      );
+      try {
+        await setRole(giver.botToken, giver.guildId, previous.userId, roleId, false);
+      } catch (error) {
+        console.error(`Taking role ${roleId} from ${previous.userId} failed, trying again after the next roundup: ${errorText(error)}`);
+        stale.push({ userId: previous.userId, roleId });
+      }
     }
-    if (steamId === null) return { holder, outcome: 'none' };
-    if (userId === null) return { holder, outcome: 'unlinked' };
+    if (steamId === null) return { holder, outcome: 'none', stale };
+    if (userId === null) return { holder, outcome: 'unlinked', stale };
     try {
-      return { holder, outcome: (await setRole(botToken, guildId, userId, roleId, true)) === 'done' ? 'given' : 'unlinked' };
+      return { holder, outcome: (await setRole(giver.botToken, giver.guildId, userId, roleId, true)) === 'done' ? 'given' : 'unlinked', stale };
     } catch (error) {
       console.error(`Giving role ${roleId} to ${userId} failed: ${errorText(error)}`);
-      return { holder, outcome: 'none' };
+      return { holder, outcome: 'none', stale };
     }
   }
 
@@ -3513,7 +3551,10 @@ export class Watcher extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const today = dayOf(now);
     try {
-      if ((await storage.get(RETURN_DAY_KEY)) === today) return;
+      // The phase this check saw, as the website has it: a server below the live mark can still be live (in its grace
+      // time after a drop, or above the low-pop mark).
+      const got = await storage.get([RETURN_DAY_KEY, 'stats']);
+      if (got.get(RETURN_DAY_KEY) === today || parseStats(got.get('stats')).server?.phase !== 'seeding') return;
       await storage.put(RETURN_DAY_KEY, today);
       await this.accounting(async () => {
         const [days, all] = await Promise.all([this.recentDays(now), storage.list({ prefix: ACCOUNT_PREFIX, limit: 20_000 })]);
@@ -3664,8 +3705,10 @@ export class Watcher extends DurableObject<Env> {
 
   // ---- Milestones, personal bests and the leaderboard at the end of a match (see achievements.ts) ----
 
-  // Adds the days that closed since the last fold to everyone's lifetime totals. The first fold adds every day the bot has.
-  private async foldLifetime(now: number): Promise<void> {
+  // Adds the days that closed since the last fold to everyone's lifetime totals. The first fold adds every day the bot has,
+  // and counts what players did earlier today as told too, leaving out `ending` (the match ending now, when it is
+  // recorded today already).
+  private async foldLifetime(now: number, ending: MatchRecord | null): Promise<void> {
     const storage = this.ctx.storage;
     const today = dayOf(now);
     const through = await storage.get(LIFETIME_THROUGH_KEY);
@@ -3673,11 +3716,13 @@ export class Watcher extends DurableObject<Env> {
     const first = typeof through !== 'string';
     const listed = await storage.list({ prefix: 'players:', ...(first ? {} : { start: `players:${String(through)}` }), end: `players:${today}` });
     const keys = Array.from({ length: LIFETIME_SHARDS }, (_, i) => lifetimeKey(i));
-    const stored = await storage.get(keys);
+    const stored = await storage.get([...keys, playerDayKey(now)]);
+    const todaySoFar = parsePlayerDay(stored.get(playerDayKey(now)));
     const shards = foldDays(
       keys.map((key) => parseShard(stored.get(key))),
       [...listed.values()].map(parsePlayerDay),
       first,
+      [ending !== null && dayOf(ending.endedAt) === today ? unrecordMatchPlayers(todaySoFar, ending.players) : todaySoFar],
     );
     await storage.put({ ...Object.fromEntries(keys.map((key, i) => [key, shards[i] ?? {}])), [LIFETIME_THROUGH_KEY]: today });
     console.info(`Lifetime totals: added ${listed.size} day${listed.size === 1 ? '' : 's'}`);
@@ -3688,9 +3733,9 @@ export class Watcher extends DurableObject<Env> {
   // or not it has been recorded yet.
   private async endExtras(match: MatchState): Promise<EndExtras> {
     const now = Date.now();
-    await this.foldLifetime(now);
-    const ids = Object.keys(match.players);
     const recordKey = matchRecordKey(match.startedAt);
+    await this.foldLifetime(now, parseMatchRecord(await this.ctx.storage.get(recordKey)));
+    const ids = Object.keys(match.players);
     const [stored, days, records] = await Promise.all([
       this.ctx.storage.get([...new Set(ids.map((id) => lifetimeKey(shardOf(id)))), recordKey]),
       this.recentDays(now),
@@ -3827,11 +3872,21 @@ export class Watcher extends DurableObject<Env> {
       return { match: removed, players: 0 };
     }
     const dayKey = playerDayKey(endedAt);
-    const day = unrecordMatchPlayers(parsePlayerDay(await storage.get(dayKey)), record.players);
+    const indexes = [...new Set(record.players.map((p) => shardOf(p.steamId)))];
+    const got = await storage.get([dayKey, LIFETIME_THROUGH_KEY, ...indexes.map(lifetimeKey)]);
+    const day = unrecordMatchPlayers(parsePlayerDay(got.get(dayKey)), record.players);
+    // Its day is in the lifetime totals already: they lose it too.
+    const through = got.get(LIFETIME_THROUGH_KEY);
+    const unfolded =
+      typeof through === 'string' && dayOf(endedAt) < through
+        ? Object.fromEntries(
+            [...unfoldMatch(new Map(indexes.map((i) => [i, parseShard(got.get(lifetimeKey(i)))])), record.players)].map(([i, s]) => [lifetimeKey(i), s]),
+          )
+        : {};
     // A match of a season that is over leaves its kept roundup, which is built again without it.
     const gone = endedAt < SEASON.endsAt ? [found[0], SEASON_KEY] : [found[0]];
     // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
-    await Promise.all([storage.put({ stats, [dayKey]: day }), storage.delete(gone)]);
+    await Promise.all([storage.put({ stats, [dayKey]: day, ...unfolded }), storage.delete(gone)]);
     // The player pages read the records again, without it, and the next check keeps the season roundup again.
     this.dayCache.clear();
     this.matchCache.clear();

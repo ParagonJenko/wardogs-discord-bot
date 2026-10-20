@@ -117,16 +117,23 @@ export const challengeFor = (weekStart: number): Challenge =>
 // Who holds each drive's role, and the week whose challenge was announced, so a winner is only named for a challenge
 // people were told of.
 export type Holder = { steamId: string; userId: string | null };
-export type DrivesState = { month: Holder | null; challenge: Holder | null; announced: string | null };
+// A role Discord would not take from someone, tried again after each roundup until it is gone.
+export type StaleRole = { userId: string; roleId: string };
+export type DrivesState = { month: Holder | null; challenge: Holder | null; announced: string | null; stale: StaleRole[] };
 
 export const DRIVES_KEY = 'drives';
 
 const HolderSchema = z.object({ steamId: z.string(), userId: z.string().nullable() }).nullable().default(null);
-const DrivesSchema = z.object({ month: HolderSchema, challenge: HolderSchema, announced: z.string().nullable().default(null) });
+const DrivesSchema = z.object({
+  month: HolderSchema,
+  challenge: HolderSchema,
+  announced: z.string().nullable().default(null),
+  stale: z.array(z.object({ userId: z.string(), roleId: z.string() })).default([]),
+});
 
 export const parseDrives = (raw: unknown): DrivesState => {
   const parsed = DrivesSchema.safeParse(raw);
-  return parsed.success ? parsed.data : { month: null, challenge: null, announced: null };
+  return parsed.success ? parsed.data : { month: null, challenge: null, announced: null, stale: [] };
 };
 
 // How a winner's role went: given, they have no linked account in the server, or no role is set.

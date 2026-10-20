@@ -13,6 +13,7 @@ import {
   reached,
   shardOf,
   thousands,
+  unfoldMatch,
   type LifetimeShard,
 } from '../src/achievements.ts';
 import type { MatchRecord, PlayerDay, PlayerTotals, RankedPlayer } from '../src/players.ts';
@@ -49,6 +50,24 @@ describe('lifetime totals', () => {
 
     const later = foldDays(empty(), [{ [B]: totals({ matches: 12 }) }], false);
     expect(later[shardOf(B)]?.[B]).toEqual({ matches: 12, kills: 0, minutes: 0, told: {} });
+  });
+
+  it('counts what was done earlier today as told on the first fold, without adding it to the totals', () => {
+    const shards = foldDays(empty(), [{ [A]: totals({ matches: 9 }) }], true, [{ [A]: totals({ matches: 2 }), [B]: totals({ matches: 12 }) }]);
+
+    expect(shards[shardOf(A)]?.[A]).toEqual({ matches: 9, kills: 0, minutes: 0, told: { matches: 10 } });
+    expect(shards[shardOf(B)]?.[B]).toEqual({ matches: 0, kills: 0, minutes: 0, told: { matches: 10 } });
+  });
+
+  it('takes a removed match back off the totals, keeping what was told', () => {
+    const shards = new Map([[shardOf(A), { [A]: { matches: 100, kills: 30, minutes: 5, told: { matches: 100 } } }]]);
+    const next = unfoldMatch(shards, [
+      { steamId: A, kills: 40 },
+      { steamId: B, kills: 3 },
+    ]);
+
+    expect(next.get(shardOf(A))?.[A]).toEqual({ matches: 99, kills: 0, minutes: 5, told: { matches: 100 } });
+    expect(next.get(shardOf(B))).toBeUndefined();
   });
 
   it('keeps what was told when it adds more days', () => {
@@ -139,5 +158,11 @@ describe('nearlyTopTen', () => {
 
   it('says nothing without 10 players on the board', () => {
     expect(nearlyTopTen([player('a', 5), player('b', 3)])).toEqual(new Map());
+  });
+
+  it('tells a player with no kills yet, but never against a 10th place with none', () => {
+    const board = Array.from({ length: 10 }, (_, i) => player(`top${i}`, 20 - i));
+    expect(nearlyTopTen([...board, player('fresh', 0)]).get('fresh')).toBe(12);
+    expect(nearlyTopTen([...Array.from({ length: 10 }, (_, i) => player(`p${i}`, 0)), player('fresh', 0)])).toEqual(new Map());
   });
 });

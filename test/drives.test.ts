@@ -107,9 +107,16 @@ describe('drive posts', () => {
   });
 
   it('reads back what it saved, and starts empty', () => {
-    const state = { month: { steamId: 'a', userId: '1' }, challenge: { steamId: 'b', userId: null }, announced: '2026-10-19' };
+    const state = {
+      month: { steamId: 'a', userId: '1' },
+      challenge: { steamId: 'b', userId: null },
+      announced: '2026-10-19',
+      stale: [{ userId: '2', roleId: '9' }],
+    };
 
     expect(parseDrives(JSON.parse(JSON.stringify(state)))).toEqual(state);
-    expect(parseDrives(undefined)).toEqual({ month: null, challenge: null, announced: null });
+    expect(parseDrives(undefined)).toEqual({ month: null, challenge: null, announced: null, stale: [] });
+    // Saved before stale roles were kept.
+    expect(parseDrives({ month: null, challenge: null, announced: null }).stale).toEqual([]);
   });
 });

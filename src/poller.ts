@@ -81,6 +81,9 @@ export type BotState = {
   recent: Recent;
   // The last match that had its end-of-match messages (its start time, see matchend.ts), so it has them once.
   endMessages: number | null;
+  // Whether the seeders of the seed being counted were thanked, so a live alert retried while Discord is down does not
+  // thank them again.
+  seedThanked: boolean;
 };
 
 export type StateStore = {
@@ -222,6 +225,8 @@ const BotStateSchema = z.object({
   recent: RecentSchema.default({}),
   // Missing from state saved before end-of-match messages.
   endMessages: z.number().nullable().default(null),
+  // Missing from state saved before the seeders were thanked.
+  seedThanked: z.boolean().default(false),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -241,6 +246,7 @@ const StoredStateSchema = z.union([
       outage: null,
       recent: {},
       endMessages: null,
+      seedThanked: false,
     }),
   ),
 ]);
@@ -529,6 +535,7 @@ export const createPoller = ({
         outage: null,
         recent: {},
         endMessages: null,
+        seedThanked: false,
       });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
@@ -627,7 +634,8 @@ export const createPoller = ({
       }
     }
 
-    const thanked = await thankSeeders(credits, players, staffIds, wording, used);
+    // Once a seed: a live alert retried while Discord is down brings the same credits back.
+    const thanked = state.seedThanked ? used : await thankSeeders(credits, players, staffIds, wording, used);
     const { watch: welcomes, recent: welcomed } = await welcome(state.welcomes, players, status.players, time, wording, thanked);
     const recent =
       ending === null || endRule === null
@@ -651,6 +659,8 @@ export const createPoller = ({
       outage,
       recent,
       endMessages,
+      // The seeding count is kept while a live alert is retried, and so is having thanked its seeders.
+      seedThanked: (thanking || state.seedThanked) && tallied === null && after === 'live',
     };
     try {
       const summary = tracked.unsentSummary;
@@ -697,6 +707,7 @@ export const createPoller = ({
       outage,
       recent,
       endMessages,
+      seedThanked: false,
     });
   };
 

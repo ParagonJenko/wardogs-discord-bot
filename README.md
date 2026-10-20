@@ -272,8 +272,9 @@ A role goes to the winner's linked Discord account (see [Player accounts](#playe
 had it. A winner without one in the server is told to link their account at the website's `/account` page to get the
 role next time. A [private profile](#private-profiles) is named `[private profile]`. Both roles need
 `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`, and the bot's role above them with **Manage Roles**; without a role set, the
-messages still go out. Who holds each role, and which week's challenge was announced, is kept in `drives`. A message
-that fails is logged and not tried again, so the roundup is never posted twice.
+messages still go out. Who holds each role, and which week's challenge was announced, is kept in `drives`; who holds a
+role is saved before its message goes out. A role Discord won't take from whoever had it is tried again after each
+roundup. A message that fails is logged and not tried again, so the roundup is never posted twice.
 
 ## Season roundup
 

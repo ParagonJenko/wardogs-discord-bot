@@ -371,6 +371,7 @@ describe('poller', () => {
       outage: null,
       recent: {},
       endMessages: null,
+      seedThanked: false,
     };
     const store = memoryStore(saved);
     const { tick, sent } = setup([snapshot(crowd(15))], store);
@@ -393,14 +394,14 @@ describe('thanks for seeding', () => {
     ...Array.from({ length: 9 }, () => snapshot([ash, staffer])),
     snapshot(crowd(25, [ash, staffer])),
   ];
-  const run = async (overrides: Partial<Config>) => {
-    const queue = [...timeline];
+  const run = async (overrides: Partial<Config>, send: (message: DiscordMessage) => Promise<void> = async () => {}, more: Snapshot[] = []) => {
+    const queue = [...timeline, ...more];
     let clock = 0;
     const sent: [steamId: string, text: string][] = [];
     const tick = createPoller({
       config: { ...config, ...overrides },
       fetchSnapshot: async () => queue.shift() ?? snapshot([]),
-      send: vi.fn(async () => {}),
+      send,
       now: () => (clock += 60_000),
       log: { info: vi.fn(), error: vi.fn() },
       store: memoryStore(),
@@ -410,9 +411,21 @@ describe('thanks for seeding', () => {
       staff: async () => new Set(['staff']),
       random: () => 0,
     });
-    for (let i = 0; i < timeline.length; i++) await tick();
+    for (let i = 0; i < timeline.length + more.length; i++) await tick();
     return sent;
   };
+
+  it('thanks them once while the live alert is retried, as when Discord is down', async () => {
+    const down = async () => {
+      throw new Error('Discord is down');
+    };
+    const sent = await run({ seedingMessages: { everyMs: 5 * 60_000, siteHost: null } }, down, [
+      snapshot(crowd(25, [ash, staffer])),
+      snapshot(crowd(25, [ash, staffer])),
+    ]);
+
+    expect(sent.map(([steamId]) => steamId)).toEqual(['ash']);
+  });
 
   it('thanks each seeder still in game the moment it goes live, by name, not staff or a short seed', async () => {
     const sent = await run({ seedingMessages: { everyMs: 5 * 60_000, siteHost: null } });
@@ -1572,6 +1585,7 @@ describe('parseState', () => {
       outage: null,
       recent: {},
       endMessages: null,
+      seedThanked: false,
     });
   });
 
@@ -1591,6 +1605,7 @@ describe('parseState', () => {
       outage: null,
       recent: {},
       endMessages: null,
+      seedThanked: false,
     });
   });
 

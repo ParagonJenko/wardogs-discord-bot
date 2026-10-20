@@ -72,20 +72,48 @@ export const reached = (t: Lifetime, kind: MilestoneKind): number => LADDERS[kin
 const reachedAll = (t: Lifetime): LifetimeEntry['told'] =>
   Object.fromEntries(KINDS.flatMap((kind) => (reached(t, kind) > 0 ? [[kind, reached(t, kind)]] : [])));
 
-// Adds closed days to the shards. On the first fold (`first`), milestones already passed count as told, so nobody is told
-// of a milestone they passed before the bot kept these.
-export const foldDays = (shards: LifetimeShard[], days: PlayerDay[], first: boolean): LifetimeShard[] => {
+const sumDays = (shards: LifetimeShard[], days: PlayerDay[]): LifetimeShard[] => {
   const next = shards.map((s) => ({ ...s }));
   for (const p of totals(days)) {
     const shard = next[shardOf(p.steamId)] ?? {};
     const known = shard[p.steamId] ?? { matches: 0, kills: 0, minutes: 0, told: {} };
-    const sum = {
+    shard[p.steamId] = {
       matches: known.matches + p.matches,
       kills: known.kills + p.kills,
       minutes: known.minutes + p.seedingMinutes + p.liveMinutes,
+      told: known.told,
     };
-    shard[p.steamId] = { ...sum, told: first ? reachedAll(sum) : known.told };
     next[shardOf(p.steamId)] = shard;
+  }
+  return next;
+};
+
+// Adds closed days to the shards. On the first fold (`first`), milestones already passed count as told, so nobody is told
+// of a milestone they passed before the bot kept these, counting what they did earlier today (`today`, which is not added).
+export const foldDays = (shards: LifetimeShard[], days: PlayerDay[], first: boolean, today: PlayerDay[] = []): LifetimeShard[] => {
+  const next = sumDays(shards, days);
+  if (!first) return next;
+  const withToday = sumDays(next, today);
+  return withToday.map((shard, i) =>
+    Object.fromEntries(
+      Object.entries(shard).map(([steamId, e]) => [
+        steamId,
+        { ...(next[i]?.[steamId] ?? { matches: 0, kills: 0, minutes: 0 }), told: reachedAll(e) },
+      ]),
+    ),
+  );
+};
+
+// The shards after a match was taken off the records (see removeMatch), when its day was already added to them. What the
+// players were told of stays.
+export const unfoldMatch = (shards: Map<number, LifetimeShard>, players: { steamId: string; kills: number }[]): Map<number, LifetimeShard> => {
+  const next = new Map(shards);
+  for (const p of players) {
+    const shard = { ...(next.get(shardOf(p.steamId)) ?? {}) };
+    const known = shard[p.steamId];
+    if (known === undefined) continue;
+    shard[p.steamId] = { ...known, matches: Math.max(0, known.matches - 1), kills: Math.max(0, known.kills - p.kills) };
+    next.set(shardOf(p.steamId), shard);
   }
   return next;
 };
@@ -159,9 +187,10 @@ export const NEARLY_MOST = 25;
 // For each player outside the top BOARD_SIZE for kills, how many more kills would take them past the last place in it, by
 // Steam ID, when that is NEARLY_MOST or fewer. `players` are everyone's totals over the leaderboard's days.
 export const nearlyTopTen = (players: RankedPlayer[]): Map<string, number> => {
-  const board = players.filter((p) => p.kills > 0).sort(byKills);
+  // Everyone, so a player with no kills yet can be told too; the board itself only lists players with a kill.
+  const board = [...players].sort(byKills);
   const last = board[BOARD_SIZE - 1];
-  if (last === undefined) return new Map();
+  if (last === undefined || last.kills === 0) return new Map();
   return new Map(
     board.slice(BOARD_SIZE).flatMap((p) => {
       const short = last.kills - p.kills + 1;
