@@ -200,7 +200,7 @@ import {
   type JoinLog,
 } from './joinlog.ts';
 import { buildFunnel, type Funnel } from './funnel.ts';
-import { createLifetime, dayPlayers, exportTable, firstStayDay, rebuildPlayers, readLifetime, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type TableName } from './lifetime.ts';
+import { createLifetime, dayPlayers, exportTable, firstStayDay, rebuildPlayers, readLifetime, readPublicLifetime, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
 import { buildNewPlayers, type Cohort } from './newplayers.ts';
 import { buildRetention, REMOVAL_AFTER_MS, sessionRows, type Removal, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
@@ -3935,6 +3935,11 @@ export class Watcher extends DurableObject<Env> {
     return readLifetime(this.lifetimeSql(), dayOf(Date.now()));
   }
 
+  // What the public website shows of the long-term records (see readPublicLifetime).
+  publicLifetime(): PublicLifetime {
+    return readPublicLifetime(this.lifetimeSql(), dayOf(Date.now()));
+  }
+
   // One of the long-term tables as CSV, for analysis.
   adminLifetimeCsv(table: TableName): string {
     return toCsv(exportTable(this.lifetimeSql(), dayOf(Date.now()), table));
@@ -4311,6 +4316,7 @@ export class Watcher extends DurableObject<Env> {
 // mostly gets it over its WebSocket instead.
 const CACHE_MS = 30_000;
 const LIVE_CACHE_MS = 5_000;
+const LIFETIME_CACHE_MS = 10 * 60_000;
 // One answer per player page; past this many, the oldest are dropped.
 const CACHE_ENTRIES = 200;
 const cache = new Map<string, { body: Promise<string | null>; at: number }>();
@@ -4357,6 +4363,8 @@ const publicRoute = (
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
   if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
+  // Added once a day, so kept for longer.
+  if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime(), keepMs: LIFETIME_CACHE_MS };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
   return null;

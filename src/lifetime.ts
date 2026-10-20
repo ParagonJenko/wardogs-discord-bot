@@ -405,3 +405,66 @@ export const toCsv = (table: { columns: string[]; rows: Value[][] }): string => 
 // Used by the worker to name a player's minutes.
 export const dayPlayers = (players: Record<string, { seedingMinutes: number; liveMinutes: number; matches: number }>): DayPlayers =>
   Object.fromEntries(Object.entries(players).map(([id, p]) => [id, { minutes: p.seedingMinutes + p.liveMinutes, matches: p.matches }]));
+
+// What the public website shows: only the figures players like to see, with no one named. Nothing about who left, who
+// stopped coming, how new players fared, seeding or Discord. `busy` is the average players on the server in each hour of the
+// week (UTC, Monday 00:00 first), and is there once seven days of stays are kept.
+export const PUBLIC_DAYS = 90;
+export const PUBLIC_WEEKS = 104;
+export const PUBLIC_MAPS = 8;
+export const BUSY_LEAST_DAYS = 7;
+
+export type PublicLifetime = {
+  since: string | null;
+  through: string | null;
+  totals: { players: number; player_hours: number; matches: number; days: number; players_last_30: number; regulars: number };
+  records: {
+    most_players: { day: string; players: number } | null;
+    biggest_match: { day: string; players: number } | null;
+    most_matches: { day: string; matches: number } | null;
+  };
+  typical_stay_minutes: number | null;
+  days: { day: string; players: number; peak: number | null }[];
+  weeks: { week: string; players: number; new_players: number | null }[];
+  months: { month: string; players: number; new_players: number | null; hours: number; matches: number }[];
+  maps: { map: string; matches: number }[];
+  busy: { days: number; players: number[] } | null;
+};
+
+const best = <T>(items: T[], value: (item: T) => number | null): T | null =>
+  items.reduce<T | null>((top, item) => ((value(item) ?? -1) > (top === null ? -1 : (value(top) ?? -1)) ? item : top), null);
+
+export const readPublicLifetime = (sql: Sql, today: string): PublicLifetime => {
+  const l = readLifetime(sql, today);
+  const rowsOf = l.daily as { day: string; unique_players: number | null; peak_players: number | null; matches: number | null; median_stay_minutes: number | null }[];
+  const mostPlayers = best(rowsOf, (r) => r.unique_players);
+  const biggest = best(rowsOf, (r) => r.peak_players);
+  const mostMatches = best(rowsOf, (r) => r.matches);
+  const stays = rowsOf.slice(-30).flatMap((r) => (r.median_stay_minutes === null ? [] : [r.median_stay_minutes]));
+  return {
+    since: l.since,
+    through: l.through,
+    totals: {
+      players: l.summary.unique_players,
+      player_hours: l.summary.player_hours,
+      matches: l.summary.matches,
+      days: l.summary.days,
+      players_last_30: l.summary.active_last_30,
+      regulars: l.summary.regulars,
+    },
+    records: {
+      most_players: mostPlayers === null || !mostPlayers.unique_players ? null : { day: mostPlayers.day, players: mostPlayers.unique_players },
+      biggest_match: biggest === null || !biggest.peak_players ? null : { day: biggest.day, players: biggest.peak_players },
+      most_matches: mostMatches === null || !mostMatches.matches ? null : { day: mostMatches.day, matches: mostMatches.matches },
+    },
+    typical_stay_minutes: stays.length === 0 ? null : round1(stays.reduce((a, b) => a + b, 0) / stays.length),
+    days: rowsOf.slice(-PUBLIC_DAYS).map((r) => ({ day: r.day, players: r.unique_players ?? 0, peak: r.peak_players })),
+    weeks: l.weekly.slice(-PUBLIC_WEEKS).map((w) => ({ week: w.period, players: w.unique_players, new_players: w.new_players })),
+    months: l.monthly.map((m) => ({ month: m.period, players: m.unique_players, new_players: m.new_players, hours: Math.round(m.player_minutes / 60), matches: m.matches })),
+    maps: l.maps.slice(0, PUBLIC_MAPS).map((m) => ({ map: m.map, matches: m.matches })),
+    busy:
+      l.heat.days < BUSY_LEAST_DAYS
+        ? null
+        : { days: l.heat.days, players: l.heat.minutes.map((minutes) => round1(minutes / 60 / (l.heat.days / 7))) },
+  };
+};

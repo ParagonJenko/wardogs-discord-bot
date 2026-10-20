@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { Sql } from '../src/killfeed.ts';
-import { createLifetime, exportTable, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
+import { createLifetime, exportTable, readPublicLifetime, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
 import { createSessions } from '../src/joinlog.ts';
 
 const database = (): Sql => {
@@ -126,5 +126,40 @@ describe('the long-term records', () => {
     expect(csv[1]?.startsWith('2026-10-01,2,,')).toBe(true);
     expect(toCsv({ columns: ['map'], rows: [['=cmd'], ['a,"b"']] })).toBe('map\r\n\'=cmd\r\n"a,""b"""\r\n');
     expect(exportTable(sql, day(5), 'cohorts').columns.slice(0, 3)).toEqual(['week', 'new_players', 'eligible_1d']);
+  });
+});
+
+describe('what the public sees', () => {
+  it('has the headline figures, records, weeks, months and maps, and nothing about who left or came back', () => {
+    const sql = stored();
+    const match = { startedAt: at(2, 18), map: 'Narva', liveAt: at(2, 19), endedAt: at(2, 20), peakPlayers: 60, scores: [100, 40] };
+    for (const d of [1, 2, 3, 8]) writeDay(sql, { ...empty(d), matches: d === 2 ? [match] : [] });
+    const pub = readPublicLifetime(sql, day(15));
+    expect(pub.totals).toMatchObject({ players: 4, player_hours: 9, matches: 1, days: 4 });
+    expect(pub.records.most_players).toEqual({ day: day(2), players: 3 });
+    expect(pub.records.biggest_match).toEqual({ day: day(2), players: 60 });
+    expect(pub.weeks.map((w) => [w.week, w.players])).toEqual([['2026-09-28', 4], ['2026-10-05', 1]]);
+    expect(pub.months).toEqual([{ month: '2026-10', players: 4, new_players: 2, hours: 9, matches: 1 }]);
+    expect(pub.maps).toEqual([{ map: 'Narva', matches: 1 }]);
+    // Seven days of stays are needed before it says when the server is busiest.
+    expect(pub.busy).toBeNull();
+    expect(Object.keys(pub)).not.toContain('cohorts');
+    expect(JSON.stringify(pub)).not.toMatch(/lapsed|left_early|bounce|seed|invite|steam/i);
+  });
+
+  it('averages the players on in each hour of the week', () => {
+    const sql = database();
+    createLifetime(sql);
+    createSessions(sql);
+    // Fourteen days of stays, each with 60 minutes on in the hour of Monday 19:00.
+    const minutes = Array.from({ length: 168 }, (_, i) => (i === 19 ? 60 : 0));
+    for (let d = 1; d <= 14; d += 1) {
+      writeDay(sql, { ...empty(d), stays: { sessions: 1, averageMinutes: 60, medianMinutes: 60, bounce: null, leaves: { timing: { early: 0, mid: 0, late: 0, end: 0, between: 0 }, finale: {} }, excluded: 0, detail: { matches: [], seeding: [] }, heat: { leaves: Array.from({ length: 168 }, () => 0), minutes } } });
+    }
+    const busy = readPublicLifetime(sql, day(20)).busy;
+    // 14 days of 60 minutes is 840 minutes: over two Mondays, 7 players on at a time.
+    expect(busy?.days).toBe(14);
+    expect(busy?.players[19]).toBe(7);
+    expect(busy?.players[20]).toBe(0);
   });
 });

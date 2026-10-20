@@ -1082,6 +1082,14 @@ players by week and how many came back within 1, 7, 30 and 90 days, once those d
 the all-time `heat`. `GET /api/admin/lifetime.csv?table=daily|matches|weekly|monthly|cohorts` gives a table as CSV, with
 no Steam IDs, for a spreadsheet or a notebook.
 
+`GET /api/lifetime` (public, no sign-in, cached for 10 minutes) gives the website's stats page the part of the records the public
+would like and nothing else: players ever, player hours, matches, players in the last 30 days and regulars; the record
+day (most players), the biggest match (most at once) and the most matches in a day; the typical stay over the last 30 days;
+players for each of the last 90 days and each of the last 104 weeks, with the new ones; each month's players, new players,
+hours and matches; the favourite maps (matches played, up to 8); and the average players on in each hour of the week (UTC,
+Monday first), once 7 days of stays are kept. Nothing about who left or stopped coming, new players' return rates, seeding,
+Discord or any player.
+
 ### Kills and headshots
 
 Many headshots, day after day, can be a sign of cheating. The staff page shows who gets them, from the
