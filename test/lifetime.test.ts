@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { Sql } from '../src/killfeed.ts';
-import { createLifetime, exportTable, readPublicLifetime, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
+import { createLifetime, exportTable, newPlayerDays, readPublicLifetime, removeArchivedMatch, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
 import { createSessions } from '../src/joinlog.ts';
 
 const database = (): Sql => {
@@ -163,3 +163,66 @@ describe('what the public sees', () => {
     expect(busy?.players[20]).toBe(0);
   });
 });
+
+describe('review fixes', () => {
+  const played = (sql: Sql, days: string[], id: string, minutes = 60): void => {
+    for (const d of days) writePlayerDays(sql, d, { [id]: { minutes, matches: 1 } });
+  };
+  const dayFrom = (iso: string, plus: number): string => new Date(Date.parse(`${iso}T00:00:00Z`) + plus * 86_400_000).toISOString().slice(0, 10);
+
+  it('counts a lapsed regular only if they once played 5 or more days in 30', () => {
+    const sql = database();
+    createLifetime(sql);
+    // anchor plays once, early, so the first day is not theirs. reg played 5 days in a week, then stopped. monthly played on
+    // 5 days, a month apart, and stopped.
+    played(sql, ['2026-01-01'], 'anchor');
+    played(sql, [0, 1, 2, 3, 4].map((n) => dayFrom('2026-02-01', n)), 'reg');
+    played(sql, [0, 1, 2, 3, 4].map((n) => dayFrom('2026-02-01', n * 31)), 'monthly');
+    rebuildPlayers(sql);
+    const summary = readLifetime(sql, '2026-12-01').summary;
+    expect(summary.lapsed_regulars).toBe(1);
+  });
+
+  it('covers the 30 completed days before today', () => {
+    const sql = database();
+    createLifetime(sql);
+    played(sql, ['2026-09-20'], 'a');
+    played(sql, ['2026-10-01'], 'b');
+    rebuildPlayers(sql);
+    // Today is 31 October: 1 October is the first of the 30 days before it.
+    const summary = readLifetime(sql, '2026-10-31').summary;
+    expect(summary).toMatchObject({ new_last_30: 1, active_last_30: 1 });
+  });
+
+  it('knows who is new by the day they were first seen, not the first day', () => {
+    const sql = database();
+    createLifetime(sql);
+    played(sql, ['2026-10-01', '2026-10-02'], 'a');
+    played(sql, ['2026-10-02'], 'b');
+    rebuildPlayers(sql);
+    expect([...newPlayerDays(sql)]).toEqual([['b', '2026-10-02']]);
+  });
+
+  it('takes a removed match out of the archive and its players’ days', () => {
+    const sql = database();
+    createLifetime(sql);
+    writePlayerDays(sql, day(1), { a: { minutes: 60, matches: 2 }, b: { minutes: 60, matches: 1 } });
+    rebuildPlayers(sql);
+    const one = { startedAt: at(1, 18), map: 'Narva', liveAt: at(1, 18), endedAt: at(1, 19), peakPlayers: 60, scores: [100, 40] };
+    const two = { startedAt: at(1, 20), map: 'Mutaha', liveAt: at(1, 20), endedAt: at(1, 21), peakPlayers: 30, scores: [100, 90] };
+    writeDay(sql, { ...empty(1), matches: [one, two] });
+    expect(readLifetime(sql, day(5)).daily[0]).toMatchObject({ matches: 2, peak_players: 60 });
+    removeArchivedMatch(sql, one.endedAt, ['a', 'b']);
+    const after = readLifetime(sql, day(5));
+    expect(after.daily[0]).toMatchObject({ matches: 1, peak_players: 30 });
+    expect(after.summary.matches).toBe(1);
+    expect(after.maps.map((m) => m.map)).toEqual(['Mutaha']);
+    // a had 2 matches that day and b 1: one fewer each, and none below 0.
+    expect(rows(sql, 'SELECT steam_id, matches FROM player_days ORDER BY steam_id')).toEqual([{ steam_id: 'a', matches: 1 }, { steam_id: 'b', matches: 0 }]);
+    // Removing one that is not there changes nothing.
+    removeArchivedMatch(sql, one.endedAt, ['a']);
+    expect(readLifetime(sql, day(5)).summary.matches).toBe(1);
+  });
+});
+
+const rows = (sql: Sql, query: string): Record<string, unknown>[] => sql.exec(query).toArray();

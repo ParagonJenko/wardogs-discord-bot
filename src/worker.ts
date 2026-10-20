@@ -200,7 +200,7 @@ import {
   type JoinLog,
 } from './joinlog.ts';
 import { buildFunnel, type Funnel } from './funnel.ts';
-import { createLifetime, dayPlayers, exportTable, firstStayDay, rebuildPlayers, readLifetime, readPublicLifetime, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
+import { createLifetime, dayPlayers, exportTable, firstStayDay, newPlayerDays, rebuildPlayers, readLifetime, readPublicLifetime, removeArchivedMatch, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
 import { buildNewPlayers, type Cohort } from './newplayers.ts';
 import { buildRetention, REMOVAL_AFTER_MS, sessionRows, type Removal, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
@@ -3855,12 +3855,23 @@ export class Watcher extends DurableObject<Env> {
         this.lifetimeRolledOn = yesterday;
         return;
       }
+      // A match running across midnight has not ended, so the day's last match and the leaves in it can't be placed yet:
+      // wait for it, for up to LIFETIME_WAIT_MS, trying again at the next check.
+      const live = await this.ctx.storage.get(['online', 'state', JOIN_LOG_KEY]);
+      const current = parseState(live.get('state'))?.match ?? null;
+      const dayEnd = Date.parse(`${yesterday}T00:00:00Z`) + DAY_MS;
+      const running = current !== null && current.endedAt === undefined && current.startedAt < dayEnd ? current : null;
+      if (running !== null && now - dayEnd < LIFETIME_WAIT_MS) {
+        this.lifetimeTriedAt = null;
+        return;
+      }
       const [kept, records, stored] = await Promise.all([this.recentDays(now), this.matchRecords(now), this.ctx.storage.list({ prefix: 'mod:' })]);
       const bans = parseBanBook(await this.ctx.storage.get('bans'));
       const clicks = parseClicks(await this.ctx.storage.get(DISCORD_CLICKS_KEY));
+      // The first time, from the first day anyone played; after that, every day since the last, even empty ones.
       const firstWithPlayers = kept.find((d) => Object.keys(d.players).length > 0)?.day;
-      if (firstWithPlayers === undefined) return;
-      const todo = kept.filter((d) => d.day >= firstWithPlayers && d.day <= yesterday && (through === undefined || d.day > through));
+      if (through === undefined && firstWithPlayers === undefined) return;
+      const todo = kept.filter((d) => d.day <= yesterday && (through === undefined ? d.day >= (firstWithPlayers ?? yesterday) : d.day > through));
       if (todo.length === 0) {
         kv.put(LIFETIME_ROLLED_KEY, yesterday);
         this.lifetimeRolledOn = yesterday;
@@ -3875,16 +3886,23 @@ export class Watcher extends DurableObject<Env> {
         ...[...stored].flatMap(([key, value]) => parseModLog(value).flatMap((e) => (e.action === 'kick' || e.action === 'ban' ? [{ steamId: key.slice('mod:'.length), at: e.at }] : []))),
         ...Object.entries(bans).map(([steamId, ban]): Removal => ({ steamId, at: ban.at, until: ban.until })),
       ];
+      // Players still in game are stays that are not over: they were there for the matches they were in.
+      const online = this.onlineNow(now, live.get('online'));
+      const inGame = online === null ? {} : (parseJoinLog(live.get(JOIN_LOG_KEY))?.inGame ?? {});
+      const ongoing = Object.entries(inGame).map(([steamId, entry]) => ({ steamId, since: entry.since }));
+      const liveMatch = running === null || records.some((r) => r.startedAt === running.startedAt) ? null : { startedAt: running.startedAt, liveAt: running.liveAt };
       const snapshot = await this.accountCounts();
       this.ctx.storage.transactionSync(() => {
         for (const d of todo) writePlayerDays(sql, d.day, dayPlayers(d.players));
         rebuildPlayers(sql);
+        // Who is new, now the players are known, for new players' short stays.
+        const newOn = newPlayerDays(sql);
         for (const d of todo) {
           const start = Date.parse(`${d.day}T00:00:00Z`);
           const end = start + DAY_MS;
           const retention =
             staysFrom !== null && d.day >= staysFrom
-              ? buildRetention({ now: end - 1, days: 1, until: end, sessions, matches, removed, newOn: null, clampHeat: false })
+              ? buildRetention({ now: end - 1, days: 1, until: end, sessions, matches, ongoing, live: liveMatch, removed, newOn, clampHeat: false })
               : null;
           const input: DayInput = {
             day: d.day,
@@ -4067,6 +4085,12 @@ export class Watcher extends DurableObject<Env> {
     this.dayCache.clear();
     this.matchCache.clear();
     this.seasonLooked = false;
+    // The long-term records lose it too (a failure is only logged, as the match is removed already).
+    try {
+      removeArchivedMatch(this.lifetimeSql(), endedAt, record.players.map((p) => p.steamId));
+    } catch (error) {
+      console.error(`Long-term records could not drop the removed match: ${errorText(error)}`);
+    }
     return { match: removed, players: record.players.length };
   }
 
@@ -4953,6 +4977,8 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
 // The UTC day the long-term records (lifetime.ts) are done up to.
 const LIFETIME_ROLLED_KEY = 'lifetimeRolled';
 const LIFETIME_RETRY_MS = 60 * 60_000;
+// How long after midnight a match still running across it is waited for before the day is added anyway.
+const LIFETIME_WAIT_MS = 3 * 60 * 60_000;
 
 // The alert review's longest period, and its usual one.
 const REVIEW_PERIOD_DAYS = 30;

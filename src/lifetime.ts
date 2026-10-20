@@ -117,12 +117,35 @@ export const rebuildPlayers = (sql: Sql): void => {
   sql.exec('INSERT INTO players (steam_id, first_seen, last_seen, active_days, minutes, matches) SELECT steam_id, MIN(day), MAX(day), COUNT(*), SUM(minutes), SUM(matches) FROM player_days GROUP BY steam_id');
 };
 
+const rows = (sql: Sql, query: string, ...bindings: (string | number)[]): Record<string, unknown>[] => sql.exec(query, ...bindings).toArray();
+
 const count = (sql: Sql, query: string, ...bindings: (string | number)[]): number => Number(Object.values(sql.exec(query, ...bindings).toArray()[0] ?? {})[0] ?? 0);
 
 // The first day anyone is recorded on: players first seen then could have played before it, so are not new.
 const dataStart = (sql: Sql): string | null => {
   const [row] = sql.exec('SELECT MIN(day) AS day FROM player_days').toArray();
   return typeof row?.['day'] === 'string' ? row['day'] : null;
+};
+
+// Who is new, by Steam ID and the day they were first seen, for telling new players' short stays from the rest: everyone
+// first seen after the first day recorded (the first day's players could have played before it).
+export const newPlayerDays = (sql: Sql): Map<string, string> => {
+  const start = dataStart(sql);
+  if (start === null) return new Map();
+  return new Map(rows(sql, 'SELECT steam_id, first_seen FROM players WHERE first_seen > ?', start).map((r) => [String(r['steam_id']), String(r['first_seen'])]));
+};
+
+// A match removed by staff (a mistake): it goes from match_stats, its day's match count and busiest match are worked out
+// again, and each of its players has one match fewer that day. What the stays gave the day (seeding, leaves) stays, as
+// it cannot be worked out again.
+export const removeArchivedMatch = (sql: Sql, endedAt: number, steamIds: string[]): void => {
+  const [row] = rows(sql, 'SELECT day FROM match_stats WHERE ended_at = ?', endedAt);
+  if (row === undefined) return;
+  const day = String(row['day']);
+  sql.exec('DELETE FROM match_stats WHERE ended_at = ?', endedAt);
+  sql.exec('UPDATE daily_stats SET matches = (SELECT COUNT(*) FROM match_stats WHERE day = ?), peak_players = (SELECT MAX(peak_players) FROM match_stats WHERE day = ?) WHERE day = ?', day, day, day);
+  for (const steamId of steamIds) sql.exec('UPDATE player_days SET matches = MAX(0, matches - 1) WHERE steam_id = ? AND day = ?', steamId, day);
+  rebuildPlayers(sql);
 };
 
 // What the day's Discord numbers were, and when taken (`accounts` and `linked` are as the bot counts them then).
@@ -225,7 +248,6 @@ export const firstStayDay = (sql: Sql): string | null => {
 const WEEK = "date(day, '-' || ((CAST(strftime('%w', day) AS INTEGER) + 6) % 7) || ' days')";
 const WEEK_OF_FIRST = "date(first_seen, '-' || ((CAST(strftime('%w', first_seen) AS INTEGER) + 6) % 7) || ' days')";
 
-const rows = (sql: Sql, query: string, ...bindings: (string | number)[]): Record<string, unknown>[] => sql.exec(query, ...bindings).toArray();
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
@@ -277,7 +299,8 @@ export type Lifetime = {
 // Everything on the Lifetime view, as of the UTC day `today` (which is not in it: it is not over).
 export const readLifetime = (sql: Sql, today: string): Lifetime => {
   const start = dataStart(sql);
-  const since30 = new Date(Date.parse(`${today}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10);
+  // The 30 days before today, which is not in the records.
+  const since30 = new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86_400_000).toISOString().slice(0, 10);
   const [through] = rows(sql, 'SELECT MAX(day) AS day FROM daily_stats');
   const summary = {
     days: count(sql, 'SELECT COUNT(*) FROM daily_stats'),
@@ -285,7 +308,16 @@ export const readLifetime = (sql: Sql, today: string): Lifetime => {
     new_last_30: start === null ? 0 : count(sql, 'SELECT COUNT(*) FROM players WHERE first_seen >= ? AND first_seen > ?', since30, start),
     active_last_30: count(sql, 'SELECT COUNT(*) FROM players WHERE last_seen >= ?', since30),
     regulars: count(sql, 'SELECT COUNT(*) FROM (SELECT steam_id FROM player_days WHERE day >= ? GROUP BY steam_id HAVING COUNT(*) >= ?)', since30, REGULAR_DAYS_30),
-    lapsed_regulars: count(sql, 'SELECT COUNT(*) FROM players WHERE last_seen < ? AND active_days >= ?', since30, REGULAR_DAYS_30),
+    // Was a regular once (5 or more days in some 30), and has not been seen for 30 days.
+    lapsed_regulars: count(
+      sql,
+      `SELECT COUNT(*) FROM players p WHERE p.last_seen < ? AND p.active_days >= ? AND EXISTS (
+        SELECT 1 FROM player_days a WHERE a.steam_id = p.steam_id AND
+          (SELECT COUNT(*) FROM player_days b WHERE b.steam_id = a.steam_id AND b.day >= a.day AND b.day < date(a.day, '+30 days')) >= ?)`,
+      since30,
+      REGULAR_DAYS_30,
+      REGULAR_DAYS_30,
+    ),
     player_hours: Math.round(count(sql, 'SELECT COALESCE(SUM(minutes), 0) FROM players') / 60),
     matches: count(sql, 'SELECT COUNT(*) FROM match_stats'),
   };

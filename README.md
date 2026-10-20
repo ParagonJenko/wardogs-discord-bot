@@ -1056,8 +1056,11 @@ played a match in the last 90 days, and how many 5 or more (counts only).
 
 The stays, kill feed and hourly figures only keep a few weeks, so each UTC day is summed up once it is over and kept for
 good, in the Durable Object's SQLite database (`src/lifetime.ts`). A few MB a year. The first check after midnight UTC
-adds yesterday (`lifetimeRolled`); the first time, it adds every day the player records go back to (90). A failed try is
-repeated hourly. Nothing is deleted, and a value already kept is never replaced by a null, so doing a day again after its
+adds yesterday (`lifetimeRolled`), once any match still running across midnight has ended (it waits up to 3 hours for it);
+the first time, it adds every day the player records go back to (90), and after that every day since the last, even
+empty ones. A failed try is repeated hourly. Players still in game then count as present for the matches they were in.
+A match staff remove with `/removematch` is taken out of the records too (its day's matches and busiest match, and each
+player's matches that day); what the stays gave the day stays. Nothing is deleted, and a value already kept is never replaced by a null, so doing a day again after its
 stays are gone keeps what was kept.
 
 | Table | A row is | Holds |
