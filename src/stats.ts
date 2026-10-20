@@ -418,17 +418,17 @@ const median = (values: number[]): number | null => {
 // cannot drag a busy hour down. Readings during a crash were never counted (see trackCrashes). A day's average is its
 // players summed over its readings in that hour, and its busy share its busy readings over the readings checked
 // against `busyThreshold`. Days with no readings in the hour are left out, and from the busy shares so are days
-// counted under another threshold, before busy readings were counted, or with no players at all. Averages are rounded to a tenth and shares
+// counted under another threshold, before busy readings were counted, or never out of seeding. Averages are rounded to a tenth and shares
 // to a hundredth to keep the JSON short. The weekdays and weekends are worked out the same way from their own days
 // (UTC), as the server is busy at different hours on each.
 const isWeekend = (day: string): boolean => [0, 6].includes(new Date(`${day}T00:00:00Z`).getUTCDay());
 
-export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number): Hourly => {
+export const hourlyAverages = (hours: HourTotals[], now: number, busyThreshold: number, liveThreshold: number): Hourly => {
   const oldest = dayOf(now - (DAYS_KEPT - 1) * DAY_MS);
   const kept = hours.filter((h) => h.day >= oldest);
-  // A day nobody joined at all, with no attempt to seed, says nothing about when the server is busy, so it is left out
-  // of the busy shares. Its hours still count towards the average players.
-  const attempted = (h: HourTotals) => h.players.some((count) => count > 0);
+  // A day that never got out of seeding, with no hour averaging `liveThreshold` players, says nothing about when the
+  // server is busy, so it is left out of the busy shares. Its hours still count towards the average players.
+  const attempted = (h: HourTotals) => h.players.some((total, hour) => h.readings[hour] > 0 && total / h.readings[hour] >= liveThreshold);
   const sameThreshold = kept.filter((h) => h.busyThreshold === busyThreshold && attempted(h));
   const typical = (days: HourTotals[], part: (h: HourTotals) => number[], whole: (h: HourTotals) => number[], places: number) =>
     Array.from({ length: 24 }, (_, hour) => {
@@ -463,7 +463,7 @@ export const publicStats = (
   ...stats,
   matches: matches.map((m) => ({ ...m, top: named(m.top, idOf) })),
   currentMatch: publicCurrentMatch(currentMatch, idOf),
-  hourly: hourlyAverages(hours, now, thresholds.busy),
+  hourly: hourlyAverages(hours, now, thresholds.busy, thresholds.live),
   leaderboard: {
     days: leaderboard.days,
     kdMinMatches: leaderboard.kdMinMatches,
