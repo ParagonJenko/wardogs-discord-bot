@@ -569,6 +569,19 @@ describe('hourlyAverages', () => {
     expect(busy[20]).toBe(1);
   });
 
+  it('leaves a day with no players at all, so no attempt to seed, out of the busy shares', () => {
+    const evening = (day: number, players: number) =>
+      Array.from({ length: 10 }, (_, minute) => observation(MIDNIGHT + day * DAY + 20 * HOUR + minute * 60_000, players));
+    // A busy evening, then two days nobody joined: the empty days must not pull the median down.
+    const stats = [...evening(0, 98), ...evening(1, 0), ...evening(2, 0)].reduce(
+      (acc, obs) => recordObservation(acc, obs, 1, LEVELS),
+      emptyStats(),
+    );
+
+    const { busy } = hourlyAverages(stats.hours, MIDNIGHT + 2 * DAY + 21 * HOUR, BUSY);
+    expect(busy[20]).toBe(1);
+  });
+
   it('counts a day with few readings in an hour as one day, like the rest', () => {
     const stats = [
       ...Array.from({ length: 60 }, (_, minute) => observation(MIDNIGHT + 20 * HOUR + minute * 60_000, 98)),
