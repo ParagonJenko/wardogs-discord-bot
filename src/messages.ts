@@ -200,14 +200,17 @@ export const nextMessage = (
 // website's top seeders board.
 export const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
   if (vip) {
-    const offer = `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a whitelist slot.`;
+    const offer =
+      vip.seedDays === 1
+        ? `Seed for over ${vip.seedMinutes} min and get a whitelist slot for ${days(vip.lengthDays)}.`
+        : `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a whitelist slot.`;
     return siteHost ? `${offer} How at ${siteHost}` : offer;
   }
   return siteHost ? `Top seeders make the leaderboard at ${siteHost}` : 'Thanks for helping get it live!';
 };
 
 // "We're seeding! 5 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How
-// at gaminginit.com"
+// at gaminginit.com". With one seed day enough: "Seed for over 10 min and get a whitelist slot for 3 days."
 export const seedingPick = (
   players: number,
   live: number,

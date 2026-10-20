@@ -239,9 +239,14 @@ const CALL_TO_ACTION: Record<AlertKind, string> = {
 
 const span = (days: number): string => (days === 7 ? 'a week' : plural(days, 'day'));
 
-// What seeding earns: "Seed on 3 days in a week and get a whitelist slot for a week."
+// How often to seed for VIP: "on 3 days in a week", or "once in 3 days" when one day is enough.
+export const seedTerms = (vip: VipRule): string =>
+  vip.seedDays === 1 ? `once in ${span(vip.windowDays)}` : `on ${plural(vip.seedDays, 'day')} in ${span(vip.windowDays)}`;
+
+// What seeding earns: "Seed on 3 days in a week and get a whitelist slot for a week.", or "Seed once and get a
+// whitelist slot for 3 days."
 export const vipOffer = (vip: VipRule): string =>
-  `Seed on ${plural(vip.seedDays, 'day')} in ${span(vip.windowDays)} and get a whitelist slot for ${span(vip.lengthDays)}.`;
+  `Seed ${vip.seedDays === 1 ? 'once' : seedTerms(vip)} and get a whitelist slot for ${span(vip.lengthDays)}.`;
 
 // What counts as a seed.
 export const vipRule = (vip: VipRule): string =>

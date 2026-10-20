@@ -89,6 +89,8 @@
     "FEED_ALERTS": "on",
     // Automatic VIP: seed on this many days in a week to get a whitelist slot for a week. "0" turns it off.
     "VIP_SEED_DAYS": "3",
+    // Which VIP rule: "week" (VIP_SEED_DAYS above) or "day" (seed on one day to get a whitelist slot for 3 days).
+    "VIP_MODE": "week",
     // A seed counts when a player is on for more than this many minutes while the server seeds, and it goes live.
     "VIP_SEED_MINUTES": "10",
     // The hour (UTC, 0 to 23) each day's map rotation starts (see /rotations). 5 is 6am in the UK in summer, 5am in winter,

@@ -96,8 +96,11 @@ const EnvSchema = z
       .trim()
       .refine(isTimeZone, 'must be a time zone name like Europe/London or UTC')
       .default('Europe/London'),
-    // Automatic VIP: days with a successful seed needed in a week. 0 turns it off.
+    // Automatic VIP: days with a successful seed needed in a week. 0 turns it off. Only for VIP_MODE "week".
     VIP_SEED_DAYS: z.coerce.number().int().min(0).max(7).default(0),
+    // Which automatic VIP rule: "week" (seed on VIP_SEED_DAYS days in a week for a week) or "day" (seed on one day for
+    // 3 days). "day" turns automatic VIP on whatever VIP_SEED_DAYS says.
+    VIP_MODE: z.enum(['week', 'day']).default('week'),
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
     // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
@@ -168,6 +171,13 @@ const EnvSchema = z
 export type VipRule = { seedDays: number; seedMinutes: number; windowDays: number; lengthDays: number };
 
 export const VIP_WEEK_DAYS = 7;
+// VIP_MODE "day": one seed day gives this many days. A seed in the last this many days keeps it, as a week does.
+export const VIP_DAY_LENGTH_DAYS = 3;
+
+const vipRule = (mode: 'week' | 'day', seedDays: number, seedMinutes: number): VipRule | null => {
+  if (mode === 'day') return { seedDays: 1, seedMinutes, windowDays: VIP_DAY_LENGTH_DAYS, lengthDays: VIP_DAY_LENGTH_DAYS };
+  return seedDays > 0 ? { seedDays, seedMinutes, windowDays: VIP_WEEK_DAYS, lengthDays: VIP_WEEK_DAYS } : null;
+};
 
 export type Config = {
   rconUrl: string;
@@ -269,10 +279,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     busyThreshold: e.BUSY_THRESHOLD,
     scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,
-    vip:
-      e.VIP_SEED_DAYS > 0
-        ? { seedDays: e.VIP_SEED_DAYS, seedMinutes: e.VIP_SEED_MINUTES, windowDays: VIP_WEEK_DAYS, lengthDays: VIP_WEEK_DAYS }
-        : null,
+    vip: vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
         ? {
