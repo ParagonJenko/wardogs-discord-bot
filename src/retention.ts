@@ -81,6 +81,11 @@ export const JOIN_TIMINGS: JoinTiming[] = ['seeding', 'early', 'mid', 'late', 'e
 export type JoinStay = { timing: JoinTiming; sessions: number; medianMinutes: number; stayedShare: number };
 export type SeedingMatch = { map: string; startedAt: number; liveAt: number; seedingMinutes: number; seeders: number; reachedLive: number };
 export type Bounce = { sessions: number; short: number };
+// The matches and seeding of the period, one entry each, for the long-term records (see lifetime.ts). Not sent to the page.
+export type RetentionDetail = {
+  matches: (RetentionMatch & { liveAt: number; scores?: number[] })[];
+  seeding: SeedingMatch[];
+};
 export type Retention = {
   days: number;
   sessions: number;
@@ -101,6 +106,7 @@ export type Retention = {
   bounce: { newPlayers: Bounce; others: Bounce } | null;
   // Leaves and minutes on the server by hour of the week in UTC, Monday 00:00 first (index = weekday * 24 + hour).
   heat: { leaves: number[]; minutes: number[] };
+  detail: RetentionDetail;
 };
 
 const LENGTHS: [label: string, under: number][] = [
@@ -186,19 +192,26 @@ export const buildRetention = (input: {
   ongoing?: OngoingStay[];
   live?: { startedAt: number; liveAt: number | null } | null;
   removed?: Removal[];
+  // Only the days before this, for a day that is over (the default is up to now).
+  until?: number;
+  // Whether the heat only counts the period's own hours, as the page shows (the default). A day on the long-term records
+  // keeps a stay that crossed midnight whole, as the day before did not count it, so every minute is counted once.
+  clampHeat?: boolean;
   // Players who are new, by Steam ID, and the UTC day they were first seen.
   newOn?: Map<string, string> | null;
 }): Retention => {
   const { now, days } = input;
   const first = Date.parse(dayOf(now - (days - 1) * 86_400_000));
+  const until = input.until ?? Infinity;
   const removed = input.removed ?? [];
   const wasRemoved = (s: SessionRow): boolean =>
     removed.some(
       (r) => r.steamId === s.steamId && s.leftAt >= r.at - REMOVAL_BEFORE_MS && s.leftAt <= (r.until === undefined ? r.at + REMOVAL_AFTER_MS : (r.until ?? Infinity)),
     );
   const everyone = input.sessions.filter((s) => !wasRemoved(s));
-  const sessions = everyone.filter((s) => s.leftAt >= first);
-  const excluded = input.sessions.filter((s) => s.leftAt >= first).length - sessions.length;
+  const inPeriodStay = (s: SessionRow): boolean => s.leftAt >= first && s.leftAt < until;
+  const sessions = everyone.filter(inPeriodStay);
+  const excluded = input.sessions.filter(inPeriodStay).length - sessions.length;
   const live = input.live ?? null;
   // The match on now stands in as a match that never ends, for the nights.
   const nights = withNights(live === null ? input.matches : [...input.matches, { map: '', startedAt: live.startedAt, liveAt: live.liveAt ?? Infinity, endedAt: Infinity }]);
@@ -248,7 +261,7 @@ export const buildRetention = (input: {
 
   // Who was in game when each match went live, and how many of them left before its last minutes. Someone who left after
   // a gap in the checks is counted when the gap shows they left in time, and left out when it can't say.
-  const inPeriod = finished.filter((m) => m.endedAt >= first).map((m): RetentionMatch & { scores?: number[] } => {
+  const inPeriod = finished.filter((m) => m.endedAt >= first && m.endedAt < until).map((m): RetentionMatch & { liveAt: number; scores?: number[] } => {
     const cutoff = m.endedAt - END_BEFORE_MS;
     let present = 0;
     let leftBefore = 0;
@@ -259,9 +272,9 @@ export const buildRetention = (input: {
       present += 1;
     }
     for (const o of input.ongoing ?? []) if (o.since !== null && o.since <= m.liveAt) present += 1;
-    return { map: m.map, startedAt: m.startedAt, endedAt: m.endedAt, lastOfNight: m.lastOfNight, present, leftBefore, ...(m.scores === undefined ? {} : { scores: m.scores }) };
+    return { map: m.map, startedAt: m.startedAt, liveAt: m.liveAt, endedAt: m.endedAt, lastOfNight: m.lastOfNight, present, leftBefore, ...(m.scores === undefined ? {} : { scores: m.scores }) };
   });
-  const matches = inPeriod.map(({ scores: _scores, ...m }) => m).reverse().slice(0, MATCHES_LISTED);
+  const matches = inPeriod.map(({ scores: _scores, liveAt: _liveAt, ...m }) => m).reverse().slice(0, MATCHES_LISTED);
 
   const maps = new Map<string, MapRetention>();
   const balances = new Map<string, BalanceRetention>(BALANCES.map((label) => [label, { label, matches: 0, present: 0, leftBefore: 0 }]));
@@ -298,7 +311,7 @@ export const buildRetention = (input: {
   });
 
   // The seeding funnel: who was in game while a match was seeding, and how many were still there when it went live.
-  const seeded = finished.filter((m) => m.endedAt >= first && m.liveAt - m.startedAt >= SEED_MIN_MS);
+  const seeded = finished.filter((m) => m.endedAt >= first && m.endedAt < until && m.liveAt - m.startedAt >= SEED_MIN_MS);
   const seedList = seeded.map((m): SeedingMatch => {
     // Each player once, however often they reconnected, and only those known to have joined: someone already on when the
     // log began was not necessarily there for a match from before it.
@@ -322,7 +335,7 @@ export const buildRetention = (input: {
     averageMinutes: seedList.length === 0 ? null : round(mean(seedList.map((m) => m.seedingMinutes))),
     seeders: seedList.reduce((a, m) => a + m.seeders, 0),
     reachedLive: seedList.reduce((a, m) => a + m.reachedLive, 0),
-    list: seedList.reverse().slice(0, SEEDING_LISTED),
+    list: [...seedList].reverse().slice(0, SEEDING_LISTED),
   };
 
   // Short stays: new players against everyone else.
@@ -342,8 +355,8 @@ export const buildRetention = (input: {
   for (const s of sessions) {
     if (s.leftFrom === null) heat.leaves[slot(s.leftAt)] = (heat.leaves[slot(s.leftAt)] ?? 0) + 1;
     if (s.joinedAt === null) continue;
-    const end = s.leftFrom ?? s.leftAt;
-    for (let t = Math.max(s.joinedAt, first); t < end; ) {
+    const end = Math.min(s.leftFrom ?? s.leftAt, until);
+    for (let t = input.clampHeat === false ? s.joinedAt : Math.max(s.joinedAt, first); t < end; ) {
       const next = Math.min(end, (Math.floor(t / 3_600_000) + 1) * 3_600_000);
       heat.minutes[slot(t)] = (heat.minutes[slot(t)] ?? 0) + (next - t) / 60_000;
       t = next;
@@ -367,5 +380,6 @@ export const buildRetention = (input: {
     seeding,
     bounce,
     heat,
+    detail: { matches: inPeriod, seeding: seedList },
   };
 };
