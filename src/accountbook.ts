@@ -416,6 +416,12 @@ export const syncAccounts = async (deps: BookDeps, vip: VipState, force: boolean
   if (next.length !== work.length || next.some((id, i) => id !== work[i])) await storage.put({ [ACCOUNT_WORK_KEY]: next });
 };
 
+// The Steam IDs the signed-in accounts have linked, for working out how many of them play. Never leaves the bot.
+export const linkedSteamIds = async (storage: BookStorage): Promise<string[]> => {
+  const all = await storage.list({ prefix: ACCOUNT_PREFIX, limit: COUNTED });
+  return [...all.values()].flatMap((value) => parseAccount(value)?.steamId ?? []);
+};
+
 export type Growth = {
   accounts: number;
   linked: number;
