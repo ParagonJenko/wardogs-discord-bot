@@ -87,6 +87,7 @@ import {
 import {
   forget,
   growth,
+  linkedSteamIds,
   isMemberNow,
   steamLinks,
   linkWithProof,
@@ -198,7 +199,9 @@ import {
   type JoinEvent,
   type JoinLog,
 } from './joinlog.ts';
-import { buildRetention, sessionRows, type Retention } from './retention.ts';
+import { buildFunnel, type Funnel } from './funnel.ts';
+import { buildNewPlayers, type Cohort } from './newplayers.ts';
+import { buildRetention, REMOVAL_AFTER_MS, sessionRows, type Removal, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
 import type { DiscordMessage, SeederRow } from './discord.ts';
 import {
@@ -3821,33 +3824,61 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // The Play time tab: how long players stay each day and when in a match they leave, over the last `days` UTC days.
-  async adminRetention(days: number): Promise<Retention> {
+  async adminRetention(days: number): Promise<Retention & { newPlayers: { lookbackDays: number; cohorts: Cohort[] } }> {
     const now = Date.now();
     const first = Date.parse(dayOf(now - (days - 1) * DAY_MS));
-    const [records, stored] = await Promise.all([this.matchRecords(now), this.ctx.storage.get(['online', 'state', JOIN_LOG_KEY])]);
-    const matches = records.map((r) => ({ map: r.map, startedAt: r.startedAt, liveAt: r.liveAt, endedAt: r.endedAt }));
+    const [records, stored, kept, logs] = await Promise.all([
+      this.matchRecords(now),
+      this.ctx.storage.get(['online', 'state', 'bans', JOIN_LOG_KEY]),
+      this.recentDays(now),
+      this.ctx.storage.list({ prefix: 'mod:' }),
+    ]);
+    const matches = records.map((r) => ({
+      map: r.map,
+      startedAt: r.startedAt,
+      liveAt: r.liveAt,
+      endedAt: r.endedAt,
+      scores: r.factionScores.map((f) => f.score),
+    }));
     // Sessions from when the earliest match in the period went live, for those who left early from one that began before it.
-    const from = Math.min(first, ...matches.filter((m) => m.endedAt >= first).map((m) => m.liveAt));
+    const from = Math.min(first, ...matches.filter((m) => m.endedAt >= first).map((m) => m.startedAt));
     const online = this.onlineNow(now, stored.get('online'));
     const inGame = online === null ? {} : (parseJoinLog(stored.get(JOIN_LOG_KEY))?.inGame ?? {});
     const current = parseState(stored.get('state'))?.match ?? null;
-    return buildRetention({
+    // Kicks and bans: the player did not choose to leave. Events up to REMOVAL_AFTER_MS before the period can still end a
+    // stay in it. A ban on the book holds until it ends, as one made while the player was away goes on when they next join.
+    const removed: Removal[] = [
+      ...[...logs].flatMap(([key, value]) =>
+        parseModLog(value).flatMap((e) => (e.at >= from - REMOVAL_AFTER_MS && (e.action === 'kick' || e.action === 'ban') ? [{ steamId: key.slice('mod:'.length), at: e.at }] : [])),
+      ),
+      ...Object.entries(parseBanBook(stored.get('bans'))).map(([steamId, ban]): Removal => ({ steamId, at: ban.at, until: ban.until })),
+    ];
+    const newPlayers = buildNewPlayers(kept, dayOf(now));
+    const retention = buildRetention({
       now,
       days,
       sessions: sessionRows(this.sessionSql(), from),
       matches,
       ongoing: Object.entries(inGame).map(([steamId, entry]) => ({ steamId, since: entry.since })),
-      live: current !== null && current.endedAt === undefined && !matches.some((m) => m.startedAt === current.startedAt) ? (current.liveAt ?? current.startedAt) : null,
+      live: current !== null && current.endedAt === undefined && !matches.some((m) => m.startedAt === current.startedAt) ? { startedAt: current.startedAt, liveAt: current.liveAt } : null,
+      removed,
+      newOn: newPlayers.firstSeen,
     });
+    return { ...retention, newPlayers: { lookbackDays: newPlayers.lookbackDays, cohorts: newPlayers.cohorts } };
   }
 
   // For the staff page: clicks on the invite by place, and how many players have accounts.
-  async discordGrowth(): Promise<{ clicks: ClickSummary; accounts: Growth; members: number | null }> {
-    const stored = await this.ctx.storage.get([DISCORD_CLICKS_KEY, 'stats']);
+  async discordGrowth(): Promise<{ clicks: ClickSummary; accounts: Growth; members: number | null; funnel: Funnel }> {
+    const [stored, kept, linked] = await Promise.all([
+      this.ctx.storage.get([DISCORD_CLICKS_KEY, 'stats']),
+      this.recentDays(Date.now()),
+      linkedSteamIds(this.bookStorage()),
+    ]);
     return {
       clicks: summariseClicks(parseClicks(stored.get(DISCORD_CLICKS_KEY)), dayOf(Date.now()), 30),
       accounts: await growth(this.bookStorage()),
       members: parseStats(stored.get('stats')).discord?.members ?? null,
+      funnel: buildFunnel(linked, kept),
     };
   }
 

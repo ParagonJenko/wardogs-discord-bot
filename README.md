@@ -1029,6 +1029,29 @@ The staff page's Server → Play time view shows how long players stay each day 
   known time, so it counts in the lengths and not here.
 - The latest 20 matches: who was in game when it went live, how many left before its last 3 minutes, and the share who stayed.
 
+Also in the same answer, over the same period:
+
+- **By map** and **by how one-sided the match was** (the winner's lead over the other side as a share of its score: under 20%,
+  20% to 50%, over 50%): how many were in game when matches went live and how many left before their last 3 minutes. It
+  uses each finished match's final scores.
+- **Stays by when they joined**: while a match was seeding, in the first, middle or last third of one, at its end, or
+  between matches, with the median stay and the share who stayed 30 minutes or more. A join noticed after a gap in the
+  checks is not placed.
+- **The seeding funnel**: matches that went live at least 2 minutes after their first player was seen, how long they
+  seeded, who was in game during it and how many were still there when it went live.
+- **Short stays** (under 10 minutes) by new players and everyone else.
+- **Leaves by hour of the week** (UTC, Monday first) and time on the server by hour, for the heatmap.
+- **Kicks and bans** by staff are left out of all of it: a leave within 30 seconds before to 3 minutes after one, from the
+  [moderation log](#moderation-log), and every leave while a ban on the bot's list holds (a ban made while the player was away is only put on
+  the server, with a kick, when they next join, and is not logged then). `excluded` says how many.
+- **New players** (`newPlayers`), by the week they were first seen: how many came back within 1, 7 and 30 days, counted
+  only once those days are over. A day counts only if they were on the server some of it, not just credited a match that ended
+  after they left. New means not seen in the days the bot keeps (90), so until it has kept that many,
+  someone who played a while ago and not since looks new. `lookbackDays` says how many days it has.
+
+`GET /api/admin/growth` also gives `funnel`: of the players who signed in on the website and linked Steam, how many have
+played a match in the last 90 days, and how many 5 or more (counts only).
+
 ### Kills and headshots
 
 Many headshots, day after day, can be a sign of cheating. The staff page shows who gets them, from the

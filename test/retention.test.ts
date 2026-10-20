@@ -80,7 +80,7 @@ describe('buildRetention', () => {
       days: 1,
       matches: [first],
       sessions: [session('a', 0, 140)],
-      live,
+      live: { startedAt: live, liveAt: live },
     });
     // Narva is not the night's last while the next match is on, and a leave in the match on now is not placed yet.
     expect(r.matches[0]).toMatchObject({ lastOfNight: false });
@@ -89,5 +89,148 @@ describe('buildRetention', () => {
 
   it('has nothing to say with no sessions', () => {
     expect(buildRetention({ now: NOW, days: 7, matches: [], sessions: [] })).toMatchObject({ sessions: 0, averageMinutes: null, daily: [] });
+  });
+});
+
+describe('what else the Play time tab works out', () => {
+  const stay = (steamId: string, joined: number, left: number, extra: Partial<SessionRow> = {}): SessionRow => ({
+    steamId,
+    joinedAt: T0 + joined * MIN,
+    leftAt: T0 + left * MIN,
+    leftFrom: null,
+    ...extra,
+  });
+  const scored = (m: MatchTimes, scores: number[]): MatchTimes => ({ ...m, scores });
+
+  it('counts early leavers by map and by how one-sided the match was', () => {
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [scored(first, [100, 90]), scored(second, [100, 20])],
+      sessions: [stay('a', 0, 20), stay('b', 0, 128), stay('c', 70, 90), stay('d', 70, 128)],
+    });
+    expect(r.byMap.map((m) => [m.map, m.present, m.leftBefore])).toEqual([
+      ['Mutaha', 3, 1],
+      ['Narva', 2, 1],
+    ]);
+    expect(r.byBalance.find((b) => b.label.startsWith('Close'))).toMatchObject({ matches: 1, present: 2, leftBefore: 1 });
+    expect(r.byBalance.find((b) => b.label.startsWith('One-sided'))).toMatchObject({ matches: 1 });
+  });
+
+  it('leaves out players staff kicked or banned', () => {
+    const sessions = [stay('a', 0, 20), stay('b', 0, 30)];
+    const r = buildRetention({ now: NOW, days: 7, matches: [first], sessions, removed: [{ steamId: 'a', at: T0 + 20 * MIN - 5_000 }] });
+    expect(r.excluded).toBe(1);
+    expect(r.sessions).toBe(1);
+    expect(r.matches[0]).toMatchObject({ present: 1, leftBefore: 1 });
+  });
+
+  it('works out stays by when people joined', () => {
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [{ ...first, startedAt: T0 - 10 * MIN }, second],
+      sessions: [stay('a', -5, 20), stay('b', 5, 65), stay('c', 80, 150), stay('d', 90, 100, { joinedFrom: T0 + 85 * MIN })],
+    });
+    const by = (t: string) => r.joins.find((j) => j.timing === t);
+    expect(by('seeding')).toMatchObject({ sessions: 1, medianMinutes: 25, stayedShare: 0 });
+    expect(by('early')).toMatchObject({ sessions: 2 });
+    // d's join came after a gap, so it is not placed.
+    expect(r.joins.reduce((n, j) => n + j.sessions, 0)).toBe(3);
+  });
+
+  it('follows the seeding funnel', () => {
+    const seeded = { map: 'Narva', startedAt: T0 - 20 * MIN, liveAt: T0, endedAt: T0 + 60 * MIN };
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [seeded],
+      sessions: [stay('a', -15, -5), stay('b', -15, 40), stay('c', 10, 40)],
+      ongoing: [{ steamId: 'd', since: T0 - 10 * MIN }],
+    });
+    // a left while seeding; b and d were there when it went live; c joined after.
+    expect(r.seeding).toMatchObject({ matches: 1, averageMinutes: 20, seeders: 3, reachedLive: 2 });
+  });
+
+  it('counts short stays by new players and everyone else', () => {
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [first],
+      sessions: [stay('a', 0, 5), stay('b', 0, 40), stay('c', 0, 3)],
+      newOn: new Map([['a', '2026-10-20'], ['b', '2026-10-20']]),
+    });
+    expect(r.bounce).toEqual({ newPlayers: { sessions: 2, short: 1 }, others: { sessions: 1, short: 1 } });
+    expect(buildRetention({ now: NOW, days: 7, matches: [], sessions: [] }).bounce).toBeNull();
+  });
+
+  it('spreads time on the server across the hours of the week', () => {
+    // 19:30 to 20:30 on Tuesday 20 October 2026.
+    const r = buildRetention({ now: NOW, days: 7, matches: [], sessions: [stay('a', 30, 90)] });
+    const tuesday19 = 24 + 19;
+    expect(r.heat.minutes[tuesday19]).toBe(30);
+    expect(r.heat.minutes[tuesday19 + 1]).toBe(30);
+    expect(r.heat.leaves[tuesday19 + 1]).toBe(1);
+  });
+});
+
+describe('review fixes', () => {
+  const stay = (steamId: string, joined: number, left: number, extra: Partial<SessionRow> = {}): SessionRow => ({
+    steamId,
+    joinedAt: T0 + joined * MIN,
+    leftAt: T0 + left * MIN,
+    leftFrom: null,
+    ...extra,
+  });
+
+  it('counts a player who reconnected while seeding once, and not one with no known join', () => {
+    const seeded = { map: 'Narva', startedAt: T0 - 20 * MIN, liveAt: T0, endedAt: T0 + 60 * MIN };
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [seeded],
+      sessions: [stay('a', -18, -15), stay('a', -10, 30), stay('b', -18, 30, { joinedAt: null })],
+    });
+    expect(r.seeding).toMatchObject({ seeders: 1, reachedLive: 1 });
+  });
+
+  it('places a join in the seeding of the match on now', () => {
+    const r = buildRetention({
+      now: NOW,
+      days: 7,
+      matches: [first],
+      sessions: [stay('a', 125, 135)],
+      live: { startedAt: T0 + 120 * MIN, liveAt: null },
+    });
+    expect(r.joins.find((j) => j.timing === 'seeding')?.sessions).toBe(1);
+  });
+
+  it("counts only the period's hours in the heatmap", () => {
+    // Joined 23:30 the day before, left 00:30: only the half hour in the period is counted.
+    const midnight = Date.UTC(2026, 9, 20);
+    const r = buildRetention({
+      now: NOW,
+      days: 1,
+      matches: [],
+      sessions: [{ steamId: 'a', joinedAt: midnight - 30 * MIN, leftAt: midnight + 30 * MIN, leftFrom: null }],
+    });
+    expect(r.heat.minutes.reduce((a, b) => a + b, 0)).toBe(30);
+  });
+
+  it('leaves out stays that ended while a ban held, and those a kick just before midnight ended', () => {
+    const midnight = Date.UTC(2026, 9, 20);
+    const r = buildRetention({
+      now: NOW,
+      days: 1,
+      matches: [],
+      sessions: [
+        { steamId: 'a', joinedAt: midnight - 5 * MIN, leftAt: midnight + MIN, leftFrom: null },
+        { steamId: 'b', joinedAt: T0, leftAt: T0 + 5 * MIN, leftFrom: null },
+        { steamId: 'c', joinedAt: T0, leftAt: T0 + 5 * MIN, leftFrom: null },
+      ],
+      removed: [{ steamId: 'a', at: midnight - MIN }, { steamId: 'b', at: T0 - 60 * MIN, until: null }, { steamId: 'c', at: T0 - 60 * MIN, until: T0 - 30 * MIN }],
+    });
+    expect(r.excluded).toBe(2);
+    expect(r.sessions).toBe(1);
   });
 });
