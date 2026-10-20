@@ -4,7 +4,8 @@ import type { Config } from './config.ts';
 import { buildMatchSummary, buildMessage, type DiscordMessage } from './discord.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
 import type { LiveMatch } from './live.ts';
-import { hasWinner, matchEndMessages, type MatchEndRule } from './matchend.ts';
+import type { Milestone } from './achievements.ts';
+import { hasWinner, matchEndMessages, NO_EXTRAS, type EndExtras, type MatchEndRule } from './matchend.ts';
 import { sameMap, type MatchFeed } from './matchfeed.ts';
 import {
   JOIN_WAIT_MS,
@@ -19,6 +20,7 @@ import {
   seedingPick,
   watchJoins,
   watchWelcomes,
+  seederThanks,
   welcomePick,
   welcomesDue,
   WelcomeWatchSchema,
@@ -79,6 +81,9 @@ export type BotState = {
   recent: Recent;
   // The last match that had its end-of-match messages (its start time, see matchend.ts), so it has them once.
   endMessages: number | null;
+  // Whether the seeders of the seed being counted were thanked, so a live alert retried while Discord is down does not
+  // thank them again.
+  seedThanked: boolean;
 };
 
 export type StateStore = {
@@ -109,12 +114,21 @@ type PollerDeps = {
   // Each player's best place on the website's leaderboard ("3rd for kills"), by Steam ID: they get the welcome back. Only
   // asked when a welcome is due.
   ranks?: () => Promise<ReadonlyMap<string, string>>;
+  // Steam IDs of regulars who have not linked their account on the website and were not asked to lately: their welcome asks
+  // them to. Only asked when a welcome is due. `nudged` is told who was asked, so they are not asked again for a while.
+  nudges?: () => Promise<ReadonlySet<string>>;
+  nudged?: (steamIds: string[]) => Promise<void>;
   // The Steam IDs of private profiles, named PRIVATE_NAME in the posts (see privacy.ts). Only asked when a post may name
   // players: the live alert's top seeders and the match summary; and when the end-of-match messages go out, as private
   // profiles get none.
   privateProfiles?: () => Promise<ReadonlySet<string>>;
-  // The kill feed's record of a match, for its awards (see matchend.ts), or null when it has none of that match.
+  // The kill feed's record of a match, for its awards and nemeses (see matchend.ts), or null when it has none of that match.
   liveMatch?: (match: MatchState) => Promise<LiveMatch | null>;
+  // What the records say about the players of a match ending: milestones, personal bests, how close they are to the
+  // leaderboard (see achievements.ts). Only asked when the end-of-match messages go out.
+  endExtras?: (match: MatchState) => Promise<EndExtras>;
+  // The milestones players were told of, so they are not told again.
+  milestonesTold?: (told: ReadonlyMap<string, Milestone>) => Promise<void>;
   // The kill feed's word on the match: its state and latest result (see matchfeed.ts), or null while the feed is not
   // heard from. With it, a match ends when the game says, with the game's scores, and nothing is worked out from the
   // scores the checks see.
@@ -211,6 +225,8 @@ const BotStateSchema = z.object({
   recent: RecentSchema.default({}),
   // Missing from state saved before end-of-match messages.
   endMessages: z.number().nullable().default(null),
+  // Missing from state saved before the seeders were thanked.
+  seedThanked: z.boolean().default(false),
 });
 
 // The first release stored only the alert state; upgrade it rather than start over.
@@ -230,6 +246,7 @@ const StoredStateSchema = z.union([
       outage: null,
       recent: {},
       endMessages: null,
+      seedThanked: false,
     }),
   ),
 ]);
@@ -283,13 +300,13 @@ const readFeed = async (matchFeed: (() => Promise<MatchFeed | null>) | undefined
   }
 };
 
-type EndDeps = Pick<PollerDeps, 'messagePlayer' | 'log' | 'liveMatch'> & { random: () => number };
+type EndDeps = Pick<PollerDeps, 'messagePlayer' | 'log' | 'liveMatch' | 'endExtras' | 'milestonesTold'> & { random: () => number };
 
 // The end-of-match messages for a match just won, privately to each of its best players in game (see matchend.ts). One
 // that fails is not tried again. Without the kill feed's record of the match, the scoreboard's top players still get
 // theirs. Gives back the lines used lately.
 const congratulate = async (
-  { messagePlayer, log, liveMatch, random }: EndDeps,
+  { messagePlayer, log, liveMatch, endExtras, milestonesTold, random }: EndDeps,
   rule: MatchEndRule,
   match: MatchState,
   players: Player[],
@@ -299,14 +316,30 @@ const congratulate = async (
 ): Promise<Recent> => {
   if (messagePlayer === undefined) return recent;
   let live: LiveMatch | null = null;
-  if (rule.awards && liveMatch !== undefined) {
+  if (liveMatch !== undefined) {
     try {
       live = await liveMatch(match);
     } catch (error) {
       log.error(`Reading the kill feed's match failed, so its awards are left out: ${errorText(error)}`);
     }
   }
-  const sent = matchEndMessages(match, live, new Set(steamIds(players)), hidden, rule, random, wording, recent);
+  let extras = NO_EXTRAS;
+  if (endExtras !== undefined) {
+    try {
+      extras = await endExtras(match);
+    } catch (error) {
+      log.error(`Reading the records for the end of the match failed, so milestones and personal bests are left out: ${errorText(error)}`);
+    }
+  }
+  const sent = matchEndMessages(match, live, new Set(steamIds(players)), hidden, rule, random, wording, recent, extras);
+  if (sent.milestones.size > 0 && milestonesTold !== undefined) {
+    // Before they go out: one that fails is not tried again, like the rest.
+    try {
+      await milestonesTold(sent.milestones);
+    } catch (error) {
+      log.error(`Saving the milestones told failed: ${errorText(error)}`);
+    }
+  }
   for (const { steamId, name, text } of sent.messages) {
     const who = `${JSON.stringify(name)} (${steamId})`;
     try {
@@ -344,6 +377,10 @@ export const createPoller = ({
   outage: tellOutage,
   linked,
   ranks,
+  nudges,
+  nudged,
+  endExtras,
+  milestonesTold,
 }: PollerDeps) => {
   // A stats failure is logged on its own: the check itself worked, and its alerts and state are saved.
   const report = async (record: (sink: StatsSink) => Promise<void>): Promise<void> => {
@@ -384,14 +421,26 @@ export const createPoller = ({
         log.error(`Reading the leaderboard failed, so welcomes leave it out: ${errorText(error)}`);
       }
     }
+    // Regulars who have not linked their account are asked to.
+    let nudging: ReadonlySet<string> = new Set();
+    if (due.length > 0 && nudges !== undefined) {
+      try {
+        nudging = await nudges();
+      } catch (error) {
+        log.error(`Reading who to ask to link their account failed, so welcomes leave it out: ${errorText(error)}`);
+      }
+    }
+    const asked: string[] = [];
     for (const steamId of due) {
       const name = players.find((p) => p.steamId === steamId)?.name ?? '';
       const pick = welcomePick(linkedIds.has(steamId) ? { ...rule, discord: null } : rule, random, wording, lately, {
         name,
         rank: places.get(steamId) ?? null,
+        nudge: nudging.has(steamId),
       });
       const text = pick.text;
       lately = remember(lately, pick);
+      if (pick.list === 'linkNudge') asked.push(steamId);
       const who = `${JSON.stringify(name)} (${steamId})`;
       try {
         await messagePlayer(steamId, text);
@@ -400,7 +449,31 @@ export const createPoller = ({
         log.error(`Welcome to ${who} failed: ${errorText(error)}`);
       }
     }
+    if (asked.length > 0 && nudged !== undefined) {
+      try {
+        await nudged(asked);
+      } catch (error) {
+        log.error(`Saving who was asked to link their account failed: ${errorText(error)}`);
+      }
+    }
     return { watch: markWelcomed(watched, due, time), recent: lately };
+  };
+
+  // The seeders still in game are thanked privately the moment the server goes live, when the seeding messages are on.
+  // One that fails is not tried again. Gives back the lines used lately.
+  const thankSeeders = async (credits: SeedCredit[], players: Player[], staffIds: ReadonlySet<string>, wording: Lines, recent: Recent) => {
+    if (credits.length === 0 || config.seedingMessages === null || messagePlayer === undefined) return recent;
+    const sent = seederThanks(credits, new Set(steamIds(players)), staffIds, config.seedMinutes, random, wording, recent);
+    for (const { steamId, name, text } of sent.messages) {
+      const who = `${JSON.stringify(name)} (${steamId})`;
+      try {
+        await messagePlayer(steamId, text);
+        log.info(`Sent seeding thanks to ${who}: ${text}`);
+      } catch (error) {
+        log.error(`Seeding thanks to ${who} failed: ${errorText(error)}`);
+      }
+    }
+    return sent.recent;
   };
 
   // An outage confirmed or over goes to staff once it is saved, so a check that fails after it never tells them twice.
@@ -462,6 +535,7 @@ export const createPoller = ({
         outage: null,
         recent: {},
         endMessages: null,
+        seedThanked: false,
       });
       log.info(`Watching "${status.name}": ${status.players}/${status.maxPlayers} players (${alerts.phase})`);
       await report((sink) => sink.check({ at: time, status, players, phase: alerts.phase, seeding: seedingNow, match }));
@@ -515,12 +589,13 @@ export const createPoller = ({
       : [];
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
     if (credits.length > 0) await stats?.seeded(credits, time);
+    const thanking = credits.length > 0 && config.seedingMessages !== null && messagePlayer !== undefined;
     // A match the game ended is recorded as ending when it did.
     const endedAt = finished === null ? null : ((await stats?.matchEnded(finished, finished.endedAt ?? time)) ?? null);
 
     // In-game messages go out whatever happens to the Discord posts. A failed one is not retried. At most one goes out
     // a check: a match message first, and a seeding message that is due then waits for the next check.
-    const wording = broadcast === undefined && !welcoming && ending === null ? DEFAULT_LINES : await readLines(lines, log);
+    const wording = broadcast === undefined && !welcoming && ending === null && !thanking ? DEFAULT_LINES : await readLines(lines, log);
     // The vote wording only while there is a vote to send people to.
     const matchRule =
       config.matchMessages !== null && config.matchMessages.vote === true && !((await voting?.(match)) ?? false)
@@ -559,11 +634,13 @@ export const createPoller = ({
       }
     }
 
-    const { watch: welcomes, recent: welcomed } = await welcome(state.welcomes, players, status.players, time, wording, used);
+    // Once a seed: a live alert retried while Discord is down brings the same credits back.
+    const thanked = state.seedThanked ? used : await thankSeeders(credits, players, staffIds, wording, used);
+    const { watch: welcomes, recent: welcomed } = await welcome(state.welcomes, players, status.players, time, wording, thanked);
     const recent =
       ending === null || endRule === null
         ? welcomed
-        : await congratulate({ messagePlayer, log, liveMatch, random }, endRule, ending, players, hidden, wording, welcomed);
+        : await congratulate({ messagePlayer, log, liveMatch, endExtras, milestonesTold, random }, endRule, ending, players, hidden, wording, welcomed);
     const endMessages = ending?.startedAt ?? state.endMessages;
 
     // If a Discord post fails, the match and the seeding count are still saved, so they keep being tracked while
@@ -582,6 +659,8 @@ export const createPoller = ({
       outage,
       recent,
       endMessages,
+      // The seeding count is kept while a live alert is retried, and so is having thanked its seeders.
+      seedThanked: (thanking || state.seedThanked) && tallied === null && after === 'live',
     };
     try {
       const summary = tracked.unsentSummary;
@@ -628,6 +707,7 @@ export const createPoller = ({
       outage,
       recent,
       endMessages,
+      seedThanked: false,
     });
   };
 
@@ -722,7 +802,7 @@ export const createFeedJoins =
 
 type MatchEndCheckDeps = Pick<
   PollerDeps,
-  'config' | 'fetchSnapshot' | 'now' | 'log' | 'store' | 'random' | 'lines' | 'privateProfiles' | 'liveMatch' | 'matchFeed'
+  'config' | 'fetchSnapshot' | 'now' | 'log' | 'store' | 'random' | 'lines' | 'privateProfiles' | 'liveMatch' | 'matchFeed' | 'endExtras' | 'milestonesTold'
 > & { messagePlayer: (steamId: string, text: string) => Promise<void> };
 
 // Returns a function that sends the end-of-match messages the moment the kill feed says a match ended, while everyone is
@@ -733,7 +813,21 @@ type MatchEndCheckDeps = Pick<
 // scoreboard as the messages; the next check ends it with the game's result (see observeMatch). It must not run at the
 // same time as a check, as both save the state. It never throws.
 export const createMatchEndCheck =
-  ({ config, fetchSnapshot, messagePlayer, now, log, store, random = Math.random, lines, privateProfiles, liveMatch, matchFeed }: MatchEndCheckDeps) =>
+  ({
+    config,
+    fetchSnapshot,
+    messagePlayer,
+    now,
+    log,
+    store,
+    random = Math.random,
+    lines,
+    privateProfiles,
+    liveMatch,
+    matchFeed,
+    endExtras,
+    milestonesTold,
+  }: MatchEndCheckDeps) =>
   async (): Promise<void> => {
     try {
       const rule = config.matchEndMessages;
@@ -748,7 +842,15 @@ export const createMatchEndCheck =
       if (ending === null) return;
       const hidden = privateProfiles === undefined ? new Set<string>() : await privateProfiles();
       const wording = await readLines(lines, log);
-      const recent = await congratulate({ messagePlayer, log, liveMatch, random }, rule, ending, players, hidden, wording, state.recent);
+      const recent = await congratulate(
+        { messagePlayer, log, liveMatch, endExtras, milestonesTold, random },
+        rule,
+        ending,
+        players,
+        hidden,
+        wording,
+        state.recent,
+      );
       await store.save({ ...state, ...(finished === null ? { match } : {}), endMessages: ending.startedAt, recent });
     } catch (error) {
       log.error(`Match end check failed: ${errorText(error)}`);

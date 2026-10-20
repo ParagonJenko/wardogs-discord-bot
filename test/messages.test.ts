@@ -4,8 +4,11 @@ import {
   joinMessageDue,
   leaderboardPlaces,
   markWelcomed,
+  MAX_SEEDER_THANKS,
+  minutesText,
   NAME_LONGEST,
   nameOf,
+  seederThanks,
   fitWithCall,
   MAX_LENGTH,
   milestones,
@@ -319,6 +322,52 @@ describe('welcomeMessage', () => {
         expect(text.length).toBeLessThanOrEqual(MAX_LENGTH);
       });
     }
+  });
+});
+
+describe('the link your account welcome', () => {
+  const both = { afterMs: 2 * MINUTE, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
+
+  it('asks a regular to link, with only the Discord after it, in place of the welcome back', () => {
+    const pick = welcomePick(both, () => 0, undefined, {}, { name: 'Ash', rank: '3rd for kills', nudge: true });
+
+    expect(pick.list).toBe('linkNudge');
+    expect(pick.text).toBe(
+      'Welcome back, Ash! Link your Discord at gaminginit.com/account for a role and VIP alerts. Rules: no cheats, no team killing. ' +
+        'Discord: discord.gg/qsJFYGhSJ4',
+    );
+  });
+
+  it('gives the usual welcome without a website or lines to ask with', () => {
+    expect(welcomePick({ ...both, siteHost: null }, () => 0, undefined, {}, { name: 'Ash', rank: null, nudge: true }).list).toBe('welcome');
+    expect(welcomePick(both, () => 0, { ...lines.DEFAULT_LINES, linkNudge: [] }, {}, { name: 'Ash', rank: null, nudge: true }).list).toBe('welcome');
+  });
+});
+
+describe('seederThanks', () => {
+  const credit = (steamId: string, minutes: number) => ({ steamId, name: steamId.toUpperCase(), minutes });
+
+  it('thanks each seeder in game who seeded long enough, not staff, longest first', () => {
+    const { messages, recent } = seederThanks(
+      [credit('a', 12), credit('b', 40), credit('c', 10), credit('d', 30), credit('s', 90)],
+      new Set(['a', 'b', 'c', 's']),
+      new Set(['s']),
+      10,
+      () => 0,
+    );
+
+    expect(messages).toEqual([
+      { steamId: 'b', name: 'B', text: (lines.SEEDER_THANKS[0] ?? '').replace('{name}', 'B').replace('{minutes}', '40 minutes') },
+      { steamId: 'a', name: 'A', text: (lines.SEEDER_THANKS[1] ?? '').replace('{name}', 'A').replace('{minutes}', '12 minutes') },
+    ]);
+    expect(recent['seederThanks']).toHaveLength(2);
+  });
+
+  it('thanks at most 15', () => {
+    const credits = Array.from({ length: 20 }, (_, i) => credit(`p${i}`, 20 + i));
+
+    expect(seederThanks(credits, new Set(credits.map((c) => c.steamId)), new Set(), 10).messages).toHaveLength(MAX_SEEDER_THANKS);
+    expect(minutesText(1)).toBe('1 minute');
   });
 });
 

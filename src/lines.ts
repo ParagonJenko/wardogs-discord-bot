@@ -7,7 +7,7 @@
 // gaminginit.com). {needed} is how many more players the server needs to go live, such as "5 more players". {earned} is
 // what a player earned in a match, such as "2nd on the scoreboard (23 kills) and best demolitions (8 kills)". In the
 // private messages, {name} is the player's name in game, cut short at NAME_LONGEST (see messages.ts), and {rank} their best
-// place on the website's leaderboard, such as "3rd for kills".
+// place on the website's leaderboard, such as "3rd for kills". The end-of-match lists below say what else each fills in.
 
 // A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
 // The bot puts the Discord and the website after the line.
@@ -62,6 +62,21 @@ export const TEN_MINUTES = [
   '10 minutes in. Rules in our Discord, and Season 1 got roasted at {site}/season',
 ];
 
+// In place of the welcome, at most once a week, for a regular (5 or more matches in 30 days) who has not linked their
+// account on the website. {site} is the website. The bot puts the Discord after the line.
+export const LINK_NUDGE = [
+  'Welcome back, {name}! Link your Discord at {site}/account for a role and VIP alerts. Rules: no cheats, no team killing.',
+  'Good to see you again, {name}. Link your account at {site}/account for a Discord role and VIP alerts. Play fair.',
+];
+
+// A private message to each seeder still in game the moment the server goes live. {minutes} is how long they seeded,
+// such as "25 minutes". The line is the whole message.
+export const SEEDER_THANKS = [
+  "We're live, {name}! Thanks for seeding for {minutes}. You made this happen.",
+  '{name}, you helped get us live with {minutes} of seeding. Thank you!',
+  'Live! Thanks for seeding, {name}. {minutes} well spent.',
+];
+
 // A private message to each of a match's best players the moment a team wins it (see matchend.ts): {earned} names their
 // place on the scoreboard and their awards. These are the whole message, so they point at the website.
 export const MATCH_END = [
@@ -78,6 +93,37 @@ export const MVP = [
   'MVP of the match: {name}, with {earned}. See where you rank on the leaderboard at {site}',
   '{name} carried. MVP with {earned}. Your player page is at {site}',
   'Top of the scoreboard, {name}! MVP with {earned}. Bragging rights at {site}',
+];
+
+// For a player who earned nothing above, the first they have of these, at the end of the match (see matchend.ts). Each
+// line is the whole message.
+// A milestone: {milestone} is "your 100th match", "your 1,000th kill" or "100 hours played".
+export const MILESTONE = [
+  "{name}, that's {milestone} on our server! Thanks for playing. See your stats at {site}",
+  'Milestone, {name}: {milestone} here. Thanks for sticking with us. Your stats are at {site}',
+  'Big one, {name}: {milestone} on our server. GG and thanks! Stats at {site}',
+];
+
+// Their most kills in a match lately (5 matches or more, 10 kills or more): {kills} is "42 kills".
+export const PERSONAL_BEST = [
+  'New personal best, {name}: {kills} in one match. See your stats at {site}',
+  "{name}, that's your best match lately with {kills}. See where you rank at {site}",
+  'Personal best, {name}! {kills} this match. Your player page is at {site}',
+];
+
+// Close to the leaderboard's top 10 for kills: {short} is how many more kills would put them in it, such as "3 kills".
+export const NEARLY_TOP = [
+  "{name}, you're {short} off the top 10 for kills. One more match? Leaderboard at {site}",
+  "So close, {name}: {short} more and you're in the top 10 for kills. Leaderboard at {site}",
+  "{short} more and you're on the leaderboard, {name}. Top 10 for kills at {site}",
+];
+
+// The player who killed them most in the match, 4 times or more: {nemesis} is their name, {count} how many, such as
+// "6 times".
+export const NEMESIS = [
+  '{nemesis} got you {count} this match, {name}. Payback next round?',
+  '{name}, {nemesis} killed you {count} this match. Time for revenge?',
+  "Your nemesis this match: {nemesis}, {count}. Next round, {name}, it's personal.",
 ];
 
 // The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
@@ -177,6 +223,8 @@ export const NEARLY_OTHER = ['{team} has {score} points!'];
 export type Lines = {
   welcome: string[];
   welcomeBack: string[];
+  linkNudge: string[];
+  seederThanks: string[];
   seeding: string[];
   tenMinutes: string[];
   // By faction (see factionKey).
@@ -187,11 +235,17 @@ export type Lines = {
   nearlyOther: string[];
   matchEnd: string[];
   mvp: string[];
+  milestone: string[];
+  personalBest: string[];
+  nearlyTop: string[];
+  nemesis: string[];
 };
 
 export const DEFAULT_LINES: Lines = {
   welcome: WELCOME,
   welcomeBack: WELCOME_BACK,
+  linkNudge: LINK_NUDGE,
+  seederThanks: SEEDER_THANKS,
   seeding: SEEDING,
   tenMinutes: TEN_MINUTES,
   halfway: HALFWAY,
@@ -201,4 +255,8 @@ export const DEFAULT_LINES: Lines = {
   nearlyOther: NEARLY_OTHER,
   matchEnd: MATCH_END,
   mvp: MVP,
+  milestone: MILESTONE,
+  personalBest: PERSONAL_BEST,
+  nearlyTop: NEARLY_TOP,
+  nemesis: NEMESIS,
 };

@@ -1,4 +1,5 @@
 import { mapName } from './discord.ts';
+import { isPersonalBest, milestoneText, type Milestone } from './achievements.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
 import type { LiveMatch, LivePlayer } from './live.ts';
 import { sameMap } from './matchfeed.ts';
@@ -125,12 +126,62 @@ export const LONGEST_MVP_EARNED = listOf([
     .slice(0, MAX_EARNED - 1),
 ]);
 
-export type MatchEndMessage = { steamId: string; name: string; text: string };
+// What each message is for: the scoreboard and the awards (`honours`), or, for a player who earned none of those, the
+// first of the others they have.
+export type EndKind = 'honours' | 'milestone' | 'personalBest' | 'nearly' | 'nemesis';
 
-// The messages for a match just won, to each player who earned something and is in game now (`online`), by name. The
-// MVP gets an MVP line, when there are any. A private profile (`hidden`) has no player page, so gets none, but keeps
-// their place: the others are told the place the match summary gives them. Each line is remembered as it is picked, so
-// players mostly get different ones.
+export type MatchEndMessage = { steamId: string; name: string; text: string; kind: EndKind };
+
+// What the records say about the players of the match ending (see achievements.ts), by Steam ID. The Node version has
+// none of it.
+export type EndExtras = {
+  // Their most kills in a match lately, for those with enough matches to have a personal best.
+  bests: ReadonlyMap<string, number>;
+  // A milestone this match took them past, that they have not been told of.
+  milestones: ReadonlyMap<string, Milestone>;
+  // How many more kills would put them in the leaderboard's top 10 for kills.
+  nearly: ReadonlyMap<string, number>;
+};
+
+export const NO_EXTRAS: EndExtras = { bests: new Map(), milestones: new Map(), nearly: new Map() };
+
+// A nemesis killed the player at least this many times in the match.
+export const NEMESIS_LEAST = 4;
+
+// The most kills at the end of a match, so they all go out with the rest of the check: the scoreboard and the awards
+// first, then the others in the order of EndKind.
+export const MAX_END_MESSAGES = 20;
+
+// The player who killed this one most in the kill feed's match, at least NEMESIS_LEAST times, with how many. Not a private
+// profile (`hidden`), whose name the bot keeps to itself. Team kills are not in the pairs.
+export const nemesisOf = (live: LiveMatch | null, steamId: string, hidden: ReadonlySet<string>): { name: string; kills: number } | null => {
+  if (live === null) return null;
+  const victim = live.players.findIndex((p) => p.steamId === steamId);
+  if (victim === -1) return null;
+  let found: { name: string; kills: number } | null = null;
+  for (const [pair, kills] of Object.entries(live.pairs)) {
+    const [killer, killed] = pair.split(':').map(Number);
+    if (killed !== victim || killer === victim || kills < NEMESIS_LEAST) continue;
+    const who = live.players[killer ?? -1];
+    if (who === undefined || hidden.has(who.steamId)) continue;
+    if (found === null || kills > found.kills) found = { name: who.name, kills };
+  }
+  return found;
+};
+
+// "1 time", "6 times".
+const times = (count: number): string => `${count} time${count === 1 ? '' : 's'}`;
+
+// The phrase {earned} gets for a personal best.
+export const BEST_EARNED = 'a personal best';
+
+// The messages for a match just won, to each player in game now (`online`), by name: one each, at most MAX_END_MESSAGES.
+// Those who earned a place on the scoreboard or an award are told what (the MVP with an MVP line, when there are any), and
+// a personal best among it. The others get the first they have of: a milestone (`extras`), a personal best, how close they
+// are to the leaderboard's top 10, and the player who killed them most (their nemesis, from the kill feed's match). A
+// private profile (`hidden`) has no player page, so gets none, but keeps their place: the others are told the place the
+// match summary gives them. Each line is remembered as it is picked, so players mostly get different ones. `milestones`
+// are the ones told, so they are not told again.
 export const matchEndMessages = (
   match: MatchState,
   live: LiveMatch | null,
@@ -140,18 +191,56 @@ export const matchEndMessages = (
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
   recent: Recent = {},
-): { messages: MatchEndMessage[]; recent: Recent } => {
+  extras: EndExtras = NO_EXTRAS,
+): { messages: MatchEndMessage[]; recent: Recent; milestones: Map<string, Milestone> } => {
   let lately = recent;
   const messages: MatchEndMessage[] = [];
-  for (const h of honours(match, live, rule)) {
-    if (!online.has(h.steamId) || hidden.has(h.steamId)) continue;
-    const values = { name: nameOf(h.name), earned: listOf(h.earned), site: rule.siteHost };
-    const pick =
-      h.mvp && lines.mvp.length > 0 ? pickLine('mvp', lines.mvp, values, random, lately) : pickLine('matchEnd', lines.matchEnd, values, random, lately);
+  const told = new Map<string, Milestone>();
+  const say = (steamId: string, name: string, kind: EndKind, list: string, from: string[], values: Record<string, string>): void => {
+    const pick = pickLine(list, from, { name: nameOf(name), site: rule.siteHost, ...values }, random, lately);
     lately = remember(lately, pick);
-    messages.push({ steamId: h.steamId, name: h.name, text: fit(pick.text) });
+    messages.push({ steamId, name, text: fit(pick.text), kind });
+  };
+  const sendable = (steamId: string): boolean => online.has(steamId) && !hidden.has(steamId);
+  const kills = (steamId: string): number => match.players[steamId]?.kills ?? 0;
+  const best = (steamId: string): boolean => isPersonalBest(kills(steamId), extras.bests.get(steamId));
+  const honoured = new Set<string>();
+  for (const h of honours(match, live, rule)) {
+    honoured.add(h.steamId);
+    if (!sendable(h.steamId)) continue;
+    // A personal best goes after their place.
+    const earned = best(h.steamId) ? [...h.earned.slice(0, 1), BEST_EARNED, ...h.earned.slice(1)].slice(0, MAX_EARNED) : h.earned;
+    const mvp = h.mvp && lines.mvp.length > 0;
+    say(h.steamId, h.name, 'honours', mvp ? 'mvp' : 'matchEnd', mvp ? lines.mvp : lines.matchEnd, { earned: listOf(earned) });
   }
-  return { messages, recent: lately };
+  // Everyone else in game who played, most kills first, so the cap leaves out those who did least.
+  const others = Object.entries(match.players)
+    .filter(([steamId]) => !honoured.has(steamId) && sendable(steamId))
+    .sort(([, a], [, b]) => byKills(a, b));
+  for (const [steamId, p] of others) {
+    const milestone = extras.milestones.get(steamId);
+    const short = extras.nearly.get(steamId);
+    const nemesis = nemesisOf(live, steamId, hidden);
+    if (milestone !== undefined && lines.milestone.length > 0) {
+      say(steamId, p.name, 'milestone', 'milestone', lines.milestone, { milestone: milestoneText(milestone) });
+      told.set(steamId, milestone);
+    } else if (best(steamId) && lines.personalBest.length > 0) {
+      say(steamId, p.name, 'personalBest', 'personalBest', lines.personalBest, { kills: killCount(p.kills) });
+    } else if (short !== undefined && lines.nearlyTop.length > 0) {
+      say(steamId, p.name, 'nearly', 'nearlyTop', lines.nearlyTop, { short: killCount(short) });
+    } else if (nemesis !== null && lines.nemesis.length > 0) {
+      say(steamId, p.name, 'nemesis', 'nemesis', lines.nemesis, { nemesis: nameOf(nemesis.name), count: times(nemesis.kills) });
+    }
+  }
+  const order: EndKind[] = ['honours', 'milestone', 'personalBest', 'nearly', 'nemesis'];
+  const kept = messages
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => order.indexOf(a.m.kind) - order.indexOf(b.m.kind) || a.i - b.i)
+    .slice(0, MAX_END_MESSAGES)
+    .sort((a, b) => a.i - b.i)
+    .map(({ m }) => m);
+  const sent = new Set(kept.map((m) => m.steamId));
+  return { messages: kept, recent: lately, milestones: new Map([...told].filter(([steamId]) => sent.has(steamId))) };
 };
 
 // Whether a team has won: it alone has at least `least` points.

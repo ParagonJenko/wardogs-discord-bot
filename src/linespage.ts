@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { readJsonBody } from './body.ts';
 import type { Config, VipRule } from './config.ts';
 import { DEFAULT_LINES, type Lines } from './lines.ts';
-import { killCount, LONGEST_EARNED, LONGEST_MVP_EARNED } from './matchend.ts';
+import { BEST_LEAST_KILLS, BEST_LEAST_MATCHES, LONGEST_MILESTONE, NEARLY_MOST } from './achievements.ts';
+import { killCount, LONGEST_EARNED, LONGEST_MVP_EARNED, MAX_END_MESSAGES, NEMESIS_LEAST } from './matchend.ts';
 import {
   discordLink,
   fillLine,
@@ -10,6 +11,7 @@ import {
   halfwayCall,
   LONGEST_RANK,
   MAX_LENGTH,
+  minutesText,
   morePlayers,
   NAME_LONGEST,
   nearlyCall,
@@ -120,7 +122,7 @@ export const LISTS: ListDefinition[] = [
   {
     id: 'seeding',
     group: 'Seeding',
-    name: 'Seeding',
+    name: 'Every few minutes',
     note: 'Every few minutes while the server seeds, and 30 seconds after someone joins. What seeding earns goes after it.',
     kind: 'seeding',
     get: (lines) => lines.seeding,
@@ -130,6 +132,21 @@ export const LISTS: ListDefinition[] = [
       ...exact({ needed: morePlayers(Math.max(1, context.live - 1)) }),
       before: '',
       after: ` ${seedingReward(context.siteHost, context.vip)}`,
+    }),
+  },
+  {
+    id: 'seederThanks',
+    group: 'Seeding',
+    name: 'Thanks when live',
+    note: 'A private message to each seeder still in game the moment the server goes live: those on long enough for the seed to count (VIP_SEED_MINUTES), not staff, at most 15. {minutes} is how long they seeded. The line is the whole message.',
+    kind: 'seeding',
+    get: (lines) => lines.seederThanks,
+    set: (lines, seederThanks) => ({ ...lines, seederThanks }),
+    frame: () => ({
+      values: { ...nameValues.values, minutes: minutesText(25) },
+      longest: { ...nameValues.longest, minutes: minutesText(9999) },
+      before: '',
+      after: '',
     }),
   },
   {
@@ -155,6 +172,21 @@ export const LISTS: ListDefinition[] = [
       longest: { ...nameValues.longest, rank: LONGEST_RANK },
       before: '',
       after: welcomeLinks(context.siteHost, context.discord),
+    }),
+  },
+  {
+    id: 'linkNudge',
+    group: 'Welcome',
+    name: 'Link your account',
+    note: "In place of the welcome, at most once a week, for a regular (5 or more matches in 30 days) who hasn't linked their account on the website. Only while players can sign in there. {site} is the website: send them to {site}/account. The Discord goes after it.",
+    kind: 'welcome',
+    get: (lines) => lines.linkNudge,
+    set: (lines, linkNudge) => ({ ...lines, linkNudge }),
+    frame: (context) => ({
+      values: { ...nameValues.values, site: site(context) },
+      longest: { ...nameValues.longest, site: site(context) },
+      before: '',
+      after: welcomeLinks(null, context.discord),
     }),
   },
   {
@@ -272,6 +304,54 @@ export const LISTS: ListDefinition[] = [
       after: '',
     }),
   },
+  ...(
+    [
+      {
+        id: 'milestone',
+        name: 'Milestone',
+        note: 'For a player who earned nothing above, at the end of a match that took them past a milestone: their 10th, 25th, 50th, 100th… match, their 100th, 250th, 500th, 1,000th… kill, or 10, 25, 50, 100… hours played. {milestone} says which. Told once each.',
+        values: { milestone: 'your 100th match' },
+        longest: { milestone: LONGEST_MILESTONE },
+      },
+      {
+        id: 'personalBest',
+        name: 'Personal best',
+        note: `For a player who earned nothing above, nor a milestone, when they had more kills than in any match of theirs in the last 90 days (from ${BEST_LEAST_MATCHES} matches, and ${BEST_LEAST_KILLS} kills). {kills} says how many. One with a place or an award has "a personal best" in {earned} instead.`,
+        values: { kills: killCount(42) },
+        longest: { kills: killCount(9999) },
+      },
+      {
+        id: 'nearlyTop',
+        name: 'Nearly on the leaderboard',
+        note: `For a player who earned none of the above, when ${NEARLY_MOST} or fewer more kills would put them in the leaderboard's top 10 for kills (30 days). {short} says how many.`,
+        values: { short: killCount(3) },
+        longest: { short: killCount(NEARLY_MOST) },
+      },
+      {
+        id: 'nemesis',
+        name: 'Nemesis',
+        note: `For a player who got none of the above, when one player killed them ${NEMESIS_LEAST} times or more in the match (from the kill feed). {nemesis} is that player, {count} how many times.`,
+        values: { nemesis: 'Viper', count: '6 times' },
+        longest: { nemesis: 'x'.repeat(NAME_LONGEST), count: '99 times' },
+      },
+    ] as const
+  ).map(
+    (extra): ListDefinition => ({
+      id: extra.id,
+      group: 'End of match',
+      name: extra.name,
+      note: `${extra.note} {name} is their name in game. The line is the whole message. At most ${MAX_END_MESSAGES} messages go out at the end of a match, these last.`,
+      kind: 'end',
+      get: (lines) => lines[extra.id],
+      set: (lines, list) => ({ ...lines, [extra.id]: list }),
+      frame: (context) => ({
+        values: { ...nameValues.values, ...extra.values, site: site(context) },
+        longest: { ...nameValues.longest, ...extra.longest, site: site(context) },
+        before: '',
+        after: '',
+      }),
+    }),
+  ),
 ];
 
 // A list staff changed: its lines, when, and who by (Discord user ID and name).

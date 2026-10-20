@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { VipRule } from './config.ts';
-import { seedTerms } from './discord.ts';
+import { playerName, seedTerms } from './discord.ts';
 import type { VipGrant } from './vip.ts';
 
 // Player accounts: a player signs in to the website with Discord, and links the Steam account they play on (from the
@@ -56,6 +56,8 @@ export type Account = {
   notified: Notified | null;
   // Their last message could not be delivered (private messages closed): none are tried again until they sign in.
   dmClosed: boolean;
+  // When they were last asked back to seed after time away (see returnDue), or 0.
+  returnedAt: number;
   // Role changes that failed wait for this time.
   retryAt: number;
 };
@@ -77,6 +79,7 @@ const AccountSchema = z.object({
     .nullable()
     .default(null),
   dmClosed: z.boolean().default(false),
+  returnedAt: z.number().default(0),
   retryAt: z.number().default(0),
 });
 
@@ -123,6 +126,7 @@ export const signedIn = (
     roles: { linked: false, vip: false },
     notified: null,
     dmClosed: false,
+    returnedAt: 0,
     retryAt: 0,
   };
   return {
@@ -350,4 +354,72 @@ export const readWebVote = async (request: Request): Promise<WebVote | null> => 
   } catch {
     return null;
   }
+};
+
+// Regulars who have not linked are asked to in their welcome in game, at most once in this long. Who was asked, and when,
+// is kept in LINK_NUDGES_KEY by Steam ID, for this long only.
+export const LINK_NUDGES_KEY = 'linkNudges';
+export const NUDGE_AGAIN_MS = 7 * 24 * 60 * 60_000;
+// A regular has played this many matches in the leaderboard's 30 days.
+export const REGULAR_MATCHES = 5;
+
+export type LinkNudges = Record<string, number>;
+
+export const parseNudges = (raw: unknown): LinkNudges => {
+  const parsed = z.record(z.string(), z.number()).safeParse(raw);
+  return parsed.success ? parsed.data : {};
+};
+
+// Who was asked lately, after these were asked now.
+export const withNudged = (nudges: LinkNudges, steamIds: string[], now: number): LinkNudges => ({
+  ...Object.fromEntries(Object.entries(nudges).filter(([, at]) => now - at < NUDGE_AGAIN_MS)),
+  ...Object.fromEntries(steamIds.map((id) => [id, now])),
+});
+
+// The regulars to ask: `matches` is each player's matches in the leaderboard's days, by Steam ID. Not anyone linked, not
+// staff, not anyone asked lately.
+export const nudgesDue = (
+  matches: ReadonlyMap<string, number>,
+  linked: ReadonlySet<string>,
+  staff: ReadonlySet<string>,
+  nudges: LinkNudges,
+  now: number,
+): Set<string> =>
+  new Set(
+    [...matches]
+      .filter(([steamId, count]) => count >= REGULAR_MATCHES && !linked.has(steamId) && !staff.has(steamId) && now - (nudges[steamId] ?? 0) >= NUDGE_AGAIN_MS)
+      .map(([steamId]) => steamId),
+  );
+
+// ---- Asking players back ----
+
+// A linked player not seen on the server for RETURN_AWAY_DAYS (but seen in the days the bot keeps) gets a Discord message
+// when the server is seeding, at most once in RETURN_AGAIN_MS, and only RETURN_PER_DAY of them a day, the ones seen most
+// lately first.
+export const RETURN_AWAY_DAYS = 14;
+export const RETURN_AGAIN_MS = 30 * 24 * 60 * 60_000;
+export const RETURN_PER_DAY = 5;
+// The UTC day ("2026-10-20") the last batch went out, so there is one a day.
+export const RETURN_DAY_KEY = 'returnDay';
+
+const DAY_MS = 24 * 60 * 60_000;
+
+// Whether to ask this account back now. `lastSeen` is the last UTC day they were on, null when not in the days kept.
+export const returnDue = (account: Account, lastSeen: string | null, now: number): boolean =>
+  account.steamId !== null &&
+  account.alerts &&
+  !account.dmClosed &&
+  account.member !== false &&
+  lastSeen !== null &&
+  now - Date.parse(`${lastSeen}T00:00:00Z`) >= RETURN_AWAY_DAYS * DAY_MS &&
+  now - account.returnedAt >= RETURN_AGAIN_MS;
+
+// The message: the server is seeding with `players` on, how to join (`serverId`, when set), what seeding earns, and how
+// to turn these off.
+export const returnText = (name: string, players: number, rule: Pick<AccountRule, 'siteUrl' | 'vip'> & { serverId: string | undefined }): string => {
+  const site = rule.siteUrl === undefined ? null : rule.siteUrl.replace(/\/+$/, '');
+  const join = rule.serverId === undefined ? '' : ` Join by ID: \`${rule.serverId}\`.`;
+  const earn = rule.vip === null ? '' : ` Seed ${seedTerms(rule.vip)} for a VIP whitelist slot.`;
+  const off = site === null ? '' : `\n-# Turn these messages off at ${site}/account`;
+  return `Hey ${playerName(name)}, it's been a while! The WARDOGS server is seeding now with ${players} on. Jump in and help get it live.${join}${earn}${off}`;
 };
