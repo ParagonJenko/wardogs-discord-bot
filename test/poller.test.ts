@@ -433,7 +433,7 @@ describe('thanks for seeding', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.[0]).toBe('ash');
-    expect(sent[0]?.[1]).toMatch(/^We're live, Pash! Thanks for seeding for \d+ minutes\. You made this happen\.$/);
+    expect(sent[0]?.[1]).toMatch(/^We're live, Pash! Your \d+ minutes of seeding made it happen\. o7$/);
   });
 
   it('thanks nobody while the seeding messages are off', async () => {
@@ -987,7 +987,7 @@ describe('welcomes', () => {
   const welcome = { afterMs: 2 * 60_000, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
   const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => player(id)) as [Player, Player, Player, Player];
   const rulesFor = (id: string) => (DEFAULT_LINES.welcome[0] ?? '').replace('{name}', `P${id}`);
-  const textFor = (id: string) => `${rulesFor(id)} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`;
+  const textFor = (id: string) => `${rulesFor(id)} Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com`;
 
   // A minute a check; records the minute, the player and the message of each welcome.
   const welcomePoller = (
@@ -1015,7 +1015,8 @@ describe('welcomes', () => {
       store,
       messagePlayer,
       random: () => 0,
-      ...(lines === undefined ? {} : { lines }),
+      // One welcome line unless a test gives its own, so each player's welcome is known.
+      lines: lines ?? (async () => ({ ...DEFAULT_LINES, welcome: DEFAULT_LINES.welcome.slice(0, 1) })),
       ...(linked === undefined ? {} : { linked }),
       ...(ranks === undefined ? {} : { ranks }),
       ...(nudging ?? {}),
@@ -1058,7 +1059,7 @@ describe('welcomes', () => {
 
     const back = (DEFAULT_LINES.welcomeBack[0] ?? '').replace('{name}', 'Pc').replace('{rank}', '2nd for kills');
     expect(sent).toEqual([
-      [4, 'c', `${back} Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com`],
+      [4, 'c', `${back} Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com`],
       [5, 'd', textFor('d')],
     ]);
     // Only read when a welcome is due.
@@ -1114,7 +1115,7 @@ describe('welcomes', () => {
     await run(7);
 
     expect(sent).toEqual([
-      [4, 'c', `${rulesFor('c')} Website: gaminginit.com`],
+      [4, 'c', `${rulesFor('c')} Stats: gaminginit.com`],
       [5, 'd', textFor('d')],
     ]);
   });
@@ -1170,7 +1171,7 @@ describe('welcomes', () => {
 
     await run(4);
 
-    expect(sent).toEqual([[4, 'a', 'Hi! Be nice. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com']]);
+    expect(sent).toEqual([[4, 'a', 'Hi! Be nice. Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com']]);
   });
 
   it('logs a failed welcome and does not send it again', async () => {
@@ -1702,12 +1703,12 @@ describe('in-game messages', () => {
     await run(7);
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
-      '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com',
-      'Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
-      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com',
+      "10 minutes in and nobody's rage quit yet. See where your K/D ranks: gaminginit.com",
+      'Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Watch this match live: gaminginit.com/live',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? gaminginit.com',
     ]);
     expect(log.info).toHaveBeenCalledWith(
-      'Sent in game: Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
+      'Sent in game: Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Watch this match live: gaminginit.com/live',
     );
   });
 
@@ -1719,13 +1720,13 @@ describe('in-game messages', () => {
     };
 
     const open = await sent(true);
-    expect(open[1]).toContain('Vote for the next map in our Discord, it plays infantry only!');
-    expect(open[2]).toContain('Last call to vote for the next map in our Discord!');
+    expect(open[1]).toContain('Vote the next map (infantry only): gaminginit.com/vote');
+    expect(open[2]).toContain('Last call! Vote the next map: gaminginit.com/vote');
 
     // A vote that has closed, or never opened: the usual call to action.
     const closed = await sent(false);
-    expect(closed[1]).toContain('Check the leaderboard and stats at gaminginit.com');
-    expect(closed[2]).toContain('Where do you rank? Leaderboard and stats at gaminginit.com');
+    expect(closed[1]).toContain('Watch this match live: gaminginit.com/live');
+    expect(closed[2]).toContain('Where do you rank? gaminginit.com');
   });
 
   it('logs a failed message and does not send it again', async () => {
@@ -1740,7 +1741,7 @@ describe('in-game messages', () => {
     await run(4);
 
     // Halfway fails once and is not tried again; ten minutes in is a different message, due on the last check.
-    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com']);
+    expect(broadcast.mock.calls.map(([m]) => m.split('!')[0].split('?')[0])).toEqual(['Halfway there', "10 minutes in and nobody's rage quit yet. See where your K/D ranks: gaminginit.com"]);
     expect(log.error).toHaveBeenCalledWith('In-game message failed: RCON request timed out after 8000ms');
   });
 
@@ -1757,9 +1758,9 @@ describe('in-game messages', () => {
 
     expect(broadcast.mock.calls.map(([m]) => m)).toEqual([
       'Ten minutes in. Rules at gaminginit.com',
-      'Halfway there! Valkyra on 52, comrades. Check the leaderboard and stats at gaminginit.com',
+      'Halfway there! Valkyra on 52, comrades. Watch this match live: gaminginit.com/live',
       // Valkyra's 90-point lines are still the bot's.
-      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? gaminginit.com',
     ]);
   });
 
@@ -1810,9 +1811,9 @@ describe('in-game messages', () => {
       await run(18);
 
       expect(sent).toEqual([
-        [2, "We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
-        [7, "We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
-        [12, "We're seeding! 17 more players and we go live. Top seeders make the leaderboard at gaminginit.com"],
+        [2, "Seeding! 15 more players and we're live. Top seeders make the leaderboard: gaminginit.com"],
+        [7, "Seeding! 15 more players and we're live. Top seeders make the leaderboard: gaminginit.com"],
+        [12, "Seeding! 17 more players and we're live. Top seeders make the leaderboard: gaminginit.com"],
       ]);
     });
 
@@ -1842,16 +1843,16 @@ describe('in-game messages', () => {
       await run(9);
 
       expect(sent.map(([minute, m]) => [minute, m.split('!')[0]])).toEqual([
-        [2, "We're seeding"],
+        [2, 'Seeding'],
         [7, 'Halfway there'],
-        [8, "We're seeding"],
+        [8, 'Seeding'],
       ]);
     });
   });
 
   describe('when someone joins while seeding', () => {
     const every5 = { everyMs: 5 * 60_000, siteHost: 'gaminginit.com' };
-    const short = (message: string) => message.split(' and we go live')[0];
+    const short = (message: string) => message.split(" and we're live")[0];
 
     // The checks the bot runs, on one clock and store: a check on each whole minute, and a quick join check every 5
     // seconds between them. `who` says who is in game at each second.
@@ -1903,11 +1904,11 @@ describe('in-game messages', () => {
       await runUntil(450);
 
       expect(sent).toEqual([
-        [60, "We're seeding! 17 more players"],
+        [60, 'Seeding! 17 more players'],
         // Joined at 100.
-        [130, "We're seeding! 16 more players"],
+        [130, 'Seeding! 16 more players'],
         // 5 minutes after 130, on the next check.
-        [420, "We're seeding! 16 more players"],
+        [420, 'Seeding! 16 more players'],
       ]);
     });
 
@@ -1927,8 +1928,8 @@ describe('in-game messages', () => {
       await runUntil(200);
 
       expect(sent).toEqual([
-        [60, "We're seeding! 17 more players"],
-        [155, "We're seeding! 14 more players"],
+        [60, 'Seeding! 17 more players'],
+        [155, 'Seeding! 14 more players'],
       ]);
     });
 
@@ -1939,7 +1940,7 @@ describe('in-game messages', () => {
 
       await runUntil(900);
 
-      expect(sent).toEqual([[60, "We're seeding! 2 more players"]]);
+      expect(sent).toEqual([[60, 'Seeding! 2 more players']]);
     });
 
     it('never sends one for a player joining a live server', async () => {
@@ -1975,7 +1976,7 @@ describe('in-game messages', () => {
 
         // Below 20 since 120: seeding at 420, and the join checks start.
         await runUntil(450);
-        expect(sent).toEqual([[420, "We're seeding! 5 more players"]]);
+        expect(sent).toEqual([[420, 'Seeding! 5 more players']]);
         expect(fetchPlayers).toHaveBeenCalled();
       });
     });
@@ -1987,8 +1988,8 @@ describe('in-game messages', () => {
       await runUntil(400);
 
       expect(sent).toEqual([
-        [60, "We're seeding! 17 more players"],
-        [375, "We're seeding! 16 more players"],
+        [60, 'Seeding! 17 more players'],
+        [375, 'Seeding! 16 more players'],
       ]);
     });
 
@@ -1998,7 +1999,7 @@ describe('in-game messages', () => {
       await runUntil(200);
 
       // The check at 60 finds them, and the server seeding.
-      expect(sent).toEqual([[90, "We're seeding! 19 more players"]]);
+      expect(sent).toEqual([[90, 'Seeding! 19 more players']]);
     });
 
     it('says whether to keep checking: only while the last check found the server seeding', async () => {

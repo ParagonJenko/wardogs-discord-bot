@@ -63,7 +63,7 @@ describe('milestones', () => {
   it('reaches ten minutes after the match went live', () => {
     expect(milestones(match(), 9 * MINUTE, rule, null, first)).toEqual([]);
     expect(milestones(match(), 10 * MINUTE, rule, null, first)).toEqual([
-      { key: 'ten-minutes', text: '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com' },
+      { key: 'ten-minutes', text: "10 minutes in and nobody's rage quit yet. See where your K/D ranks: gaminginit.com" },
     ]);
   });
 
@@ -75,10 +75,10 @@ describe('milestones', () => {
   it('sends people to the next-map vote at halfway and when a team is close to winning, while a vote runs', () => {
     const voting = { ...rule, vote: true };
     const [halfway] = milestones(match({ factionScores: [{ name: 'Valkyra', score: 50 }] }), 0, voting, vip, () => 0);
-    expect(halfway?.text).toContain('Vote for the next map in our Discord, it plays infantry only! Leaderboard at gaminginit.com');
+    expect(halfway?.text).toContain('Vote the next map (infantry only): gaminginit.com/vote');
     expect(halfway?.text).not.toContain('whitelist');
     const nearly = milestones(match({ factionScores: [{ name: 'Valkyra', score: 92 }] }), 0, voting, null, () => 0).find((m) => m.key === 'nearly');
-    expect(nearly?.text).toContain('Last call to vote for the next map in our Discord!');
+    expect(nearly?.text).toContain('Last call! Vote the next map: gaminginit.com/vote');
   });
 
   it('keeps every vote message within the game\'s line', () => {
@@ -95,18 +95,18 @@ describe('milestones', () => {
     expect(milestones(match(scores(50, 20)), 0, rule, null, first)).toEqual([
       {
         key: 'halfway',
-        text: 'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
+        text: 'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Watch this match live: gaminginit.com/live',
       },
     ]);
     expect(milestones(match(scores(50, 20)), 0, rule, vip, first)[0]?.text).toBe(
-      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com',
+      'Halfway there! Valkyra leads on 50. Not my points, OUR points, comrade. Watch this match live: gaminginit.com/live',
     );
   });
 
   it("picks at random from the leading faction's own list, whatever the server calls it", () => {
     const halfway = (leader: string, random: () => number) =>
       milestones(match({ factionScores: [{ name: leader, score: 52 }, { name: 'Other', score: 10 }] }), 0, rule, null, random)[0]?.text.split(
-        ' Check the',
+        ' Watch this',
       )[0];
 
     for (const [name, key] of [['Lonestar', 'lonestar'], ['MANTICORE', 'manticore'], ['Valkyra', 'valkyra'], ['Lone Star', 'lonestar']] as const) {
@@ -117,7 +117,7 @@ describe('milestones', () => {
   });
 
   it('names only the leader, plainly for a team without a list, and nobody when the top teams are level', () => {
-    const text = (s: ReturnType<typeof scores>) => milestones(match(s), 0, rule, null, first)[0]?.text.split(' Check the')[0];
+    const text = (s: ReturnType<typeof scores>) => milestones(match(s), 0, rule, null, first)[0]?.text.split(' Watch this')[0];
 
     expect(text(scores(30, 50, 12))).toBe('Halfway there! Kharr leads on 50!');
     expect(text(scores(50, 50, 12))).toBe("Halfway there and it's neck and neck!");
@@ -126,10 +126,10 @@ describe('milestones', () => {
   it('reaches "nearly there" once per match, for the team in front, at 90% of the winning score', () => {
     expect(milestones(match(scores(92, 90, 60)), 0, rule, null).map((m) => m.key)).toEqual(['halfway', 'nearly']);
     expect(milestones(match(scores(90, 94, 60)), 0, rule, null, first)[1]?.text).toBe(
-      'Kharr has 90 points! Where do you rank? Leaderboard and stats at gaminginit.com',
+      'Kharr has 90! Nearly over. Where do you rank? gaminginit.com',
     );
     expect(milestones(match(scores(92, 20)), 0, rule, null, first)[1]?.text).toBe(
-      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com',
+      'Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? gaminginit.com',
     );
     expect(milestones(match(scores(135, 20)), 0, { ...rule, scoreToWin: 150 }, null)[1]?.key).toBe('nearly');
   });
@@ -175,7 +175,7 @@ describe('the lines', () => {
     const used = all.flatMap((line) => [...line.matchAll(/\{(\w+)\}/g)].map((m) => m[1]));
 
     expect(used.every((name) => ['team', 'score', 'site'].includes(name ?? ''))).toBe(true);
-    expect(lines.TEN_MINUTES.every((line) => line.includes('Discord') && line.includes('{site}'))).toBe(true);
+    expect(lines.TEN_MINUTES.every((line) => line.includes('{site}'))).toBe(true);
   });
 
   it('has seeding lines that only use {needed}', () => {
@@ -212,26 +212,26 @@ describe('seedingMessage', () => {
 
   it('says how many more players are needed to go live, and what seeding earns', () => {
     expect(seedingMessage(5, 20, site, vip, first)).toBe(
-      "We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How at gaminginit.com",
+      "Seeding! 15 more players and we're live. Seed over 10 min on 3 days in a week for free VIP: gaminginit.com/seeding",
     );
     expect(seedingMessage(19, 20, noSite, vip, first)).toBe(
-      "We're seeding! 1 more player and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot.",
+      "Seeding! 1 more player and we're live. Seed over 10 min on 3 days in a week for free VIP.",
     );
   });
 
-  it('says how long the whitelist slot lasts when one seed day earns it', () => {
+  it('says how long the free VIP lasts when one seed day earns it', () => {
     expect(seedingMessage(19, 20, noSite, { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 }, first)).toBe(
-      "We're seeding! 1 more player and we go live. Seed for over 10 min and get a whitelist slot for 3 days.",
+      "Seeding! 1 more player and we're live. Seed over 10 min for 3 days of free VIP.",
     );
   });
 
   it('points at the top seeders board without VIP, and just thanks seeders without a website either', () => {
-    expect(seedingMessage(5, 20, site, null, first)).toBe("We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com");
-    expect(seedingMessage(5, 20, noSite, null, first)).toBe("We're seeding! 15 more players and we go live. Thanks for helping get it live!");
+    expect(seedingMessage(5, 20, site, null, first)).toBe("Seeding! 15 more players and we're live. Top seeders make the leaderboard: gaminginit.com");
+    expect(seedingMessage(5, 20, noSite, null, first)).toBe("Seeding! 15 more players and we're live. Thanks for seeding!");
   });
 
   it('picks the line at random', () => {
-    const picked = lines.SEEDING.map((_, i) => seedingMessage(17, 20, noSite, null, () => i / lines.SEEDING.length).split(' Thanks for helping')[0]);
+    const picked = lines.SEEDING.map((_, i) => seedingMessage(17, 20, noSite, null, () => i / lines.SEEDING.length).split(' Thanks for seeding!')[0]);
 
     expect(picked).toEqual(lines.SEEDING.map((line) => line.replace('{needed}', '3 more players')));
   });
@@ -282,16 +282,16 @@ describe('welcomeMessage', () => {
   const ash = { name: 'Ash', rank: null };
 
   it('says their name and the basic rules, then the Discord and the website', () => {
-    expect(welcomeMessage(both, Math.random, undefined, {}, ash)).toBe(
-      'Welcome, Ash! Rules: no cheats, exploits, team killing, griefing, racism or abuse. Listen to admins. ' +
-        'All rules on our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com',
+    expect(welcomeMessage(both, first, undefined, {}, ash)).toBe(
+      'Welcome, Ash! Play fair: no cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say. ' +
+        'Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
     );
   });
 
   it('leaves out a link it does not have', () => {
-    expect(welcomeMessage({ ...both, discord: null }, Math.random, undefined, {}, ash)).toBe(`${rules} Website: gaminginit.com`);
-    expect(welcomeMessage({ ...both, siteHost: null }, Math.random, undefined, {}, ash)).toBe(`${rules} Discord: discord.gg/qsJFYGhSJ4`);
-    expect(welcomeMessage({ ...both, siteHost: null, discord: null }, Math.random, undefined, {}, ash)).toBe(rules);
+    expect(welcomeMessage({ ...both, discord: null }, first, undefined, {}, ash)).toBe(`${rules} Stats: gaminginit.com`);
+    expect(welcomeMessage({ ...both, siteHost: null }, first, undefined, {}, ash)).toBe(`${rules} Discord: discord.gg/qsJFYGhSJ4`);
+    expect(welcomeMessage({ ...both, siteHost: null, discord: null }, first, undefined, {}, ash)).toBe(rules);
   });
 
   it('welcomes a player on the leaderboard back, with their place', () => {
@@ -299,8 +299,8 @@ describe('welcomeMessage', () => {
 
     expect(pick.list).toBe('welcomeBack');
     expect(pick.text).toBe(
-      "Welcome back, Ash! You're 3rd for kills on the leaderboard. Same rules: no cheats, no team killing, listen to admins. " +
-        'Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com',
+      'Welcome back, Ash! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, listen to admins. ' +
+        'Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
     );
   });
 
@@ -333,8 +333,7 @@ describe('the link your account welcome', () => {
 
     expect(pick.list).toBe('linkNudge');
     expect(pick.text).toBe(
-      'Welcome back, Ash! Link your Discord at gaminginit.com/account for a role and VIP alerts. Rules: no cheats, no team killing. ' +
-        'Discord: discord.gg/qsJFYGhSJ4',
+      "Ash, you're a regular! Link your account at gaminginit.com/account for a Discord role and VIP alerts. " + 'Discord: discord.gg/qsJFYGhSJ4',
     );
   });
 

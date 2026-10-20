@@ -45,6 +45,8 @@ import {
   voteLink,
   votingNow,
   voteMessage,
+  voteOpenBroadcast,
+  voteResultBroadcast,
   withPlayed,
   zoneForTry,
   type MapVote,
@@ -1860,13 +1862,11 @@ export class Watcher extends DurableObject<Env> {
         console.error(`Map vote: could not delete the last vote's message: ${errorText(error)}`),
       );
     }
-    if (config.inviteCode) {
-      await sendBroadcast(
-        config.rconUrl,
-        config.rconPassword,
-        `Vote for the next map in our Discord: ${discordLink(config.inviteCode)} - it plays infantry only. Open for ${rule.minutes} minutes.`,
-        socketHttp(connect),
-      ).catch((error: unknown) => console.error(`Map vote announcement failed: ${errorText(error)}`));
+    const announcement = voteOpenBroadcast(config.siteUrl, config.inviteCode ? discordLink(config.inviteCode) : null, opened.closeScore, rule.minutes);
+    if (announcement !== null) {
+      await sendBroadcast(config.rconUrl, config.rconPassword, announcement, socketHttp(connect)).catch((error: unknown) =>
+        console.error(`Map vote announcement failed: ${errorText(error)}`),
+      );
     }
   }
 
@@ -1939,7 +1939,7 @@ export class Watcher extends DurableObject<Env> {
       await this.stageNextMap(target.map, playing);
       await endMatch(rconUrl, rconPassword, http);
       await storage.put(RESTART_WATCH_KEY, settled(watch));
-      await sendBroadcast(rconUrl, rconPassword, `The server restarted: changing to ${mapName(target.map)}, infantry only.`, http).catch((error: unknown) =>
+      await sendBroadcast(rconUrl, rconPassword, `Server restarted. Switching to ${mapName(target.map)}, infantry only. Hang tight!`, http).catch((error: unknown) =>
         console.error(`Restart announcement failed: ${errorText(error)}`),
       );
     } catch (error) {
@@ -2043,8 +2043,8 @@ export class Watcher extends DurableObject<Env> {
       console.info(`Map vote: ${winner} staged as the next map ${inserted === true ? 'in the rotation' : 'in the queue'}, ${JSON.stringify(planned.setup)}`);
       const name = vote.options.find((o) => o.map === winner)?.name ?? mapName(winner);
       const votes = vote.ballots.filter((b) => b.map === winner).length;
-      const setup = [vote.outcome?.lightingName, picked ? `${picked.name} zones` : null].filter(Boolean);
-      await sendBroadcast(rconUrl, rconPassword, `Map vote: ${name} plays next, infantry only${setup.map((x) => `, ${x}`).join('')} (${votes > 0 ? `${votes} votes` : 'picked at random'}).`, http).catch((error: unknown) =>
+      const setup = [vote.outcome?.lightingName, picked ? `${picked.name} zones` : null].filter((x): x is string => Boolean(x));
+      await sendBroadcast(rconUrl, rconPassword, voteResultBroadcast(name, setup, votes), http).catch((error: unknown) =>
         console.error(`Map vote result announcement failed: ${errorText(error)}`),
       );
       return outcomeOf(false, at);

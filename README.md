@@ -881,8 +881,8 @@ To set it up:
 - **Kicks outside the bot** cannot be seen: the game's RCON does not report them, and its kill feed only has deaths.
 - **Possible griefing** posts can be turned off with `GRIEF_ALERTS` `"off"` in the `vars` block of `wrangler.jsonc`.
   They are a reason to look, not proof: sides come from the bot's last check (see [Staff page](#staff-page)).
-- **Team kill warning.** When the kill feed shows a player killing a teammate, the bot messages them in game: team
-  killing is against the rules, so apologise in team chat. It goes in their staff history like a `/warn`, but is not posted to
+- **Team kill warning.** When the kill feed shows a player killing a teammate, the bot messages them in game: "Team kill!
+  That's against the rules. Say sorry in team chat." It goes in their staff history like a `/warn`, but is not posted to
   the moderation log. Not sent for helicopter crashes. Turn it off with
   `TEAMKILL_WARNING` `"off"`. Sides come from the bot's last check, so it can be wrong for a player who just switched.
 - **Risky Steam account** posts can be turned off with `STEAM_ALERTS` `"off"`. They are a reason to look, not proof too.
@@ -1652,14 +1652,14 @@ Automatic VIP is Cloudflare only.
 Each player who joins gets a private message in game (like `/warn`, only they see it) 2 minutes after the bot sees
 them join (`WELCOME_MESSAGE_MINUTES`), by name, with the basic rules and where the Discord and the website are:
 
-> Welcome, Ghost! Rules: no cheats, exploits, team killing, griefing, racism or abuse. Listen to admins. All rules on
-> our Discord. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com
+> Welcome, Ghost! Play fair: no cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say.
+> Discord: gaminginit.com/discord | Stats: gaminginit.com
 
 A player on the website's leaderboard (the top 10 of any board over its 30 days) is welcomed back with their best place
 instead (Cloudflare only):
 
-> Welcome back, Ghost! You're 3rd for kills on the leaderboard. Same rules: no cheats, no team killing, listen to
-> admins. Discord: discord.gg/qsJFYGhSJ4 | Website: gaminginit.com
+> Welcome back, Ghost! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, listen to admins.
+> Discord: gaminginit.com/discord | Stats: gaminginit.com
 
 - The bot sees joins at its check each minute, so the welcome arrives 2 to 3 minutes after the player joins.
 - **Not again for 6 hours:** a player who rejoins within 6 hours of their welcome (a map change, a crash) doesn't get
@@ -1678,8 +1678,8 @@ instead (Cloudflare only):
   more matches in 30 days, who hasn't linked their account on the website is asked to instead, at most once a week. It
   comes before the welcome back. Staff are never asked. Who was asked is kept for a week (`linkNudges`).
 
-  > Welcome back, Ghost! Link your Discord at gaminginit.com/account for a role and VIP alerts. Rules: no cheats, no team
-  > killing. Discord: discord.gg/qsJFYGhSJ4
+  > Ghost, you're a regular! Link your account at gaminginit.com/account for a Discord role and VIP alerts.
+  > Discord: gaminginit.com/discord
 - The lines are on the [Lines tab](#lines-tab) (Welcome: Everyone, Welcome: On the leaderboard, and Welcome: Link your
   account), so staff can change them without a deploy. The defaults are in `src/lines.ts`.
 - A welcome that fails to send is logged (`Welcome to "<name>" (<Steam ID>) failed: …`) and not tried again. Each one
@@ -1693,13 +1693,12 @@ instead (Cloudflare only):
 The moment a team wins a match, its best players each get a private message in game (like `/warn`, only they see
 it), by name, while everyone is still on the scoreboard: what they earned, and where to see their stats.
 
-> GG Ghost! This match: 2nd on the scoreboard (41 kills) and best demolitions (8 kills). See your stats at gaminginit.com
+> GG Ghost! 2nd on the scoreboard (41 kills) and best demolitions (8 kills). Full stats: gaminginit.com
 
 The MVP, the top of the scoreboard (most kills, then fewest deaths; players level share it), gets an MVP line instead,
 with their kills in place of their place:
 
-> GG Ghost, you were the MVP! 63 kills, best assaulter (40 kills) and most headshots (21). See your stats at
-> gaminginit.com
+> GG Ghost, MVP of the match! 63 kills, best assaulter (40 kills) and most headshots (21). Full stats: gaminginit.com
 
 - **The top 5 on the scoreboard** (`TOP_PLAYER_MESSAGES`), ranked as in the match summary: most kills, then fewest
   deaths. A player without a kill has no place.
@@ -1737,9 +1736,9 @@ with their kills in place of their place:
 
   | Message                   | When                                                                                  | Example |
   | ------------------------- | ------------------------------------------------------------------------------------- | ------- |
-  | Milestone                 | The match took them past their 10th, 25th, 50th, 100th… match, their 100th, 250th, 500th, 1,000th… kill, or 10, 25, 50, 100… hours played. Told once each | Ghost, that's your 100th match on our server! Thanks for playing. See your stats at gaminginit.com |
-  | Personal best             | As above                                                                              | New personal best, Ghost: 42 kills in one match. See your stats at gaminginit.com |
-  | Nearly on the leaderboard | 25 or fewer more kills would put them in the leaderboard's top 10 for kills (30 days) | Ghost, you're 3 kills off the top 10 for kills. One more match? Leaderboard at gaminginit.com |
+  | Milestone                 | The match took them past their 10th, 25th, 50th, 100th… match, their 100th, 250th, 500th, 1,000th… kill, or 10, 25, 50, 100… hours played. Told once each | Ghost, that's your 100th match on our server! Thanks for playing. Stats: gaminginit.com |
+  | Personal best             | As above                                                                              | New personal best, Ghost: 42 kills in one match! Stats: gaminginit.com |
+  | Nearly on the leaderboard | 25 or fewer more kills would put them in the leaderboard's top 10 for kills (30 days) | Ghost, you're 3 kills off the top 10 for kills. One more match? Leaderboard: gaminginit.com |
   | Nemesis                   | One player killed them 4 times or more in the match (from the kill feed). Never names a private profile | Viper got you 6 times this match, Ghost. Payback next round? |
 
   Milestones count every day the bot has recorded. The bot keeps each player's totals of the days before today
@@ -1768,7 +1767,7 @@ with their kills in place of their place:
 
 The moment the server goes live, each seeder still in game gets a private message thanking them by name:
 
-> We're live, Ghost! Thanks for seeding for 25 minutes. You made this happen.
+> We're live, Ghost! Your 25 minutes of seeding made it happen. o7
 
 - Those on for more than `VIP_SEED_MINUTES` while it seeded (a seed that counts), longest first, at most 15. Never
   [staff](#staff-steam-accounts).
@@ -1783,9 +1782,9 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
 
 | VIP and website                     | Message                                                                       |
 | ----------------------------------- | ----------------------------------------------------------------------------- |
-| Automatic VIP on, `SITE_URL` set    | We're seeding! 15 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How at gaminginit.com |
-| Automatic VIP off, `SITE_URL` set   | We're seeding! 15 more players and we go live. Top seeders make the leaderboard at gaminginit.com |
-| Neither                             | We're seeding! 15 more players and we go live. Thanks for helping get it live! |
+| Automatic VIP on, `SITE_URL` set    | Seeding! 15 more players and we're live. Seed over 10 min on 3 days in a week for free VIP: gaminginit.com/seeding |
+| Automatic VIP off, `SITE_URL` set   | Seeding! 15 more players and we're live. Top seeders make the leaderboard: gaminginit.com |
+| Neither                             | Seeding! 15 more players and we're live. Thanks for seeding! |
 
 - **When someone joins:** 30 seconds after they join, so they have loaded in to see it. When several join close
   together, it waits until 30 seconds after the last of them and goes out once. With the [kill feed](#weapon-stats),
@@ -1818,25 +1817,27 @@ leaderboard, the Discord and seeding:
 
 | When                                             | Message                                                                         |
 | ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 10 minutes after the match went live             | 10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at gaminginit.com |
-| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Check the leaderboard and stats at gaminginit.com |
-| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? Leaderboard and stats at gaminginit.com |
+| 10 minutes after the match went live             | 10 minutes in and nobody's rage quit yet. See where your K/D ranks: gaminginit.com |
+| A team reaches half of `SCORE_TO_WIN` (50)        | Halfway there! Valkyra leads on 52. Not my points, OUR points, comrade. Watch this match live: gaminginit.com/live |
+| The first team to reach 90% of `SCORE_TO_WIN` (90) | Valkyra has 90! Victory for the motherland is in sight, comrades. Where do you rank? gaminginit.com |
 
 - While the [next-map vote](#next-map-vote) runs (`MAP_VOTE` on, with the token and channel set) and can still be voted on
   (this match's vote is open and no team has reached its close score), the halfway and 90-point messages send people to it
   in place of the usual call to action, and say the usual thing once it is closed (with `MAP_VOTE_CLOSE_PERCENT` at 80, the
-  90-point message is the usual one), as a message has room for one: halfway says "Vote for
-  the next map in our Discord, it plays infantry only! Leaderboard at gaminginit.com" and 90 points says "Last call to
-  vote for the next map in our Discord! Leaderboard at gaminginit.com". The staff page's Lines tab shows these. The bot also
-  announces the vote when it opens, and the result when it is staged.
+  90-point message is the usual one), as a message has room for one: halfway says "Vote the next map (infantry only):
+  gaminginit.com/vote" and 90 points says "Last call! Vote the next map: gaminginit.com/vote", the website's vote page,
+  which is quicker to type in game than a Discord invite. The staff page's Lines tab shows these. The bot also announces
+  the vote when it opens ("Map vote is open! Pick the next map (infantry only) at gaminginit.com/vote. Closes at 75 points
+  or in 60 min.", or the Discord invite without `SITE_URL`), and the result when it is staged ("Vote's in! Ozeti plays
+  next, infantry only, Night, Small zones (5 votes).").
 - Each message's line is picked at random from its list, passing over the lines it used lately (up to half the list, so
   the same line doesn't come up game after game): the seeding lines, the 10-minute lines, and for halfway and
   90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any
   other faction (for halfway and 90 points, from the leading faction's list). Staff change them on the staff page's
   [Lines tab](#lines-tab). `{team}`, `{score}` and `{site}` are filled in.
 - A few lines in the seeding and 10-minute lists point players at Season 1's Season in Review (the
-  [season roundup](#season-roundup), such as "10 minutes in. Who carried, who fed, who got roasted? Season 1 in Review
-  is out at gaminginit.com/season. Rules in our Discord"), and a few in the halfway and 90-point lists mention Season 2.
+  [season roundup](#season-roundup), such as "10 minutes in. Who carried Season 1? Who got roasted? Find out:
+  gaminginit.com/season"), and a few in the halfway and 90-point lists mention Season 2.
   They go out at the same times as the rest, picked at random like any other line. A list staff replaced on the Lines
   tab keeps staff's lines, so it has none of them.
 - The halfway and 90-point messages name only the team in front. Factions are matched however the server spells them

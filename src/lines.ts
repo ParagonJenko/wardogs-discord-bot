@@ -12,110 +12,112 @@
 // A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
 // The bot puts the Discord and the website after the line.
 export const WELCOME = [
-  'Welcome, {name}! Rules: no cheats, exploits, team killing, griefing, racism or abuse. Listen to admins. All rules on our Discord.',
+  'Welcome, {name}! Play fair: no cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say.',
+  'Welcome in, {name}! House rules: no cheats, exploits, TKs, griefing, racism or abuse. Listen to admins.',
+  'Boots on the ground, {name}! No cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say.',
 ];
 
 // The welcome for a player on the website's leaderboard (the top 10 of any board over 30 days), in place of the one above.
 // {rank} is their best place, such as "3rd for kills". The bot puts the Discord and the website after the line.
 export const WELCOME_BACK = [
-  "Welcome back, {name}! You're {rank} on the leaderboard. Same rules: no cheats, no team killing, listen to admins.",
-  "{name} is back! {rank} on the leaderboard. Keep it clean: no cheats, no team killing, listen to admins.",
-  "Welcome back, {name}. {rank} on the leaderboard, and everyone's coming for it. No cheats, no team killing.",
+  'Welcome back, {name}! {rank} on the leaderboard. Defend it. No cheats, no TKs, listen to admins.',
+  '{name} is back! {rank} on the leaderboard. Keep it clean: no cheats, no TKs, listen to admins.',
+  "Welcome back, {name}. You're {rank} and everyone's gunning for your spot. No cheats, no TKs.",
 ];
 
 // Every few minutes while the server seeds. The bot puts what seeding earns after the line. The ones that say why to
 // play here mention the leaderboards and player pages, which need the website (SITE_URL) and the bot on Cloudflare.
 export const SEEDING = [
-  "We're seeding! {needed} and we go live.",
-  'Seeding now: {needed} to go live. Stick around and bring a friend.',
+  "Seeding! {needed} and we're live.",
+  '{needed} to go live. Stick around and bring your squad.',
   "Quiet, isn't it? {needed} and it won't be.",
-  '{needed} until we go live. Every player counts while we seed.',
-  'Seeding in progress: {needed} to go live. Get your squad on.',
-  "Seeding now: {needed} to go live. Green's got room, for once.",
+  '{needed} to go live. Every player counts.',
+  "{needed} to go live. Green's got room, for once.",
   '{needed} to go live. Pick any team. Yes, even blue.',
-  'Active admins keep it fair here. {needed} to go live.',
-  'Cheaters and trolls get dealt with here. {needed} to go live.',
-  'Real admins who actually show up. {needed} and we go live.',
-  'Kills, K/D, play time and seeding all have a leaderboard here. {needed} to go live.',
-  'The leaderboard covers the last 30 days, so anyone can top it. {needed} to go live.',
-  'Every match you play is tracked: kills, deaths, wins. {needed} to go live.',
-  '{needed} to go live. Your K/D, wins and play time are all on your player page.',
-  'We track your stats, match by match. {needed} and we go live.',
-  'Active admins, leaderboards and full stats. {needed} to go live.',
-  'Season 1 in Review is out. Who carried? Who got roasted? {needed} to go live.',
-  'Your Season 1 in slides, roast and all, is out now. {needed} to go live.',
-  'Season 1 got roasted. Did your seeding make the slides? {needed} to go live.',
+  '{needed} to go live. Active admins keep it fair here.',
+  '{needed} to go live. Cheaters and trolls get dealt with here.',
+  '{needed} to go live. Real admins who actually show up.',
+  '{needed} to go live. Kills, K/D, play time and seeding all have a leaderboard.',
+  '{needed} to go live. The leaderboard covers 30 days, so anyone can top it.',
+  '{needed} to go live. Every match is tracked: kills, deaths, wins.',
+  '{needed} to go live. Your K/D, wins and play time are on your player page.',
+  "{needed} to go live. Season 2 is on and the leaderboard's wide open.",
+  '{needed} to go live. Season 1 in Review is out: who carried, who got roasted?',
+  '{needed} to go live. Did your seeding make the Season 1 slides?',
 ];
 
-// 10 minutes after the match goes live. These are the whole message, so they point at the rules and the site.
+// 10 minutes after the match goes live. These are the whole message, so each ends on one link to type: the website, a
+// page on it, or the rules in the Discord through the website's short link ({site}/discord, see DISCORD_SHORT_LINK).
 export const TEN_MINUTES = [
-  '10 minutes in and nobody has rage quit yet. Rules are in our Discord, leaderboard at {site}',
-  'Still alive? Impressive. Rules are in our Discord, and your K/D is on the leaderboard at {site}',
-  'Enjoying the chaos? Read the rules in our Discord, soldier. Leaderboard at {site}',
-  'Your squad lead wants you to read the rules. They are in our Discord at {site}',
-  '10 minutes down. Rules in our Discord, bragging rights on the leaderboard at {site}',
-  '10 minutes in. Blue, park the spawn truck so people can spawn. Rules in our Discord, leaderboard at {site}',
-  'Still spamming the green button? We started 10 minutes ago. Rules in our Discord, leaderboard at {site}',
-  '10 minutes in. Cash is nice, the zone is nicer. Rules in our Discord, leaderboard at {site}',
-  '10 minutes in. Who carried, who fed, who got roasted? Season 1 in Review is out at {site}/season. Rules in our Discord',
-  'Still alive? Your whole Season 1 in slides, roast included, at {site}/season. Rules in our Discord',
-  '10 minutes in. Rules in our Discord, and Season 1 got roasted at {site}/season',
+  "10 minutes in and nobody's rage quit yet. See where your K/D ranks: {site}",
+  'Still alive? Impressive. Your K/D is on the leaderboard: {site}',
+  'Enjoying the chaos, soldier? Rules are in our Discord: {site}/discord',
+  'Your squad lead wants you to read the rules. They are in our Discord: {site}/discord',
+  '10 minutes down. Bragging rights live on the leaderboard: {site}',
+  '10 minutes in. Blue, park the spawn truck so people can spawn. Rules: {site}/discord',
+  'Still spamming the green join button? We started 10 minutes ago. Stats: {site}',
+  '10 minutes in. Cash is nice, the zone is nicer. Leaderboard: {site}',
+  '10 minutes in. Play fair: the rules are in our Discord at {site}/discord',
+  '10 minutes in. Watch the kill feed and streaks live: {site}/live',
+  '10 minutes in. Who carried Season 1? Who got roasted? Find out: {site}/season',
+  'Still alive? Your Season 1 in slides, roast included: {site}/season',
 ];
 
 // In place of the welcome, at most once a week, for a regular (5 or more matches in 30 days) who has not linked their
 // account on the website. {site} is the website. The bot puts the Discord after the line.
 export const LINK_NUDGE = [
-  'Welcome back, {name}! Link your Discord at {site}/account for a role and VIP alerts. Rules: no cheats, no team killing.',
-  'Good to see you again, {name}. Link your account at {site}/account for a Discord role and VIP alerts. Play fair.',
+  "{name}, you're a regular! Link your account at {site}/account for a Discord role and VIP alerts.",
+  'Welcome back, {name}! Link Steam and Discord at {site}/account: get a role and VIP alerts. Play fair.',
+  'Good to see you, {name}. Link your account at {site}/account for a Discord role and VIP alerts.',
 ];
 
 // A private message to each seeder still in game the moment the server goes live. {minutes} is how long they seeded,
 // such as "25 minutes". The line is the whole message.
 export const SEEDER_THANKS = [
-  "We're live, {name}! Thanks for seeding for {minutes}. You made this happen.",
-  '{name}, you helped get us live with {minutes} of seeding. Thank you!',
-  'Live! Thanks for seeding, {name}. {minutes} well spent.',
+  "We're live, {name}! Your {minutes} of seeding made it happen. o7",
+  '{name}, you helped get us live with {minutes} of seeding. Legend.',
+  'Live! Thanks for seeding, {name}. {minutes} well spent. o7',
 ];
 
 // A private message to each of a match's best players the moment a team wins it (see matchend.ts): {earned} names their
 // place on the scoreboard and their awards. These are the whole message, so they point at the website.
 export const MATCH_END = [
-  'GG {name}! This match: {earned}. See your stats at {site}',
-  'GG {name}! You got {earned}. See where you rank on the leaderboard at {site}',
-  'Nice match, {name}: {earned}. Your K/D and wins are on your player page at {site}',
-  'Bragging rights, {name}: {earned}. It is all on the leaderboard at {site}',
+  'GG {name}! {earned}. Full stats: {site}',
+  'GG {name}! You got {earned}. See where you rank: {site}',
+  'Nice match, {name}: {earned}. Your K/D and wins: {site}',
+  'Bragging rights, {name}: {earned}. Proof at {site}',
 ];
 
 // In place of the one above, to the match's MVP: the top of the scoreboard (most kills, then fewest deaths; players level
 // share it). Their {earned} starts with their kills, such as "31 kills and best demolitions (8 kills)", not their place.
 export const MVP = [
-  'GG {name}, you were the MVP! {earned}. See your stats at {site}',
-  'MVP of the match: {name}, with {earned}. See where you rank on the leaderboard at {site}',
-  '{name} carried. MVP with {earned}. Your player page is at {site}',
-  'Top of the scoreboard, {name}! MVP with {earned}. Bragging rights at {site}',
+  'GG {name}, MVP of the match! {earned}. Full stats: {site}',
+  'MVP: {name}, with {earned}. See where you rank: {site}',
+  '{name} carried. MVP with {earned}. Your player page: {site}',
+  'Top of the scoreboard, {name}! MVP with {earned}. Proof at {site}',
 ];
 
 // For a player who earned nothing above, the first they have of these, at the end of the match (see matchend.ts). Each
 // line is the whole message.
 // A milestone: {milestone} is "your 100th match", "your 1,000th kill" or "100 hours played".
 export const MILESTONE = [
-  "{name}, that's {milestone} on our server! Thanks for playing. See your stats at {site}",
-  'Milestone, {name}: {milestone} here. Thanks for sticking with us. Your stats are at {site}',
-  'Big one, {name}: {milestone} on our server. GG and thanks! Stats at {site}',
+  "{name}, that's {milestone} on our server! Thanks for playing. Stats: {site}",
+  'Milestone unlocked, {name}: {milestone} here. Thanks for sticking with us. Stats: {site}',
+  'Big one, {name}: {milestone} on our server. GG and thanks! Stats: {site}',
 ];
 
 // Their most kills in a match lately (5 matches or more, 10 kills or more): {kills} is "42 kills".
 export const PERSONAL_BEST = [
-  'New personal best, {name}: {kills} in one match. See your stats at {site}',
-  "{name}, that's your best match lately with {kills}. See where you rank at {site}",
-  'Personal best, {name}! {kills} this match. Your player page is at {site}',
+  'New personal best, {name}: {kills} in one match! Stats: {site}',
+  "{name}, that's your best match lately: {kills}. See where you rank: {site}",
+  'PB, {name}! {kills} this match. Your player page: {site}',
 ];
 
 // Close to the leaderboard's top 10 for kills: {short} is how many more kills would put them in it, such as "3 kills".
 export const NEARLY_TOP = [
-  "{name}, you're {short} off the top 10 for kills. One more match? Leaderboard at {site}",
-  "So close, {name}: {short} more and you're in the top 10 for kills. Leaderboard at {site}",
-  "{short} more and you're on the leaderboard, {name}. Top 10 for kills at {site}",
+  "{name}, you're {short} off the top 10 for kills. One more match? Leaderboard: {site}",
+  'So close, {name}: {short} away from the top 10 for kills. Leaderboard: {site}',
+  '{short} from the leaderboard, {name}. One more match? Top 10 for kills at {site}',
 ];
 
 // The player who killed them most in the match, 4 times or more: {nemesis} is their name, {count} how many, such as
@@ -124,6 +126,7 @@ export const NEMESIS = [
   '{nemesis} got you {count} this match, {name}. Payback next round?',
   '{name}, {nemesis} killed you {count} this match. Time for revenge?',
   "Your nemesis this match: {nemesis}, {count}. Next round, {name}, it's personal.",
+  '{nemesis} has your number, {name}: {count} this match. Run it back?',
 ];
 
 // The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
@@ -217,7 +220,7 @@ export const NEARLY: Record<string, string[]> = {
 
 // For a faction with no list above.
 export const HALFWAY_OTHER = ['{team} leads on {score}!'];
-export const NEARLY_OTHER = ['{team} has {score} points!'];
+export const NEARLY_OTHER = ['{team} has {score}! Nearly over.'];
 
 // Every list, as the bot says them: these, or the ones staff put in their place.
 export type Lines = {

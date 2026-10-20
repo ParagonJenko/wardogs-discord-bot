@@ -612,6 +612,20 @@ const rainNote = (vote: MapVote): string => {
   return none + left;
 };
 
+// What the game is told when a vote opens: where to vote, as a link players can type (the website's vote page, or the
+// Discord without a website), and when it closes. Null with neither.
+export const voteOpenBroadcast = (siteUrl: string | undefined, discord: string | null, closeScore: number, minutes: number): string | null => {
+  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const where = host ? `at ${host}/vote` : discord ? `in our Discord: ${discord}` : null;
+  if (where === null) return null;
+  const closes = closeScore > 0 ? `Closes at ${closeScore} points or in ${minutes} min.` : `Closes in ${minutes} min.`;
+  return `Map vote is open! Pick the next map (infantry only) ${where}. ${closes}`;
+};
+
+// What the game is told when the winner is staged: "Vote's in! Ozeti plays next, infantry only, Night, Small zones (5 votes)."
+export const voteResultBroadcast = (name: string, setup: string[], votes: number): string =>
+  `Vote's in! ${name} plays next, infantry only${setup.map((x) => `, ${x}`).join('')} (${votes > 0 ? `${votes} ${votes === 1 ? 'vote' : 'votes'}` : 'no votes, picked at random'}).`;
+
 export const voteMessage = (vote: MapVote, now: number, siteUrl?: string): VoteMessage => {
   const shown = publicVote(vote, now);
   const at = `<t:${Math.floor(vote.closesAt / 1000)}:R>`;

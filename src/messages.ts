@@ -53,11 +53,12 @@ export const nearlyScore = (scoreToWin: number): number => Math.ceil(scoreToWin 
 // What the bot puts around the lines (see lines.ts). The staff page shows them too, so staff see the whole message.
 export const HALFWAY_START = 'Halfway there!';
 // While a vote runs, these send people to it instead: the vote is open from the start of the match until a team is close to
-// winning, and a message is one line of 200 characters, so there is room for one call to action.
+// winning, and a message is one line of 200 characters, so there is room for one call to action. Each is a link players
+// can type: the vote is on the website as well as in the Discord.
 export const halfwayCall = (siteHost: string, vote = false): string =>
-  vote ? `Vote for the next map in our Discord, it plays infantry only! Leaderboard at ${siteHost}` : `Check the leaderboard and stats at ${siteHost}`;
+  vote ? `Vote the next map (infantry only): ${siteHost}/vote` : `Watch this match live: ${siteHost}/live`;
 export const nearlyCall = (siteHost: string, vote = false): string =>
-  vote ? `Last call to vote for the next map in our Discord! Leaderboard at ${siteHost}` : `Where do you rank? Leaderboard and stats at ${siteHost}`;
+  vote ? `Last call! Vote the next map: ${siteHost}/vote` : `Where do you rank? ${siteHost}`;
 
 // A line the bot chose: its message, which list it came from and the line as written (before placeholders).
 export type Picked = { text: string; list: string; line: string };
@@ -197,21 +198,21 @@ export const nextMessage = (
   return { messages: { ...previous, sent: [...previous.sent, next.key] }, send: next.text, used: next.pick };
 };
 
-// What seeding earns, after the seeding line: a whitelist slot when automatic VIP is on, otherwise a place on the
-// website's top seeders board.
+// What seeding earns, after the seeding line: free VIP (a whitelist slot) when automatic VIP is on, with the website's
+// seeding page for how, otherwise a place on the website's top seeders board.
 export const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
   if (vip) {
     const offer =
       vip.seedDays === 1
-        ? `Seed for over ${vip.seedMinutes} min and get a whitelist slot for ${days(vip.lengthDays)}.`
-        : `Seed for over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week and get a whitelist slot.`;
-    return siteHost ? `${offer} How at ${siteHost}` : offer;
+        ? `Seed over ${vip.seedMinutes} min for ${days(vip.lengthDays)} of free VIP`
+        : `Seed over ${vip.seedMinutes} min on ${days(vip.seedDays)} in a week for free VIP`;
+    return siteHost ? `${offer}: ${siteHost}/seeding` : `${offer}.`;
   }
-  return siteHost ? `Top seeders make the leaderboard at ${siteHost}` : 'Thanks for helping get it live!';
+  return siteHost ? `Top seeders make the leaderboard: ${siteHost}` : 'Thanks for seeding!';
 };
 
-// "We're seeding! 5 more players and we go live. Seed for over 10 min on 3 days in a week and get a whitelist slot. How
-// at gaminginit.com". With one seed day enough: "Seed for over 10 min and get a whitelist slot for 3 days."
+// "19 more players to go live. Every player counts. Seed over 10 min on 3 days in a week for free VIP:
+// gaminginit.com/seeding". With one seed day enough: "Seed over 10 min for 3 days of free VIP: gaminginit.com/seeding".
 export const seedingPick = (
   players: number,
   live: number,
@@ -271,10 +272,10 @@ export const WELCOME_AGAIN_MS = 6 * 60 * 60_000;
 // A Discord invite code as players type it in: "discord.gg/abc123".
 export const discordLink = (inviteCode: string): string => `discord.gg/${inviteCode}`;
 
-// What the bot puts after the welcome line: " Discord: discord.gg/abc123 | Website: gaminginit.com", or whichever of
-// the two there is.
+// What the bot puts after the welcome line: " Discord: discord.gg/abc123 | Stats: gaminginit.com", or whichever of
+// the two there is. The website is named for what players get there.
 export const welcomeLinks = (siteHost: string | null, discord: string | null): string => {
-  const links = [...(discord ? [`Discord: ${discord}`] : []), ...(siteHost ? [`Website: ${siteHost}`] : [])];
+  const links = [...(discord ? [`Discord: ${discord}`] : []), ...(siteHost ? [`Stats: ${siteHost}`] : [])];
   return links.length === 0 ? '' : ` ${links.join(' | ')}`;
 };
 
