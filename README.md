@@ -1013,6 +1013,22 @@ Admin tools: the page runs the staff commands through the bot, as the signed-in 
   also logged as `Staff page: /<command> by "<name>" (Discord user <ID>)`.
 - The page asks before anything that changes the game or the records, such as a kick, a ban or a map change.
 
+### Play time
+
+The staff page's Server → Play time view shows how long players stay each day and when they leave, from the
+`sessions` table (30 days, see Who joined and left) and the finished matches' start and end times (`src/retention.ts`).
+`GET /api/admin/retention?days=1|7|30` serves it to signed-in staff.
+
+- Each UTC day: players who left, their stays, the average and median stay, and the average per player. A stay counts
+  on the day it ended. Players on when the log started have no length.
+- Stays in bands: under 15 minutes, to 3 hours or more.
+- When each leave was: the first, middle or last third of a live match; at the end of a match (the last 3 minutes, and
+  up to 10 minutes after it, until the next starts); or between matches (seeding, or empty). And whether it was in the
+  night's last match or after it: a night is a run of matches with less than 2 hours from one's end to the next's start,
+  so the last match is the night's last full game. A leave noticed only after a gap in the checks (`leftFrom`) has no
+  known time, so it counts in the lengths and not here.
+- The latest 20 matches: who was in game when it went live, how many left before its last 3 minutes, and the share who stayed.
+
 ### Kills and headshots
 
 Many headshots, day after day, can be a sign of cheating. The staff page shows who gets them, from the
