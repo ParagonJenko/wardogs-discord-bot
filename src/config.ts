@@ -124,6 +124,9 @@ const EnvSchema = z
     AWARD_MESSAGES: z.enum(['on', 'off']).default('on'),
     // Weekly and monthly roundups of the best players and team, posted to Discord: "on" or "off".
     ROUNDUPS: z.enum(['on', 'off']).default('on'),
+    // A Discord message to linked players who have been away, when the server seeds (see README, "Asking players back"):
+    // "on" or "off". Off unless set.
+    ASK_BACK: z.enum(['on', 'off']).default('off'),
     // The hour (UTC) on Mondays, and on the 1st of the month, when the roundups go out.
     ROUNDUP_HOUR: z.coerce.number().int().min(0).max(23).default(17),
     // The hour (UTC) each day's map rotation starts, so a late night still plays the evening's rotation.
@@ -208,6 +211,8 @@ export type Config = {
   accounts: { linkedRoleId: string | undefined; vipRoleId: string | undefined; botToken: string | undefined };
   // The roles the player of the month and the weekly challenge's winner get (see drives.ts).
   drives: { playerOfMonthRoleId: string | undefined; challengeRoleId: string | undefined };
+  // Whether linked players who have been away are asked back when the server seeds (ASK_BACK).
+  askBack: boolean;
   // The server's ID for Join by ID in game, when set.
   serverId: string | undefined;
   pollIntervalMs: number;
@@ -267,6 +272,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     siteUrl: e.SITE_URL,
     accounts: { linkedRoleId: e.DISCORD_LINKED_ROLE_ID, vipRoleId: e.DISCORD_VIP_ROLE_ID, botToken: e.DISCORD_BOT_TOKEN || undefined },
     drives: { playerOfMonthRoleId: e.DISCORD_PLAYER_OF_MONTH_ROLE_ID, challengeRoleId: e.DISCORD_CHALLENGE_ROLE_ID },
+    askBack: e.ASK_BACK === 'on',
     serverId: e.SERVER_ID,
     pollIntervalMs: e.POLL_INTERVAL_SECONDS * 1000,
     rules: {

@@ -3539,12 +3539,12 @@ export class Watcher extends DurableObject<Env> {
     );
   }
 
-  // Asks linked players who have been away back, by Discord message, the first time each day the server seeds outside the
-  // quiet hours (see returnDue). The day is saved before any goes out, so a batch that fails part-way is not sent twice.
+  // With ASK_BACK on, asks linked players who have been away back, by Discord message, the first time each day the server
+  // seeds outside the quiet hours (see returnDue). The day is saved before any goes out, so a batch that fails part-way is not sent twice.
   private async askBack(config: Config, snapshot: Snapshot | null): Promise<void> {
     const { botToken } = config.accounts;
     const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
-    if (botToken === undefined || !/^\d+$/.test(guildId) || snapshot === null) return;
+    if (!config.askBack || botToken === undefined || !/^\d+$/.test(guildId) || snapshot === null) return;
     const now = Date.now();
     const players = snapshot.status.players;
     if (players < config.rules.seeding || players >= config.rules.live || isQuiet(now, config.quietHours)) return;

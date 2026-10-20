@@ -26,6 +26,7 @@ describe('loadConfig', () => {
       siteUrl: undefined,
       accounts: { linkedRoleId: undefined, vipRoleId: undefined, botToken: undefined },
       drives: { playerOfMonthRoleId: undefined, challengeRoleId: undefined },
+      askBack: false,
       serverId: undefined,
       pollIntervalMs: 60_000,
       rules: { seeding: 1, live: 20, lowPop: 20, cooldownMs: 600_000, graceMs: 300_000, seedHoldMs: 300_000 },
@@ -79,6 +80,9 @@ describe('loadConfig', () => {
     const url = 'https://discord.com/api/webhooks/333/roundup-Token_9';
     expect(loadConfig({ ...required, DISCORD_ROUNDUP_WEBHOOK_URL: url, ROUNDUP_HOUR: '9' }).roundups).toEqual({ hour: 9, webhookUrl: url });
     expect(loadConfig({ ...required, ROUNDUPS: 'off' }).roundups).toBeNull();
+    // Asking players back is off unless set.
+    expect(loadConfig({ ...required, ASK_BACK: 'on' }).askBack).toBe(true);
+    expect(() => loadConfig({ ...required, ASK_BACK: 'yes' })).toThrow(/ASK_BACK/);
     expect(() => loadConfig({ ...required, ROUNDUP_HOUR: '24' })).toThrow(/ROUNDUP_HOUR/);
     expect(() => loadConfig({ ...required, DISCORD_ROUNDUP_WEBHOOK_URL: 'https://example.com/hook' })).toThrow(
       /DISCORD_ROUNDUP_WEBHOOK_URL/,

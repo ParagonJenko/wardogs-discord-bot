@@ -30,7 +30,7 @@ It also posts:
   [player of the month and the weekly challenge](#player-of-the-month-and-weekly-challenge), each with a role.
 - **[Player accounts](#player-accounts)** (Cloudflare only): players sign in to the website with Discord, link their Steam
   account, and get a role and a message when their seeder VIP is earned or about to end. Sign-in can also add them to the server.
-  Linked players who have been away are asked back when the server seeds.
+  With `ASK_BACK` on, linked players who have been away are asked back when the server seeds.
 - **[Private messages in game](#in-game-messages)**, by name: a welcome (a welcome back with their leaderboard place, or a
   nudge to link their account), thanks to the seeders when the server goes live, and at the end of a match their place and
   awards, or a milestone, a personal best, how close they are to the leaderboard, or their nemesis.
@@ -805,8 +805,9 @@ now. At most 15 accounts and 40 calls to Discord a pass; the rest go to the fron
 on it for days (VIP) cannot starve the others. Someone known to be out of the server is left alone until they sign in. Without `DISCORD_BOT_TOKEN` it does
 nothing, and players can still sign in and link.
 
-**Asking players back.** The first time each day the server is seeding (outside the quiet hours), the bot sends a private Discord
-message to linked players who haven't been on the server for 14 days (but were in the 90 days the bot keeps):
+**Asking players back** (off unless `ASK_BACK` is `"on"` in `wrangler.jsonc`). The first time each day the server is seeding
+(outside the quiet hours), the bot sends a private Discord message to linked players who haven't been on the server for 14 days
+(but were in the 90 days the bot keeps):
 
 > Hey Ghost, it's been a while! The WARDOGS server is seeding now with 6 on. Jump in and help get it live. Join by ID: `ABC123`.
 > Seed on 3 days in a week for a VIP whitelist slot.
