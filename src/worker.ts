@@ -200,7 +200,7 @@ import {
   type JoinLog,
 } from './joinlog.ts';
 import { buildFunnel, type Funnel } from './funnel.ts';
-import { createLifetime, dayPlayers, exportTable, firstStayDay, newPlayerDays, rebuildPlayers, readLifetime, readPublicLifetime, removeArchivedMatch, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
+import { createLifetime, dayPlayers, exportTable, firstStayDay, newPlayerDays, rebuildPlayers, readLifetime, readPublicLifetime, readRegulars, removeArchivedMatch, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
 import { buildNewPlayers, type Cohort } from './newplayers.ts';
 import { buildRetention, REMOVAL_AFTER_MS, sessionRows, type Removal, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
@@ -3954,8 +3954,16 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // What the public website shows of the long-term records (see readPublicLifetime).
-  publicLifetime(): PublicLifetime {
-    return readPublicLifetime(this.lifetimeSql(), dayOf(Date.now()));
+  async publicLifetime(): Promise<PublicLifetime> {
+    const now = Date.now();
+    const sql = this.lifetimeSql();
+    const today = dayOf(now);
+    // The regulars go by what their player records last called them, and have a page unless their profile is private.
+    const [kept, hidden] = await Promise.all([this.recentDays(now), this.privateSteam()]);
+    const names = new Map<string, string>();
+    for (const d of kept) for (const [steamId, p] of Object.entries(d.players)) if (p.name !== '') names.set(steamId, p.name);
+    const ids = await this.idsFor(readRegulars(sql, today).map((r) => r.steam_id));
+    return readPublicLifetime(sql, today, { nameOf: (steamId) => names.get(steamId), idOf: publicIdOf(hidden, (steamId) => ids.get(steamId)) });
   }
 
   // One of the long-term tables as CSV, for analysis.
@@ -4340,7 +4348,6 @@ export class Watcher extends DurableObject<Env> {
 // mostly gets it over its WebSocket instead.
 const CACHE_MS = 30_000;
 const LIVE_CACHE_MS = 5_000;
-const LIFETIME_CACHE_MS = 10 * 60_000;
 // One answer per player page; past this many, the oldest are dropped.
 const CACHE_ENTRIES = 200;
 const cache = new Map<string, { body: Promise<string | null>; at: number }>();
@@ -4387,8 +4394,8 @@ const publicRoute = (
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
   if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
-  // Added once a day, so kept for longer.
-  if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime(), keepMs: LIFETIME_CACHE_MS };
+  // Kept for the usual time and no longer: it names the regulars, so a profile made private must leave it within a minute.
+  if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime() };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
   return null;
