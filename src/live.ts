@@ -182,6 +182,9 @@ const isNewMatch = (match: LiveMatch, e: FeedEvent, playingAt: number | null): b
 // A kill that ended a kill streak of `min` or more: who did it, and whose streak it was.
 export type StreakBreak = { eventId: string; steamId: string; name: string; victim: string; streak: number };
 
+// A player whose kill streak just reached `min` kills: they have a bounty on them.
+export type StreakStart = { eventId: string; steamId: string; name: string; streak: number };
+
 // Adds a batch's deaths, and the match's states and results, in the order the game sent them. `before` is the game's
 // word on the match before the batch (see matchfeed.ts). `factionOf` is the side the bot last saw a player on, as the
 // feed does not say: two players on the same side make a team kill. A result ends the match it is for, and a match
@@ -194,7 +197,8 @@ export const recordLive = (
   before: Pick<MatchFeed, 'state' | 'playingAt'> = { state: null, playingAt: null },
   // When given, the kills in the batch that ended a streak of `min` kills or more are added to `found`, as they happen:
   // a match that starts later in the batch, or a death trimmed from the feed, does not lose one. A team kill never counts.
-  streaks?: { min: number; found: StreakBreak[] },
+  // `started` gets a player the moment their streak reaches `min`.
+  streaks?: { min: number; found: StreakBreak[]; started: StreakStart[] },
 ): LiveMatch | null => {
   let m = match === null ? null : { ...match, players: match.players.map((p) => ({ ...p, weapons: { ...p.weapons } })), pairs: { ...match.pairs }, feed: [...match.feed] };
   let state = before.state;
@@ -281,6 +285,9 @@ export const recordLive = (
         live.headshots += e.headshot ? 1 : 0;
       }
       Object.assign(death, { killer, teamKill, streak: teamKill ? 0 : k.streak, chain: teamKill ? 0 : k.chain });
+      if (!teamKill && streaks !== undefined && k.streak === streaks.min) {
+        streaks.started.push({ eventId: e.eventId, steamId: k.steamId, name: k.name, streak: k.streak });
+      }
       if (!teamKill && streaks !== undefined && v.streak >= streaks.min) {
         streaks.found.push({ eventId: e.eventId, steamId: k.steamId, name: k.name, victim: v.name, streak: v.streak });
       }

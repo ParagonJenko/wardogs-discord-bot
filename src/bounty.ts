@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { StreakBreak } from './live.ts';
+import type { StreakBreak, StreakStart } from './live.ts';
 
 // Streak breaker VIP (BOUNTY_STREAK): a kill that ends a long kill streak earns the killer a whitelist slot for the next
 // calendar day(s). A win is kept here, by the kill's event ID, from the moment the feed batch is counted until the slot
@@ -50,3 +50,29 @@ export const planBounties = (pending: BountyPending, rule: { days: number } | nu
   });
   return { pay, drop };
 };
+
+// What the whole server is told in game. A player's name is cleaned of line breaks and cut short, as it is typed by the player.
+const shown = (name: string): string => {
+  const clean = name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() || 'Someone';
+  return clean.length > 32 ? `${clean.slice(0, 31)}…` : clean;
+};
+
+const reward = (days: number): string => (days === 1 ? 'VIP for tomorrow' : `VIP for the next ${days} days`);
+
+// A player has reached the streak: everyone is told, so they can hunt them.
+export const bountyOnText = (start: StreakStart, days: number): string =>
+  `BOUNTY: ${shown(start.name)} is on a ${start.streak} kill streak! Kill them to win ${reward(days)}.`;
+
+// The streak was ended: who did it, and whose it was.
+export const bountyEndedText = (win: StreakBreak, days: number): string =>
+  `${shown(win.name)} ended ${shown(win.victim)}'s ${win.streak} kill streak and wins ${reward(days)}!`;
+
+// Everything to say about a batch, in the order its kills happened (`order` is the batch's event IDs). A kill that ends a
+// streak and starts another says the end first, so a bounty that is on never reads as over.
+export const bountyLines = (started: StreakStart[], ended: StreakBreak[], days: number, order: string[]): string[] =>
+  [
+    ...ended.map((e) => ({ at: order.indexOf(e.eventId), then: 0, text: bountyEndedText(e, days) })),
+    ...started.map((s) => ({ at: order.indexOf(s.eventId), then: 1, text: bountyOnText(s, days) })),
+  ]
+    .sort((a, b) => a.at - b.at || a.then - b.then)
+    .map((line) => line.text);
