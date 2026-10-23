@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { Sql } from '../src/killfeed.ts';
-import { createLifetime, exportTable, newPlayerDays, readPublicLifetime, removeArchivedMatch, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
+import { createLifetime, exportTable, newPlayerDays, publicRegulars, readPublicLifetime, readRegulars, removeArchivedMatch, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
 import { createSessions } from '../src/joinlog.ts';
 
 const database = (): Sql => {
@@ -226,3 +226,70 @@ describe('review fixes', () => {
 });
 
 const rows = (sql: Sql, query: string): Record<string, unknown>[] => sql.exec(query).toArray();
+
+describe('the regulars', () => {
+  const dayAt = (iso: string, plus: number): string => new Date(Date.parse(`${iso}T00:00:00Z`) + plus * 86_400_000).toISOString().slice(0, 10);
+  const setup = (): Sql => {
+    const sql = database();
+    createLifetime(sql);
+    const play = (id: string, from: string, n: number, minutes = 60): void => {
+      for (let i = 0; i < n; i += 1) writePlayerDays(sql, dayAt(from, i), { [id]: { minutes, matches: 2 } });
+    };
+    // anchor is on the first day only. ann: 8 days from the second day. bo: 6 days, long ones. cy: 4 days (not a regular).
+    // dee: 6 days, with a private profile. old: 9 days but long ago.
+    play('anchor', '2026-06-01', 1);
+    play('ann', '2026-06-02', 8);
+    play('bo', '2026-10-01', 6, 180);
+    play('cy', '2026-10-01', 4);
+    play('dee', '2026-10-01', 6);
+    play('old', '2026-06-10', 9);
+    rebuildPlayers(sql);
+    return sql;
+  };
+
+  it('lists who played 5 or more days of the last 30, most days first', () => {
+    const rowsOf = readRegulars(setup(), '2026-10-12');
+    expect(rowsOf.map((r) => [r.steam_id, r.days])).toEqual([['bo', 6], ['dee', 6]]);
+    // Most days first, then most time.
+    expect(rowsOf[0]?.minutes).toBe(1080);
+  });
+
+  it('names them, links their page, leaves out a private profile and says how many', () => {
+    const sql = setup();
+    const regs = readRegulars(sql, '2026-10-12');
+    const who = {
+      nameOf: (id: string) => ({ bo: 'Bo', dee: 'Dee' })[id],
+      idOf: (id: string) => (id === 'dee' ? null : id === 'bo' ? 'b0b0b0b0b0b0' : undefined),
+    };
+    const out = publicRegulars(regs, who, '2026-06-01');
+    expect(out).toEqual({
+      total: 1,
+      hidden: 1,
+      players: [{ name: 'Bo', id: 'b0b0b0b0b0b0', days: 6, hours: 18, matches: 12, since: '2026-10-01', founder: false }],
+    });
+    expect(JSON.stringify(out)).not.toMatch(/dee|steam/i);
+  });
+
+  it('marks those first seen in the first fortnight of the records', () => {
+    const rowsOf = [
+      { steam_id: 'a', days: 8, minutes: 480, matches: 16, first_seen: '2026-06-14' },
+      { steam_id: 'b', days: 7, minutes: 420, matches: 14, first_seen: '2026-06-15' },
+    ];
+    const out = publicRegulars(rowsOf, { nameOf: (id) => id.toUpperCase(), idOf: () => undefined }, '2026-06-01');
+    expect(out.players.map((p) => [p.name, p.founder, p.id])).toEqual([['A', true, null], ['B', false, null]]);
+  });
+
+  it('counts a regular with no name but does not list them, and lists at most 60', () => {
+    const many = Array.from({ length: 70 }, (_, i) => ({ steam_id: `p${i}`, days: 30 - (i % 20), minutes: 600, matches: 4, first_seen: '2026-09-01' }));
+    const out = publicRegulars(many, { nameOf: (id) => (id === 'p3' ? undefined : id), idOf: () => 'x' }, '2026-06-01');
+    expect(out.total).toBe(70);
+    expect(out.players).toHaveLength(60);
+    expect(out.players.some((p) => p.name === 'p3')).toBe(false);
+  });
+
+  it('is in the public figures only when someone says who they are', () => {
+    const sql = setup();
+    expect(readPublicLifetime(sql, '2026-10-12').regulars).toBeNull();
+    expect(readPublicLifetime(sql, '2026-10-12', { nameOf: () => 'X', idOf: () => 'i' }).regulars?.total).toBe(2);
+  });
+});

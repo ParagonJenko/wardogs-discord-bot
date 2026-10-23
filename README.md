@@ -1090,8 +1090,11 @@ would like and nothing else: players ever, player hours, matches, players in the
 day (most players), the biggest match (most at once) and the most matches in a day; the typical stay over the last 30 days;
 players for each of the last 90 days and each of the last 104 weeks, with the new ones; each month's players, new players,
 hours and matches; the favourite maps (matches played, up to 8); and the average players on in each hour of the week (UTC,
-Monday first), once 7 days of stays are kept. Nothing about who left or stopped coming, new players' return rates, seeding,
-Discord or any player.
+Monday first), once 7 days of stays are kept. And the regulars (`regulars`): players on the server 5 or more days of the last 30,
+most days first, then most time, the first 60 of them by name with a link to their player page, the days and hours in the last 30,
+matches, the day they were first seen and whether that was in the first fortnight of the records. A player with a
+[private profile](#private-profiles) is not listed, only counted in `hidden`. No Steam ID is ever in it. Nothing about who left or
+stopped coming, new players' return rates, seeding or Discord.
 
 ### Kills and headshots
 

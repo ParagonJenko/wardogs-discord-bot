@@ -1,4 +1,5 @@
 import type { Sql } from './killfeed.ts';
+import type { PublicIdOf } from './privacy.ts';
 import type { RetentionDetail } from './retention.ts';
 
 // The long-term records, for the staff page's Lifetime view and for analysis. The stays, kill feed and hourly figures
@@ -438,8 +439,55 @@ export const toCsv = (table: { columns: string[]; rows: Value[][] }): string => 
 export const dayPlayers = (players: Record<string, { seedingMinutes: number; liveMinutes: number; matches: number }>): DayPlayers =>
   Object.fromEntries(Object.entries(players).map(([id, p]) => [id, { minutes: p.seedingMinutes + p.liveMinutes, matches: p.matches }]));
 
-// What the public website shows: only the figures players like to see, with no one named. Nothing about who left, who
-// stopped coming, how new players fared, seeding or Discord. `busy` is the average players on the server in each hour of the
+// The regulars: players on the server 5 or more days of the last 30, most days first, then most time. Steam IDs, so for the
+// bot's own use: the public sees them through publicRegulars.
+export type RegularRow = { steam_id: string; days: number; minutes: number; matches: number; first_seen: string };
+
+export const readRegulars = (sql: Sql, today: string): RegularRow[] => {
+  const since30 = new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86_400_000).toISOString().slice(0, 10);
+  return rows(
+    sql,
+    `SELECT d.steam_id AS steam_id, COUNT(*) AS days, SUM(d.minutes) AS minutes, SUM(d.matches) AS matches, p.first_seen AS first_seen
+     FROM player_days d JOIN players p ON p.steam_id = d.steam_id
+     WHERE d.day >= ? GROUP BY d.steam_id HAVING COUNT(*) >= ? ORDER BY days DESC, minutes DESC, d.steam_id`,
+    since30,
+    REGULAR_DAYS_30,
+  ).map((r) => ({ steam_id: String(r['steam_id']), days: num(r['days']), minutes: num(r['minutes']), matches: num(r['matches']), first_seen: String(r['first_seen']) }));
+};
+
+// A regular as the public sees them: what they go by, their page (null when they have none), days and hours in the last 30,
+// matches, the day they were first seen, and whether that was in the first fortnight of the records.
+export type PublicRegular = { name: string; id: string | null; days: number; hours: number; matches: number; since: string; founder: boolean };
+export type PublicRegulars = { total: number; hidden: number; players: PublicRegular[] };
+export const REGULARS_SHOWN = 60;
+export const FOUNDER_DAYS = 14;
+
+// How the public learns who someone is: `nameOf` what they go by, `idOf` their page's id, null for a private profile.
+export type PublicWho = { nameOf: (steamId: string) => string | undefined; idOf: PublicIdOf };
+
+// The regulars the public may see. A private profile is not listed, only counted in `hidden`; `total` is those listed or
+// that could be (a regular with no name is not shown, but counts), and the list is the first REGULARS_SHOWN.
+export const publicRegulars = (regulars: RegularRow[], who: PublicWho, firstDay: string | null): PublicRegulars => {
+  const founderBy = firstDay === null ? null : new Date(Date.parse(`${firstDay}T00:00:00Z`) + (FOUNDER_DAYS - 1) * 86_400_000).toISOString().slice(0, 10);
+  let hidden = 0;
+  const players: PublicRegular[] = [];
+  let total = 0;
+  for (const r of regulars) {
+    const id = who.idOf(r.steam_id);
+    if (id === null) {
+      hidden += 1;
+      continue;
+    }
+    total += 1;
+    const name = who.nameOf(r.steam_id);
+    if (name === undefined || name === '' || players.length >= REGULARS_SHOWN) continue;
+    players.push({ name, id: id ?? null, days: r.days, hours: Math.round((r.minutes / 60) * 10) / 10, matches: r.matches, since: r.first_seen, founder: founderBy !== null && r.first_seen <= founderBy });
+  }
+  return { total, hidden, players };
+};
+
+// What the public website shows: only the figures players like to see, and the regulars (by name, unless they have a private
+// profile). Nothing about who left, who stopped coming, how new players fared, seeding or Discord. `busy` is the average players on the server in each hour of the
 // week (UTC, Monday 00:00 first), and is there once seven days of stays are kept.
 export const PUBLIC_DAYS = 90;
 export const PUBLIC_WEEKS = 104;
@@ -461,12 +509,13 @@ export type PublicLifetime = {
   months: { month: string; players: number; new_players: number | null; hours: number; matches: number }[];
   maps: { map: string; matches: number }[];
   busy: { days: number; players: number[] } | null;
+  regulars: PublicRegulars | null;
 };
 
 const best = <T>(items: T[], value: (item: T) => number | null): T | null =>
   items.reduce<T | null>((top, item) => ((value(item) ?? -1) > (top === null ? -1 : (value(top) ?? -1)) ? item : top), null);
 
-export const readPublicLifetime = (sql: Sql, today: string): PublicLifetime => {
+export const readPublicLifetime = (sql: Sql, today: string, who: PublicWho | null = null): PublicLifetime => {
   const l = readLifetime(sql, today);
   const rowsOf = l.daily as { day: string; unique_players: number | null; peak_players: number | null; matches: number | null; median_stay_minutes: number | null }[];
   const mostPlayers = best(rowsOf, (r) => r.unique_players);
@@ -498,5 +547,6 @@ export const readPublicLifetime = (sql: Sql, today: string): PublicLifetime => {
       l.heat.days < BUSY_LEAST_DAYS
         ? null
         : { days: l.heat.days, players: l.heat.minutes.map((minutes) => round1(minutes / 60 / (l.heat.days / 7))) },
+    regulars: who === null ? null : publicRegulars(readRegulars(sql, today), who, l.since),
   };
 };

@@ -200,7 +200,7 @@ import {
   type JoinLog,
 } from './joinlog.ts';
 import { buildFunnel, type Funnel } from './funnel.ts';
-import { createLifetime, dayPlayers, exportTable, firstStayDay, newPlayerDays, rebuildPlayers, readLifetime, readPublicLifetime, removeArchivedMatch, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
+import { createLifetime, dayPlayers, exportTable, firstStayDay, newPlayerDays, rebuildPlayers, readLifetime, readPublicLifetime, readRegulars, removeArchivedMatch, TABLE_NAMES, toCsv, writeDay, writePlayerDays, type DayInput, type Lifetime, type PublicLifetime, type TableName } from './lifetime.ts';
 import { buildNewPlayers, type Cohort } from './newplayers.ts';
 import { buildRetention, REMOVAL_AFTER_MS, sessionRows, type Removal, type Retention } from './retention.ts';
 import type { Config } from './config.ts';
@@ -3954,8 +3954,16 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // What the public website shows of the long-term records (see readPublicLifetime).
-  publicLifetime(): PublicLifetime {
-    return readPublicLifetime(this.lifetimeSql(), dayOf(Date.now()));
+  async publicLifetime(): Promise<PublicLifetime> {
+    const now = Date.now();
+    const sql = this.lifetimeSql();
+    const today = dayOf(now);
+    // The regulars go by what their player records last called them, and have a page unless their profile is private.
+    const [kept, hidden] = await Promise.all([this.recentDays(now), this.privateSteam()]);
+    const names = new Map<string, string>();
+    for (const d of kept) for (const [steamId, p] of Object.entries(d.players)) if (p.name !== '') names.set(steamId, p.name);
+    const ids = await this.idsFor(readRegulars(sql, today).map((r) => r.steam_id));
+    return readPublicLifetime(sql, today, { nameOf: (steamId) => names.get(steamId), idOf: publicIdOf(hidden, (steamId) => ids.get(steamId)) });
   }
 
   // One of the long-term tables as CSV, for analysis.
