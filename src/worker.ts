@@ -2814,7 +2814,7 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
-    if (live !== null) this.awardStreakBreakers(live, new Set(happened.map((e) => e.eventId)));
+    if (live !== null) this.awardStreakBreakers(live, new Set(happened.map((e) => e.eventId)), now);
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
     // it has gone.
@@ -2825,7 +2825,7 @@ export class Watcher extends DurableObject<Env> {
 
   // A player who kills someone on a long kill streak (BOUNTY_STREAK) gets a whitelist slot for BOUNTY_VIP_DAYS days. It is
   // given by the same code as /vip add, so it ends on time, and a player who already has a slot keeps what they have.
-  private awardStreakBreakers(live: LiveMatch, events: ReadonlySet<string>): void {
+  private awardStreakBreakers(live: LiveMatch, events: ReadonlySet<string>, now: number): void {
     const rule = this.rcon().config.bounty;
     if (rule === null) return;
     const wins = streakBreaks(live, events, rule.streak);
@@ -2838,7 +2838,10 @@ export class Watcher extends DurableObject<Env> {
           given.add(win.steamId);
           try {
             const reason = `Ended ${win.victim}'s ${win.streak} kill streak`;
-            const result = await this.vipAdd({ steamId: win.steamId, name: win.name, days: rule.days, reason, by: 'bot', source: 'bounty' });
+            // The slot runs to the end of the last of the next `rule.days` calendar days (UTC), however late in the day it is won.
+            const midnight = Math.floor(now / DAY_MS) * DAY_MS;
+            const days = (midnight + (1 + rule.days) * DAY_MS - now) / DAY_MS;
+            const result = await this.vipAdd({ steamId: win.steamId, name: win.name, days, reason, by: 'bot', source: 'bounty' });
             console.info(`Streak breaker: ${JSON.stringify(win.name)} (${win.steamId}) ${result.outcome}. ${reason}.`);
           } catch (error) {
             console.error(`Streak breaker VIP failed for ${win.steamId}: ${errorText(error)}`);
@@ -4237,7 +4240,8 @@ export class Watcher extends DurableObject<Env> {
         return { outcome: change.outcome };
       }
       const outcome = change.outcome === 'extended' ? 'extended' : 'added';
-      const length = days === null ? 'permanent' : `${days} day${days === 1 ? '' : 's'}`;
+      const length =
+        days === null ? 'permanent' : source === 'bounty' ? `until ${new Date(now + days * DAY_MS).toISOString().slice(0, 16).replace('T', ' ')} UTC` : `${days} day${days === 1 ? '' : 's'}`;
       const entry: ModEntry = {
         action: 'vip-add',
         at: now,
