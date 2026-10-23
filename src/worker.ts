@@ -558,7 +558,8 @@ import {
   type RulesPage,
   type WeaponRule,
 } from './weaponrules.ts';
-import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, streakBreaks, type LiveMatch, type LiveSnapshot } from './live.ts';
+import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot, type StreakBreak } from './live.ts';
+import { addBounties, BOUNTY_KEY, parseBountyPending, planBounties } from './bounty.ts';
 import {
   adminFeed,
   alertedOn,
@@ -721,6 +722,7 @@ export class Watcher extends DurableObject<Env> {
   private seasonLooked = false;
   // Kill feed event ids already counted, oldest first.
   private eventsSeen = new Set<string>();
+  private payingBounties = false;
   // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
   private weaponDayCache = new Map<string, WeaponDay>();
   // Steam checks once read, by Steam ID; null for a player with none. Every write goes through saveSteam, so it is never
@@ -1216,6 +1218,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.rollupLifetime(Date.now()));
     await this.serial(() => this.updateVip(config));
+    await this.payBounties();
     await this.keepAccounts(config);
     await this.askBack(config, seen.snapshot);
     // Before the rotation and the vote change it: they can write another entry into the slot the server is on.
@@ -2754,6 +2757,7 @@ export class Watcher extends DurableObject<Env> {
       griefKey,
       'killFeedSince',
       'live',
+      BOUNTY_KEY,
       'online',
       'state',
       KILL_FEED_KEY,
@@ -2772,11 +2776,14 @@ export class Watcher extends DurableObject<Env> {
     const staffKills = toStaffKills(kills, now, factionOf);
     const before = parseMatchFeed(stored.get(MATCH_FEED_KEY));
     const matchFeed = matchEvents.length === 0 ? before : recordMatchFeed(before, matchEvents, now);
-    const live = events.length > 0 || ended ? recordLive(parseLiveMatch(stored.get('live')), happened, now, factionOf, before) : null;
+    const bounty = this.rcon().config.bounty;
+    const streaks = bounty === null ? undefined : { min: bounty.streak, found: [] as StreakBreak[] };
+    const live = events.length > 0 || ended ? recordLive(parseLiveMatch(stored.get('live')), happened, now, factionOf, before, streaks) : null;
     const joins = came.length === 0 ? null : recordPresence(parseJoinLog(stored.get(JOIN_LOG_KEY)), came, now);
     const write = this.ctx.storage.put({
       killFeedHeardAt: now,
       ...(live === null ? {} : { live }),
+      ...(streaks === undefined || streaks.found.length === 0 ? {} : { [BOUNTY_KEY]: addBounties(parseBountyPending(stored.get(BOUNTY_KEY)), streaks.found, now) }),
       ...(matchFeed === before ? {} : { [MATCH_FEED_KEY]: matchFeed }),
       ...(joins === null || joins.log === null || joins.added.length === 0 ? {} : { [JOIN_LOG_KEY]: joins.log }),
       ...(grief === null ? {} : { [griefKey]: grief.day }),
@@ -2814,7 +2821,7 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
-    if (live !== null) this.awardStreakBreakers(live, new Set(happened.map((e) => e.eventId)), now);
+    if (streaks !== undefined && streaks.found.length > 0) this.ctx.waitUntil(this.payBounties());
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
     // it has gone.
@@ -2823,32 +2830,38 @@ export class Watcher extends DurableObject<Env> {
     return { accepted: fresh.length, ended, over };
   }
 
-  // A player who kills someone on a long kill streak (BOUNTY_STREAK) gets a whitelist slot for BOUNTY_VIP_DAYS days. It is
-  // given by the same code as /vip add, so it ends on time, and a player who already has a slot keeps what they have.
-  private awardStreakBreakers(live: LiveMatch, events: ReadonlySet<string>, now: number): void {
-    const rule = this.rcon().config.bounty;
-    if (rule === null) return;
-    const wins = streakBreaks(live, events, rule.streak);
-    if (wins.length === 0) return;
-    this.ctx.waitUntil(
-      (async () => {
-        const given = new Set<string>();
-        for (const win of wins) {
-          if (given.has(win.steamId)) continue;
-          given.add(win.steamId);
-          try {
-            const reason = `Ended ${win.victim}'s ${win.streak} kill streak`;
-            // The slot runs to the end of the last of the next `rule.days` calendar days (UTC), however late in the day it is won.
-            const midnight = Math.floor(now / DAY_MS) * DAY_MS;
-            const days = (midnight + (1 + rule.days) * DAY_MS - now) / DAY_MS;
-            const result = await this.vipAdd({ steamId: win.steamId, name: win.name, days, reason, by: 'bot', source: 'bounty' });
-            console.info(`Streak breaker: ${JSON.stringify(win.name)} (${win.steamId}) ${result.outcome}. ${reason}.`);
-          } catch (error) {
-            console.error(`Streak breaker VIP failed for ${win.steamId}: ${errorText(error)}`);
-          }
+  // Pays the streak breakers recorded with the feed (see bounty.ts): a whitelist slot to the end of the next calendar
+  // day(s), given by the same code as /vip add, so it ends on time, and a player who already has a slot keeps what they
+  // have. A win stays recorded until its slot is written, so one that fails (the server cannot be reached) is tried
+  // again at the next check, until its time is up. Not run inside `serial`, as vipAdd is.
+  private async payBounties(): Promise<void> {
+    if (this.payingBounties) return;
+    this.payingBounties = true;
+    try {
+      const rule = this.rcon().config.bounty;
+      const pending = parseBountyPending(await this.ctx.storage.get(BOUNTY_KEY));
+      if (Object.keys(pending).length === 0) return;
+      const now = Date.now();
+      const plan = planBounties(pending, rule, now);
+      const settled = new Set(plan.drop);
+      for (const { win, until, events } of plan.pay) {
+        try {
+          const reason = `Ended ${win.victim}'s ${win.streak} kill streak`;
+          const result = await this.vipAdd({ steamId: win.steamId, name: win.name, days: (until - now) / DAY_MS, reason, by: 'bot', source: 'bounty' });
+          console.info(`Streak breaker: ${JSON.stringify(win.name)} (${win.steamId}) ${result.outcome}. ${reason}.`);
+          for (const id of events) settled.add(id);
+        } catch (error) {
+          console.error(`Streak breaker VIP failed for ${win.steamId}, will try again: ${errorText(error)}`);
         }
-      })(),
-    );
+      }
+      if (settled.size === 0) return;
+      // Read again: wins may have been recorded while the slots were being written.
+      const latest = parseBountyPending(await this.ctx.storage.get(BOUNTY_KEY));
+      const left = Object.fromEntries(Object.entries(latest).filter(([id]) => !settled.has(id)));
+      await (Object.keys(left).length === 0 ? this.ctx.storage.delete(BOUNTY_KEY) : this.ctx.storage.put(BOUNTY_KEY, left));
+    } finally {
+      this.payingBounties = false;
+    }
   }
 
   // The SQLite database, with the staff page's kill_days table, which is made the first time.

@@ -286,7 +286,7 @@ export type AccountView = {
   steam: { linked: boolean; via: 'discord' | 'steam' | null };
   // The page of their linked Steam account, by the public id players have. Null without one, or before they were seen.
   playerId: string | null;
-  vip: { until: number; source: 'seeding' | 'staff' } | null;
+  vip: { until: number; source: 'seeding' | 'staff' | 'bounty' } | null;
   alerts: boolean;
   // Whether their profile is private, and whether they made it so (staff keep control of what they made private).
   private: { on: boolean; byYou: boolean };
