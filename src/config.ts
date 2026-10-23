@@ -105,6 +105,10 @@ const EnvSchema = z
     VIP_MODE: z.enum(['week', 'day']).default('week'),
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
+    // Kill a player on a streak of this many kills or more without dying and get a whitelist slot for BOUNTY_VIP_DAYS days.
+    // 0 turns it off.
+    BOUNTY_STREAK: z.coerce.number().int().min(0).default(0),
+    BOUNTY_VIP_DAYS: z.coerce.number().int().min(1).max(30).default(1),
     // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
     MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
     // The score a faction needs to win: for "halfway" and "nearly there" messages, and to record a win the last check
@@ -226,6 +230,8 @@ export type Config = {
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
   seedMinutes: number;
   vip: VipRule | null;
+  // A whitelist slot for killing a player on a long kill streak, when it is on.
+  bounty: { streak: number; days: number } | null;
   // Null when MATCH_MESSAGES is off or there is no SITE_URL to point players at.
   matchMessages: MessageRule | null;
   // Null when SEEDING_MESSAGE_MINUTES is 0.
@@ -291,6 +297,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,
     vip: vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
+    bounty: e.BOUNTY_STREAK > 0 ? { streak: e.BOUNTY_STREAK, days: e.BOUNTY_VIP_DAYS } : null,
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
         ? {

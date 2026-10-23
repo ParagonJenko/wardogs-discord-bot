@@ -170,7 +170,7 @@ export type VipView = Pick<VipGrant, 'grantedAt' | 'expiresAt' | 'source'>;
 export const activeGrant = (account: Account, grant: VipView | null | undefined, now: number): VipView | null =>
   account.steamId !== null && grant != null && grant.expiresAt > now ? grant : null;
 
-export type DmKind = 'earned' | 'renewed' | 'staff' | 'expiring' | 'ended';
+export type DmKind = 'earned' | 'renewed' | 'staff' | 'bounty' | 'expiring' | 'ended';
 
 // The roles to give or take: only those with a role ID set (`ids`) are looked at.
 export type AccountRule = { roles: Partial<Record<RoleName, string>>; messages: boolean; siteUrl: string | undefined; vip: VipRule | null };
@@ -198,7 +198,7 @@ export const planAccount = (account: Account, grant: VipView | null | undefined,
   } else if (active !== null) {
     if (notified === null || notified.grantedAt !== active.grantedAt) {
       const renewal = notified !== null && !notified.ended && notified.expiresAt <= active.grantedAt + RENEW_SLACK_MS;
-      dms.push(active.source === 'staff' ? 'staff' : renewal ? 'renewed' : 'earned');
+      dms.push(active.source === 'staff' ? 'staff' : active.source === 'bounty' ? 'bounty' : renewal ? 'renewed' : 'earned');
       notified = { grantedAt: active.grantedAt, expiresAt: active.expiresAt, warned: false, ended: false };
     } else if (notified.expiresAt !== active.expiresAt) {
       // Staff made it longer: the warning is for the new end.
@@ -271,6 +271,7 @@ export const dmText = (kind: DmKind, expiresAt: number | null, rule: Pick<Accoun
     earned: `You earned **seeder VIP** on the WARDOGS server, thanks for seeding. It lasts until ${until}. The server picks it up at its next restart.${keep}`,
     renewed: `Your **seeder VIP** on the WARDOGS server is renewed until ${until}. Thanks for seeding again.`,
     staff: `Staff gave you **VIP** on the WARDOGS server until ${until}. The server picks it up at its next restart.`,
+    bounty: `You ended a long kill streak and earned **VIP** on the WARDOGS server until ${until}. The server picks it up at its next restart.`,
     expiring: `Your VIP on the WARDOGS server ends <t:${unix(expiresAt ?? 0)}:R>.${keep}${more}`,
     ended: `Your VIP on the WARDOGS server has ended.${keep}${more}`,
   }[kind];

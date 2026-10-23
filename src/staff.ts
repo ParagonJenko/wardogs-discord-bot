@@ -108,7 +108,7 @@ export type StaffRecords = {
   ban: (request: BanRequest) => Promise<BanResult>;
   unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
   // `days` null: permanent, until staff remove it. `reason` is why, as the staff history and moderation log show it.
-  vipAdd: (request: Named & { days: number | null; reason: string; by: string; byName?: string }) => Promise<VipAddResult>;
+  vipAdd: (request: Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' }) => Promise<VipAddResult>;
   vipRemove: (request: Named & { reason?: string; by: string; byName?: string }) => Promise<VipRemoveResult>;
   // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
   // the server was on when staff set it, or null when that could not be read.

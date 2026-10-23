@@ -10,6 +10,7 @@ import {
   phaseOf,
   recordLive,
   RIVALRY_KILLS,
+  streakBreaks,
   trimLive,
   type LiveMatch,
 } from '../src/live.ts';
@@ -423,5 +424,29 @@ describe('trimLive', () => {
     expect(match.kills).toBe(5_000);
     expect(match.feed).toHaveLength(LIVE_FEED_KEPT);
     expect(stats(match).players).toHaveLength(10);
+  });
+});
+
+describe('streakBreaks', () => {
+  it('names who ended a long streak, not a team kill or a short one', () => {
+    const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3), death(ASH, CY, 4)];
+    const ended = death(BO, ASH, 5);
+    const match = play([...run, ended]);
+    expect(match.feed.at(-1)?.broke).toBe(4);
+    const events = new Set(match.feed.map((d) => d.eventId));
+    expect(streakBreaks(match, events, 4)).toEqual([{ eventId: ended.eventId, steamId: BO, name: 'Bo', victim: 'Ash', streak: 4 }]);
+    expect(streakBreaks(match, events, 5)).toEqual([]);
+    // Only the events asked about: a break in an earlier batch is not given again.
+    expect(streakBreaks(match, new Set(), 4)).toEqual([]);
+    expect(streakBreaks(null, events, 4)).toEqual([]);
+  });
+
+  it('does not count a team kill, or a death with no killer', () => {
+    const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3)];
+    const teamKill = death(DEE, ASH, 4);
+    const match = play([...run, teamKill]);
+    expect(streakBreaks(match, new Set(match.feed.map((d) => d.eventId)), 1)).toEqual([]);
+    const fell = play([...run, death(null, ASH, 4)]);
+    expect(streakBreaks(fell, new Set(fell.feed.map((d) => d.eventId)), 1)).toEqual([]);
   });
 });

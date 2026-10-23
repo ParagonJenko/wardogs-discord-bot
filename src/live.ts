@@ -63,6 +63,8 @@ export type LiveDeath = {
   teamKill: boolean;
   streak: number;
   chain: number;
+  // The kill streak the victim was on, which this death ended. 0 for a team kill or a death with no killer.
+  broke: number;
 };
 
 export type LiveMatch = {
@@ -103,6 +105,8 @@ const DeathSchema = z.object({
   teamKill: z.boolean(),
   streak: count,
   chain: count,
+  // The kill streak the victim was on, which this death ended. Missing from matches saved before it was kept.
+  broke: count.default(0),
 });
 
 const LiveMatchSchema = z.object({
@@ -247,6 +251,7 @@ export const recordLive = (
       teamKill: false,
       streak: 0,
       chain: 0,
+      broke: 0,
     };
     if (isKill(e)) {
       const killer = place(e.killerSteamId, e.killerName);
@@ -274,7 +279,7 @@ export const recordLive = (
         live.kills += 1;
         live.headshots += e.headshot ? 1 : 0;
       }
-      Object.assign(death, { killer, teamKill, streak: teamKill ? 0 : k.streak, chain: teamKill ? 0 : k.chain });
+      Object.assign(death, { killer, teamKill, streak: teamKill ? 0 : k.streak, chain: teamKill ? 0 : k.chain, broke: teamKill ? 0 : v.streak });
       if (!teamKill) live.firstBlood ??= death;
     } else {
       live.otherDeaths += 1;
@@ -589,3 +594,17 @@ export const isCurrent = (match: LiveMatch, feed: MatchFeed, onServer: { map: st
   const onMap = match.map === '' || sameMap(onServer.map, mapName(match.map));
   return onMap && since >= onServer.startedAt - MATCH_SLACK_MS && !(feed.playingAt !== null && feed.playingAt > since);
 };
+
+// The kills in `events` (by event ID) that ended a kill streak of `minStreak` or more: who did it, and whose streak it was.
+// A team kill or a death with no killer never counts, and the streak is the victim's before the death.
+export type StreakBreak = { eventId: string; steamId: string; name: string; victim: string; streak: number };
+
+export const streakBreaks = (match: LiveMatch | null, events: ReadonlySet<string>, minStreak: number): StreakBreak[] =>
+  match === null
+    ? []
+    : match.feed.flatMap((d): StreakBreak[] => {
+        const killer = d.killer === null ? undefined : match.players[d.killer];
+        const victim = match.players[d.victim];
+        if (killer === undefined || victim === undefined || d.teamKill || !events.has(d.eventId) || d.broke < minStreak) return [];
+        return [{ eventId: d.eventId, steamId: killer.steamId, name: killer.name, victim: victim.name, streak: d.broke }];
+      });

@@ -558,7 +558,7 @@ import {
   type RulesPage,
   type WeaponRule,
 } from './weaponrules.ts';
-import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot } from './live.ts';
+import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, streakBreaks, type LiveMatch, type LiveSnapshot } from './live.ts';
 import {
   adminFeed,
   alertedOn,
@@ -2814,12 +2814,38 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
+    if (live !== null) this.awardStreakBreakers(live, new Set(happened.map((e) => e.eventId)));
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
     // it has gone.
     if (came.length > 0) this.ctx.waitUntil(this.feedJoined(came, now));
     this.ctx.waitUntil(this.broadcastLive());
     return { accepted: fresh.length, ended, over };
+  }
+
+  // A player who kills someone on a long kill streak (BOUNTY_STREAK) gets a whitelist slot for BOUNTY_VIP_DAYS days. It is
+  // given by the same code as /vip add, so it ends on time, and a player who already has a slot keeps what they have.
+  private awardStreakBreakers(live: LiveMatch, events: ReadonlySet<string>): void {
+    const rule = this.rcon().config.bounty;
+    if (rule === null) return;
+    const wins = streakBreaks(live, events, rule.streak);
+    if (wins.length === 0) return;
+    this.ctx.waitUntil(
+      (async () => {
+        const given = new Set<string>();
+        for (const win of wins) {
+          if (given.has(win.steamId)) continue;
+          given.add(win.steamId);
+          try {
+            const reason = `Ended ${win.victim}'s ${win.streak} kill streak`;
+            const result = await this.vipAdd({ steamId: win.steamId, name: win.name, days: rule.days, reason, by: 'bot', source: 'bounty' });
+            console.info(`Streak breaker: ${JSON.stringify(win.name)} (${win.steamId}) ${result.outcome}. ${reason}.`);
+          } catch (error) {
+            console.error(`Streak breaker VIP failed for ${win.steamId}: ${errorText(error)}`);
+          }
+        }
+      })(),
+    );
   }
 
   // The SQLite database, with the staff page's kill_days table, which is made the first time.
@@ -4200,11 +4226,11 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async vipAdd({ steamId, name, days, reason, by, byName }: Named & { days: number | null; reason: string; by: string; byName?: string }): Promise<VipAddResult> {
+  async vipAdd({ steamId, name, days, reason, by, byName, source }: Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' }): Promise<VipAddResult> {
     return this.serial(async () => {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
-      const change = await addVip({ steamId, name, days, now, state, rcon: this.settingsFile(this.rcon()) });
+      const change = await addVip({ steamId, name, days, now, state, rcon: this.settingsFile(this.rcon()), ...(source === undefined ? {} : { source }) });
       if (change.outcome === 'already-reserved') {
         // Nothing given, but any block from /vip remove is lifted.
         await this.record(steamId, null, { vip: change.state });
