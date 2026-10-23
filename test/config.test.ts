@@ -35,7 +35,7 @@ describe('loadConfig', () => {
       scoreToWin: 100,
       seedMinutes: 10,
       vip: null,
-      bounty: null,
+      bounty: { streak: 10, days: 1 },
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
       welcomeMessages: { afterMs: 120_000, siteHost: null, discord: null },
