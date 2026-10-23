@@ -196,7 +196,8 @@ export const recordLive = (
   factionOf: (steamId: string) => string | null,
   before: Pick<MatchFeed, 'state' | 'playingAt'> = { state: null, playingAt: null },
   // When given, the kills in the batch that ended a streak of `min` kills or more are added to `found`, as they happen:
-  // a match that starts later in the batch, or a death trimmed from the feed, does not lose one. A team kill never counts.
+  // a match that starts later in the batch, or a death trimmed from the feed, does not lose one. Only a kill on a player of a
+  // known other side counts: never a team kill, nor one where either side is not known.
   // `started` gets a player the moment their streak reaches `min`.
   streaks?: { min: number; found: StreakBreak[]; started: StreakStart[] },
 ): LiveMatch | null => {
@@ -285,10 +286,13 @@ export const recordLive = (
         live.headshots += e.headshot ? 1 : 0;
       }
       Object.assign(death, { killer, teamKill, streak: teamKill ? 0 : k.streak, chain: teamKill ? 0 : k.chain });
-      if (!teamKill && streaks !== undefined && k.streak === streaks.min) {
+      // A bounty is only ever on, or won, between players known to be on opposite sides: not teammates, and not when the
+      // bot does not know a side.
+      const enemy = k.faction !== null && v.faction !== null && factionKey(k.faction) !== factionKey(v.faction);
+      if (enemy && streaks !== undefined && k.streak === streaks.min) {
         streaks.started.push({ eventId: e.eventId, steamId: k.steamId, name: k.name, streak: k.streak });
       }
-      if (!teamKill && streaks !== undefined && v.streak >= streaks.min) {
+      if (enemy && streaks !== undefined && v.streak >= streaks.min) {
         streaks.found.push({ eventId: e.eventId, steamId: k.steamId, name: k.name, victim: v.name, streak: v.streak });
       }
       if (!teamKill) live.firstBlood ??= death;

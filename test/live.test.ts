@@ -23,7 +23,9 @@ const ASH = '76561198000000001';
 const BO = '76561198000000002';
 const CY = '76561198000000003';
 const DEE = '76561198000000004';
-const NAMES: Record<string, string> = { [ASH]: 'Ash', [BO]: 'Bo', [CY]: 'Cy', [DEE]: 'Dee' };
+// On no side the bot knows.
+const EVE = '76561198000000005';
+const NAMES: Record<string, string> = { [ASH]: 'Ash', [BO]: 'Bo', [CY]: 'Cy', [DEE]: 'Dee', [EVE]: 'Eve' };
 const SIDES: Record<string, string> = { [ASH]: 'Valkyra', [BO]: 'Lonestar', [CY]: 'Lonestar', [DEE]: 'VALKYRA' };
 const factionOf = (steamId: string) => SIDES[steamId] ?? null;
 const NOW = Date.UTC(2026, 9, 3, 18);
@@ -453,6 +455,20 @@ describe('streak breaks found as a batch is counted', () => {
     const ended = death(BO, ASH, 5);
     expect(found([...run, ended], 4)).toEqual([{ eventId: ended.eventId, steamId: BO, name: 'Bo', victim: 'Ash', streak: 4 }]);
     expect(found([...run, ended], 5)).toEqual([]);
+  });
+
+  it('only counts kills between players known to be on opposite sides', () => {
+    // Eve is on no side the bot knows: her streak starts no bounty, and a streak of Ash's she ends wins nothing.
+    const eve = [death(EVE, BO, 1), death(EVE, CY, 2), death(EVE, BO, 3)];
+    expect(started(eve, 3)).toEqual([]);
+    const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3)];
+    expect(started(run, 3)).toEqual([['Ash', 3]]);
+    expect(found([...run, death(EVE, ASH, 4)], 3)).toEqual([]);
+    // A teammate of Ash ending it (Dee is on Ash's side) wins nothing either; an enemy does.
+    expect(found([...run, death(DEE, ASH, 4)], 3)).toEqual([]);
+    expect(found([...run, death(BO, ASH, 4)], 3)).toHaveLength(1);
+    // Nor does a streak that reaches the bounty on a kill of a player whose side is not known.
+    expect(started([death(ASH, EVE, 1), death(ASH, EVE, 2), death(ASH, EVE, 3)], 3)).toEqual([]);
   });
 
   it('does not count a team kill, or a death with no killer', () => {
