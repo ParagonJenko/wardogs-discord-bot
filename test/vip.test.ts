@@ -472,6 +472,13 @@ describe('addVip and removeVip', () => {
     });
   });
 
+  it('records a streak breaker\'s VIP as the bounty\'s, and keeps it out of the seeders', async () => {
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: 1, now: NOW, state: empty, rcon: server(), source: 'bounty' });
+
+    expect(result.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW, expiresAt: NOW + DAY, source: 'bounty' });
+    expect(seederVip(result.state, NOW)).toEqual([]);
+  });
+
   it('extends a player the bot already gave VIP, never shortening it', async () => {
     const rcon = server(editReserved(settings, [ASH], []));
     const state = { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 6 * DAY } } };

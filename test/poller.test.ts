@@ -53,6 +53,7 @@ const config: Config = {
   scoreToWin: 100,
   seedMinutes: 10,
   vip: null,
+  bounty: null,
   matchMessages: null,
   seedingMessages: null,
   welcomeMessages: null,

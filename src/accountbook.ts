@@ -283,7 +283,7 @@ export const view = async (deps: ViewDeps, userId: string, vip: VipState): Promi
     member: account.member,
     steam: { linked: account.steamId !== null, via: account.via },
     playerId: account.steamId === null || profile !== undefined ? null : await deps.playerPage(account.steamId),
-    vip: grant !== undefined && grant.expiresAt > now ? { until: grant.expiresAt, source: grant.source === 'staff' ? 'staff' : 'seeding' } : null,
+    vip: grant !== undefined && grant.expiresAt > now ? { until: grant.expiresAt, source: grant.source ?? 'seeding' } : null,
     alerts: account.alerts,
     private: { on: profile !== undefined, byYou: profile?.by === userId || profile?.self === true },
     ballot: await deps.ballotOf(userId),

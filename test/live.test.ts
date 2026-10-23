@@ -12,6 +12,7 @@ import {
   RIVALRY_KILLS,
   trimLive,
   type LiveMatch,
+  type StreakBreak,
 } from '../src/live.ts';
 import { NO_MATCH_FEED } from '../src/matchfeed.ts';
 import { PRIVATE_NAME } from '../src/privacy.ts';
@@ -423,5 +424,35 @@ describe('trimLive', () => {
     expect(match.kills).toBe(5_000);
     expect(match.feed).toHaveLength(LIVE_FEED_KEPT);
     expect(stats(match).players).toHaveLength(10);
+  });
+});
+
+describe('streak breaks found as a batch is counted', () => {
+  const found = (events: (FeedEvent | FeedMatchEvent)[], min: number, match: LiveMatch | null = null) => {
+    const streaks = { min, found: [] as StreakBreak[] };
+    recordLive(match, events, NOW, factionOf, playing(null), streaks);
+    return streaks.found;
+  };
+
+  it('names who ended a long streak, and not a short one', () => {
+    const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3), death(ASH, CY, 4)];
+    const ended = death(BO, ASH, 5);
+    expect(found([...run, ended], 4)).toEqual([{ eventId: ended.eventId, steamId: BO, name: 'Bo', victim: 'Ash', streak: 4 }]);
+    expect(found([...run, ended], 5)).toEqual([]);
+  });
+
+  it('does not count a team kill, or a death with no killer', () => {
+    const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3)];
+    expect(found([...run, death(DEE, ASH, 4)], 1)).toEqual([]);
+    expect(found([...run, death(null, ASH, 4)], 1)).toEqual([]);
+  });
+
+  it('keeps a break from a match that another match in the same batch replaced, and one trimmed from the feed', () => {
+    const early = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3), death(BO, ASH, 4)];
+    const later = [state('MatchState.Playing.KOTH'), death(CY, BO, 1, { matchId: 'm2' })];
+    expect(found([...early, ...later], 3).map((b) => b.streak)).toEqual([3]);
+    const many = Array.from({ length: LIVE_FEED_KEPT + 20 }, (_, i) => death(i % 2 === 0 ? ASH : BO, i % 2 === 0 ? BO : ASH, i));
+    // Every death after the first ends a streak of 1, though the feed keeps only the latest LIVE_FEED_KEPT.
+    expect(found(many, 1)).toHaveLength(many.length - 1);
   });
 });
