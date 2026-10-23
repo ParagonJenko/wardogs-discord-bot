@@ -270,8 +270,9 @@ export type LifetimeCohort = { week: string; new_players: number; windows: Cohor
 export const RETURN_DAYS = [1, 7, 30, 90] as const;
 // A regular plays this many days in a week, in a month, or in the last 30 days.
 export const REGULAR_DAYS_WEEK = 3;
-export const REGULAR_DAYS_MONTH = 5;
-export const REGULAR_DAYS_30 = 5;
+// 14 of the last 30 days is about every other day. A month's regulars have the same bar; a week's are 3 days of 7.
+export const REGULAR_DAYS_MONTH = 14;
+export const REGULAR_DAYS_30 = 14;
 export const DAILY_LISTED = 800;
 
 export type MapLifetime = { map: string; matches: number; average_peak: number; average_minutes: number; players_at_start: number; left_early: number; one_sided: number; with_scores: number };
@@ -284,6 +285,8 @@ export type Lifetime = {
     unique_players: number;
     new_last_30: number;
     active_last_30: number;
+    // How many days of the last 30 make a regular.
+    regular_days: number;
     regulars: number;
     lapsed_regulars: number;
     player_hours: number;
@@ -308,8 +311,9 @@ export const readLifetime = (sql: Sql, today: string): Lifetime => {
     unique_players: count(sql, 'SELECT COUNT(*) FROM players'),
     new_last_30: start === null ? 0 : count(sql, 'SELECT COUNT(*) FROM players WHERE first_seen >= ? AND first_seen > ?', since30, start),
     active_last_30: count(sql, 'SELECT COUNT(*) FROM players WHERE last_seen >= ?', since30),
+    regular_days: REGULAR_DAYS_30,
     regulars: count(sql, 'SELECT COUNT(*) FROM (SELECT steam_id FROM player_days WHERE day >= ? GROUP BY steam_id HAVING COUNT(*) >= ?)', since30, REGULAR_DAYS_30),
-    // Was a regular once (5 or more days in some 30), and has not been seen for 30 days.
+    // Was a regular once (REGULAR_DAYS_30 days in some 30), and has not been seen for 30 days.
     lapsed_regulars: count(
       sql,
       `SELECT COUNT(*) FROM players p WHERE p.last_seen < ? AND p.active_days >= ? AND EXISTS (
@@ -439,7 +443,7 @@ export const toCsv = (table: { columns: string[]; rows: Value[][] }): string => 
 export const dayPlayers = (players: Record<string, { seedingMinutes: number; liveMinutes: number; matches: number }>): DayPlayers =>
   Object.fromEntries(Object.entries(players).map(([id, p]) => [id, { minutes: p.seedingMinutes + p.liveMinutes, matches: p.matches }]));
 
-// The regulars: players on the server 5 or more days of the last 30, most days first, then most time. Steam IDs, so for the
+// The regulars: players on the server REGULAR_DAYS_30 or more days of the last 30, most days first, then most time. Steam IDs, so for the
 // bot's own use: the public sees them through publicRegulars.
 export type RegularRow = { steam_id: string; days: number; minutes: number; matches: number; first_seen: string };
 
@@ -458,7 +462,8 @@ export const readRegulars = (sql: Sql, today: string): RegularRow[] => {
 // A regular as the public sees them: what they go by, their page (null when they have none), days and hours in the last 30,
 // matches, the day they were first seen, and whether that was in the first fortnight of the records.
 export type PublicRegular = { name: string; id: string | null; days: number; hours: number; matches: number; since: string; founder: boolean };
-export type PublicRegulars = { total: number; hidden: number; players: PublicRegular[] };
+// `min_days`: how many days of the last 30 make a regular.
+export type PublicRegulars = { min_days: number; total: number; hidden: number; players: PublicRegular[] };
 export const REGULARS_SHOWN = 60;
 export const FOUNDER_DAYS = 14;
 
@@ -483,7 +488,7 @@ export const publicRegulars = (regulars: RegularRow[], who: PublicWho, firstDay:
     if (name === undefined || name === '' || players.length >= REGULARS_SHOWN) continue;
     players.push({ name, id: id ?? null, days: r.days, hours: Math.round((r.minutes / 60) * 10) / 10, matches: r.matches, since: r.first_seen, founder: founderBy !== null && r.first_seen <= founderBy });
   }
-  return { total, hidden, players };
+  return { min_days: REGULAR_DAYS_30, total, hidden, players };
 };
 
 // What the public website shows: only the figures players like to see, and the regulars (by name, unless they have a private
@@ -497,7 +502,7 @@ export const BUSY_LEAST_DAYS = 7;
 export type PublicLifetime = {
   since: string | null;
   through: string | null;
-  totals: { players: number; player_hours: number; matches: number; days: number; players_last_30: number; regulars: number };
+  totals: { players: number; player_hours: number; matches: number; days: number; players_last_30: number; regular_days: number; regulars: number };
   records: {
     most_players: { day: string; players: number } | null;
     biggest_match: { day: string; players: number } | null;
@@ -531,6 +536,7 @@ export const readPublicLifetime = (sql: Sql, today: string, who: PublicWho | nul
       matches: l.summary.matches,
       days: l.summary.days,
       players_last_30: l.summary.active_last_30,
+      regular_days: l.summary.regular_days,
       regulars: l.summary.regulars,
     },
     records: {
