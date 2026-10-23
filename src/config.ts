@@ -106,8 +106,8 @@ const EnvSchema = z
     // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
     // Kill a player on a streak of this many kills or more without dying and get a whitelist slot for the next BOUNTY_VIP_DAYS calendar days (UTC), starting tomorrow.
-    // 0 turns it off. On by default, at 10.
-    BOUNTY_STREAK: z.coerce.number().int().min(0).default(10),
+    // 0 turns it off. On by default, at 15.
+    BOUNTY_STREAK: z.coerce.number().int().min(0).default(15),
     BOUNTY_VIP_DAYS: z.coerce.number().int().min(1).max(30).default(1),
     // Tell the whole server in game who has a bounty (a player reaching BOUNTY_STREAK kills) and who ended it.
     BOUNTY_ANNOUNCE: z.enum(['on', 'off']).default('on'),
