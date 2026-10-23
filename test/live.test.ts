@@ -13,6 +13,7 @@ import {
   trimLive,
   type LiveMatch,
   type StreakBreak,
+  type StreakStart,
 } from '../src/live.ts';
 import { NO_MATCH_FEED } from '../src/matchfeed.ts';
 import { PRIVATE_NAME } from '../src/privacy.ts';
@@ -429,10 +430,23 @@ describe('trimLive', () => {
 
 describe('streak breaks found as a batch is counted', () => {
   const found = (events: (FeedEvent | FeedMatchEvent)[], min: number, match: LiveMatch | null = null) => {
-    const streaks = { min, found: [] as StreakBreak[] };
+    const streaks = { min, found: [] as StreakBreak[], started: [] as StreakStart[] };
     recordLive(match, events, NOW, factionOf, playing(null), streaks);
     return streaks.found;
   };
+  const started = (events: (FeedEvent | FeedMatchEvent)[], min: number) => {
+    const streaks = { min, found: [] as StreakBreak[], started: [] as StreakStart[] };
+    recordLive(null, events, NOW, factionOf, playing(null), streaks);
+    return streaks.started.map((s) => [s.name, s.streak]);
+  };
+
+  it('names a player the moment their streak reaches the bounty, once', () => {
+    const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3), death(ASH, CY, 4)];
+    expect(started(run, 3)).toEqual([['Ash', 3]]);
+    expect(started(run, 5)).toEqual([]);
+    // A team kill is not a kill for the streak.
+    expect(started([death(ASH, BO, 1), death(ASH, DEE, 2), death(ASH, CY, 3)], 3)).toEqual([]);
+  });
 
   it('names who ended a long streak, and not a short one', () => {
     const run = [death(ASH, BO, 1), death(ASH, CY, 2), death(ASH, BO, 3), death(ASH, CY, 4)];

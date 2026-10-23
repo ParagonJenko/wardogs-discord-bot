@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBounties, bountyEnds, parseBountyPending, planBounties } from '../src/bounty.ts';
+import { addBounties, bountyEndedText, bountyEnds, bountyOnText, parseBountyPending, planBounties } from '../src/bounty.ts';
 
 const DAY = 24 * 60 * 60_000;
 const NOON = Date.UTC(2026, 9, 23, 12);
@@ -34,5 +34,20 @@ describe('planBounties', () => {
     expect(parseBountyPending(undefined)).toEqual({});
     expect(parseBountyPending({ a: { eventId: 1 } })).toEqual({});
     expect(parseBountyPending(pending)).toEqual(pending);
+  });
+});
+
+describe('what the server is told', () => {
+  it('names who has the bounty, and who ended it', () => {
+    expect(bountyOnText({ eventId: 'a', steamId: 'p1', name: 'Ash', streak: 10 }, 1)).toBe('BOUNTY: Ash is on a 10 kill streak! Kill them to win VIP for tomorrow.');
+    expect(bountyEndedText({ eventId: 'b', steamId: 'p2', name: 'Bo', victim: 'Ash', streak: 12 }, 1)).toBe("Bo ended Ash's 12 kill streak and wins VIP for tomorrow!");
+    expect(bountyOnText({ eventId: 'a', steamId: 'p1', name: 'Ash', streak: 10 }, 3)).toMatch(/win VIP for the next 3 days\.$/);
+  });
+
+  it('cleans a name of line breaks and cuts a long one', () => {
+    const text = bountyOnText({ eventId: 'a', steamId: 'p1', name: `A\nsh${'x'.repeat(60)}`, streak: 10 }, 1);
+    expect(text).not.toMatch(/\n/);
+    expect(text).toContain('A shxxxxxxxxxxxxxxxxxxxxxxxxxxx…');
+    expect(bountyOnText({ eventId: 'a', steamId: 'p1', name: '', streak: 10 }, 1)).toMatch(/^BOUNTY: Someone is/);
   });
 });

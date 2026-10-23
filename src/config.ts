@@ -109,6 +109,8 @@ const EnvSchema = z
     // 0 turns it off. On by default, at 10.
     BOUNTY_STREAK: z.coerce.number().int().min(0).default(10),
     BOUNTY_VIP_DAYS: z.coerce.number().int().min(1).max(30).default(1),
+    // Tell the whole server in game who has a bounty (a player reaching BOUNTY_STREAK kills) and who ended it.
+    BOUNTY_ANNOUNCE: z.enum(['on', 'off']).default('on'),
     // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
     MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
     // The score a faction needs to win: for "halfway" and "nearly there" messages, and to record a win the last check
@@ -231,7 +233,7 @@ export type Config = {
   seedMinutes: number;
   vip: VipRule | null;
   // A whitelist slot for killing a player on a long kill streak, when it is on.
-  bounty: { streak: number; days: number } | null;
+  bounty: { streak: number; days: number; announce: boolean } | null;
   // Null when MATCH_MESSAGES is off or there is no SITE_URL to point players at.
   matchMessages: MessageRule | null;
   // Null when SEEDING_MESSAGE_MINUTES is 0.
@@ -297,7 +299,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,
     vip: vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
-    bounty: e.BOUNTY_STREAK > 0 ? { streak: e.BOUNTY_STREAK, days: e.BOUNTY_VIP_DAYS } : null,
+    bounty: e.BOUNTY_STREAK > 0 ? { streak: e.BOUNTY_STREAK, days: e.BOUNTY_VIP_DAYS, announce: e.BOUNTY_ANNOUNCE === 'on' } : null,
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
         ? {

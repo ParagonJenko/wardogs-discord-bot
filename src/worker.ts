@@ -558,8 +558,8 @@ import {
   type RulesPage,
   type WeaponRule,
 } from './weaponrules.ts';
-import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot, type StreakBreak } from './live.ts';
-import { addBounties, BOUNTY_KEY, parseBountyPending, planBounties } from './bounty.ts';
+import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot, type StreakBreak, type StreakStart } from './live.ts';
+import { addBounties, BOUNTY_KEY, bountyEndedText, bountyOnText, parseBountyPending, planBounties } from './bounty.ts';
 import {
   adminFeed,
   alertedOn,
@@ -2777,7 +2777,7 @@ export class Watcher extends DurableObject<Env> {
     const before = parseMatchFeed(stored.get(MATCH_FEED_KEY));
     const matchFeed = matchEvents.length === 0 ? before : recordMatchFeed(before, matchEvents, now);
     const bounty = this.rcon().config.bounty;
-    const streaks = bounty === null ? undefined : { min: bounty.streak, found: [] as StreakBreak[] };
+    const streaks = bounty === null ? undefined : { min: bounty.streak, found: [] as StreakBreak[], started: [] as StreakStart[] };
     const live = events.length > 0 || ended ? recordLive(parseLiveMatch(stored.get('live')), happened, now, factionOf, before, streaks) : null;
     const joins = came.length === 0 ? null : recordPresence(parseJoinLog(stored.get(JOIN_LOG_KEY)), came, now);
     const write = this.ctx.storage.put({
@@ -2822,12 +2822,32 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
     if (streaks !== undefined && streaks.found.length > 0) this.ctx.waitUntil(this.payBounties());
+    if (streaks !== undefined && bounty?.announce === true) this.announceBounties(streaks.started, streaks.found, bounty.days);
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
     // it has gone.
     if (came.length > 0) this.ctx.waitUntil(this.feedJoined(came, now));
     this.ctx.waitUntil(this.broadcastLive());
     return { accepted: fresh.length, ended, over };
+  }
+
+  // Tells the server in game who has a bounty and who ended one. Said once and not tried
+  // again: the reward is what is kept (see payBounties), and a late "bounty on" would be wrong.
+  private announceBounties(started: StreakStart[], ended: StreakBreak[], days: number): void {
+    const lines = [...started.map((s) => ({ id: s.eventId, text: bountyOnText(s, days) })), ...ended.map((e) => ({ id: e.eventId, text: bountyEndedText(e, days) }))];
+    if (lines.length === 0) return;
+    const { config, http } = this.rcon();
+    this.ctx.waitUntil(
+      (async () => {
+        for (const line of lines) {
+          try {
+            await sendBroadcast(config.rconUrl, config.rconPassword, line.text, http);
+          } catch (error) {
+            console.error(`Bounty announcement failed: ${errorText(error)}`);
+          }
+        }
+      })(),
+    );
   }
 
   // Pays the streak breakers recorded with the feed (see bounty.ts): a whitelist slot to the end of the next calendar
