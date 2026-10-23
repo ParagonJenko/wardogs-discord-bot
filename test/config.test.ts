@@ -197,8 +197,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, VIP_SEED_DAYS: '8' })).toThrow(/VIP_SEED_DAYS/);
   });
 
-  it('turns the streak-breaker reward on with BOUNTY_STREAK, for a day unless BOUNTY_VIP_DAYS says', () => {
-    expect(loadConfig(required).bounty).toBeNull();
+  it('has the streak-breaker reward on at 10 kills, off with BOUNTY_STREAK 0, for a day unless BOUNTY_VIP_DAYS says', () => {
+    expect(loadConfig(required).bounty).toEqual({ streak: 10, days: 1 });
+    expect(loadConfig({ ...required, BOUNTY_STREAK: '0' }).bounty).toBeNull();
     expect(loadConfig({ ...required, BOUNTY_STREAK: '15' }).bounty).toEqual({ streak: 15, days: 1 });
     expect(loadConfig({ ...required, BOUNTY_STREAK: '15', BOUNTY_VIP_DAYS: '2' }).bounty).toEqual({ streak: 15, days: 2 });
   });

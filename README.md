@@ -1731,9 +1731,9 @@ Automatic VIP is Cloudflare only.
 ### Streak breaker VIP
 
 Kill a player who is on a long kill streak and get a whitelist slot. Set `BOUNTY_STREAK` to the number of kills in a row without
-dying that makes a streak worth ending (`0`, the default, turns it off), and `BOUNTY_VIP_DAYS` to how many calendar days it covers, starting tomorrow (default
-`1`: the whole of tomorrow, UTC, however late in the day the kill was). Team kills never count. A player who already has a slot keeps what they have
-(a slot from seeding is extended, never shortened), and one staff took VIP from with `/vip remove` gets it back, as with `/vip add`.
+dying that makes a streak worth ending (default `10`, so it is on; `0` turns it off), and `BOUNTY_VIP_DAYS` to how many calendar days it covers, starting tomorrow (default
+`1`: the whole of tomorrow, UTC, however late in the day the kill was). Team kills never count. A win is kept until the slot is written, so a server that cannot be reached at that moment does not lose it.
+A player who already has a slot keeps what they have (a slot from seeding is extended, never shortened), and one staff took VIP from with `/vip remove` gets it back, as with `/vip add`.
 It is given the same way as `/vip add`, so it shows in the player's moderation log as "Ended X's N kill streak" by the bot, ends on
 time, and the player gets the usual Discord message. The server picks the whitelist up at its next restart.
 
