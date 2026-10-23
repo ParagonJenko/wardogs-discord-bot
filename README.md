@@ -1085,7 +1085,7 @@ players by week and how many came back within 1, 7, 30 and 90 days, once those d
 the all-time `heat`. `GET /api/admin/lifetime.csv?table=daily|matches|weekly|monthly|cohorts` gives a table as CSV, with
 no Steam IDs, for a spreadsheet or a notebook.
 
-`GET /api/lifetime` (public, no sign-in, cached for 10 minutes) gives the website's stats page the part of the records the public
+`GET /api/lifetime` (public, no sign-in, cached like the other public pages, so a profile made private leaves its regulars within a minute) gives the website's stats page the part of the records the public
 would like and nothing else: players ever, player hours, matches, players in the last 30 days and regulars; the record
 day (most players), the biggest match (most at once) and the most matches in a day; the typical stay over the last 30 days;
 players for each of the last 90 days and each of the last 104 weeks, with the new ones; each month's players, new players,

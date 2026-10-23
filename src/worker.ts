@@ -4348,7 +4348,6 @@ export class Watcher extends DurableObject<Env> {
 // mostly gets it over its WebSocket instead.
 const CACHE_MS = 30_000;
 const LIVE_CACHE_MS = 5_000;
-const LIFETIME_CACHE_MS = 10 * 60_000;
 // One answer per player page; past this many, the oldest are dropped.
 const CACHE_ENTRIES = 200;
 const cache = new Map<string, { body: Promise<string | null>; at: number }>();
@@ -4395,8 +4394,8 @@ const publicRoute = (
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
   if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
-  // Added once a day, so kept for longer.
-  if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime(), keepMs: LIFETIME_CACHE_MS };
+  // Kept for the usual time and no longer: it names the regulars, so a profile made private must leave it within a minute.
+  if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime() };
   const id = url.searchParams.get('id') ?? '';
   if (url.pathname === '/api/player' && PLAYER_ID.test(id)) return { key: `player:${id}`, load: () => watcher().profile(id) };
   return null;
