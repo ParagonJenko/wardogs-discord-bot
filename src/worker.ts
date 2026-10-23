@@ -559,7 +559,7 @@ import {
   type WeaponRule,
 } from './weaponrules.ts';
 import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot, type StreakBreak, type StreakStart } from './live.ts';
-import { addBounties, BOUNTY_KEY, bountyEndedText, bountyOnText, parseBountyPending, planBounties } from './bounty.ts';
+import { addBounties, BOUNTY_KEY, bountyLines, parseBountyPending, planBounties } from './bounty.ts';
 import {
   adminFeed,
   alertedOn,
@@ -2822,7 +2822,7 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
     if (streaks !== undefined && streaks.found.length > 0) this.ctx.waitUntil(this.payBounties());
-    if (streaks !== undefined && bounty?.announce === true) this.announceBounties(streaks.started, streaks.found, bounty.days);
+    if (streaks !== undefined && bounty?.announce === true) this.announceBounties(streaks.started, streaks.found, bounty.days, happened.map((e) => e.eventId));
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
     // it has gone.
@@ -2833,15 +2833,15 @@ export class Watcher extends DurableObject<Env> {
 
   // Tells the server in game who has a bounty and who ended one. Said once and not tried
   // again: the reward is what is kept (see payBounties), and a late "bounty on" would be wrong.
-  private announceBounties(started: StreakStart[], ended: StreakBreak[], days: number): void {
-    const lines = [...started.map((s) => ({ id: s.eventId, text: bountyOnText(s, days) })), ...ended.map((e) => ({ id: e.eventId, text: bountyEndedText(e, days) }))];
+  private announceBounties(started: StreakStart[], ended: StreakBreak[], days: number, order: string[]): void {
+    const lines = bountyLines(started, ended, days, order);
     if (lines.length === 0) return;
     const { config, http } = this.rcon();
     this.ctx.waitUntil(
       (async () => {
-        for (const line of lines) {
+        for (const text of lines) {
           try {
-            await sendBroadcast(config.rconUrl, config.rconPassword, line.text, http);
+            await sendBroadcast(config.rconUrl, config.rconPassword, text, http);
           } catch (error) {
             console.error(`Bounty announcement failed: ${errorText(error)}`);
           }

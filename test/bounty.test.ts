@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addBounties, bountyEndedText, bountyEnds, bountyOnText, parseBountyPending, planBounties } from '../src/bounty.ts';
+import { addBounties, bountyEndedText, bountyLines, bountyEnds, bountyOnText, parseBountyPending, planBounties } from '../src/bounty.ts';
 
 const DAY = 24 * 60 * 60_000;
 const NOON = Date.UTC(2026, 9, 23, 12);
@@ -49,5 +49,22 @@ describe('what the server is told', () => {
     expect(text).not.toMatch(/\n/);
     expect(text).toContain('A shxxxxxxxxxxxxxxxxxxxxxxxxxxx…');
     expect(bountyOnText({ eventId: 'a', steamId: 'p1', name: '', streak: 10 }, 1)).toMatch(/^BOUNTY: Someone is/);
+  });
+});
+
+describe('bountyLines', () => {
+  const on = (eventId: string, name: string) => ({ eventId, steamId: name, name, streak: 10 });
+  const end = (eventId: string, name: string, victim: string) => ({ eventId, steamId: name, name, victim, streak: 12 });
+
+  it('keeps the order the kills happened in, so an active bounty never reads as over', () => {
+    // Ash's bounty is ended (e2), then Ash reaches the streak again (e5).
+    const lines = bountyLines([on('e5', 'Ash')], [end('e2', 'Bo', 'Ash')], 1, ['e1', 'e2', 'e3', 'e4', 'e5']);
+    expect(lines).toEqual(["Bo ended Ash's 12 kill streak and wins VIP for tomorrow!", 'BOUNTY: Ash is on a 10 kill streak! Kill them to win VIP for tomorrow.']);
+    expect(bountyLines([on('e1', 'Ash')], [end('e4', 'Bo', 'Ash')], 1, ['e1', 'e2', 'e3', 'e4'])[0]).toMatch(/^BOUNTY: Ash/);
+  });
+
+  it('says the end first when one kill ends a streak and starts another', () => {
+    const lines = bountyLines([on('e3', 'Bo')], [end('e3', 'Bo', 'Ash')], 1, ['e3']);
+    expect(lines.map((l) => l.split(' ')[0])).toEqual(['Bo', 'BOUNTY:']);
   });
 });

@@ -66,3 +66,13 @@ export const bountyOnText = (start: StreakStart, days: number): string =>
 // The streak was ended: who did it, and whose it was.
 export const bountyEndedText = (win: StreakBreak, days: number): string =>
   `${shown(win.name)} ended ${shown(win.victim)}'s ${win.streak} kill streak and wins ${reward(days)}!`;
+
+// Everything to say about a batch, in the order its kills happened (`order` is the batch's event IDs). A kill that ends a
+// streak and starts another says the end first, so a bounty that is on never reads as over.
+export const bountyLines = (started: StreakStart[], ended: StreakBreak[], days: number, order: string[]): string[] =>
+  [
+    ...ended.map((e) => ({ at: order.indexOf(e.eventId), then: 0, text: bountyEndedText(e, days) })),
+    ...started.map((s) => ({ at: order.indexOf(s.eventId), then: 1, text: bountyOnText(s, days) })),
+  ]
+    .sort((a, b) => a.at - b.at || a.then - b.then)
+    .map((line) => line.text);
