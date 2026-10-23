@@ -1078,8 +1078,8 @@ a finished match is credited to everyone in it on the day it ends, even someone 
 as players. The Steam IDs stay in `player_days` and `players` and are never in an answer.
 
 `GET /api/admin/lifetime` (signed-in staff) gives what the page's Lifetime view shows: `summary` (days kept, players ever,
-new and active in the last 30 days, regulars with 5 or more days in 30, regulars who stopped, player hours, matches), the
-`daily` rows (the latest 800), `weekly` and `monthly` unique players with new players, regulars (3 days in a week, 5 in a
+new and active in the last 30 days, regulars with 14 or more days in 30 (`regular_days`), regulars who stopped, player hours, matches), the
+`daily` rows (the latest 800), `weekly` and `monthly` unique players with new players, regulars (3 days in a week, 14 in a
 month), player minutes, matches and stickiness (the average day's players as a share of the period's), `cohorts` (new
 players by week and how many came back within 1, 7, 30 and 90 days, once those days are over), `maps` over their lifetime, and
 the all-time `heat`. `GET /api/admin/lifetime.csv?table=daily|matches|weekly|monthly|cohorts` gives a table as CSV, with
@@ -1090,7 +1090,7 @@ would like and nothing else: players ever, player hours, matches, players in the
 day (most players), the biggest match (most at once) and the most matches in a day; the typical stay over the last 30 days;
 players for each of the last 90 days and each of the last 104 weeks, with the new ones; each month's players, new players,
 hours and matches; the favourite maps (matches played, up to 8); and the average players on in each hour of the week (UTC,
-Monday first), once 7 days of stays are kept. And the regulars (`regulars`): players on the server 5 or more days of the last 30,
+Monday first), once 7 days of stays are kept. And the regulars (`regulars`): players on the server 14 or more days of the last 30 (about every other day; `min_days` says the number),
 most days first, then most time, the first 60 of them by name with a link to their player page, the days and hours in the last 30,
 matches, the day they were first seen and whether that was in the first fortnight of the records. A player with a
 [private profile](#private-profiles) is not listed, only counted in `hidden`. No Steam ID is ever in it. Nothing about who left or

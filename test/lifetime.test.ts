@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { Sql } from '../src/killfeed.ts';
-import { createLifetime, exportTable, newPlayerDays, publicRegulars, readPublicLifetime, readRegulars, removeArchivedMatch, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
+import { createLifetime, exportTable, REGULAR_DAYS_30, newPlayerDays, publicRegulars, readPublicLifetime, readRegulars, removeArchivedMatch, firstStayDay, rebuildPlayers, readLifetime, toCsv, writeDay, writePlayerDays, type DayInput } from '../src/lifetime.ts';
 import { createSessions } from '../src/joinlog.ts';
 
 const database = (): Sql => {
@@ -170,17 +170,19 @@ describe('review fixes', () => {
   };
   const dayFrom = (iso: string, plus: number): string => new Date(Date.parse(`${iso}T00:00:00Z`) + plus * 86_400_000).toISOString().slice(0, 10);
 
-  it('counts a lapsed regular only if they once played 5 or more days in 30', () => {
+  it('counts a lapsed regular only if they once played REGULAR_DAYS_30 days in some 30', () => {
     const sql = database();
     createLifetime(sql);
-    // anchor plays once, early, so the first day is not theirs. reg played 5 days in a week, then stopped. monthly played on
-    // 5 days, a month apart, and stopped.
+    const run = (step: number) => Array.from({ length: REGULAR_DAYS_30 }, (_, n) => dayFrom('2026-02-01', n * step));
+    // anchor plays once, early, so the first day is not theirs. reg played that many days running, then stopped. weekly
+    // played the same number of days, a week apart, so never that many in 30, and stopped.
     played(sql, ['2026-01-01'], 'anchor');
-    played(sql, [0, 1, 2, 3, 4].map((n) => dayFrom('2026-02-01', n)), 'reg');
-    played(sql, [0, 1, 2, 3, 4].map((n) => dayFrom('2026-02-01', n * 31)), 'monthly');
+    played(sql, run(1), 'reg');
+    played(sql, run(7), 'weekly');
     rebuildPlayers(sql);
     const summary = readLifetime(sql, '2026-12-01').summary;
     expect(summary.lapsed_regulars).toBe(1);
+    expect(summary.regular_days).toBe(REGULAR_DAYS_30);
   });
 
   it('covers the 30 completed days before today', () => {
@@ -228,6 +230,8 @@ describe('review fixes', () => {
 const rows = (sql: Sql, query: string): Record<string, unknown>[] => sql.exec(query).toArray();
 
 describe('the regulars', () => {
+  const R = REGULAR_DAYS_30;
+  const TODAY = '2026-10-20';
   const dayAt = (iso: string, plus: number): string => new Date(Date.parse(`${iso}T00:00:00Z`) + plus * 86_400_000).toISOString().slice(0, 10);
   const setup = (): Sql => {
     const sql = database();
@@ -235,37 +239,37 @@ describe('the regulars', () => {
     const play = (id: string, from: string, n: number, minutes = 60): void => {
       for (let i = 0; i < n; i += 1) writePlayerDays(sql, dayAt(from, i), { [id]: { minutes, matches: 2 } });
     };
-    // anchor is on the first day only. ann: 8 days from the second day. bo: 6 days, long ones. cy: 4 days (not a regular).
-    // dee: 6 days, with a private profile. old: 9 days but long ago.
+    // anchor is on the first day only. ann: more than enough days, but long ago. bo: enough days, long ones. cy: one day short
+    // (not a regular). dee: enough days, with a private profile.
     play('anchor', '2026-06-01', 1);
-    play('ann', '2026-06-02', 8);
-    play('bo', '2026-10-01', 6, 180);
-    play('cy', '2026-10-01', 4);
-    play('dee', '2026-10-01', 6);
-    play('old', '2026-06-10', 9);
+    play('ann', '2026-06-02', R + 2);
+    play('bo', '2026-10-01', R, 180);
+    play('cy', '2026-10-01', R - 1);
+    play('dee', '2026-10-01', R);
     rebuildPlayers(sql);
     return sql;
   };
 
-  it('lists who played 5 or more days of the last 30, most days first', () => {
-    const rowsOf = readRegulars(setup(), '2026-10-12');
-    expect(rowsOf.map((r) => [r.steam_id, r.days])).toEqual([['bo', 6], ['dee', 6]]);
+  it('lists who played REGULAR_DAYS_30 or more days of the last 30, most days first', () => {
+    const rowsOf = readRegulars(setup(), TODAY);
+    expect(rowsOf.map((r) => [r.steam_id, r.days])).toEqual([['bo', R], ['dee', R]]);
     // Most days first, then most time.
-    expect(rowsOf[0]?.minutes).toBe(1080);
+    expect(rowsOf[0]?.minutes).toBe(R * 180);
   });
 
   it('names them, links their page, leaves out a private profile and says how many', () => {
     const sql = setup();
-    const regs = readRegulars(sql, '2026-10-12');
+    const regs = readRegulars(sql, TODAY);
     const who = {
       nameOf: (id: string) => ({ bo: 'Bo', dee: 'Dee' })[id],
       idOf: (id: string) => (id === 'dee' ? null : id === 'bo' ? 'b0b0b0b0b0b0' : undefined),
     };
     const out = publicRegulars(regs, who, '2026-06-01');
     expect(out).toEqual({
+      min_days: R,
       total: 1,
       hidden: 1,
-      players: [{ name: 'Bo', id: 'b0b0b0b0b0b0', days: 6, hours: 18, matches: 12, since: '2026-10-01', founder: false }],
+      players: [{ name: 'Bo', id: 'b0b0b0b0b0b0', days: R, hours: R * 3, matches: R * 2, since: '2026-10-01', founder: false }],
     });
     expect(JSON.stringify(out)).not.toMatch(/dee|steam/i);
   });
@@ -289,7 +293,8 @@ describe('the regulars', () => {
 
   it('is in the public figures only when someone says who they are', () => {
     const sql = setup();
-    expect(readPublicLifetime(sql, '2026-10-12').regulars).toBeNull();
-    expect(readPublicLifetime(sql, '2026-10-12', { nameOf: () => 'X', idOf: () => 'i' }).regulars?.total).toBe(2);
+    expect(readPublicLifetime(sql, TODAY).regulars).toBeNull();
+    expect(readPublicLifetime(sql, TODAY, { nameOf: () => 'X', idOf: () => 'i' }).regulars?.total).toBe(2);
+    expect(readPublicLifetime(sql, TODAY).totals.regular_days).toBe(R);
   });
 });
