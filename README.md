@@ -1731,12 +1731,12 @@ Automatic VIP is Cloudflare only.
 ### Streak breaker VIP
 
 Kill a player who is on a long kill streak and get a whitelist slot. Set `BOUNTY_STREAK` to the number of kills in a row without
-dying that makes a streak worth ending (default `10`, so it is on; `0` turns it off), and `BOUNTY_VIP_DAYS` to how many calendar days it covers, starting tomorrow (default
+dying that makes a streak worth ending (default `20`, so it is on; `0` turns it off), and `BOUNTY_VIP_DAYS` to how many calendar days it covers, starting tomorrow (default
 `1`: the whole of tomorrow, UTC, however late in the day the kill was). Only a kill on an enemy counts, for starting a bounty or winning one: never a team kill, nor one where the bot does not know a side. A win is kept until the slot is written, so a server that cannot be reached at that moment does not lose it.
 A player who already has a slot keeps what they have (a slot from seeding is extended, never shortened), and one staff took VIP from with `/vip remove` gets it back, as with `/vip add`.
 It is given the same way as `/vip add`, so it shows in the player's moderation log as "Ended X's N kill streak" by the bot, ends on
 time, and the player gets the usual Discord message.
-The server is told in game too (`BOUNTY_ANNOUNCE`, default `on`, `off` for silence): when a player reaches the streak ("BOUNTY: X is on a 10 kill streak! Kill them to win VIP for tomorrow.") and when someone ends it ("Y ended X's 12 kill streak and wins VIP for tomorrow!"). Each is said once, as it happens. The server picks the whitelist up at its next restart.
+The server is told in game too (`BOUNTY_ANNOUNCE`, default `on`, `off` for silence): when a player reaches the streak ("BOUNTY: X is on a 20 kill streak! Kill them to win VIP for tomorrow.") and when someone ends it ("Y ended X's 23 kill streak and wins VIP for tomorrow!"). Each is said once, as it happens. The server picks the whitelist up at its next restart.
 
 ## In-game messages
 

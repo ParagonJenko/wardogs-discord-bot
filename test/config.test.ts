@@ -35,7 +35,7 @@ describe('loadConfig', () => {
       scoreToWin: 100,
       seedMinutes: 10,
       vip: null,
-      bounty: { streak: 10, days: 1, announce: true },
+      bounty: { streak: 20, days: 1, announce: true },
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
       welcomeMessages: { afterMs: 120_000, siteHost: null, discord: null },
@@ -197,8 +197,8 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, VIP_SEED_DAYS: '8' })).toThrow(/VIP_SEED_DAYS/);
   });
 
-  it('has the streak-breaker reward on at 10 kills, off with BOUNTY_STREAK 0, for a day unless BOUNTY_VIP_DAYS says', () => {
-    expect(loadConfig(required).bounty).toEqual({ streak: 10, days: 1, announce: true });
+  it('has the streak-breaker reward on at 20 kills, off with BOUNTY_STREAK 0, for a day unless BOUNTY_VIP_DAYS says', () => {
+    expect(loadConfig(required).bounty).toEqual({ streak: 20, days: 1, announce: true });
     expect(loadConfig({ ...required, BOUNTY_STREAK: '0' }).bounty).toBeNull();
     expect(loadConfig({ ...required, BOUNTY_STREAK: '15' }).bounty).toEqual({ streak: 15, days: 1, announce: true });
     expect(loadConfig({ ...required, BOUNTY_ANNOUNCE: 'off' }).bounty?.announce).toBe(false);
