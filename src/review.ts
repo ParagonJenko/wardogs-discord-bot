@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AlertRules, QuietHours } from './alerts.ts';
+import { AUTO_RULES, summariseShadow, type OutcomeEntry, type ShadowEntry } from './autoflag.ts';
 import { dayFlags, FLAGS, vehicleDeath, type Flag, type GriefDay, type VehicleDeath } from './griefing.ts';
 import { flaggedDay, HEADSHOT_FLAG, headshotOdds, tally, type KillDaySummary } from './killfeed.ts';
 import {
@@ -120,6 +121,9 @@ export type ReviewSources = {
   kept: KillDaySummary[];
   // The Steam checks of everyone on the server in the period, or null without STEAM_API_KEY.
   steam: SteamCheck[] | null;
+  // What automatic action would have done and what staff found (see autoflag.ts).
+  shadow: ShadowEntry[];
+  outcomes: OutcomeEntry[];
 };
 
 const minutes = (ms: number): number => Math.round(ms / 60_000);
@@ -226,8 +230,11 @@ export const buildReview = (s: ReviewSources) => {
       grief: FLAGS,
       headshots: HEADSHOT_FLAG,
       steam: RISK,
+      autoFlags: AUTO_RULES,
       posts: s.posts,
     },
+    // Shadow mode: what automatic action on headshots would have done, and how staff judged it.
+    autoFlags: summariseShadow(s.shadow, s.outcomes, s.now, s.days),
     // What was posted, by UTC day, since the bot started counting.
     alerts: { totals, byDay: alertDays.map(([day, counts]) => ({ day, ...counts })) },
     outages: {

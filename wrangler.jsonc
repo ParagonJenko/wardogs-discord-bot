@@ -90,6 +90,7 @@
     // (needs STEAM_API_KEY): "on" or "off".
     "STEAM_ALERTS": "on",
     "HEADSHOT_ALERTS": "on",
+    "AUTO_FLAGS": "on",
     "OUTAGE_ALERTS": "on",
     // Posts to the moderation log when the server is live and the kill feed has sent nothing for 10 minutes: "on" or "off".
     "FEED_ALERTS": "on",

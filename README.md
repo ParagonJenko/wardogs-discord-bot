@@ -1371,7 +1371,43 @@ characters. To let Claude Code on the web read it, add the token to the environm
 | `outages`    | The outage going on `now`, if any, and the `log` of outages confirmed in the period: kind, when, players before, the fewest, how long unreachable, and when they ended and whether the players came back. The last 100 are kept |
 | `grief`      | Each player's day with a team kill, team death or suicide: how many had 0, 1, 2… team kills (not counting helicopter crashes), the most kills of one teammate, vehicle suicides and suicides; the days each flag was earned; how many players were flagged on 1, 2… days; and `vehicles`: team kills and vehicle suicides with a vehicle by how (`helicopter`, `runOver`, `explosion`, `other`), how many run-over team kills each player's day had, and how many of the day's team kills and vehicle suicides the kept incidents cover |
 | `headshots`  | The server's share of headshots; players' days by kills (`killsPerDay`) and, for days with enough kills to judge, by chance by luck; flagged days, and how many players were flagged on 1, 2… days |
+| `autoFlags`  | [Shadow mode](#automatic-action-shadow-mode): the marks, what the bot would have done by tier and rule, how many players, and how staff judged them (`judged`, `precision`, `outcomes`) |
 | `steam`      | The checked Steam accounts of everyone on the server in the period, by risk and by points, and how many are at the alert mark. `null` without `STEAM_API_KEY` |
+
+## Automatic action (shadow mode)
+
+The bot can tell, with some confidence, which players in game are cheating. It does not act on it yet. In shadow mode
+it writes down who it **would** have kicked or banned and why, and staff say on the Queue whether it was right. Once
+the [alert review](#alert-review) shows it is right nearly every time, the same marks can drive real action.
+
+Why these marks: in the review's first 30 days, 2,079 player-days were judged for headshots, and luck alone puts 2.1 of
+them below 1 in 1,000. 13 were. Below 1 in 10,000 it was 7 against 0.2, and one player was flagged on two days where
+luck gives about 0.003. At about 25,000 judged days a year, a mark of 1 in 1,000,000 is 0.025 false actions a year if
+the model is right, so it has room to be wrong by a factor of 40. It is still a model of luck, not proof of cheating:
+that is what the outcomes below are for.
+
+| Tier | Would do | When (`AUTO_RULES` in `src/autoflag.ts`) |
+| ---- | -------- | ---------------------------------------- |
+| 1 | Kick and ban for a day or so | A flagged day with 25+ kills below 1 in 100,000 by luck (`strong-day`), or, with a VAC or game ban in the last year, 25+ kills below 1 in 10,000 (`ban-and-headshots`) |
+| 2 | Ban for a week | A flagged day with 25+ kills below 1 in 1,000,000 (`extreme-day`), or 2 flagged days within 14 days (`repeat-days`) |
+
+- Permanent bans stay with staff. A Steam account's risk is never enough on its own: it only lowers the mark for a
+  headshot day, as above.
+- **Staff are never judged.** Each player is written down once a day per tier.
+- **The shadow log** (`autoShadow`, 60 days, the newest 300) has the player, day, tier, rule, kills, headshots, chance by
+  luck and flagged days. Each is also logged (`Auto flag (shadow, tier 1, strong-day): …`) and counted in the alert
+  review's `alerts` as `autoTier1` and `autoTier2`.
+- **Outcomes.** On the staff page's Queue, a row with a headshots flag has a "Found…" pick-list by "Dealt with":
+  Cheating, False alarm, Griefing or Something else. It goes in `outcomes` and is kept for good (the newest 1,000), unlike
+  "Dealt with", which lasts 30 days and does not say what was found. The review matches each player the bot would have
+  acted on with the latest outcome from that day on: `precision` is cheating over cheating plus false alarms. Pick one
+  for every headshots row you deal with, or the review has nothing to judge by.
+  `POST /api/admin/dealt` takes an optional `"outcome"` with a deal.
+- **Before turning anything on for real**, have a few weeks of outcomes, no false alarms among the tier 2 players, and
+  tier 1 close to it. Then act through the existing timed bans, with a cap on actions a day that stops the automation
+  when it is passed (a game update that changes the kill feed's tags could otherwise flag everyone), and a way to
+  appeal in the kick message.
+- **Turning it off:** `AUTO_FLAGS` `"off"` in the `vars` block of `wrangler.jsonc`. It needs the [kill feed](#weapon-stats).
 
 ## Website stats
 
