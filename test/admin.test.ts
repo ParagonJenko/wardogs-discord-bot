@@ -229,9 +229,9 @@ describe('buildAdminOverview', () => {
 
     expect(overview.reserved).toEqual({
       players: [
-        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY }, staff: null },
-        { player: { steamId: CY, name: 'Cy' }, bot: null, staff: { since: NOW - 2 * DAY } },
-        { player: { steamId: DEE, name: 'Dee' }, bot: null, staff: null },
+        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY }, staff: null, reason: 'Given by staff' },
+        { player: { steamId: CY, name: 'Cy' }, bot: null, staff: { since: NOW - 2 * DAY }, reason: 'Staff spot: linked their Steam account' },
+        { player: { steamId: DEE, name: 'Dee' }, bot: null, staff: null, reason: 'Added by hand in ServerSettings.ini' },
       ],
       maxSlots: 2,
     });

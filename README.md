@@ -942,7 +942,7 @@ lines, weapon rules and admin tools. Staff sign in with Discord, and the pages s
   reason and who did it, and bans made or lifted outside the bot.
 - **The bans on the server**, with their reasons, who made them and when timed bans end, and bans waiting for the
   player to join.
-- **The whitelist slots**: everyone on the whitelist in `ServerSettings.ini`, with VIP from the bot and when it ends,
+- **The whitelist slots** (VIP view, apart from the bans): everyone on the whitelist in `ServerSettings.ini`, why they have a slot, with VIP from the bot and when it ends,
   or added by hand, and how many slots `MaxReservedSlots` holds back.
 - **Admin tools**: every staff slash command, run from the page: warn, kick, move team, ban, unban, look up a player,
   give or remove VIP, top seeders, message everyone in game, set the next map, change map now, call for seeders,

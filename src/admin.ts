@@ -88,9 +88,15 @@ export type AdminBan = {
 
 // Everyone on the server's whitelist. `bot` is VIP the bot gave (earned by seeding, or added with /vip add) and
 // when it ends; `staff` a staff spot the bot keeps while their Steam account is linked, and since when. With neither,
-// the slot is permanent (added by hand, or with /vip add permanent).
+// the slot is permanent (added by hand, or with /vip add permanent). `reason` is why they have it: the reason staff gave
+// with /vip add, or how the bot gave it (seeding, a streak breaker, a staff spot), or that it was added by hand.
 export type AdminReserved = {
-  players: { player: AdminPlayer; bot: { since: number; until: number } | null; staff: { since: number } | null }[];
+  players: {
+    player: AdminPlayer;
+    bot: { since: number; until: number } | null;
+    staff: { since: number } | null;
+    reason: string;
+  }[];
   maxSlots: number | null;
 };
 
@@ -560,10 +566,21 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
               .map((steamId) => {
                 const grant = s.vip.granted[steamId];
                 const spot = s.vip.staffSpots[steamId];
+                const given = (s.modLogs.get(steamId) ?? []).filter((e) => e.action === 'vip-add').at(-1)?.reason;
                 return {
                   player: ref(steamId, grant?.name ?? spot?.name),
                   bot: grant === undefined ? null : { since: grant.grantedAt, until: grant.expiresAt },
                   staff: spot === undefined ? null : { since: spot.since },
+                  reason:
+                    spot !== undefined
+                      ? 'Staff spot: linked their Steam account'
+                      : grant === undefined
+                        ? 'Added by hand in ServerSettings.ini'
+                        : grant.source === 'seeding'
+                          ? 'Earned by seeding'
+                          : grant.source === 'bounty'
+                            ? 'Ended a long kill streak'
+                            : (given ?? 'Given by staff'),
                 };
               })
               .sort((a, b) => a.player.name.localeCompare(b.player.name)),
