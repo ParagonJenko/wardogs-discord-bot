@@ -12,9 +12,9 @@
 // A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
 // The bot puts the Discord and the website after the line.
 export const WELCOME = [
-  'Welcome, {name}! Play fair: no cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say.',
-  'Welcome in, {name}! House rules: no cheats, exploits, TKs, griefing, racism or abuse. Listen to admins.',
-  'Boots on the ground, {name}! No cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say.',
+  'Welcome, {name}! Play fair: no cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide.',
+  'Welcome in, {name}! House rules: no cheats, exploits, TKs, dropping crates in HQ, griefing, racism or abuse. Listen to admins.',
+  'Boots on the ground, {name}! No cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide.',
 ];
 
 // The welcome for a player on the website's leaderboard (the top 10 of any board over 30 days), in place of the one above.

@@ -1745,7 +1745,7 @@ The server is told in game too (`BOUNTY_ANNOUNCE`, default `on`, `off` for silen
 Each player who joins gets a private message in game (like `/warn`, only they see it) 2 minutes after the bot sees
 them join (`WELCOME_MESSAGE_MINUTES`), by name, with the basic rules and where the Discord and the website are:
 
-> Welcome, Ghost! Play fair: no cheats, exploits, team kills, griefing, racism or abuse. Admins have the final say.
+> Welcome, Ghost! Play fair: no cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide.
 > Discord: gaminginit.com/discord | Stats: gaminginit.com
 
 A player on the website's leaderboard (the top 10 of any board over its 30 days) is welcomed back with their best place
