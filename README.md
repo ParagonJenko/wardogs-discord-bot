@@ -1388,7 +1388,7 @@ that is what the outcomes below are for.
 
 | Tier | Would do | When (`AUTO_RULES` in `src/autoflag.ts`) |
 | ---- | -------- | ---------------------------------------- |
-| 1 | Kick and ban for a day or so | A flagged day with 25+ kills below 1 in 100,000 by luck (`strong-day`), or below 1 in 10,000 with a VAC or game ban in the last year (`ban-and-headshots`) |
+| 1 | Kick and ban for a day or so | A flagged day with 25+ kills below 1 in 100,000 by luck (`strong-day`), or, with a VAC or game ban in the last year, 25+ kills below 1 in 10,000 (`ban-and-headshots`) |
 | 2 | Ban for a week | A flagged day with 25+ kills below 1 in 1,000,000 (`extreme-day`), or 2 flagged days within 14 days (`repeat-days`) |
 
 - Permanent bans stay with staff. A Steam account's risk is never enough on its own: it only lowers the mark for a

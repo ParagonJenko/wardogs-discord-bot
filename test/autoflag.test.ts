@@ -64,6 +64,8 @@ describe('decide', () => {
     expect(decide(day(5e-5), [], ['vacBan'])).toBeNull();
     expect(decide(day(5e-5), [], ['recentBan', 'communityBan'])).toBeNull();
     expect(decide(day(5e-5), [], ['newAccount', 'hidden'])).toBeNull();
+    // The kill minimum holds for it too.
+    expect(decide(day(5e-5, { kills: 12 }), [], banned)).toBeNull();
   });
 
   it('takes the highest tier when several marks are met', () => {
@@ -160,5 +162,13 @@ describe('outcomes', () => {
     expect(s.precision).toBeNull();
     expect(s.judged).toEqual({ cheating: 0, falseAlarm: 0, other: 0, pending: 1 });
     expect(summariseShadow([entry({ at: NOW - 40 * DAY })], [], NOW, 30).players).toBe(0);
+  });
+
+  it('counts from the start of the UTC day the period begins on', () => {
+    // NOW is 20:00 on the 24th: a day is the 24th alone, and an entry from 21:00 on the 23rd is not in it.
+    const yesterday = entry({ steamId: '76561198000000002', at: NOW - 23 * 60 * 60_000 });
+    const today = entry({ at: NOW - 60 * 60_000 });
+    expect(summariseShadow([yesterday, today], [], NOW, 1).players).toBe(1);
+    expect(summariseShadow([yesterday, today], [], NOW, 2).players).toBe(2);
   });
 });

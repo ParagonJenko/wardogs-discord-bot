@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dayOf } from './stats.ts';
 import type { SteamFlag } from './steam.ts';
 
 // Shadow mode for automatic action on cheating. The bot judges the players in game for unlikely headshots (see
@@ -21,7 +22,7 @@ const DAY_MS = 24 * 60 * 60_000;
 export const AUTO_RULES = {
   // Kills a day needs for the stronger marks: a handful of kills can be luck however it looks.
   minKills: 25,
-  // Tier 1 (would kick and ban for a day or so): a day this unlikely by luck, 1 in `strong`, or 1 in `withBan` when the
+  // Tier 1 (would kick and ban for a day or so): a day with `minKills` this unlikely by luck, 1 in `strong`, or 1 in `withBan` when the
   // account has a VAC or game ban in the last year.
   strong: 100_000,
   withBan: 10_000,
@@ -52,7 +53,7 @@ export const decide = (today: DayEvidence, earlier: DayEvidence[], steam: readon
   if (flaggedDays >= AUTO_RULES.repeat.flagged) return { tier: 2, rule: 'repeat-days', flaggedDays };
   if (enough && odds(today, AUTO_RULES.strong)) return { tier: 1, rule: 'strong-day', flaggedDays };
   const banned = steam.includes('recentBan') && (steam.includes('vacBan') || steam.includes('gameBan'));
-  if (banned && odds(today, AUTO_RULES.withBan)) return { tier: 1, rule: 'ban-and-headshots', flaggedDays };
+  if (enough && banned && odds(today, AUTO_RULES.withBan)) return { tier: 1, rule: 'ban-and-headshots', flaggedDays };
   return null;
 };
 
@@ -127,7 +128,8 @@ const tally = (values: string[]): Record<string, number> => {
 // each such player the latest outcome staff gave from that day on: cheating, a false alarm, something else, or none yet.
 // `precision` is cheating over cheating and false alarms, null until there is one.
 export const summariseShadow = (shadow: ShadowEntry[], outcomes: OutcomeEntry[], now: number, days: number) => {
-  const from = now - days * DAY_MS;
+  // From the start of the UTC day the review's period begins on, like the rest of the review.
+  const from = Date.parse(dayOf(now - (days - 1) * DAY_MS));
   const recent = shadow.filter((e) => e.at >= from);
   const first = new Map<string, number>();
   for (const e of recent) first.set(e.steamId, Math.min(first.get(e.steamId) ?? e.at, e.at));
