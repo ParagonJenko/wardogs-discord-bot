@@ -566,7 +566,10 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
               .map((steamId) => {
                 const grant = s.vip.granted[steamId];
                 const spot = s.vip.staffSpots[steamId];
-                const given = (s.modLogs.get(steamId) ?? []).filter((e) => e.action === 'vip-add').at(-1)?.reason;
+                // What staff said when they last gave this player VIP, unless it was taken away since. The bot's own
+                // streak awards (by "bot") are not staff's word.
+                const lastVip = (s.modLogs.get(steamId) ?? []).filter((e) => e.action === 'vip-remove' || (e.action === 'vip-add' && e.by !== 'bot')).at(-1);
+                const given = lastVip?.action === 'vip-add' ? lastVip.reason : undefined;
                 return {
                   player: ref(steamId, grant?.name ?? spot?.name),
                   bot: grant === undefined ? null : { since: grant.grantedAt, until: grant.expiresAt },
@@ -575,12 +578,12 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
                     spot !== undefined
                       ? 'Staff spot: linked their Steam account'
                       : grant === undefined
-                        ? 'Added by hand in ServerSettings.ini'
-                        : grant.source === 'seeding'
-                          ? 'Earned by seeding'
-                          : grant.source === 'bounty'
-                            ? 'Ended a long kill streak'
-                            : (given ?? 'Given by staff'),
+                        ? (given ?? 'Added by hand in ServerSettings.ini')
+                        : grant.source === 'bounty'
+                          ? 'Ended a long kill streak'
+                          : grant.source === 'staff'
+                            ? (given ?? 'Given by staff')
+                            : 'Earned by seeding',
                 };
               })
               .sort((a, b) => a.player.name.localeCompare(b.player.name)),
