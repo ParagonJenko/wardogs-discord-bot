@@ -65,7 +65,7 @@ export type MatchSummary = {
 
 const TOP_PLAYERS = 5;
 
-export const matchKey = (status: ServerStatus): string => `${status.map}#${status.rotationIndex ?? ''}`;
+const matchKey = (status: ServerStatus): string => `${status.map}#${status.rotationIndex ?? ''}`;
 
 const keyMap = (key: string): string => key.slice(0, key.lastIndexOf('#'));
 

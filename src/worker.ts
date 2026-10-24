@@ -56,7 +56,7 @@ import {
 } from './mapvote.ts';
 import { planSetup } from './matchsetup.ts';
 import { VOTE_OPTIONS_KEY, offMapIds, parseVoteOptions, withMap, withRain, type VoteOptions } from './voteoptions.ts';
-import { MATCH_ZONE_KEY, parseMatchZone, zoneOfMatch, zoneOfSlot } from './matchzone.ts';
+import { MATCH_ZONE_KEY, parseMatchZones, withMatchZone, zoneOfMatch, zoneOfSlot } from './matchzone.ts';
 import { BLOCKED_CIRCLES_KEY, blockCircle, blockedCircleIds, parseBlockedCircles, unblockCircle, type BlockedCircles } from './circles.ts';
 import {
   infantryFromRotation,
@@ -500,7 +500,7 @@ import {
   type Thresholds,
 } from './stats.ts';
 import { teamBoard } from './teams.ts';
-import { matchKey, matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
+import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
 import {
   addVip,
   parseVipState,
@@ -1120,7 +1120,7 @@ export class Watcher extends DurableObject<Env> {
     const dayKey = playerDayKey(at);
     const stored = await this.ctx.storage.get([key, 'stats', dayKey, MATCH_ZONE_KEY]);
     if (stored.has(key)) return parseMatchRecord(stored.get(key))?.endedAt ?? null;
-    const zone = zoneOfMatch(parseMatchZone(stored.get(MATCH_ZONE_KEY)), match.key);
+    const zone = zoneOfMatch(parseMatchZones(stored.get(MATCH_ZONE_KEY)), match.startedAt);
     await this.ctx.storage.put({
       [key]: matchRecord(match, at, zone),
       stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at, zone),
@@ -1560,19 +1560,22 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Notes the circles the match on now is played on, from the rotation's entry for the slot the server is on, so the match
-  // is recorded with them when it ends. Read once per match (the rotation is cached, see serverRotation). A failure is
-  // logged and tried again next check.
+  // Notes the circles the match being tracked is played on, from the rotation's entry for the slot the server is on, so the
+  // match is recorded with them when it ends. Once per match (by when it started), read fresh from the server as the match
+  // begins, and kept until the match is recorded, however many matches follow. A failure is logged and tried again next check.
   private async trackMatchZone(config: Config, snapshot: Snapshot | null): Promise<void> {
     if (snapshot === null || snapshot.status.map === '') return;
     try {
-      const key = matchKey(snapshot.status);
-      const saved = parseMatchZone(await this.ctx.storage.get(MATCH_ZONE_KEY));
-      if (saved?.key === key) return;
-      const rotation = await this.serverRotation(config, snapshot, parseReadRotation(await this.ctx.storage.get('boardRotation')), Date.now());
-      if (rotation === null) return;
-      const zone = zoneOfSlot(rotation, snapshot.status);
-      await this.ctx.storage.put(MATCH_ZONE_KEY, { key, ...(zone ? { zone } : {}) });
+      const storage = this.ctx.storage;
+      const startedAt = parseState(await storage.get('state'))?.match?.startedAt;
+      if (startedAt === undefined) return;
+      const notes = parseMatchZones(await storage.get(MATCH_ZONE_KEY));
+      if (notes.some((n) => n.startedAt === startedAt)) return;
+      const { rconUrl, rconPassword } = config;
+      const http = socketHttp(connect);
+      const [rotation, status] = await Promise.all([fetchRotation(rconUrl, rconPassword, http), fetchStatus(rconUrl, rconPassword, http)]);
+      const zone = zoneOfSlot(rotation, status);
+      await storage.put(MATCH_ZONE_KEY, withMatchZone(notes, { startedAt, ...(zone ? { zone } : {}) }));
     } catch (error) {
       console.error(`Noting the match's circles failed: ${errorText(error)}`);
     }
