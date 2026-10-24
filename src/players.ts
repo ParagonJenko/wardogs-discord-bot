@@ -36,6 +36,8 @@ export type MatchRecord = {
   peakPlayers: number;
   factionScores: FactionScore[];
   players: MatchPlayer[];
+  // The name of the circles (control-zone layout) it was played on, when known.
+  zone?: string;
 };
 
 export type RankedPlayer = PlayerTotals & { steamId: string };
@@ -146,7 +148,7 @@ export const recordMatchPlayers = (day: PlayerDay, match: MatchState): PlayerDay
     ]),
   );
 
-export const matchRecord = (match: MatchState, endedAt: number): MatchRecord => {
+export const matchRecord = (match: MatchState, endedAt: number, zone?: string): MatchRecord => {
   const summary = summarise(match);
   return {
     map: mapName(summary.map),
@@ -156,6 +158,7 @@ export const matchRecord = (match: MatchState, endedAt: number): MatchRecord => 
     durationMs: summary.durationMs,
     peakPlayers: summary.peakPlayers,
     factionScores: summary.factionScores,
+    ...(zone ? { zone } : {}),
     players: Object.entries(match.players).map(([steamId, p]) => ({
       steamId,
       name: p.name,
@@ -173,6 +176,7 @@ const MatchRecordSchema = z.object({
   endedAt: z.number(),
   durationMs: z.number(),
   peakPlayers: z.number(),
+  zone: z.string().optional(),
   // Each side's colour in game is kept when the server reported it, for the player pages.
   factionScores: z.array(z.object({ name: z.string(), score: z.number(), colorHex: z.string().optional() })),
   players: z.array(

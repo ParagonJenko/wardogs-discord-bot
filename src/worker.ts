@@ -56,6 +56,7 @@ import {
 } from './mapvote.ts';
 import { planSetup } from './matchsetup.ts';
 import { VOTE_OPTIONS_KEY, offMapIds, parseVoteOptions, withMap, withRain, type VoteOptions } from './voteoptions.ts';
+import { MATCH_ZONE_KEY, parseMatchZone, zoneOfMatch, zoneOfSlot } from './matchzone.ts';
 import { BLOCKED_CIRCLES_KEY, blockCircle, blockedCircleIds, parseBlockedCircles, unblockCircle, type BlockedCircles } from './circles.ts';
 import {
   infantryFromRotation,
@@ -499,7 +500,7 @@ import {
   type Thresholds,
 } from './stats.ts';
 import { teamBoard } from './teams.ts';
-import { matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
+import { matchKey, matchMap, settleWin, summarise, type MatchState } from './tracking.ts';
 import {
   addVip,
   parseVipState,
@@ -1117,11 +1118,12 @@ export class Watcher extends DurableObject<Env> {
   private async recordMatchEnd(match: MatchState, at: number): Promise<number | null> {
     const key = matchRecordKey(match.startedAt);
     const dayKey = playerDayKey(at);
-    const stored = await this.ctx.storage.get([key, 'stats', dayKey]);
+    const stored = await this.ctx.storage.get([key, 'stats', dayKey, MATCH_ZONE_KEY]);
     if (stored.has(key)) return parseMatchRecord(stored.get(key))?.endedAt ?? null;
+    const zone = zoneOfMatch(parseMatchZone(stored.get(MATCH_ZONE_KEY)), match.key);
     await this.ctx.storage.put({
-      [key]: matchRecord(match, at),
-      stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at),
+      [key]: matchRecord(match, at, zone),
+      stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at, zone),
       [dayKey]: recordMatchPlayers(parsePlayerDay(stored.get(dayKey)), match),
     });
     return at;
@@ -1213,6 +1215,7 @@ export class Watcher extends DurableObject<Env> {
     await this.alerting(poll);
     await this.startJoinChecks(config);
     await this.updateBoard(config, seen.snapshot);
+    await this.trackMatchZone(config, seen.snapshot);
     await this.serial(() => this.expireBans(config));
     await this.serial(() => this.applyWaitingBans(config, seen.snapshot));
     await this.serial(() => this.watchBans(config, seen.snapshot));
@@ -1554,6 +1557,24 @@ export class Watcher extends DurableObject<Env> {
       }
     } catch (error) {
       console.error(`Live status update failed: ${errorText(error)}`);
+    }
+  }
+
+  // Notes the circles the match on now is played on, from the rotation's entry for the slot the server is on, so the match
+  // is recorded with them when it ends. Read once per match (the rotation is cached, see serverRotation). A failure is
+  // logged and tried again next check.
+  private async trackMatchZone(config: Config, snapshot: Snapshot | null): Promise<void> {
+    if (snapshot === null || snapshot.status.map === '') return;
+    try {
+      const key = matchKey(snapshot.status);
+      const saved = parseMatchZone(await this.ctx.storage.get(MATCH_ZONE_KEY));
+      if (saved?.key === key) return;
+      const rotation = await this.serverRotation(config, snapshot, parseReadRotation(await this.ctx.storage.get('boardRotation')), Date.now());
+      if (rotation === null) return;
+      const zone = zoneOfSlot(rotation, snapshot.status);
+      await this.ctx.storage.put(MATCH_ZONE_KEY, { key, ...(zone ? { zone } : {}) });
+    } catch (error) {
+      console.error(`Noting the match's circles failed: ${errorText(error)}`);
     }
   }
 
