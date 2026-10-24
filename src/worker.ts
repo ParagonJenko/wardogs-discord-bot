@@ -3019,7 +3019,9 @@ export class Watcher extends DurableObject<Env> {
     const day = dayOf(now);
     try {
       const alerted = alertedOn(await this.ctx.storage.get(HEADSHOTS_ALERTED_KEY), day);
-      const names = new Map(snapshot.players.map((p) => [p.steamId, p.name]));
+      // Staff who linked their Steam account are left out, as they are from the shadow log and the Queue's headshots.
+      const staff = await this.staffSteam();
+      const names = new Map(snapshot.players.filter((p) => !staff.has(p.steamId)).map((p) => [p.steamId, p.name]));
       const due = headshotAlertsDue(this.keptKillDays(this.killSql(), now), day, names.keys(), alerted).map((a) => ({
         ...a,
         name: names.get(a.steamId) || a.name,

@@ -49,6 +49,12 @@ export const HEADSHOT_FLAG = { kills: 10, odds: 1_000 } as const;
 const WEAPON_PRIOR_KILLS = 20;
 // The server's players need this many kills between them before anyone's headshots are judged.
 const BASELINE_KILLS = 100;
+// A player's own history moves their usual: how far above the server's usual they got with the same weapons on their
+// other days, as headshots got over headshots expected, with SKILL_PRIOR headshots of the server's usual added so a few
+// kills do not decide. Never below 1 (a player who aims worse than usual is not judged more harshly) and never above
+// SKILL_MAX, so a cheater with a long history of it is still flagged by a day well above what any skill explains.
+const SKILL_PRIOR = 30;
+export const SKILL_MAX = 1.5;
 
 // One kill as the staff records keep it. `at` is when the bot got it, `map` as RCON names it, `cause` the game's tag.
 export type StaffKill = {
@@ -406,27 +412,45 @@ export const chanceOfAtLeast = (kills: number, headshots: number, share: number)
   return Math.min(1, total);
 };
 
-// How `weapons` compare with the server: `expected` is the headshots someone with the server's usual aim would get with
+// How `weapons` compare with the server: `expected` is the headshots someone with the server's usual aim, raised to their
+// own where their other days show better (see SKILL_MAX), would get with
 // the same kills by weapon, and `chance` the chance of getting as many headshots as they did, or more. `server` is
 // everyone's kills, and `own` the player's own, which are left out of it. Null while the others have too few kills.
-export type HeadshotOdds = { expected: number; chance: number };
+// `skill` is how far above the server's usual their own other days put them (1 to SKILL_MAX): `expected` and `chance`
+// already count it.
+export type HeadshotOdds = { expected: number; chance: number; skill: number };
 
 export const headshotOdds = (weapons: Record<string, WeaponCount>, server: Tally, own: Tally): HeadshotOdds | null => {
   const others = minus(server.all, own.all);
   if (others.kills < BASELINE_KILLS) return null;
   const usual = others.headshots / others.kills;
+  // What the server's other players get with a weapon.
+  const rate = (cause: string): number => {
+    const theirs = minus(server.byCause.get(cause) ?? NONE, own.byCause.get(cause));
+    return (theirs.headshots + WEAPON_PRIOR_KILLS * usual) / (theirs.kills + WEAPON_PRIOR_KILLS);
+  };
   let kills = 0;
   let headshots = 0;
   let expected = 0;
   for (const [cause, w] of Object.entries(weapons)) {
-    const theirs = minus(server.byCause.get(cause) ?? NONE, own.byCause.get(cause));
     kills += w.kills;
     headshots += w.headshots;
-    expected += (w.kills * (theirs.headshots + WEAPON_PRIOR_KILLS * usual)) / (theirs.kills + WEAPON_PRIOR_KILLS);
+    expected += w.kills * rate(cause);
   }
-  if (kills === 0) return { expected: 0, chance: 1 };
+  if (kills === 0) return { expected: 0, chance: 1, skill: 1 };
+  // Their other days: what they got with each weapon outside `weapons`, against what the server's usual would have got.
+  let pastHeadshots = 0;
+  let pastExpected = 0;
+  for (const [cause, mine] of own.byCause) {
+    const past = minus(mine, weapons[cause]);
+    if (past.kills <= 0) continue;
+    pastHeadshots += Math.max(past.headshots, 0);
+    pastExpected += past.kills * rate(cause);
+  }
+  const skill = Math.min(Math.max((pastHeadshots + SKILL_PRIOR) / (pastExpected + SKILL_PRIOR), 1), SKILL_MAX);
+  expected *= skill;
   // Each weapon's own share would make the chance a little smaller still, so this never overstates how unlikely it is.
-  return { expected, chance: chanceOfAtLeast(kills, headshots, expected / kills) };
+  return { expected, chance: chanceOfAtLeast(kills, headshots, expected / kills), skill };
 };
 
 export const flaggedDay = (kills: number, odds: HeadshotOdds | null): boolean =>
@@ -452,6 +476,8 @@ export type HeadshotRow = {
   // See HeadshotOdds; null while the server has too few kills to judge by.
   expected: number | null;
   chance: number | null;
+  // How far above the server's usual their other days put them, 1 to SKILL_MAX, or null while there is nothing to judge by.
+  skill: number | null;
   // Their days in the period with kills, how many were flagged (HEADSHOT_FLAG), and the latest that was ('2026-10-16'),
   // or null.
   days: number;
@@ -489,6 +515,7 @@ export const headshotRows = (period: KillDaySummary[], kept: KillDaySummary[]): 
           headshots,
           expected: odds === null ? null : round1(odds.expected),
           chance: odds?.chance ?? null,
+          skill: odds === null ? null : Math.round(odds.skill * 100) / 100,
           days: days.length,
           flaggedDays: flagged.length,
           lastFlaggedDay: flagged.sort().at(-1) ?? null,
