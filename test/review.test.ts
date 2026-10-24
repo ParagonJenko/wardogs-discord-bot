@@ -161,6 +161,8 @@ describe('buildReview', () => {
     ],
     kept: [...crowd('2026-10-06'), ...crowd('2026-10-07'), summary(ASH, '2026-10-07', 12, 10), summary(BO, '2026-10-07', 4, 1)],
     steam: [steam({}), steam({ vacBans: 1, lastBanAt: NOW - 10 * DAY, createdAt: NOW - 10 * DAY })],
+    shadow: [],
+    outcomes: [],
   });
 
   it('gives the marks the alerts use', () => {

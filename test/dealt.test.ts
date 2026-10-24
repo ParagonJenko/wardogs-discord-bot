@@ -72,4 +72,10 @@ describe('dealt with', () => {
     await expect(readDealtAction(request('not json'))).resolves.toBeNull();
     await expect(readDealtAction(request({ ...deal(VEX), padding: 'x'.repeat(2_000) }))).resolves.toBeNull();
   });
+
+  it('reads an outcome with a deal, and refuses one it does not know', async () => {
+    expect(await readDealtAction(request({ ...deal(VEX), outcome: 'cheating' }))).toMatchObject({ outcome: 'cheating' });
+    expect(await readDealtAction(request(deal(VEX)))).not.toHaveProperty('outcome');
+    expect(await readDealtAction(request({ ...deal(VEX), outcome: 'banned-for-fun' }))).toBeNull();
+  });
 });

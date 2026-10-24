@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OUTCOMES, type Outcome } from './autoflag.ts';
 import { readJsonBody } from './body.ts';
 
 // "Dealt with": a staff member looked at a player on the staff page's Queue (everyone the bot flagged in the period for
@@ -54,7 +55,16 @@ export const dealtLately = (raw: unknown, now: number): Record<string, Dealt> =>
 
 // What the staff page asks: to note that a player was dealt with, with what the Queue showed for them, or to undo it.
 export type DealtAction =
-  | { action: 'deal'; steamId: string; reasons: QueueReason[]; headshotDay: string | null; griefDay: string | null; steamScore: number | null }
+  | {
+      action: 'deal';
+      steamId: string;
+      reasons: QueueReason[];
+      headshotDay: string | null;
+      griefDay: string | null;
+      steamScore: number | null;
+      // What staff found, when they said: kept for good apart from this, see autoflag.ts.
+      outcome?: Outcome;
+    }
   | { action: 'undo'; steamId: string };
 
 const STEAM_ID = z.string().regex(/^\d{17}$/);
@@ -66,6 +76,7 @@ const DealtActionSchema = z.discriminatedUnion('action', [
     headshotDay: DAY.nullable(),
     griefDay: DAY.nullable(),
     steamScore: SCORE.nullable(),
+    outcome: z.enum(OUTCOMES).optional(),
   }),
   z.object({ action: z.literal('undo'), steamId: STEAM_ID }),
 ]);

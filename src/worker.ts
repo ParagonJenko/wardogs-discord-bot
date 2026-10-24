@@ -411,6 +411,17 @@ import {
   type PrivateProfiles,
 } from './privacy.ts';
 import { applyCheck, CHECKED_KEY, checkedToday, readCheckAction, type CheckAction, type Check } from './checked.ts';
+import {
+  addOutcome,
+  AUTO_RULES,
+  AUTO_SHADOW_KEY,
+  decide,
+  OUTCOMES_KEY,
+  parseOutcomes,
+  parseShadow,
+  recordShadow,
+  type DayEvidence,
+} from './autoflag.ts';
 import { applyDealt, DEALT_KEY, dealtLately, readDealtAction, type Dealt, type DealtAction } from './dealt.ts';
 import {
   linkSteam,
@@ -1230,6 +1241,7 @@ export class Watcher extends DurableObject<Env> {
     await this.updateMapVote(config, seen.snapshot);
     await this.steamChecking(() => this.checkSteam(seen.snapshot));
     await this.checkHeadshots(seen.snapshot);
+    await this.checkAutoFlags(seen.snapshot);
     await this.watchFeed(config, seen.snapshot);
 
     const { inviteCode } = config;
@@ -3035,6 +3047,64 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
+  // Shadow mode for automatic action on cheating (see autoflag.ts): players in game with a flagged day of headshots who
+  // the marks would have acted on, written down with why. It never acts, and AUTO_FLAGS "off" stops it. A failure never
+  // stops the rest of the check.
+  private async checkAutoFlags(snapshot: Snapshot | null): Promise<void> {
+    if (stringVars(this.env)['AUTO_FLAGS'] === 'off' || snapshot === null || snapshot.players.length === 0) return;
+    const now = Date.now();
+    const day = dayOf(now);
+    try {
+      const kept = this.keptKillDays(this.killSql(), now);
+      const names = new Map(snapshot.players.map((p) => [p.steamId, p.name]));
+      const today = headshotsOn(kept, day, names.keys());
+      const flagged = [...today].filter(([, d]) => d.flagged);
+      if (flagged.length === 0) return;
+      const ids = flagged.map(([steamId]) => steamId);
+      const evidence = (d: string, h: HeadshotDay): DayEvidence => ({ day: d, kills: h.kills, headshots: h.headshots, chance: h.chance, flagged: h.flagged });
+      const earlier = new Map<string, DayEvidence[]>();
+      for (let back = 1; back < AUTO_RULES.repeat.days; back++) {
+        const d = dayOf(now - back * DAY_MS);
+        for (const [steamId, h] of headshotsOn(kept, d, ids)) earlier.set(steamId, [...(earlier.get(steamId) ?? []), evidence(d, h)]);
+      }
+      const [staff, steam] = await Promise.all([this.staffSteam(), this.savedSteam(ids)]);
+      let shadow = parseShadow(await this.ctx.storage.get(AUTO_SHADOW_KEY));
+      let changed = false;
+      for (const [steamId, h] of flagged) {
+        // Staff are never acted on, in shadow or not.
+        if (staff.has(steamId) || h.chance === null) continue;
+        const check = steam.get(steamId) ?? null;
+        const decision = decide(evidence(day, h), earlier.get(steamId) ?? [], check === null ? [] : assess(check, now).flags);
+        if (decision === null) continue;
+        const entry = {
+          steamId,
+          name: names.get(steamId) || steamId,
+          day,
+          at: now,
+          tier: decision.tier,
+          rule: decision.rule,
+          kills: h.kills,
+          headshots: h.headshots,
+          chance: h.chance,
+          flaggedDays: decision.flaggedDays,
+        };
+        const next = recordShadow(shadow, entry);
+        if (next === null) continue;
+        shadow = next;
+        await this.countAlert(`autoTier${entry.tier}`, now);
+        changed = true;
+        console.info(
+          `Auto flag (shadow, tier ${entry.tier}, ${entry.rule}): ${JSON.stringify(entry.name)} (${steamId}): ${entry.headshots} headshots in ` +
+            `${entry.kills} kills, ${luckOdds(entry.chance)}, flagged on ${entry.flaggedDays} days`,
+        );
+      }
+      if (!changed) return;
+      await this.ctx.storage.put(AUTO_SHADOW_KEY, shadow);
+    } catch (error) {
+      console.error(`Auto flags failed: ${errorText(error)}`);
+    }
+  }
+
   // The kill feed going quiet while the server is live, and events arriving again after (see feedwatch.ts), to the
   // moderation log channel when FEED_ALERTS is on. Watched once the bot has had the feed, while KILL_FEED_TOKEN is set.
   // A failure never stops the rest of the check.
@@ -3076,7 +3146,7 @@ export class Watcher extends DurableObject<Env> {
     const config = loadConfig(stringVars(this.env));
     const griefKeys = Array.from({ length: days }, (_, i) => griefDayKey(now - (days - 1 - i) * DAY_MS));
     const [stored, recent] = await Promise.all([
-      this.ctx.storage.get([...griefKeys, ALERT_LOG_KEY, OUTAGE_LOG_KEY, 'state']),
+      this.ctx.storage.get([...griefKeys, ALERT_LOG_KEY, OUTAGE_LOG_KEY, AUTO_SHADOW_KEY, OUTCOMES_KEY, 'state']),
       this.recentDays(now),
     ]);
     const seen = steamPlayers(
@@ -3102,6 +3172,8 @@ export class Watcher extends DurableObject<Env> {
       grief: griefKeys.map((key) => parseGriefDay(stored.get(key))),
       kept: this.keptKillDays(this.killSql(), now),
       steam: checks === null ? null : seen.flatMap((steamId) => checks.get(steamId) ?? []),
+      shadow: parseShadow(stored.get(AUTO_SHADOW_KEY)),
+      outcomes: parseOutcomes(stored.get(OUTCOMES_KEY)),
     });
   }
 
@@ -4131,6 +4203,11 @@ export class Watcher extends DurableObject<Env> {
   async dealWith(action: DealtAction, user: { id: string; name: string }): Promise<{ dealt: Dealt | null }> {
     const next = applyDealt(await this.ctx.storage.get(DEALT_KEY), action, user, Date.now());
     await this.ctx.storage.put(DEALT_KEY, next);
+    if (action.action === 'deal' && action.outcome !== undefined) {
+      const now = Date.now();
+      const entry = { steamId: action.steamId, at: now, by: user.id, outcome: action.outcome, headshotDay: action.headshotDay };
+      await this.ctx.storage.put(OUTCOMES_KEY, addOutcome(parseOutcomes(await this.ctx.storage.get(OUTCOMES_KEY)), entry));
+    }
     return { dealt: next[action.steamId] ?? null };
   }
 
