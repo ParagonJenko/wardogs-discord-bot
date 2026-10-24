@@ -34,6 +34,7 @@ export const SEEDING = [
   '{needed} to go live. Every player counts.',
   "{needed} to go live. Green's got room, for once.",
   '{needed} to go live. Pick any team. Yes, even blue.',
+  '{needed} to go live. Blue got its nerf taken back, so no excuses.',
   '{needed} to go live. Active admins keep it fair here.',
   '{needed} to go live. Cheaters and trolls get dealt with here.',
   '{needed} to go live. Real admins who actually show up.',
@@ -41,9 +42,6 @@ export const SEEDING = [
   '{needed} to go live. The leaderboard covers 30 days, so anyone can top it.',
   '{needed} to go live. Every match is tracked: kills, deaths, wins.',
   '{needed} to go live. Your K/D, wins and play time are on your player page.',
-  "{needed} to go live. Season 2 is on and the leaderboard's wide open.",
-  '{needed} to go live. Season 1 in Review is out: who carried, who got roasted?',
-  '{needed} to go live. Did your seeding make the Season 1 slides?',
 ];
 
 // 10 minutes after the match goes live. These are the whole message, so each ends on one link to type: the website, a
@@ -59,8 +57,6 @@ export const TEN_MINUTES = [
   '10 minutes in. Cash is nice, the zone is nicer. Leaderboard: {site}',
   '10 minutes in. Play fair: the rules are in our Discord at {site}/discord',
   '10 minutes in. Watch the kill feed and streaks live: {site}/live',
-  '10 minutes in. Who carried Season 1? Who got roasted? Find out: {site}/season',
-  'Still alive? Your Season 1 in slides, roast included: {site}/season',
 ];
 
 // In place of the welcome, at most once a week, for a regular (5 or more matches in 30 days) who has not linked their
@@ -131,7 +127,8 @@ export const NEMESIS = [
 
 // The faction lines play on the community's running jokes: Lonestar (blue) is the default pick, full of new players,
 // spawning in the south between the other two in bright kit, and losing; Manticore (green) is where the sweats queue
-// to get in, and wins most; Valkyra (red) is level with green, pushes hard and farms cash.
+// to get in, and wins most; Valkyra (red) is level with green, pushes hard and farms cash. In Season 2 blue got a nerf,
+// then had it taken back.
 
 // A team reaches half the winning score. The bot puts "Halfway there!" before the line, and the seeding or Discord
 // call to action after it.
@@ -144,8 +141,8 @@ export const HALFWAY: Record<string, string[]> = {
     'Lonestar leads on {score}! Nightmare mode, and blue is winning it.',
     'Lonestar leads on {score}! Somebody finally parked the spawn truck.',
     'Lonestar leads on {score}! Two fronts, bright blue kit, still in front.',
+    'Lonestar leads on {score}! Nerfed, un-nerfed, and now in front.',
     'Lonestar leads on {score}! Reddit wrote blue off. Reddit was wrong.',
-    'Lonestar leads on {score}! New season, new blue. Who knew?',
   ],
   manticore: [
     'Manticore leads on {score}. Green winning? Shocking. Truly.',
@@ -154,9 +151,9 @@ export const HALFWAY: Record<string, string[]> = {
     "Manticore leads on {score}. Nobody saw them coming. That's the point.",
     'Manticore leads on {score}. Worth all that spamming of the join button.',
     'Manticore leads on {score}. Easy mode, played as intended.',
+    'Manticore leads on {score}. Blue lost its nerf. Green lost nothing.',
     'Manticore leads on {score}. Blends into every bush, beats every team.',
     'Manticore leads on {score}. Even the devs say green wins most of the time.',
-    'Manticore leads on {score}. New season, same green.',
   ],
   valkyra: [
     'Valkyra leads on {score}. Not my points, OUR points, comrade.',
@@ -165,9 +162,9 @@ export const HALFWAY: Record<string, string[]> = {
     'Valkyra leads on {score}. Red is looking very red today.',
     "Valkyra leads on {score}. Didn't get green? Red's doing just fine, comrade.",
     'Valkyra leads on {score}. Normal mode, abnormal results.',
+    'Valkyra leads on {score}. Blue got un-nerfed. Red got on with it, comrade.',
     'Valkyra leads on {score}. Somebody stopped farming cash and took the zone.',
     'Valkyra leads on {score}. Dark armour: hard to spot, harder to stop.',
-    'Valkyra leads on {score}. A new season for the motherland, comrade.',
   ],
 };
 
@@ -178,7 +175,6 @@ export const HALFWAY_LEVEL = [
   'Halfway there and dead level. Somebody do something.',
   "Halfway there and level. Nobody's on easy mode this match.",
   'Halfway there and level. Blue, this is your moment.',
-  'Halfway there and level. Somebody give Season 2 a winner.',
 ];
 
 // The first team to reach 90% of the winning score. The bot puts the leaderboard call to action after the line.
@@ -192,7 +188,7 @@ export const NEARLY: Record<string, string[]> = {
     'Lonestar has {score}! The devs said blue gets destroyed. Not this match.',
     'Lonestar has {score}! Fighting from the south on two fronts, and nearly there.',
     'Lonestar has {score}! Bright blue and nearly winning. Who needs camo?',
-    'Lonestar has {score}! Season 2 blue is built different.',
+    'Lonestar has {score}! The devs nerfed blue, then took it back. Fair enough.',
   ],
   manticore: [
     'Manticore has {score}. Green about to win again. Groundbreaking.',
@@ -203,7 +199,7 @@ export const NEARLY: Record<string, string[]> = {
     'Manticore has {score}. Towers taken, FOBs up, sweat everywhere.',
     'Manticore has {score}. Can somebody else have a go on green next match?',
     'Manticore has {score}. The green queue was worth it, apparently.',
-    'Manticore has {score}. Season 1 in Review called it. Season 2 agrees.',
+    "Manticore has {score}. Blue got its nerf taken back. Didn't help.",
   ],
   valkyra: [
     'Valkyra has {score}! Victory for the motherland is in sight, comrades.',
@@ -214,7 +210,7 @@ export const NEARLY: Record<string, string[]> = {
     'Valkyra has {score}! Fairly even with green, said the devs. Red disagrees.',
     'Valkyra has {score}! Less cash farming, more capping. Nearly there, comrades.',
     'Valkyra has {score}! Pushing deep and, for once, playing the objective.',
-    'Valkyra has {score}! Glory for the motherland, and a fine start to Season 2.',
+    'Valkyra has {score}! Blue got un-nerfed. The motherland was not consulted.',
   ],
 };
 

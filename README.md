@@ -1972,11 +1972,6 @@ leaderboard, the Discord and seeding:
   90 points a list for each faction (🤠 Lonestar, 🦂 Manticore, 🐻 Valkyra), plus lines for level scores and for any
   other faction (for halfway and 90 points, from the leading faction's list). Staff change them on the staff page's
   [Lines tab](#lines-tab). `{team}`, `{score}` and `{site}` are filled in.
-- A few lines in the seeding and 10-minute lists point players at Season 1's Season in Review (the
-  [season roundup](#season-roundup), such as "10 minutes in. Who carried Season 1? Who got roasted? Find out:
-  gaminginit.com/season"), and a few in the halfway and 90-point lists mention Season 2.
-  They go out at the same times as the rest, picked at random like any other line. A list staff replaced on the Lines
-  tab keeps staff's lines, so it has none of them.
 - The halfway and 90-point messages name only the team in front. Factions are matched however the server spells them
   ("LONESTAR", "Lone Star").
 - Each goes out once per match, and at most one per check (a minute), so they never arrive in a burst. The 90-point
