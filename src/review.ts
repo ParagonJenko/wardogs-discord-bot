@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AlertRules, QuietHours } from './alerts.ts';
 import { AUTO_RULES, summariseShadow, type OutcomeEntry, type ShadowEntry } from './autoflag.ts';
 import { dayFlags, FLAGS, vehicleDeath, type Flag, type GriefDay, type VehicleDeath } from './griefing.ts';
-import { flaggedDay, HEADSHOT_FLAG, headshotOdds, tally, type KillDaySummary } from './killfeed.ts';
+import { flaggedDay, HEADSHOT_FLAG, headshotOdds, SKILL_MAX, tally, type KillDaySummary } from './killfeed.ts';
 import {
   BACK_SHARE,
   CRASH_CONFIRM_MS,
@@ -228,7 +228,7 @@ export const buildReview = (s: ReviewSources) => {
         giveUpMinutes: minutes(GIVE_UP_MS),
       },
       grief: FLAGS,
-      headshots: HEADSHOT_FLAG,
+      headshots: { ...HEADSHOT_FLAG, skillMax: SKILL_MAX },
       steam: RISK,
       autoFlags: AUTO_RULES,
       posts: s.posts,

@@ -1121,6 +1121,13 @@ How headshots are judged:
   does not decide. Added up over a player's kills by weapon, that is how many headshots a player with the server's
   usual aim would get: `expected`. A sniper rifle gets more headshots than a machine gun, so snipers are not flagged
   for sniping.
+- **Their own history.** A player who always gets a lot of headshots is not flagged for it. Their other days in the
+  last 30, with the same weapons, show how far above the server's usual they run (headshots over headshots expected,
+  with 30 headshots of the server's usual added so a few kills do not decide): `skill`. Their `expected` for the day is
+  raised by it, so a heavy player at a steady 56% needs a jump to be flagged, not 56% again. It never goes below 1, so
+  a player who aims worse than usual is not judged more harshly, and never above **1.5** (`SKILL_MAX`): a cheater
+  with a long history of it is still flagged by a day well past what any skill explains. A player with no other days
+  is judged against the server alone, and so is the 30-day view, which has no days left over.
 - **Chance by luck** (`chance`): how often a player with that usual aim would get at least as many headshots in as many
   kills. It treats every kill as having the player's average usual share, which never makes it look less likely than
   it is.
@@ -1393,7 +1400,8 @@ that is what the outcomes below are for.
 
 - Permanent bans stay with staff. A Steam account's risk is never enough on its own: it only lowers the mark for a
   headshot day, as above.
-- **Staff are never judged.** Each player is written down once a day per tier.
+- **Staff are never judged.** Those who linked their Steam account are left out of this log and of the headshot posts in
+  the moderation log (the staff page's Queue hides them too). Each player is written down once a day per tier.
 - **The shadow log** (`autoShadow`, 60 days, the newest 300) has the player, day, tier, rule, kills, headshots, chance by
   luck and flagged days. Each is also logged (`Auto flag (shadow, tier 1, strong-day): …`) and counted in the alert
   review's `alerts` as `autoTier1` and `autoTier2`.

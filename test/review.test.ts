@@ -176,7 +176,7 @@ describe('buildReview', () => {
       quietHours: { start: 21, end: 6, timeZone: 'Europe/London' },
     });
     expect(review.thresholds.grief).toEqual({ teamKills: 4, sameTeammate: 3, vehicleSuicides: 4, suicides: 10 });
-    expect(review.thresholds.headshots).toEqual({ kills: 10, odds: 1_000 });
+    expect(review.thresholds.headshots).toEqual({ kills: 10, odds: 1_000, skillMax: 1.5 });
   });
 
   it('counts what was posted in the period', () => {

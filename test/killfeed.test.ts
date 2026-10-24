@@ -15,6 +15,7 @@ import {
   firstKillDay,
   flaggedDay,
   headshotOdds,
+  SKILL_MAX,
   headshotAlertsDue,
   headshotRows,
   headshotsOn,
@@ -404,15 +405,58 @@ describe('headshotOdds', () => {
     expect(odds?.expected).toBeCloseTo((2 + 20 * (252 / 1002)) / 22, 6);
   });
 
+  describe('their own history', () => {
+    // The others get 25% with the AK. The player's other days: 500 kills, `past` headshots. Today: 40 kills, 22 headshots.
+    const today = { [AK]: { kills: 40, headshots: 22 } };
+    const odds = (past: number | null) => {
+      const mine = past === null ? today : { [AK]: { kills: 540, headshots: past + 22 } };
+      const own = tally([{ weapons: mine }]);
+      const server = tally([{ weapons: { [AK]: { kills: 1000, headshots: 250 } } }, { weapons: mine }]);
+      return headshotOdds(today, server, own)!;
+    };
+
+    it('does not flag a heavy player for the aim they always have', () => {
+      // 40% over 500 kills: the same day is 1 in 10,000 for a stranger and ordinary for them.
+      expect(odds(null).chance).toBeLessThan(0.001);
+      expect(odds(null).skill).toBe(1);
+      expect(odds(200).skill).toBeGreaterThan(1.4);
+      expect(odds(200).chance).toBeGreaterThan(0.001);
+    });
+
+    it('still flags a jump well above their own history', () => {
+      const jump = { [AK]: { kills: 40, headshots: 36 } };
+      const mine = { [AK]: { kills: 540, headshots: 236 } };
+      const server = tally([{ weapons: { [AK]: { kills: 1000, headshots: 250 } } }, { weapons: mine }]);
+      expect(headshotOdds(jump, server, tally([{ weapons: mine }]))!.chance).toBeLessThan(1e-6);
+    });
+
+    it('never lets a history raise their usual past SKILL_MAX', () => {
+      expect(odds(450).skill).toBe(SKILL_MAX);
+    });
+
+    it('does not judge a player more harshly for aiming worse than usual', () => {
+      expect(odds(60).skill).toBe(1);
+      expect(odds(60).chance).toBeCloseTo(odds(null).chance, 12);
+    });
+
+    it('barely moves for a few kills', () => {
+      const few = { [AK]: { kills: 10, headshots: 8 } };
+      const own = tally([{ weapons: { [AK]: { kills: 50, headshots: 30 } } }]);
+      const server = tally([{ weapons: { [AK]: { kills: 1000, headshots: 250 } } }, { weapons: { [AK]: { kills: 50, headshots: 30 } } }]);
+      expect(headshotOdds({ [AK]: { kills: 40, headshots: 22 } }, server, own)!.skill).toBeLessThan(1.3);
+      expect(headshotOdds(few, server, own)!.skill).toBeGreaterThan(1);
+    });
+  });
+
   it('says nothing until the server has enough kills', () => {
     const quiet = tally([{ weapons: { [AK]: { kills: 99, headshots: 20 } } }]);
     expect(headshotOdds({ [AK]: { kills: 30, headshots: 30 } }, quiet, none)).toBeNull();
   });
 
   it('flags a day with enough kills and less than one chance in a thousand', () => {
-    expect(flaggedDay(10, { expected: 2, chance: 0.0009 })).toBe(true);
-    expect(flaggedDay(9, { expected: 2, chance: 0.0000001 })).toBe(false);
-    expect(flaggedDay(30, { expected: 2, chance: 0.0011 })).toBe(false);
+    expect(flaggedDay(10, { expected: 2, chance: 0.0009, skill: 1 })).toBe(true);
+    expect(flaggedDay(9, { expected: 2, chance: 0.0000001, skill: 1 })).toBe(false);
+    expect(flaggedDay(30, { expected: 2, chance: 0.0011, skill: 1 })).toBe(false);
     expect(flaggedDay(30, null)).toBe(false);
   });
 });
