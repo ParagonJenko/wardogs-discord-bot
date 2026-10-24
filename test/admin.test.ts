@@ -229,14 +229,31 @@ describe('buildAdminOverview', () => {
 
     expect(overview.reserved).toEqual({
       players: [
-        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY }, staff: null },
-        { player: { steamId: CY, name: 'Cy' }, bot: null, staff: { since: NOW - 2 * DAY } },
-        { player: { steamId: DEE, name: 'Dee' }, bot: null, staff: null },
+        { player: { steamId: ASH, name: 'Ash', id: 'a00000000001' }, bot: { since: NOW - DAY, until: NOW + 6 * DAY }, staff: null, reason: 'Earned by seeding' },
+        { player: { steamId: CY, name: 'Cy' }, bot: null, staff: { since: NOW - 2 * DAY }, reason: 'Staff spot: linked their Steam account' },
+        { player: { steamId: DEE, name: 'Dee' }, bot: null, staff: null, reason: 'Added by hand in ServerSettings.ini' },
       ],
       maxSlots: 2,
     });
     expect(buildAdminOverview(sources()).reserved).toBeNull();
     expect(adminSteamIds([], new Map(), null, {}, [DEE])).toEqual([DEE]);
+  });
+
+  it('gives staff\'s reason for a slot, even when the bot later awarded a streak breaker or the grant is permanent', () => {
+    const log = (by: string, reason: string, at: number): ModEntry => ({ action: 'vip-add', at, by, reason });
+    const grant = (source: 'staff' | 'bounty') => ({ name: 'x', grantedAt: NOW - DAY, expiresAt: NOW + DAY, source });
+    const overview = buildAdminOverview(
+      sources({
+        reserved: { ids: [ASH, CY, DEE], maxSlots: null },
+        vip: { granted: { [ASH]: grant('staff'), [CY]: grant('bounty') }, checkedAt: 0, revoked: {}, staffSpots: {} },
+        modLogs: new Map([
+          [ASH, [log('1', 'Friend', NOW - 2 * DAY), log('bot', 'Ended a streak', NOW - 1)]],
+          [CY, [log('bot', 'Ended a streak', NOW - 1)]],
+          [DEE, [log('1', 'Paid: monthly', NOW - 2 * DAY)]],
+        ]),
+      }),
+    );
+    expect(overview.reserved?.players.map((p) => p.reason)).toEqual(['Friend', 'Ended a long kill streak', 'Paid: monthly']);
   });
 
   it('lists the staff who linked their Steam account, by name, and whether the bot has seen it in game', () => {
