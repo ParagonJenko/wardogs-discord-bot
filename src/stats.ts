@@ -42,7 +42,9 @@ export type Thresholds = { seeding: number; live: number; busy: number };
 // back to `back`. Until they are back, `until` is CRASH_MS after the fall, so a server nobody comes back to counts again.
 export type Crash = { from: number; until: number; back: number };
 
-export type RecentMatch = MatchSummary & { endedAt: number };
+// `zone` is the name of the circles (control-zone layout) the match was played on, when it was known. Missing from matches
+// recorded before circles were kept, and for a map played with its own layout.
+export type RecentMatch = MatchSummary & { endedAt: number; zone?: string };
 
 export type CurrentMatch = {
   map: string;
@@ -146,6 +148,7 @@ const SiteStatsSchema = z.object({
     z.object({
       map: z.string(),
       endedAt: z.number(),
+      zone: z.string().optional(),
       durationMs: z.number(),
       peakPlayers: z.number(),
       factionScores: Scores,
@@ -332,9 +335,9 @@ export const recordObservation = (
 };
 
 // Newest first.
-export const recordMatch = (stats: SiteStats, summary: MatchSummary, at: number): SiteStats => ({
+export const recordMatch = (stats: SiteStats, summary: MatchSummary, at: number, zone?: string): SiteStats => ({
   ...stats,
-  matches: [{ ...summary, map: mapName(summary.map), endedAt: at }, ...stats.matches].slice(0, MATCHES_KEPT),
+  matches: [{ ...summary, map: mapName(summary.map), endedAt: at, ...(zone ? { zone } : {}) }, ...stats.matches].slice(0, MATCHES_KEPT),
 });
 
 // Takes a match off the recent matches, as when it was recorded by mistake. A match is picked by when it ended.
