@@ -3435,7 +3435,7 @@ export class Watcher extends DurableObject<Env> {
     if (steamId === undefined || hidden.has(steamId)) return null;
     const [matches, stored, staff] = await Promise.all([
       this.matchRecords(now),
-      this.ctx.storage.get(['state', 'vip', 'online', 'killFeedSince', playerWeaponsKey(steamId)]),
+      this.ctx.storage.get(['state', 'vip', 'bans', 'serverBans', 'online', 'killFeedSince', playerWeaponsKey(steamId)]),
       this.staffSteam(),
     ]);
     const snapshot = this.onlineNow(now, stored.get('online'));
@@ -3452,6 +3452,7 @@ export class Watcher extends DurableObject<Env> {
           };
     const config = loadConfig(stringVars(this.env));
     const since = stored.get('killFeedSince');
+    const serverBans = parseServerBans(stored.get('serverBans'));
     return buildProfile({
       steamId,
       id,
@@ -3461,6 +3462,9 @@ export class Watcher extends DurableObject<Env> {
       rankDays: LEADERBOARD_DAYS,
       online,
       vip: parseVipState(stored.get('vip')).granted[steamId] ?? null,
+      ban: parseBanBook(stored.get('bans'))[steamId] ?? null,
+      // Undefined before the bot has read the server's ban list.
+      serverBan: serverBans === null ? undefined : (serverBans[steamId] ?? null),
       // Staff cannot earn seeder VIP, so their page does not count them towards it.
       rule: staff.has(steamId) ? null : config.vip,
       weapons:
