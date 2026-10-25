@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { VipRule } from './config.ts';
 import { factionKey } from './discord.ts';
 import { ranks, totals, type MatchRecord, type PlayerDay, type PlayerTotals, type Ranks } from './players.ts';
+import { isBotBan, type BanRecord, type ServerBan } from './moderation.ts';
 import type { PublicIdOf } from './privacy.ts';
 import type { FactionScore, Player } from './rcon.ts';
 import { byKills } from './tracking.ts';
@@ -85,6 +86,8 @@ export type ActiveDay = Omit<PlayerTotals, 'name'> & { day: string };
 // What they are doing in the match on now. Kills and deaths are their totals for the match so far.
 export type OnlineNow = { map: string; faction: string | null; kills: number; deaths: number };
 
+export type PublicBan = { reason: string | null; until: number | null };
+
 export type PlayerProfile = {
   generatedAt: number;
   id: string;
@@ -99,6 +102,9 @@ export type PlayerProfile = {
   online: OnlineNow | null;
   // A whitelist slot from the bot, earned by seeding or given by staff, and until when.
   vip: { until: number } | null;
+  // Their ban and why, null when they are not banned. `until` is when a timed ban ends, null for good or when the server
+  // does not say. `reason` is null when the server's ban has none. Who banned them is left out: the page is public.
+  ban: PublicBan | null;
   // How close they are to earning seeder VIP: seed days in the bot's window. Null when automatic VIP is off, and for
   // staff, who cannot earn it.
   seeding: { rule: VipRule; seedDays: number } | null;
@@ -149,12 +155,26 @@ export type ProfileSources = {
   rankDays: number;
   online: OnlineNow | null;
   vip: VipGrant | null;
+  // The bot's ban on them, and the server's ban on them: null for none, undefined when the ban list could not be read.
+  ban: BanRecord | null;
+  serverBan: ServerBan | null | undefined;
   rule: VipRule | null;
   weapons: PlayerWeaponsPage | null;
 };
 
+// Whether and why they are banned, as far as can be told: the server's ban list is the truth when it was read (as in
+// playerrecord.ts). A ban of the bot's the server does not have yet is waiting for them to join, and still counts.
+export const publicBan = (ban: BanRecord | null, serverBan: ServerBan | null | undefined, now: number): PublicBan | null => {
+  const bots = (b: BanRecord): PublicBan | null => (b.until !== null && b.until <= now ? null : { reason: b.reason, until: b.until });
+  if (ban?.waiting && serverBan === null) return bots(ban);
+  if (serverBan === null) return null;
+  if (serverBan === undefined) return ban === null ? null : bots(ban);
+  if (ban !== null && isBotBan(serverBan.reason, ban)) return bots(ban);
+  return { reason: serverBan.reason || null, until: null };
+};
+
 // Null when the bot has nothing on them in those days.
-export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online, vip, rule, weapons }: ProfileSources): PlayerProfile | null => {
+export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online, vip, ban, serverBan, rule, weapons }: ProfileSources): PlayerProfile | null => {
   const mine = (d: DayRecords): PlayerTotals | undefined => d.players[steamId];
   // Everyone in a match is credited with it on the day it ended, so anyone with a match has a day too.
   const name = days.map(mine).findLast((t) => t !== undefined)?.name;
@@ -179,6 +199,7 @@ export const buildProfile = ({ steamId, id, now, days, matches, rankDays, online
     ranks: ranks(totals(days.slice(-rankDays).map((d) => d.players)), steamId, rankDays),
     online,
     vip: vip === null || vip.expiresAt <= now ? null : { until: vip.expiresAt },
+    ban: publicBan(ban, serverBan, now),
     seeding: rule === null ? null : { rule, seedDays: seedDays(rule.windowDays) },
     weapons,
   };

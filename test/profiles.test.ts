@@ -10,6 +10,7 @@ import {
   PLAYER_ID,
   playerMatch,
   PROFILE_MATCHES,
+  publicBan,
   publicId,
   type DayRecords,
   type ProfileSources,
@@ -158,6 +159,8 @@ describe('buildProfile', () => {
     rankDays: 30,
     online: null,
     vip: null,
+    ban: null,
+    serverBan: null,
     rule,
     weapons: null,
     ...overrides,
@@ -251,5 +254,34 @@ describe('directory', () => {
     expect(directory(days, (steamId) => (steamId === ASH ? null : ids[steamId]), new Set([ASH]), NOON).players).toEqual([
       { id: 'b2b2b2b2b2b2', name: 'Bo', minutes: 10, lastSeen: '2026-09-30', online: false },
     ]);
+  });
+});
+
+describe('publicBan', () => {
+  const ours = { name: 'Ash', until: null, reason: 'Teamkilling', serverReason: 'Teamkilling (bot)', by: '123', at: NOON - DAY };
+
+  it('is null when the server has no ban', () => {
+    expect(publicBan(null, null, NOON)).toBeNull();
+    expect(publicBan(ours, null, NOON)).toBeNull();
+  });
+
+  it("gives the bot's reason and end, without who banned them", () => {
+    const until = NOON + DAY;
+    expect(publicBan({ ...ours, until }, { reason: 'Teamkilling (bot)', bannedBy: null }, NOON)).toEqual({ reason: 'Teamkilling', until });
+  });
+
+  it('gives the server reason for a ban made outside the bot', () => {
+    expect(publicBan(null, { reason: 'Cheating', bannedBy: 'Admin' }, NOON)).toEqual({ reason: 'Cheating', until: null });
+    expect(publicBan(null, { reason: null, bannedBy: null }, NOON)).toEqual({ reason: null, until: null });
+  });
+
+  it("counts a bot ban the server does not have yet, unless it has ended", () => {
+    expect(publicBan({ ...ours, waiting: true }, null, NOON)).toEqual({ reason: 'Teamkilling', until: null });
+    expect(publicBan({ ...ours, waiting: true, until: NOON - 1 }, null, NOON)).toBeNull();
+  });
+
+  it("falls back on the bot's record when the server's list could not be read", () => {
+    expect(publicBan(ours, undefined, NOON)).toEqual({ reason: 'Teamkilling', until: null });
+    expect(publicBan(null, undefined, NOON)).toBeNull();
   });
 });

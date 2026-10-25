@@ -1509,7 +1509,7 @@ Two more public endpoints let a website show every player's stats, not only the 
 | Endpoint                 | What                                                                                   |
 | ------------------------ | -------------------------------------------------------------------------------------- |
 | `GET /api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now. Not [private profiles](#private-profiles) |
-| `GET /api/player?id=<id>` | One player's page, or 404 for an id nobody seen in the last 90 days has, or a private profile's |
+| `GET /api/player?id=<id>` | One player's page (including `ban`: `reason` and `until`, null when not banned; never who banned them), or 404 for an id nobody seen in the last 90 days has, or a private profile's |
 
 A player page has:
 
