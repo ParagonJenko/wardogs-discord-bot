@@ -5,6 +5,7 @@ import { isQuiet, withSeedCall } from './alerts.ts';
 import { loadConfig } from './config.ts';
 import {
   castVote,
+  inGameProblem,
   chooseConditions,
   votePool,
   chooseWinner,
@@ -1718,6 +1719,14 @@ export class Watcher extends DurableObject<Env> {
       const vote = parseMapVote(await this.ctx.storage.get(MAP_VOTE_KEY));
       if (config.mapVote === null || vote === null || vote.id !== press.poll) {
         return { update: null, reply: 'That vote is over. A new one opens with the next match.' };
+      }
+      if (config.mapVote.inGame) {
+        // Only someone on the server now: their Discord account's linked Steam account must be among the players at the last check.
+        const stored = await this.ctx.storage.get(['online', accountKey(press.userId)]);
+        const steamId = parseAccount(stored.get(accountKey(press.userId)))?.steamId ?? null;
+        const online = this.onlineNow(now, stored.get('online'));
+        const problem = inGameProblem(steamId, online === null ? null : new Set(online.players.map((p) => p.steamId)));
+        if (problem !== null) return { update: null, reply: problem };
       }
       const cast = castVote(
         vote,

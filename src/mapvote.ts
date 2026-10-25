@@ -43,6 +43,17 @@ export type MapVoteRule = {
   botToken: string | undefined;
   // How the winner is put on the server (see MAP_VOTE_STAGING in config.ts).
   staging: 'rotation' | 'queue';
+  // Whether only a player who is on the server right now can vote (see MAP_VOTE_IN_GAME in config.ts).
+  inGame: boolean;
+};
+
+// Why someone cannot vote because they are not in the game, in words for them, or null when they can. `steamId` is the Steam account
+// linked to their Discord account (null when none is), `online` the Steam IDs of the players on the server now, or null when the
+// server cannot be reached (nobody can be shown to be in game then).
+export const inGameProblem = (steamId: string | null, online: ReadonlySet<string> | null): string | null => {
+  if (steamId === null) return 'Only players in the game can vote. Link your Steam account on the website, then join the server.';
+  if (online === null || !online.has(steamId)) return 'Only players in the game can vote. Join the server, then vote.';
+  return null;
 };
 
 export type VoteOption = { map: string; name: string };

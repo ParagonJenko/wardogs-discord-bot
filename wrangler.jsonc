@@ -121,6 +121,9 @@
     // staging with POST /v1/match/map mid-match (a team on 95) was followed 1.3 seconds later by the match ending at 96 of 100.
     // See the README, "Next-map vote".
     "MAP_VOTE_STAGING": "rotation",
+    // Only players on the server right now can vote: their Discord account needs a linked Steam account (linked on the website) that is
+    // in the game. "on" or "off".
+    "MAP_VOTE_IN_GAME": "on",
     // The channel the vote is posted in (the bot needs View Channel, Send Messages and Embed Links there).
     "DISCORD_VOTE_CHANNEL_ID": "1561043064800280596"
   }

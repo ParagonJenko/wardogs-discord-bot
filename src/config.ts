@@ -167,6 +167,9 @@ const EnvSchema = z
     // the vote closes, and writes the rotation back once it is playing; "queue" stages it (POST /v1/match/map) once the match is
     // over, which the server travels to when the end screen finishes.
     MAP_VOTE_STAGING: z.enum(['rotation', 'queue']).default('rotation'),
+    // Whether only players on the server right now can vote: their Discord account must have a linked Steam account (on the
+    // website) that is in the game. "on" or "off".
+    MAP_VOTE_IN_GAME: z.enum(['on', 'off']).default('off'),
   })
   .refine((env) => env.SEEDING_THRESHOLD < env.LIVE_THRESHOLD, {
     path: ['SEEDING_THRESHOLD'],
@@ -334,7 +337,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     rotationHour: e.ROTATION_HOUR,
     mapVote:
       e.MAP_VOTE === 'on'
-        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, closePercent: e.MAP_VOTE_CLOSE_PERCENT, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN, staging: e.MAP_VOTE_STAGING }
+        ? { options: e.MAP_VOTE_OPTIONS, minutes: e.MAP_VOTE_MINUTES, closePercent: e.MAP_VOTE_CLOSE_PERCENT, channelId: e.DISCORD_VOTE_CHANNEL_ID, botToken: e.DISCORD_BOT_TOKEN, staging: e.MAP_VOTE_STAGING, inGame: e.MAP_VOTE_IN_GAME === 'on' }
         : null,
   };
 };
