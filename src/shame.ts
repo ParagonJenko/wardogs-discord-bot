@@ -3,7 +3,7 @@ import type { ModEntry } from './moderation.ts';
 
 // The hall of shame on the website: GET /api/shame. Who has been warned most for team killing, and who has been kicked
 // or banned. It is public, so it only has what the page needs to be funny and fair: names, counts, dates and what came
-// of it. Never the reasons, who did it, or a Steam ID, and nobody who is staff or has a private profile (see privacy.ts).
+// of it. Never the reasons, who did it, or a Steam ID, and nobody who has a private profile (see privacy.ts). Staff are on it like anyone else.
 // It reads the moderation log, which keeps each player's latest 50 entries, so a count never goes past that.
 
 // The bot warns whoever team kills (see warnTeamKillers), and staff warn by hand: both count when the warning is about
@@ -49,7 +49,7 @@ export type ShameSources = {
   now: number;
   // Each player's moderation log by Steam ID, oldest entry first.
   logs: ReadonlyMap<string, ModEntry[]>;
-  // Staff and private profiles: left out of everything.
+  // Private profiles: left out of everything.
   hidden: ReadonlySet<string>;
   nameOf: (steamId: string) => string | undefined;
   // The id of their player page, for those who have one.

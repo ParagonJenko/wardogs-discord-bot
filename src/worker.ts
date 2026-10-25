@@ -4147,7 +4147,7 @@ export class Watcher extends DurableObject<Env> {
   // The hall of shame: who has been warned most for team killing, and who has been kicked or banned (see shame.ts).
   async shame(): Promise<Shame> {
     const now = Date.now();
-    const [kept, hidden, staff, logs] = await Promise.all([this.recentDays(now), this.privateSteam(), this.staffSteam(), this.ctx.storage.list({ prefix: 'mod:' })]);
+    const [kept, hidden, logs] = await Promise.all([this.recentDays(now), this.privateSteam(), this.ctx.storage.list({ prefix: 'mod:' })]);
     const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
     // Names as their player records last called them; only those seen lately have a player page.
     const names = new Map<string, string>();
@@ -4156,7 +4156,7 @@ export class Watcher extends DurableObject<Env> {
     return buildShame({
       now,
       logs: modLogs,
-      hidden: new Set([...hidden, ...staff]),
+      hidden,
       nameOf: (steamId) => names.get(steamId),
       idOf: (steamId) => (names.has(steamId) ? ids.get(steamId) : undefined),
     });
