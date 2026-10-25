@@ -283,7 +283,7 @@ describe('welcomeMessage', () => {
 
   it('says their name and the basic rules, then the Discord and the website', () => {
     expect(welcomeMessage(both, first, undefined, {}, ash)).toBe(
-      'Welcome, Ash! Play fair: no cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide. ' +
+      'Welcome, Ash! Play fair: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide. ' +
         'Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
     );
   });
@@ -299,7 +299,7 @@ describe('welcomeMessage', () => {
 
     expect(pick.list).toBe('welcomeBack');
     expect(pick.text).toBe(
-      'Welcome back, Ash! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, listen to admins. ' +
+      'Welcome back, Ash! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, no GLs, no crates in HQ. ' +
         'Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
     );
   });

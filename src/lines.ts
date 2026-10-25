@@ -12,17 +12,17 @@
 // A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
 // The bot puts the Discord and the website after the line.
 export const WELCOME = [
-  'Welcome, {name}! Play fair: no cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide.',
-  'Welcome in, {name}! House rules: no cheats, exploits, TKs, dropping crates in HQ, griefing, racism or abuse. Listen to admins.',
-  'Boots on the ground, {name}! No cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide.',
+  'Welcome, {name}! Play fair: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide.',
+  'Welcome in, {name}! Rules: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism, abuse. Listen to admins.',
+  'Boots on the ground, {name}! No cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide.',
 ];
 
 // The welcome for a player on the website's leaderboard (the top 10 of any board over 30 days), in place of the one above.
 // {rank} is their best place, such as "3rd for kills". The bot puts the Discord and the website after the line.
 export const WELCOME_BACK = [
-  'Welcome back, {name}! {rank} on the leaderboard. Defend it. No cheats, no TKs, listen to admins.',
-  '{name} is back! {rank} on the leaderboard. Keep it clean: no cheats, no TKs, listen to admins.',
-  "Welcome back, {name}. You're {rank} and everyone's gunning for your spot. No cheats, no TKs.",
+  'Welcome back, {name}! {rank} on the leaderboard. Defend it. No cheats, no TKs, no GLs, no crates in HQ.',
+  '{name} is back! {rank} on the leaderboard. Keep it clean: no cheats, no TKs, no GLs, no crates in HQ.',
+  "Welcome back, {name}. You're {rank}, so everyone's gunning for you. No cheats, no TKs, no GLs, no crates in HQ.",
 ];
 
 // Every few minutes while the server seeds. The bot puts what seeding earns after the line. The ones that say why to
@@ -59,6 +59,8 @@ export const TEN_MINUTES = [
   'Still spamming the green join button? We started 10 minutes ago. Stats: {site}',
   '10 minutes in. Cash is nice, the zone is nicer. Leaderboard: {site}',
   '10 minutes in. Play fair: the rules are in our Discord at {site}/discord',
+  '10 minutes in. No grenade launchers and no crates in HQ. Rules: {site}/discord',
+  'Reminder: no GLs, no crates in HQ. Admins are watching. Rules: {site}/discord',
   '10 minutes in. Watch the kill feed and streaks live: {site}/live',
   '10 minutes in. Season 2 stats are live. See where you rank: {site}',
   'Still alive? Your Season 2 K/D, wins and play time: {site}',

@@ -1789,13 +1789,13 @@ The server is told in game too (`BOUNTY_ANNOUNCE`, default `on`, `off` for silen
 Each player who joins gets a private message in game (like `/warn`, only they see it) 2 minutes after the bot sees
 them join (`WELCOME_MESSAGE_MINUTES`), by name, with the basic rules and where the Discord and the website are:
 
-> Welcome, Ghost! Play fair: no cheats, exploits, team kills, dropping crates in HQ, griefing, racism or abuse. Admins decide.
+> Welcome, Ghost! Play fair: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide.
 > Discord: gaminginit.com/discord | Stats: gaminginit.com
 
 A player on the website's leaderboard (the top 10 of any board over its 30 days) is welcomed back with their best place
 instead (Cloudflare only):
 
-> Welcome back, Ghost! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, listen to admins.
+> Welcome back, Ghost! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, no GLs, no crates in HQ.
 > Discord: gaminginit.com/discord | Stats: gaminginit.com
 
 - The bot sees joins at its check each minute, so the welcome arrives 2 to 3 minutes after the player joins.
