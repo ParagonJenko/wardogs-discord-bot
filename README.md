@@ -695,6 +695,10 @@ Set up (Cloudflare):
    This is the same optional secret the staff page uses to name staff. A webhook can't carry buttons, so posting the vote
    needs the bot itself.
 
+With `MAP_VOTE_IN_GAME` set to `on` (default `off`), only players on the server right now can vote, in Discord or on the website:
+the voter's Discord account must have a Steam account linked (on the website) that was among the players at the bot's last check. Anyone else
+is told to link their account or join the server, and a vote already cast stays counted if they leave.
+
 No new Developer Portal setting: button presses arrive at the same Interactions Endpoint URL as the slash commands. While
 `MAP_VOTE` is on and the token or channel is missing, no vote opens and the logs say why.
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   castVote,
+  inGameProblem,
   chooseWinner,
   closeDue,
   closeScoreFor,
@@ -57,7 +58,7 @@ const choice = (id: string, modes = 1, infantry = true): MapChoice => ({
 
 const NOW = 1_000_000;
 const vote = (): MapVote =>
-  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation' }, NOW, 95);
+  openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation', inGame: false }, NOW, 95);
 const ballot = (n: number, map: string) => ({ user: `user${n}`, map });
 
 describe('pickOptions', () => {
@@ -806,7 +807,7 @@ describe('the random map', () => {
       { startedAt: 42 },
       'Kavkazi',
       [{ map: 'Bakurani', name: 'Bakurani' }, { map: 'Ozeti', name: 'Ozeti' }],
-      { options: 2, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation' },
+      { options: 2, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation', inGame: false },
       NOW,
       95,
       conditionOptions(serverLightings),
@@ -1004,5 +1005,21 @@ describe('what the game is told about the vote', () => {
     expect(voteResultBroadcast('Ozeti', ['Night', 'Small zones'], 5)).toBe("Vote's in! Ozeti plays next, infantry only, Night, Small zones (5 votes).");
     expect(voteResultBroadcast('Ozeti', [], 1)).toBe("Vote's in! Ozeti plays next, infantry only (1 vote).");
     expect(voteResultBroadcast('Ozeti', [], 0)).toBe("Vote's in! Ozeti plays next, infantry only (no votes, picked at random).");
+  });
+});
+
+describe('inGameProblem', () => {
+  const online = new Set(['76561198000000001']);
+  it('lets a linked player who is on the server vote', () => {
+    expect(inGameProblem('76561198000000001', online)).toBeNull();
+  });
+  it('tells someone with no linked Steam account to link one', () => {
+    expect(inGameProblem(null, online)).toMatch(/Link your Steam account/);
+  });
+  it('tells a linked player who is not on the server to join it', () => {
+    expect(inGameProblem('76561198000000002', online)).toMatch(/Join the server/);
+  });
+  it('lets nobody vote when the server cannot be reached', () => {
+    expect(inGameProblem('76561198000000001', null)).toMatch(/Join the server/);
   });
 });
