@@ -123,7 +123,7 @@ describe('buildShame', () => {
   });
 
   it('keeps the removed list to its length', () => {
-    const logs = new Map(Array.from({ length: REMOVED_SHOWN + 3 }, (_, i) => [`s${i}`, [entry('kick', i + 1)]] as const));
+    const logs = new Map<string, ModEntry[]>(Array.from({ length: REMOVED_SHOWN + 3 }, (_, i) => [`s${i}`, [entry('kick', i + 1)]]));
     const shame = buildShame({ now: NOW, logs, hidden: new Set(), nameOf: (steamId) => steamId, idOf: () => undefined });
     expect(shame.removed).toHaveLength(REMOVED_SHOWN);
     expect(shame.removed[0]?.name).toBe('s0');
