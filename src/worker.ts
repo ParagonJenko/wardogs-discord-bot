@@ -2539,7 +2539,11 @@ export class Watcher extends DurableObject<Env> {
         return;
       }
       const { added, lifted } = banChanges(saved, onServer);
-      if (added.length === 0 && lifted.length === 0) return;
+      if (added.length === 0 && lifted.length === 0) {
+        // A ban whose reason changed is neither added nor lifted, but the saved list is what player pages show.
+        await storage.put('serverBans', current);
+        return;
+      }
       const book = parseBanBook(stored.get('bans'));
       const names = await this.namesFor([...added, ...lifted].map((b) => b.steamId), snapshot);
       const by = (ban: ServerBan) => (ban.bannedBy ? { detail: `By ${ban.bannedBy}` } : {});
