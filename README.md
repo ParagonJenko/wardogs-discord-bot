@@ -1510,6 +1510,7 @@ Two more public endpoints let a website show every player's stats, not only the 
 | ------------------------ | -------------------------------------------------------------------------------------- |
 | `GET /api/players`       | Everyone seen in the last 90 days, most time played first: `id`, `name`, `minutes` played, `lastSeen` (UTC day) and whether they are `online` now. Not [private profiles](#private-profiles) |
 | `GET /api/player?id=<id>` | One player's page (including `ban`: `reason` and `until`, null when not banned; never who banned them), or 404 for an id nobody seen in the last 90 days has, or a private profile's |
+| `GET /api/shame` | The hall of shame: `teamKillers` (players warned at least 3 times for team killing, most first, with `warnings` and `lastAt`), `removed` (everyone kicked or banned, newest first: `outcome` is `kicked`, `banned` or `kicked-then-banned`, with `kicks`, `bans`, `lastAt`, whether the ban was lifted since as `unbanned`, and their `teamKillWarnings`) and `totals`. From the moderation log, which keeps each player's latest 50 entries. Never has reasons, who did it or Steam IDs, and leaves out staff and [private profiles](#private-profiles) |
 
 A player page has:
 

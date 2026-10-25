@@ -373,6 +373,7 @@ import {
   type SeasonPage,
   type SeasonRoundup,
 } from './season.ts';
+import { buildShame, type Shame } from './shame.ts';
 import { socketHttp } from './socket-http.ts';
 import {
   alertDue,
@@ -4143,6 +4144,24 @@ export class Watcher extends DurableObject<Env> {
     return readPublicLifetime(sql, today, { nameOf: (steamId) => names.get(steamId), idOf: publicIdOf(hidden, (steamId) => ids.get(steamId)) });
   }
 
+  // The hall of shame: who has been warned most for team killing, and who has been kicked or banned (see shame.ts).
+  async shame(): Promise<Shame> {
+    const now = Date.now();
+    const [kept, hidden, staff, logs] = await Promise.all([this.recentDays(now), this.privateSteam(), this.staffSteam(), this.ctx.storage.list({ prefix: 'mod:' })]);
+    const modLogs = new Map([...logs].map(([key, value]) => [key.slice('mod:'.length), parseModLog(value)]));
+    // Names as their player records last called them; only those seen lately have a player page.
+    const names = new Map<string, string>();
+    for (const d of kept) for (const [steamId, p] of Object.entries(d.players)) if (p.name !== '') names.set(steamId, p.name);
+    const ids = await this.idsFor([...names.keys()]);
+    return buildShame({
+      now,
+      logs: modLogs,
+      hidden: new Set([...hidden, ...staff]),
+      nameOf: (steamId) => names.get(steamId),
+      idOf: (steamId) => (names.has(steamId) ? ids.get(steamId) : undefined),
+    });
+  }
+
   // One of the long-term tables as CSV, for analysis.
   adminLifetimeCsv(table: TableName): string {
     return toCsv(exportTable(this.lifetimeSql(), dayOf(Date.now()), table));
@@ -4576,6 +4595,7 @@ const publicRoute = (
   if (url.pathname === '/api/live') return { key: 'live', load: () => watcher().live(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
   if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
+  if (url.pathname === '/api/shame') return { key: 'shame', load: () => watcher().shame() };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
   // Kept for the usual time and no longer: it names the regulars, so a profile made private must leave it within a minute.
   if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime() };
