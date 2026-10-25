@@ -100,7 +100,7 @@ describe('buildShame', () => {
     expect(text).not.toContain(ASH);
   });
 
-  it('leaves out staff and private profiles, and anyone with no name', () => {
+  it('leaves out private profiles, and anyone with no name', () => {
     const logs = { [ASH]: [tk(3), tk(2), tk(1), entry('ban', 1)], [BO]: [entry('kick', 1)], [CY]: [entry('kick', 1)], '76561198000000009': [entry('kick', 1)] };
     const shame = build(logs, [ASH, BO]);
 
