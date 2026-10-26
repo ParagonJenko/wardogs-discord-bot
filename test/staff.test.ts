@@ -283,6 +283,17 @@ describe('runStaffCommand', () => {
     expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
   });
 
+  it('/moveclan keeps its reply short for a big clan, and counts the rest', async () => {
+    const big = Array.from({ length: 30 }, (_, i) => ({ name: `[WD] ${'Longname'.repeat(5)}${i}`, steamId: `7656119800002${String(i).padStart(4, '0')}`, faction: 'Valkyra', kills: 0, deaths: 0 }));
+    const { run } = setup({ 'GET /v1/players': [200, { players: big }] });
+
+    const reply = await run('moveclan', { clan: 'WD', team: 'Manticore' });
+
+    expect(reply.content.length).toBeLessThan(2000);
+    expect(reply.content).toContain('Moved 30 players');
+    expect(reply.content).toContain('and 22 more');
+  });
+
   it('/moveclan moves no one if the team would go over 33 players', async () => {
     const filler = Array.from({ length: 32 }, (_, i) => ({ name: `Fill${i}`, steamId: `7656119800001${String(i).padStart(4, '0')}`, faction: 'Manticore', kills: 0, deaths: 0 }));
     const clan = {

@@ -175,6 +175,9 @@ export const inClan = (name: string, tag: string): boolean => {
 // The most players a team can hold: a 98 player server split three ways.
 export const TEAM_MAX_PLAYERS = 33;
 
+// How many names /moveclan lists in its reply.
+const CLAN_REPLY_NAMES = 8;
+
 // The game's three teams. /switchteam only moves players to one of them, each with its colour: "🔵 Lonestar".
 export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
 export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionDot(team)}${team}`, value: team }));
@@ -574,9 +577,13 @@ export const runStaffCommand =
           failed: failed.map((p) => ({ name: p.name })),
         });
       }
-      const names = moved.map(who).join(', ');
-      const lines = [`🔀 Moved ${moved.length} player${moved.length === 1 ? '' : 's'} with the tag "${tag}" to ${factionBadge(team)}**${team}**: ${names}. They respawn on the new side.`];
-      if (failed.length > 0) lines.push(`⚠️ Could not move: ${failed.map(who).join(', ')}.`);
+      // A short preview of each list, with the rest counted: a whole clan's names could pass Discord's 2000 characters.
+      const preview = (list: Player[]): string =>
+        list.length <= CLAN_REPLY_NAMES
+          ? list.map(who).join(', ')
+          : `${list.slice(0, CLAN_REPLY_NAMES).map(who).join(', ')} and ${list.length - CLAN_REPLY_NAMES} more`;
+      const lines = [`🔀 Moved ${moved.length} player${moved.length === 1 ? '' : 's'} with the tag "${tag}" to ${factionBadge(team)}**${team}**: ${preview(moved)}. They respawn on the new side.`];
+      if (failed.length > 0) lines.push(`⚠️ Could not move ${failed.length}: ${preview(failed)}.`);
       return { content: lines.join('\n') };
     }
 
