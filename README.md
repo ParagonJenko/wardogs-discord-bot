@@ -344,6 +344,7 @@ The Node/Docker version does not serve the season roundup.
 | `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), team kills today, [Steam account](#risky-steam-accounts), VIP, ban and staff history |
 | `/kick`         | Staff only           | Removes a player from the server, with a reason they see; they can rejoin |
 | `/switchteam`   | Staff only           | Moves a player to another team (`team`, or the other one when there are two) and respawns them |
+| `/moveclan`     | Staff only           | Moves everyone in game whose name starts with a clan tag (`clan`, such as `WD`) to a team (`team`) and respawns them |
 | `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
 | `/unban`        | Staff only           | Lifts a ban                                                        |
 | `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
@@ -447,6 +448,8 @@ works when it matches exactly one player.
 - **`/switchteam`** only offers the game's three teams: 🔵 Lonestar, 🟢 Manticore and 🔴 Valkyra. A team that is not
   in the match is refused. With two teams, leave `team` out to move them to the other one. Like the game's own
   console, the bot then kills the player so they respawn on the new side.
+- **`/moveclan`** moves every player in game whose name starts with the tag: `[WD] Ash`, `WD | Ash` and `WD_Ash` all
+  match `WD`, whatever the case. Players already on the team are left alone, and each move is logged like `/switchteam`.
 - **`/ban`** needs a length and a reason. The server's own bans are permanent (they go into `ServerSettings.ini`), so
   for a timed ban the bot writes when it ends into the reason, remembers it, and lifts the ban itself at the first
   check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly

@@ -355,7 +355,7 @@ describe('handleInteraction', () => {
     });
   });
 
-  it.each(['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'])(
+  it.each(['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip'])(
     'keeps /%s to Administrators and staff, replying privately',
     async (name) => {
       const allowed = { ...broadcast('0'), member: { user: { id: '42' }, permissions: '0', roles: ['555'] }, data: { name } };
@@ -636,6 +636,7 @@ describe('COMMANDS', () => {
       'player',
       'kick',
       'switchteam',
+      'moveclan',
       'ban',
       'unban',
       'setnextmap',

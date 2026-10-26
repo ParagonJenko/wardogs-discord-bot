@@ -144,7 +144,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -159,6 +159,15 @@ export const VIP_REASONS = [
   { value: 'other', name: 'Other' },
 ] as const;
 export const VIP_NOTE_MAX_LENGTH = 200;
+// A clan is the tag at the start of a name: "[WD] Ash", "WD | Ash" or "WD_Ash". Matched whatever the case, with or
+// without the brackets typed.
+export const inClan = (name: string, tag: string): boolean => {
+  const bare = tag.trim().replace(/^[[({<|]+|[\])}>|]+$/g, '').trim();
+  if (!bare) return false;
+  const escaped = bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^\\s*(?:[[({<|]\\s*${escaped}\\s*[\\])}>|]|${escaped}(?![\\p{L}\\p{N}]))`, 'iu').test(name);
+};
+
 // The game's three teams. /switchteam only moves players to one of them, each with its colour: "🔵 Lonestar".
 export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
 export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionDot(team)}${team}`, value: team }));
@@ -508,6 +517,45 @@ export const runStaffCommand =
         detail: current ? `${current} to ${team}` : `to ${team}`,
       });
       return { content: `🔀 Moved ${who(player)} to ${factionBadge(team)}**${team}**. They respawn on the new side.` };
+    }
+
+    if (name === 'moveclan') {
+      const tag = text('clan');
+      if (!tag) return { content: 'Write the clan tag, such as WD.' };
+      const [live, status] = await Promise.all([online(), fetchStatus(rconUrl, rconPassword, http)]);
+      const teams = status.factionScores.map((f) => f.name);
+      const same = (a: string, b: string | null | undefined): boolean => b != null && factionKey(a) === factionKey(b);
+      const known = TEAMS.find((t) => same(t, text('team')));
+      if (known === undefined) return { content: `Pick ${TEAMS.slice(0, -1).join(', ')} or ${TEAMS.at(-1)}.` };
+      const team = teams.find((t) => same(t, known)) ?? (teams.length === 0 ? known : null);
+      if (team === null) return { content: `${known} is not in this match. Teams now: ${teams.join(', ')}.` };
+      const members = live.filter((p) => inClan(p.name, tag));
+      if (members.length === 0) return { content: `No one in game has the clan tag "${tag}".` };
+      const moving = members.filter((p) => !same(team, p.faction));
+      if (moving.length === 0) return { content: `All ${members.length} players with the tag "${tag}" are already on ${team}.` };
+      log.info(`/moveclan by ${staff}: ${JSON.stringify(tag)} (${moving.length} players) to ${team}`);
+      const failed: Player[] = [];
+      for (const p of moving) {
+        try {
+          await switchFaction(rconUrl, rconPassword, p.steamId, team, http);
+        } catch {
+          failed.push(p);
+          continue;
+        }
+        await records.log(p.steamId, {
+          action: 'switchteam',
+          at: now(),
+          by,
+          ...named,
+          name: p.name,
+          detail: p.faction ? `${p.faction} to ${team}` : `to ${team}`,
+        });
+      }
+      const moved = moving.filter((p) => !failed.includes(p));
+      const names = moved.map(who).join(', ');
+      const lines = [`🔀 Moved ${moved.length} player${moved.length === 1 ? '' : 's'} with the tag "${tag}" to ${factionBadge(team)}**${team}**: ${names}. They respawn on the new side.`];
+      if (failed.length > 0) lines.push(`⚠️ Could not move: ${failed.map(who).join(', ')}.`);
+      return { content: lines.join('\n') };
     }
 
     if (name === 'ban') {

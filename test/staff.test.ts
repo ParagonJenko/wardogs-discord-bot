@@ -9,6 +9,7 @@ import { editRotations, parseRotationBook, rotationDay, type RotationBook, type 
 import type { SteamLookup } from '../src/steam.ts';
 import {
   findPlayer,
+  inClan,
   runStaffCommand,
   suggestStaff,
   type BanResult,
@@ -149,6 +150,20 @@ describe('findPlayer', () => {
   });
 });
 
+describe('inClan', () => {
+  it('matches a tag at the start of a name, with or without brackets, whatever the case', () => {
+    for (const name of ['[WD] Ash', '(wd)Ash', 'WD | Ash', 'wd_Ash', 'WD Ash']) expect(inClan(name, 'WD')).toBe(true);
+    expect(inClan('[WD] Ash', '[wd]')).toBe(true);
+  });
+
+  it('does not match a longer word, a tag later in the name, or an empty tag', () => {
+    for (const name of ['WDX Ash', 'Ash [WD]', 'Wardog']) expect(inClan(name, 'WD')).toBe(false);
+    expect(inClan('Ash', ' ')).toBe(false);
+    expect(inClan('[a.b] Ash', 'a.b')).toBe(true);
+    expect(inClan('[axb] Ash', 'a.b')).toBe(false);
+  });
+});
+
 describe('runStaffCommand', () => {
   it('/warn sends a private message and records it', async () => {
     const { run, sent, records } = setup();
@@ -219,6 +234,38 @@ describe('runStaffCommand', () => {
     await expect(run('switchteam', { player: ASH, team: 'valkyra' })).resolves.toEqual({ content: '**Ash** is already on Valkyra.' });
     await expect(run('switchteam', { player: ASH, team: 'Lonestar' })).resolves.toMatchObject({ content: expect.stringContaining('🤠 **LONESTAR**') });
     expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'LONESTAR' })}`]);
+  });
+
+  it('/moveclan moves everyone with the tag who is not on the team already, and logs each move', async () => {
+    const clan = {
+      players: [
+        { name: '[WD] Ash', steamId: ASH, faction: 'Valkyra', kills: 0, deaths: 0 },
+        { name: 'WD | Bo', steamId: BO, faction: 'Manticore', kills: 0, deaths: 0 },
+        { name: 'Cy', steamId: CY, faction: 'Valkyra', kills: 0, deaths: 0 },
+      ],
+    };
+    const { run, sent, records } = setup({ 'GET /v1/players': [200, clan] });
+
+    const reply = await run('moveclan', { clan: 'wd', team: 'Manticore' });
+
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'Manticore' })}`]);
+    expect(records.log).toHaveBeenCalledTimes(1);
+    expect(records.log).toHaveBeenCalledWith(ASH, { action: 'switchteam', at: NOW, by: '42', name: '[WD] Ash', detail: 'Valkyra to Manticore' });
+    expect(reply.content).toContain('Moved 1 player with the tag "wd" to 🦂 **Manticore**: **\\[WD\\] Ash**');
+  });
+
+  it('/moveclan says when nobody has the tag, everyone is there already, or the team is not in the match', async () => {
+    const { run, sent } = setup();
+
+    await expect(run('moveclan', { clan: 'WD', team: 'Manticore' })).resolves.toEqual({ content: 'No one in game has the clan tag "WD".' });
+    await expect(run('moveclan', { clan: 'Ash', team: 'Valkyra' })).resolves.toMatchObject({
+      content: expect.stringContaining('already on Valkyra'),
+    });
+    await expect(run('moveclan', { clan: 'Ash', team: 'Lonestar' })).resolves.toEqual({
+      content: 'Lonestar is not in this match. Teams now: Valkyra, Manticore.',
+    });
+    await expect(run('moveclan', { clan: ' ', team: 'Valkyra' })).resolves.toEqual({ content: 'Write the clan tag, such as WD.' });
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
   });
 
   it('/switchteam refuses a team that is not in the match', async () => {
