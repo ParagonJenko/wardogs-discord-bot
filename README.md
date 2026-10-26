@@ -531,10 +531,20 @@ claim or close. A member can have 3 tickets open at once.
 
 ### Set up
 
-1. In the Discord server, make a **category** for tickets. Set its permissions so the bot has **View Channel, Manage Channels,
-   Send Messages, Embed Links, Attach Files and Read Message History**. Tickets inherit nothing else: each one is hidden from
-   `@everyone` and opened to the member, the staff roles and the bot only.
-2. Optional: make a staff-only **log channel** for transcripts (the bot needs View Channel, Send Messages and Attach Files).
+1. In the Discord server, make a **category** for tickets. Give the bot **View Channel, Manage Channels, Send Messages, Embed
+   Links, Attach Files, Read Message History and Mention Everyone** in it (Discord only lets the bot set permissions it has
+   itself). Mention Everyone lets it ping the staff roles for urgent tickets even if the roles are not set to be mentionable.
+   Each ticket is made with its own permissions, not the category's: hidden from `@everyone`, and open to the member, the staff
+   roles and the bot only. The bot checks what Discord made before telling anyone, and deletes the channel if it is visible
+   to anyone else. The member cannot invite people, start threads or ping everyone in it. Anyone with Administrator can still
+   see every ticket: that is Discord's rule.
+2. Optional: make a **staff-only log channel** for transcripts: deny View Channel for `@everyone` on it, and give the bot View
+   Channel, Send Messages, Embed Links and Attach Files. The bot refuses to close tickets (and `/ticketpanel` warns) while the
+   log channel is not hidden from `@everyone`, so transcripts can't be copied into a public channel. In the
+   [Developer Portal](https://discord.com/developers/applications) → your app → Bot, switch on **Message Content Intent**.
+   The bot never connects to the gateway, but without the intent Discord leaves most message text out of what it reads, so
+   transcripts would come out nearly empty. (Under 100 servers it is just a switch.) A ticket with more than 2,000 messages
+   is not closed: the bot refuses rather than save a transcript with its start missing.
 3. Copy the IDs (Developer Mode → right-click → Copy Channel ID) into `wrangler.jsonc`:
    `DISCORD_TICKET_CATEGORY_ID` and, optionally, `DISCORD_TICKET_LOG_CHANNEL_ID`. The staff roles are the existing
    `DISCORD_ADMIN_ROLE_IDS`. `DISCORD_BOT_TOKEN` must already be set.

@@ -990,7 +990,22 @@ describe('tickets', () => {
 
   it('opens the ticket from the submitted form, and replies privately once it is made', async () => {
     const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) =>
-      new Response(JSON.stringify(init?.method === 'GET' ? [] : { id: '1000' }), { status: 200 })) as typeof fetch;
+      new Response(
+        JSON.stringify(
+          init?.method === 'GET'
+            ? []
+            : {
+                id: '1000',
+                permission_overwrites: [
+                  { id: '777', type: 0, allow: '0', deny: String(1 << 10) },
+                  { id: '555', type: 0, allow: String(1 << 10), deny: '0' },
+                  { id: '300', type: 1, allow: String(1 << 10), deny: '0' },
+                  { id: '111', type: 1, allow: String(1 << 10), deny: '0' },
+                ],
+              },
+        ),
+        { status: 200 },
+      )) as typeof fetch;
     const d = deps();
     const { body, signature, timestamp } = await signed(
       press('ticket:new:query', {

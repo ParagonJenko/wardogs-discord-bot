@@ -29,6 +29,12 @@ const request = (over: Partial<TicketRequest> = {}): TicketRequest => ({
   ...over,
 });
 
+const OPENER = '300';
+const BOT = '111';
+// A channel as Discord returns it after creating it with the overwrites we sent.
+const madeChannel = (id = '777') => ({ id, permission_overwrites: ticketOverwrites(rule, OPENER, BOT) });
+const hiddenLog = { id: '60', permission_overwrites: [{ id: '1', type: 0, allow: '0', deny: String(1 << 10) }] };
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 describe('ticket helpers', () => {
@@ -47,7 +53,7 @@ describe('ticket helpers', () => {
     const overwrites = ticketOverwrites(rule, '300', '111');
     expect(overwrites[0]).toMatchObject({ id: '1', type: 0, allow: '0' });
     expect(BigInt(overwrites[0]?.deny ?? 0) & (1n << 10n)).toBe(1n << 10n);
-    expect(overwrites.map((o) => o.id)).toEqual(['1', '300', '70', '71', '111']);
+    expect(overwrites.map((o) => o.id)).toEqual(['1', '70', '71', '300', '111']);
     expect(overwrites.filter((o) => BigInt(o.allow) & (1n << 10n)).length).toBe(4);
   });
 
@@ -85,7 +91,7 @@ describe('openTicket', () => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ url: String(url), method: init?.method ?? 'GET', body });
       if (init?.method === 'GET') return json([{ id: '9', parent_id: '50', topic: 'query ticket · opener 999' }]);
-      if (String(url).endsWith('/channels')) return json({ id: '777' });
+      if (String(url).endsWith('/channels')) return json(madeChannel());
       return json({ id: 'm1' });
     }) as unknown as typeof fetch;
     const reply = await openTicket({ rule, fetchFn }, 'appeal', request());
@@ -107,7 +113,7 @@ describe('openTicket', () => {
     const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
       if (init?.method === 'GET') return json([]);
       bodies.push(init?.body ? JSON.parse(String(init.body)) : undefined);
-      return json({ id: '777' });
+      return json(madeChannel());
     }) as typeof fetch;
     await openTicket({ rule, fetchFn }, 'urgent', request({ fields: { who: 'x', details: 'aimbot' } }));
     expect(bodies[1].allowed_mentions).toEqual({ users: ['300'], roles: ['70', '71'] });
@@ -129,9 +135,73 @@ describe('openTicket', () => {
       if (init?.method === 'GET') return json([]);
       if (init?.method === 'DELETE') return json({});
       if (String(url).endsWith('/messages')) return json({ message: 'Missing Access' }, 403);
-      return json({ id: '777' });
+      return json(madeChannel());
     }) as typeof fetch;
     await expect(openTicket({ rule, fetchFn }, 'query', request())).rejects.toThrow('post in the ticket channel');
+    expect(calls).toContain('DELETE https://discord.com/api/v10/channels/777');
+  });
+});
+
+describe('privacy', () => {
+  it('refuses to trust a channel that is visible to anyone else', async () => {
+    const mine = madeChannel();
+    const cases: Record<string, unknown> = {
+      'not hidden from @everyone': { id: '777', permission_overwrites: mine.permission_overwrites.filter((o) => o.id !== '1') },
+      '@everyone allowed': { id: '777', permission_overwrites: [{ id: '1', type: 0, allow: String(1 << 10), deny: '0' }, ...mine.permission_overwrites.slice(1)] },
+      'a stranger shown it': { id: '777', permission_overwrites: [...mine.permission_overwrites, { id: '999', type: 0, allow: String(1 << 10), deny: '0' }] },
+      'no list': { id: '777' },
+    };
+    for (const [name, channel] of Object.entries(cases)) {
+      const calls: string[] = [];
+      const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push(`${init?.method} ${String(url)}`);
+        if (init?.method === 'GET') return json([]);
+        if (init?.method === 'DELETE') return json({});
+        return json(channel);
+      }) as typeof fetch;
+      await expect(openTicket({ rule, fetchFn }, 'query', request()), name).rejects.toThrow();
+      expect(calls, name).toContain('DELETE https://discord.com/api/v10/channels/777');
+      // Nothing was posted in it, and nobody was told it exists.
+      expect(calls.some((c) => c.endsWith('/messages')), name).toBe(false);
+    }
+  });
+
+  it('never gives @everyone access, even if it is set as a staff role', () => {
+    const overwrites = ticketOverwrites({ ...rule, staffRoleIds: ['1', '70'] }, '300', '111');
+    expect(overwrites.filter((o) => o.id === '1')).toEqual([{ id: '1', type: 0, allow: '0', deny: String(1 << 10) }]);
+  });
+
+  it('stops the opener from inviting, starting threads or pinging everyone', () => {
+    const opener = ticketOverwrites(rule, '300', '111').find((o) => o.id === '300');
+    const deny = BigInt(opener?.deny ?? 0);
+    for (const bit of [0n, 35n, 36n, 17n]) expect(deny & (1n << bit)).toBe(1n << bit);
+  });
+
+  it('keeps transcripts out of a log channel anyone can read', async () => {
+    const channel = { id: '777', name: 'appeal-ozeti', parent_id: '50', topic: 'appeal ticket · opener 300' };
+    for (const log of [{ id: '60', permission_overwrites: [] }, { id: '60' }]) {
+      const calls: string[] = [];
+      const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push(`${init?.method} ${String(url)}`);
+        return json(String(url).endsWith('/channels/60') ? log : channel);
+      }) as typeof fetch;
+      await expect(closeTicket({ rule, fetchFn }, '777', request({ staff: true }))).rejects.toThrow(/not hidden from @everyone|did not say/);
+      expect(calls.some((c) => c.startsWith('DELETE') || c.startsWith('POST'))).toBe(false);
+    }
+  });
+});
+
+describe('openTicket cleanup', () => {
+  it('deletes the channel when posting rejects outright', async () => {
+    const calls: string[] = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method} ${String(url)}`);
+      if (init?.method === 'GET') return json([]);
+      if (init?.method === 'DELETE') return json({});
+      if (String(url).endsWith('/messages')) throw new Error('timeout');
+      return json(madeChannel());
+    }) as typeof fetch;
+    await expect(openTicket({ rule, fetchFn }, 'query', request())).rejects.toThrow('timeout');
     expect(calls).toContain('DELETE https://discord.com/api/v10/channels/777');
   });
 });
@@ -144,6 +214,7 @@ describe('closeTicket', () => {
     const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
       calls.push(`${init?.method} ${String(url)}`);
       if (String(url).includes('/messages?')) return json([{ id: '1', timestamp: 't', content: 'hello', author: { username: 'Ozeti' } }]);
+      if (String(url).endsWith('/channels/60')) return json(hiddenLog);
       if (init?.method === 'GET') return json(channel);
       if (init?.method === 'DELETE') return json({});
       return json({ id: 'log' });
@@ -159,11 +230,25 @@ describe('closeTicket', () => {
     const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
       calls.push(`${init?.method} ${String(url)}`);
       if (String(url).includes('/messages?')) return json([]);
+      if (String(url).endsWith('/channels/60')) return json(hiddenLog);
       if (init?.method === 'GET') return json(channel);
       return json({ message: 'no' }, 403);
     }) as typeof fetch;
     await expect(closeTicket({ rule, fetchFn }, '777', request({ staff: true }))).rejects.toThrow('ticket was kept');
     expect(calls.some((c) => c.startsWith('DELETE'))).toBe(false);
+  });
+
+  it('keeps a ticket whose history is too long to save', async () => {
+    const calls: string[] = [];
+    const page = Array.from({ length: 100 }, (_, i) => ({ id: String(i), timestamp: 't', content: 'x', author: { username: 'a' } }));
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method} ${String(url)}`);
+      if (String(url).includes('/messages?')) return json(page);
+      if (String(url).endsWith('/channels/60')) return json(hiddenLog);
+      return json(channel);
+    }) as typeof fetch;
+    await expect(closeTicket({ rule, fetchFn }, '777', request({ staff: true }))).rejects.toThrow('too many to save');
+    expect(calls.some((c) => c.startsWith('DELETE') || c.startsWith('POST'))).toBe(false);
   });
 
   it('never deletes a channel that is not a ticket', async () => {

@@ -4922,7 +4922,7 @@ const ticketRule = (vars: Record<string, string>): TicketRule | null => {
     staffRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
       .split(',')
       .map((role) => role.trim())
-      .filter((role) => /^\d+$/.test(role)),
+      .filter((role) => /^\d+$/.test(role) && role !== guildId),
   };
 };
 

@@ -23,18 +23,27 @@ export const TICKET_PANEL_COMMAND = {
 const MANAGE_CHANNELS = 1n << 4n;
 const VIEW_CHANNEL = 1n << 10n;
 const SEND_MESSAGES = 1n << 11n;
-const MANAGE_MESSAGES = 1n << 13n;
+const MENTION_EVERYONE = 1n << 17n;
 const EMBED_LINKS = 1n << 14n;
 const ATTACH_FILES = 1n << 15n;
 const READ_HISTORY = 1n << 16n;
 
-const MEMBER_ALLOW = VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | ATTACH_FILES | READ_HISTORY;
-const STAFF_ALLOW = MEMBER_ALLOW | MANAGE_MESSAGES;
-const BOT_ALLOW = STAFF_ALLOW | MANAGE_CHANNELS;
+const CREATE_INVITE = 1n << 0n;
+const CREATE_PUBLIC_THREADS = 1n << 35n;
+const CREATE_PRIVATE_THREADS = 1n << 36n;
 
-// How many tickets one person can have open at once, and how many messages a transcript keeps.
+const MEMBER_ALLOW = VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | ATTACH_FILES | READ_HISTORY;
+// The person who opened the ticket cannot bring anyone else in: no invites, no threads (a thread can add people), and no
+// pinging everyone.
+const MEMBER_DENY = CREATE_INVITE | CREATE_PUBLIC_THREADS | CREATE_PRIVATE_THREADS | MENTION_EVERYONE;
+const STAFF_ALLOW = MEMBER_ALLOW;
+// Mention Everyone lets the bot ping staff roles that are not set to be mentionable, for urgent tickets.
+const BOT_ALLOW = STAFF_ALLOW | MANAGE_CHANNELS | MENTION_EVERYONE;
+
+// How many tickets one person can have open at once, and how many pages of 100 messages a transcript can hold.
+// A ticket longer than that is not closed, rather than saved with its start missing.
 export const MAX_OPEN_PER_USER = 3;
-const TRANSCRIPT_PAGES = 5;
+const TRANSCRIPT_PAGES = 20;
 
 export type TicketType = 'urgent' | 'report' | 'appeal' | 'query';
 
@@ -251,12 +260,38 @@ export const ticketChannelName = (type: TicketType, userName: string, userId: st
 };
 
 // Who sees the channel: nobody, except the person who opened it, the staff roles and the bot.
+// Never the @everyone role (its ID is the server's), whatever the staff roles are set to.
+const staffRoles = (rule: TicketRule): string[] => rule.staffRoleIds.filter((id) => id !== rule.guildId);
+
 export const ticketOverwrites = (rule: TicketRule, userId: string, botId: string) => [
   { id: rule.guildId, type: 0, allow: '0', deny: String(VIEW_CHANNEL) },
-  { id: userId, type: 1, allow: String(MEMBER_ALLOW), deny: '0' },
-  ...rule.staffRoleIds.map((id) => ({ id, type: 0, allow: String(STAFF_ALLOW), deny: '0' })),
+  ...staffRoles(rule).map((id) => ({ id, type: 0, allow: String(STAFF_ALLOW), deny: '0' })),
+  { id: userId, type: 1, allow: String(MEMBER_ALLOW), deny: String(MEMBER_DENY) },
   { id: botId, type: 1, allow: String(BOT_ALLOW), deny: '0' },
 ];
+
+const OverwritesSchema = z.array(z.object({ id: z.string(), type: z.number(), allow: z.string(), deny: z.string() }));
+const bits = (value: string): bigint => {
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+};
+
+// What Discord says a channel's permissions are, checked against what a ticket must be: hidden from @everyone, and shown to
+// nobody but `allowed`. Null when it is; otherwise what is wrong. A missing list fails, so nothing is trusted unseen.
+export const exposure = (channel: unknown, guildId: string, allowed: string[]): string | null => {
+  const parsed = z.object({ permission_overwrites: OverwritesSchema }).safeParse(channel);
+  if (!parsed.success) return "Discord did not say who can see the channel";
+  const overwrites = parsed.data.permission_overwrites;
+  const everyone = overwrites.find((o) => o.id === guildId);
+  if (everyone === undefined || (bits(everyone.deny) & VIEW_CHANNEL) === 0n || (bits(everyone.allow) & VIEW_CHANNEL) !== 0n) {
+    return 'the channel is not hidden from @everyone';
+  }
+  const stranger = overwrites.find((o) => o.id !== guildId && (bits(o.allow) & VIEW_CHANNEL) !== 0n && !allowed.includes(o.id));
+  return stranger === undefined ? null : `the channel is shown to ${stranger.type === 0 ? 'role' : 'member'} ${stranger.id}`;
+};
 
 const call =
   (rule: TicketRule, fetchFn: typeof fetch) =>
@@ -325,18 +360,29 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
     `${TICKET_KINDS[type].label} ticket opened by ${request.userName}`,
   );
   if (!created.ok) throw new Error(`Discord would not create the ticket channel: ${created.status} ${await created.text()}`);
-  const channel = z.object({ id: z.string() }).parse(await created.json());
+  const made: unknown = await created.json();
+  const channel = z.object({ id: z.string() }).parse(made);
+  // A channel without its details and buttons is worse than none, and would count against the person's limit.
+  const discard = () => send(`/channels/${channel.id}`, 'DELETE').catch(() => undefined);
+  // Never trust the channel to be private: check what Discord made, and delete it before anyone is told if it is not.
+  const exposed = exposure(made, rule.guildId, [request.userId, request.applicationId, ...staffRoles(rule)]);
+  if (exposed !== null) {
+    await discard();
+    throw new Error(`Refused to open a ticket: ${exposed}`);
+  }
 
-  const ping = TICKET_KINDS[type].ping ? rule.staffRoleIds : [];
+  const ping = TICKET_KINDS[type].ping ? staffRoles(rule) : [];
   const posted = await send(`/channels/${channel.id}/messages`, 'POST', {
     content: [`<@${request.userId}>`, ...ping.map((id) => `<@&${id}>`)].join(' '),
     embeds: [detailsEmbed(type, request)],
     components: STAFF_BUTTONS,
     allowed_mentions: { users: [request.userId], roles: ping },
+  }).catch(async (error: unknown) => {
+    await discard();
+    throw error;
   });
   if (!posted.ok) {
-    // A ticket nobody was told about is worse than none.
-    await send(`/channels/${channel.id}`, 'DELETE').catch(() => undefined);
+    await discard();
     throw new Error(`Discord would not post in the ticket channel: ${posted.status} ${await posted.text()}`);
   }
   return `✅ Your ticket is open: <#${channel.id}>`;
@@ -354,7 +400,8 @@ const MessageSchema = z.object({
 });
 type TicketMessage = z.infer<typeof MessageSchema>;
 
-// The channel's messages, oldest first, up to TRANSCRIPT_PAGES of 100.
+// All of the channel's messages, oldest first. Throws when there are more than TRANSCRIPT_PAGES of 100: a transcript with
+// its start missing must not be taken for the whole.
 const fetchMessages = async (rule: TicketRule, fetchFn: typeof fetch, channelId: string): Promise<TicketMessage[]> => {
   const send = call(rule, fetchFn);
   const newestFirst: TicketMessage[] = [];
@@ -365,10 +412,10 @@ const fetchMessages = async (rule: TicketRule, fetchFn: typeof fetch, channelId:
     const batch = z.array(MessageSchema).parse(await response.json());
     newestFirst.push(...batch);
     const last = batch[batch.length - 1];
-    if (batch.length < 100 || last === undefined) break;
+    if (batch.length < 100 || last === undefined) return newestFirst.reverse();
     before = last.id;
   }
-  return newestFirst.reverse();
+  throw new Error(`the ticket has more than ${TRANSCRIPT_PAGES * 100} messages, which is too many to save, so it was kept`);
 };
 
 export const transcriptText = (messages: TicketMessage[]): string =>
@@ -382,6 +429,21 @@ export const transcriptText = (messages: TicketMessage[]): string =>
       return `[${message.timestamp}] ${message.author.username}${message.author.bot ? ' (bot)' : ''}: ${lines.join('\n    ')}`;
     })
     .join('\n');
+
+// Why the log channel cannot take transcripts, or null when it can: it must be hidden from @everyone, or tickets would be
+// copied out to a channel anyone can read. Anything else with access is the staff's to choose.
+export const logChannelProblem = async (rule: TicketRule, fetchFn: typeof fetch): Promise<string | null> => {
+  if (rule.logChannelId === undefined) return null;
+  const response = await call(rule, fetchFn)(`/channels/${rule.logChannelId}`, 'GET');
+  if (!response.ok) return `the bot cannot see the log channel (${response.status})`;
+  const channel: unknown = await response.json();
+  const roleOrMember = z.object({ permission_overwrites: OverwritesSchema }).safeParse(channel);
+  if (!roleOrMember.success) return 'Discord did not say who can see the log channel';
+  const everyone = roleOrMember.data.permission_overwrites.find((o) => o.id === rule.guildId);
+  return everyone !== undefined && (bits(everyone.deny) & VIEW_CHANNEL) !== 0n && (bits(everyone.allow) & VIEW_CHANNEL) === 0n
+    ? null
+    : 'the log channel is not hidden from @everyone. Deny View Channel for @everyone on it, so only staff can read transcripts';
+};
 
 // Saves the transcript, then deletes the channel. Returns what to tell staff. A transcript that could not be saved stops
 // the delete: closing must not lose the record.
@@ -397,6 +459,8 @@ export const closeTicket = async (tools: TicketTools & { rule: TicketRule }, cha
   if (ticket === null || channel.parent_id !== rule.categoryId) return 'This is not a ticket channel, so it was not closed.';
 
   if (rule.logChannelId !== undefined) {
+    const problem = await logChannelProblem(rule, fetchFn);
+    if (problem !== null) throw new Error(`the ticket was kept: ${problem}`);
     const messages = await fetchMessages(rule, fetchFn, channelId);
     const form = new FormData();
     form.append(
@@ -464,7 +528,8 @@ export const handleTicket = async (
     if (channelId === undefined) return privateMessage('Use this in the channel you want the panel in.');
     return deferred(async () => {
       await postPanel(ready, channelId);
-      return '✅ Ticket panel posted.';
+      const warning = await logChannelProblem(rule, tools.fetchFn ?? fetch).catch((error: unknown) => errorText(error));
+      return warning === null ? '✅ Ticket panel posted.' : `✅ Ticket panel posted.\n⚠️ Closing tickets will not work yet: ${warning}.`;
     }, "Couldn't post the panel. The bot needs View Channel, Send Messages and Embed Links in this channel.");
   }
 
