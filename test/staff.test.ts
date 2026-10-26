@@ -194,7 +194,7 @@ describe('runStaffCommand', () => {
 
     expect(server.sent.filter((s) => s.startsWith('POST'))).toEqual([
       `POST /v1/players/${BO}/message ${JSON.stringify({ message: 'Staff warning: Language | Rules: our Discord at gaminginit.com' })}`,
-      `POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Spam | Rules: our Discord at gaminginit.com' })}`,
+      `POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Kicked for: Spam | Appeal at gaminginit.com/discord' })}`,
     ]);
   });
 
@@ -212,7 +212,7 @@ describe('runStaffCommand', () => {
 
     await expect(run('kick', { player: ASH, reason: '  ' })).resolves.toEqual({ content: 'A kick needs a reason.' });
     await expect(run('kick', { player: ASH, reason: 'Teamkilling' })).resolves.toEqual({ content: '👢 Kicked **Ash**: Teamkilling' });
-    expect(sent).toContain(`POST /v1/players/${ASH}/kick ${JSON.stringify({ reason: 'Teamkilling | Rules are in our Discord' })}`);
+    expect(sent).toContain(`POST /v1/players/${ASH}/kick ${JSON.stringify({ reason: 'Kicked for: Teamkilling | Appeal in our Discord' })}`);
     expect(records.log).toHaveBeenCalledWith(ASH, { action: 'kick', at: NOW, by: '42', name: 'Ash', reason: 'Teamkilling' });
   });
 
@@ -343,7 +343,7 @@ describe('runStaffCommand', () => {
     const reply = await run('ban', { player: 'Bo', duration: '1d', reason: 'Cheating' });
 
     expect(records.ban).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', length: '1d', reason: 'Cheating', by: '42' });
-    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned: Cheating | Rules are in our Discord' })}`);
+    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned for: Cheating | Appeal in our Discord' })}`);
     expect(reply).toEqual({
       content: `🔨 Banned **Bo** for 1 day, until <t:${(NOW + 86_400_000) / 1000}:f> and kicked them. Reason: Cheating`,
     });
