@@ -343,7 +343,7 @@ describe('runStaffCommand', () => {
     const reply = await run('ban', { player: 'Bo', duration: '1d', reason: 'Cheating' });
 
     expect(records.ban).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', length: '1d', reason: 'Cheating', by: '42' });
-    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned: Cheating | Rules are in our Discord' })}`);
+    expect(sent).toContain(`POST /v1/players/${BO}/kick ${JSON.stringify({ reason: 'Banned for: Cheating | Appeal in our Discord' })}`);
     expect(reply).toEqual({
       content: `🔨 Banned **Bo** for 1 day, until <t:${(NOW + 86_400_000) / 1000}:f> and kicked them. Reason: Cheating`,
     });

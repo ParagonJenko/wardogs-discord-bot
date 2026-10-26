@@ -192,8 +192,11 @@ export const rulesNote = (siteUrl: string | undefined): string => {
   return host ? `Rules: our Discord at ${host}` : 'Rules are in our Discord';
 };
 
-// The reason given with the kick that comes with a ban.
-export const banKickReason = (reason: string, siteUrl: string | undefined): string => `Banned: ${reason} | ${rulesNote(siteUrl)}`;
+// The reason given with the kick that comes with a ban, with where to appeal it.
+export const banKickReason = (reason: string, siteUrl: string | undefined): string => {
+  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  return `Banned for: ${reason} | ${host ? `Appeal at ${host}/discord` : 'Appeal in our Discord'}`;
+};
 
 const STEAM_ID = /^\d{17}$/;
 
