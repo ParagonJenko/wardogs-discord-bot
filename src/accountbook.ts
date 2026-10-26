@@ -323,6 +323,20 @@ export const steamLinks = async (storage: BookStorage): Promise<{ members: Set<s
   return { members, all };
 };
 
+// The Discord user of each Steam account that is linked, to tag them in posts. Steam accounts nobody linked are left out.
+export const discordUsers = async (storage: BookStorage, steamIds: Iterable<string>): Promise<Map<string, string>> => {
+  const wanted = [...new Set(steamIds)];
+  const users = new Map<string, string>();
+  for (let i = 0; i < wanted.length; i += 100) {
+    const got = await storage.get(wanted.slice(i, i + 100).map(steamLinkKey));
+    for (const steamId of wanted.slice(i, i + 100)) {
+      const link = parseSteamLink(got.get(steamLinkKey(steamId)));
+      if (link !== null) users.set(steamId, link.u);
+    }
+  }
+  return users;
+};
+
 export const linkedMembers = async (storage: BookStorage): Promise<Set<string>> => (await steamLinks(storage)).members;
 
 // One pass of what the bot owes accounts: roles to give or take, and VIP messages to send. It looks at the accounts in

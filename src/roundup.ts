@@ -331,6 +331,16 @@ const feedAwards = (
 };
 
 // Null when nobody was on the server in the period.
+// The public ids of every player a roundup names.
+export const roundupIds = (roundup: Roundup): string[] => {
+  const found = new Set<string>();
+  JSON.stringify(roundup, (_key, value: unknown) => {
+    if (typeof value === 'object' && value !== null && 'name' in value && 'id' in value && typeof value.id === 'string') found.add(value.id);
+    return value;
+  });
+  return [...found];
+};
+
 export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS_SHOWN, kdDays }: RoundupSources): Roundup | null => {
   const covered = new Set(periodDays(period));
   const inPeriod = days.filter((d) => covered.has(d.day) && Object.keys(d.players).length > 0);

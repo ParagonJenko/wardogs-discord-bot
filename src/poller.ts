@@ -111,6 +111,8 @@ type PollerDeps = {
   staff?: () => Promise<ReadonlySet<string>>;
   // Steam IDs of players who linked their Discord account on the website: their welcome leaves the Discord invite out.
   linked?: () => Promise<ReadonlySet<string>>;
+  // The Discord user of each of these Steam IDs that linked their account on the website: the live alert tags its top seeders.
+  discordUsers?: (steamIds: string[]) => Promise<ReadonlyMap<string, string>>;
   // Each player's best place on the website's leaderboard ("3rd for kills"), by Steam ID: they get the welcome back. Only
   // asked when a welcome is due.
   ranks?: () => Promise<ReadonlyMap<string, string>>;
@@ -376,6 +378,7 @@ export const createPoller = ({
   voting,
   outage: tellOutage,
   linked,
+  discordUsers,
   ranks,
   nudges,
   nudged,
@@ -581,12 +584,19 @@ export const createPoller = ({
     const ending = endRule === null ? null : ([finished, won].find((m) => unthanked(m, state)) ?? null);
     const naming = wentLive || finished !== null || state.unsentSummary !== null || ending !== null;
     const hidden = naming && privateProfiles !== undefined ? await privateProfiles() : new Set<string>();
-    const seeders = wentLive
-      ? topSeeders(publicNamesBySteamId(state.seeding, hidden), TOP_SEEDERS, staffIds).map((s) => ({
-          name: s.name,
-          minutes: minutes(s.checks),
-        }))
-      : [];
+    const publicSeeding = publicNamesBySteamId(state.seeding, hidden);
+    const topped = wentLive ? topSeeders(publicSeeding, TOP_SEEDERS, staffIds) : [];
+    // The top seeders who linked their Discord account are tagged. A private profile is never named, so never tagged.
+    const steamOf = new Map(Object.entries(publicSeeding).map(([steamId, s]) => [s, steamId]));
+    const toppedIds = topped.flatMap((s) => {
+      const steamId = steamOf.get(s);
+      return steamId === undefined || hidden.has(steamId) ? [] : [steamId];
+    });
+    const users = toppedIds.length > 0 && discordUsers !== undefined ? await discordUsers(toppedIds).catch(() => new Map<string, string>()) : new Map<string, string>();
+    const seeders = topped.map((s) => {
+      const discordId = users.get(steamOf.get(s) ?? '');
+      return { name: s.name, minutes: minutes(s.checks), ...(discordId === undefined ? {} : { discordId }) };
+    });
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
     if (credits.length > 0) await stats?.seeded(credits, time);
     const thanking = credits.length > 0 && config.seedingMessages !== null && messagePlayer !== undefined;

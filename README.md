@@ -16,6 +16,9 @@ It also posts:
 
 - **Top seeders** on the live alert: the 3 players who were online longest while the server seeded. Never
   [staff](#staff-steam-accounts).
+- **Tags**: a player who linked their Discord account on the website is tagged instead of named: the top seeders on the live
+  alert and the players who earn or keep a whitelist slot (both ping them), and the players in a roundup's boards and awards
+  (shown as a mention, no ping). A private profile is never named, so never tagged.
 - **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D. With the [kill feed](#weapon-stats)

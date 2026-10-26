@@ -32,12 +32,12 @@ export type Embed = {
 export type DiscordMessage = {
   content?: string;
   embeds: Embed[];
-  allowed_mentions: { parse: never[]; roles: string[] };
+  allowed_mentions: { parse: never[]; roles: string[]; users?: string[] };
 };
 
 type Population = Pick<ServerStatus, 'name' | 'players' | 'maxPlayers'> & Partial<Pick<ServerStatus, 'map'>>;
 
-export type Seeder = { name: string; minutes: number };
+export type Seeder = { name: string; minutes: number; discordId?: string };
 
 type MessageOptions = {
   lowPop: number;
@@ -51,6 +51,12 @@ type MessageOptions = {
 };
 
 const NO_PINGS = { parse: [], roles: [] };
+
+// A player's name, or a mention of them when their Discord account is linked.
+const tagged = (name: string, discordId: string | undefined): string => (discordId === undefined ? playerName(name) : `<@${discordId}>`);
+
+// A message line's pings: the mentioned users, once each.
+const pinged = (ids: (string | undefined)[]): string[] => [...new Set(ids.filter((id): id is string => id !== undefined))];
 
 // Map ids as RCON reports them, and the names players see in game.
 // Each map also has its own colour, the same as on the website, so they can be told apart at a glance.
@@ -263,7 +269,7 @@ const needed = (kind: AlertKind, server: Population, options: MessageOptions): E
 };
 
 export const buildMessage = (kind: AlertKind, server: Population, options: MessageOptions): DiscordMessage => {
-  const seeders = (options.seeders ?? []).map((s) => `${playerName(s.name)} · ${s.minutes} min`);
+  const seeders = (options.seeders ?? []).map((s) => `${tagged(s.name, s.discordId)} · ${s.minutes} min`);
   const fields: EmbedField[] = [
     { name: 'Players', value: population(server.players, server.maxPlayers, kind) },
     ...(server.map ? [{ name: 'Map', value: mapTitle(server.map), inline: true }] : []),
@@ -274,8 +280,11 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
       : []),
     ...joinField(options.serverId),
   ];
+  // The live alert thanks the seeders by tagging the ones with a linked Discord account.
+  const users = kind === 'live' ? pinged((options.seeders ?? []).map((s) => s.discordId)) : [];
+  const content = [options.roleId ? `<@&${options.roleId}>` : null, ...users.map((id) => `<@${id}>`)].filter((part) => part !== null).join(' ');
   return {
-    ...(options.roleId ? { content: `<@&${options.roleId}>` } : {}),
+    ...(content ? { content } : {}),
     embeds: [
       {
         title: title(kind, server, options.lowPop),
@@ -286,7 +295,7 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
       },
     ],
     // Only the configured role may be pinged; a server name containing @everyone must not ping anyone.
-    allowed_mentions: { parse: [], roles: options.roleId ? [options.roleId] : [] },
+    allowed_mentions: { parse: [], roles: options.roleId ? [options.roleId] : [], ...(users.length > 0 ? { users } : {}) },
   };
 };
 
@@ -656,17 +665,17 @@ export const buildSavedRotationEmbed = ({ name, lines, days, onToday }: { name: 
 // Discord caps an embed description at 4096 characters; this many names stays well inside it.
 const MAX_NAMES_ANNOUNCED = 20;
 
-const nameList = (names: string[]): string => {
-  const shown = names.slice(0, MAX_NAMES_ANNOUNCED).map(playerName);
-  const more = names.length - shown.length;
+const nameList = (players: { name: string; discordId?: string }[]): string => {
+  const shown = players.slice(0, MAX_NAMES_ANNOUNCED).map((p) => tagged(p.name, p.discordId));
+  const more = players.length - shown.length;
   const all = more > 0 ? [...shown, `${more} more`] : shown;
   return andList(all);
 };
 
 // Posted when seeders get a whitelist slot, or keep one for another week, so everyone sees what seeding earns.
 export const buildVipMessage = (
-  added: { name: string }[],
-  renewed: { name: string }[],
+  added: { name: string; discordId?: string }[],
+  renewed: { name: string; discordId?: string }[],
   vip: VipRule,
   siteUrl?: string,
 ): DiscordMessage => {
@@ -674,24 +683,27 @@ export const buildVipMessage = (
   const week = vip.lengthDays === 7 ? 'week' : span(vip.lengthDays);
   const earned =
     added.length > 0
-      ? `🎉 **${nameList(added.map((p) => p.name))}** earned ${added.length === 1 ? 'a whitelist slot' : 'whitelist slots'} ` +
+      ? `🎉 **${nameList(added)}** earned ${added.length === 1 ? 'a whitelist slot' : 'whitelist slots'} ` +
         `for ${span(vip.lengthDays)} by seeding. Thank you!`
       : null;
+  // Whoever linked their Discord account is tagged, and pinged, for their slot.
+  const users = pinged([...added, ...renewed].slice(0, MAX_NAMES_ANNOUNCED).map((p) => p.discordId));
   return {
+    ...(users.length > 0 ? { content: users.map((id) => `<@${id}>`).join(' ') } : {}),
     embeds: [
       {
         title: '🎖️ Whitelist slots for seeders',
         ...(earned ? { description: earned } : {}),
         color: COLORS.seeding,
         fields: [
-          ...(renewed.length > 0 ? [{ name: `Kept for another ${week}`, value: nameList(renewed.map((p) => p.name)) }] : []),
+          ...(renewed.length > 0 ? [{ name: `Kept for another ${week}`, value: nameList(renewed) }] : []),
           { name: 'Earn one too', value: `${vipOffer(vip)}\n${vipRule(vip)}` },
         ],
         ...linked,
         footer: { text: ["Whitelist slots start after the server's next restart.", linked.footer?.text].filter(Boolean).join(' · ') },
       },
     ],
-    allowed_mentions: NO_PINGS,
+    allowed_mentions: { parse: [], roles: [], ...(users.length > 0 ? { users } : {}) },
   };
 };
 
@@ -752,18 +764,25 @@ const embedLength = (embed: Embed): number =>
   (embed.footer?.text.length ?? 0) +
   (embed.fields ?? []).reduce((sum, f) => sum + f.name.length + f.value.length, 0);
 
-// A player's name in bold, linked to their page when `pages` is the website's address.
-const roundupName = (p: RoundupPlayer, pages: string | null): string => {
+// How a roundup names its players: `pages` is the website's address, for a link to each player's page, and `users` the
+// Discord user of each player (by public id) who linked their account.
+type RoundupLinks = { pages: string | null; users: ReadonlyMap<string, string> };
+
+// A player's name in bold, a mention of them when they linked their Discord account, or else linked to their page when
+// there is a website.
+const roundupName = (p: RoundupPlayer, { pages, users }: RoundupLinks): string => {
+  const user = p.id === undefined ? undefined : users.get(p.id);
+  if (user !== undefined) return `**<@${user}>**`;
   const name = playerName(p.name);
   return `**${pages && p.id ? `[${name}](${pages}/player?id=${p.id})` : name}**`;
 };
 
-const roundupBoard = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string, pages: string | null): string =>
-  rows.length === 0 ? '–' : ranked(rows.map((p) => `${roundupName(p, pages)} · ${value(p)}`));
+const roundupBoard = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string, links: RoundupLinks): string =>
+  rows.length === 0 ? '–' : ranked(rows.map((p) => `${roundupName(p, links)} · ${value(p)}`));
 
-const buildRoundupEmbed = (r: Roundup, pages: string | null, siteUrl: string | undefined): Embed => {
-  const who = (p: RoundupPlayer): string => roundupName(p, pages);
-  const board = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string): string => roundupBoard(rows, value, pages);
+const buildRoundupEmbed = (r: Roundup, links: RoundupLinks, siteUrl: string | undefined): Embed => {
+  const who = (p: RoundupPlayer): string => roundupName(p, links);
+  const board = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string): string => roundupBoard(rows, value, links);
 
   // Whole hours, once there is at least one.
   const played = r.playedMs >= 60 * 60_000 ? `${Math.round(r.playedMs / (60 * 60_000))} h` : minutes(r.playedMs);
@@ -844,9 +863,9 @@ const ROLE_RULES =
 const metres = (distance: number): string => `${distance < 10 ? Number(distance.toFixed(1)) : Math.round(distance)} m`;
 
 // The awards: the best at each role, from the kill feed, and shout-outs for the rest. Null when there are none.
-const buildAwardsEmbed = (r: Roundup, pages: string | null): Embed | null => {
+const buildAwardsEmbed = (r: Roundup, links: RoundupLinks): Embed | null => {
   const a = r.awards;
-  const who = (p: RoundupPlayer): string => roundupName(p, pages);
+  const who = (p: RoundupPlayer): string => roundupName(p, links);
   const shoutOuts = [
     ...(a?.headshots ? [`💀 Headhunter: ${who(a.headshots)} · ${plural(a.headshots.headshots, 'headshot')}`] : []),
     ...(a?.longest ? [`📏 Longest shot: ${who(a.longest)} · ${metres(a.longest.distance)} · ${escapeMarkdown(a.longest.weapon)}`] : []),
@@ -858,7 +877,7 @@ const buildAwardsEmbed = (r: Roundup, pages: string | null): Embed | null => {
     ...(r.rookie ? [`🐣 Rookie of the ${r.kind}: ${who(r.rookie)} · ${hoursAndMinutes(r.rookie.minutes)} played`] : []),
   ];
   const fields: EmbedField[] = [
-    ...(a ? a.roles.map(({ role, top }) => ({ name: ROLE_TITLES[role], value: roundupBoard(top, (p) => String(p.kills), pages), inline: true })) : []),
+    ...(a ? a.roles.map(({ role, top }) => ({ name: ROLE_TITLES[role], value: roundupBoard(top, (p) => String(p.kills), links) })) : []),
     ...(shoutOuts.length > 0 ? [{ name: '🌟 Shout-outs', value: shoutOuts.join('\n') }] : []),
   ];
   if (fields.length === 0) return null;
@@ -881,14 +900,15 @@ const fits = (embeds: Embed[]): boolean =>
   embeds.every((e) => (e.fields ?? []).every((f) => f.value.length <= MAX_FIELD));
 
 // The best players and team of a week or month, then the awards. Names link to their player pages on the website,
-// unless the links would make it too long for Discord, and the awards are left out if it is too long even then.
-export const buildRoundupMessage = (roundup: Roundup, siteUrl?: string): DiscordMessage => {
+// unless the links would make it too long for Discord, and the awards are left out if it is too long even then. A player
+// who linked their Discord account (`users`, by public id) is tagged instead; a mention in an embed pings nobody.
+export const buildRoundupMessage = (roundup: Roundup, siteUrl?: string, users: ReadonlyMap<string, string> = new Map()): DiscordMessage => {
   const pages = siteUrl ? siteUrl.replace(/\/$/, '') : null;
-  const build = (links: string | null): Embed[] => {
+  const build = (links: RoundupLinks): Embed[] => {
     const awards = buildAwardsEmbed(roundup, links);
     return [buildRoundupEmbed(roundup, links, siteUrl), ...(awards === null ? [] : [awards])];
   };
-  const embeds = [build(pages), build(null)].find(fits) ?? build(null).slice(0, 1);
+  const embeds = [build({ pages, users }), build({ pages: null, users })].find(fits) ?? build({ pages: null, users }).slice(0, 1);
   return { embeds, allowed_mentions: NO_PINGS };
 };
 

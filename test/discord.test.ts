@@ -150,6 +150,18 @@ describe('buildMessage', () => {
     expect(field(buildMessage('live', server, { lowPop: 20 }), 'Join the server')).toBeUndefined();
   });
 
+  it('tags the top seeders with a linked Discord account on the live alert, and pings them', () => {
+    const seeders = [
+      { name: 'Ash_1', minutes: 42, discordId: '111111111111111111' },
+      { name: 'Bo', minutes: 30 },
+    ];
+    const live = buildMessage('live', { ...server, players: 20 }, { lowPop: 20, roleId: '999', seeders });
+
+    expect(field(live, 'Top seeders')).toBe('🥇 <@111111111111111111> · 42 min\n🥈 Bo · 30 min');
+    expect(live.content).toBe('<@&999> <@111111111111111111>');
+    expect(live.allowed_mentions).toEqual({ parse: [], roles: ['999'], users: ['111111111111111111'] });
+  });
+
   it('adds no seeder list when nobody seeded', () => {
     expect(field(buildMessage('live', { ...server, players: 20 }, { lowPop: 20, seeders: [] }), 'Top seeders')).toBeUndefined();
   });
@@ -731,17 +743,18 @@ describe('buildRoundupMessage', () => {
 
   it('adds the awards: the best at each role from the kill feed, and shout-outs', () => {
     const message = buildRoundupMessage(awarded, 'https://gaminginit.com/');
+    expect((message.embeds[1]?.fields ?? []).some((f) => f.inline === true)).toBe(false);
     expect(message.embeds).toHaveLength(2);
     const embed = message.embeds[1];
     const link = (name: string, id: string) => `**[${name}](https://gaminginit.com/player?id=${id})**`;
     expect(embed?.title).toBe('🎖️ Awards · 28 Sep – 4 Oct');
     expect(embed?.fields).toEqual([
-      { name: '🪖 Best assaulter', value: `🥇 ${link('Ash', 'aaaaaaaaaaaa')} · 40\n🥈 **Bo\\_b** · 12`, inline: true },
-      { name: '💣 Best support', value: `🥇 ${link('Cy', 'cccccccccccc')} · 9`, inline: true },
-      { name: '🔥 Best machine gunner', value: '–', inline: true },
-      { name: '🔭 Best marksman', value: `🥇 ${link('Di', 'dddddddddddd')} · 7`, inline: true },
-      { name: '🧨 Best demolitions', value: '–', inline: true },
-      { name: '🚁 Best vehicle crew', value: '–', inline: true },
+      { name: '🪖 Best assaulter', value: `🥇 ${link('Ash', 'aaaaaaaaaaaa')} · 40\n🥈 **Bo\\_b** · 12` },
+      { name: '💣 Best support', value: `🥇 ${link('Cy', 'cccccccccccc')} · 9` },
+      { name: '🔥 Best machine gunner', value: '–' },
+      { name: '🔭 Best marksman', value: `🥇 ${link('Di', 'dddddddddddd')} · 7` },
+      { name: '🧨 Best demolitions', value: '–' },
+      { name: '🚁 Best vehicle crew', value: '–' },
       {
         name: '🌟 Shout-outs',
         value: [
@@ -874,6 +887,21 @@ describe('buildRoundupMessage', () => {
   });
 });
 
+describe('roundup tags', () => {
+  it('tags a player with a linked Discord account in place of their name', () => {
+    const roundup = { kind: 'week', start: Date.UTC(2026, 8, 28), end: Date.UTC(2026, 9, 5), partial: false, matches: 0, playedMs: 0, players: 2, peakPlayers: null,
+      busiestDay: null, teams: [], bestTeam: null, teamMinMatches: 3, kdMinMatches: 3, kills: [], kd: [], bestMatch: [], wins: [], mvps: [],
+      playtime: [{ name: 'Ash', id: 'aaaaaaaaaaaa', minutes: 90 }, { name: 'Bo', id: 'bbbbbbbbbbbb', minutes: 60 }],
+      seeding: [], biggestWin: null, closestMatch: null, topMap: null, regular: null, rookie: null, awards: null } as unknown as Roundup;
+    const message = buildRoundupMessage(roundup, 'https://gaminginit.com', new Map([['aaaaaaaaaaaa', '111111111111111111']]));
+
+    expect(field(message, '⏱️ Most time played')).toBe(
+      '🥇 **<@111111111111111111>** · 1 h 30 min\n🥈 **[Bo](https://gaminginit.com/player?id=bbbbbbbbbbbb)** · 1 h 0 min',
+    );
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+});
+
 describe('buildSeedersEmbed', () => {
   it('lists seeders with medals, seed days, minutes, Steam IDs and VIP, and explains it in the footer', () => {
     const embed = buildSeedersEmbed(
@@ -911,6 +939,20 @@ describe('buildSeedersEmbed', () => {
 });
 
 describe('buildVipMessage', () => {
+  it('tags and pings whoever linked their Discord account', () => {
+    const day = { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 };
+    const message = buildVipMessage(
+      [{ name: 'Ash', discordId: '111111111111111111' }],
+      [{ name: 'Bo', discordId: '222222222222222222' }, { name: 'Cy' }],
+      day,
+    );
+
+    expect(embedOf(message)?.description).toContain('**<@111111111111111111>** earned');
+    expect(field(message, 'Kept for another 3 days')).toBe('<@222222222222222222> and Cy');
+    expect(message.content).toBe('<@111111111111111111> <@222222222222222222>');
+    expect(message.allowed_mentions.users).toEqual(['111111111111111111', '222222222222222222']);
+  });
+
   it('says one seed earns a slot for 3 days when one seed day is enough', () => {
     const day = { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 };
     const message = buildVipMessage([{ name: 'Ash' }], [{ name: 'Bo' }], day);
