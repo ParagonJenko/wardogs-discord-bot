@@ -967,3 +967,92 @@ describe('a press of a vote button', () => {
     expect(d.log.error).toHaveBeenCalled();
   });
 });
+
+describe('tickets', () => {
+  const member = (roles: string[] = []) => ({ roles, permissions: '0', user: { id: '300', username: 'ozeti' } });
+  const rule = { botToken: 'bot', guildId: '777', categoryId: '50', logChannelId: undefined, staffRoleIds: ['555'] };
+  const press = (customId: string, over: Record<string, unknown> = {}) => ({
+    type: 3,
+    application_id: '111',
+    token: 'tok',
+    guild_id: '777',
+    channel_id: '900',
+    member: member(),
+    data: { custom_id: customId },
+    ...over,
+  });
+
+  it('opens a form when a ticket button is pressed', async () => {
+    const { body, signature, timestamp } = await signed(press('ticket:open:appeal'));
+    const result = await handleInteraction(body, signature, timestamp, { ...deps(), tickets: { rule } });
+    expect(result.body).toMatchObject({ type: 9, data: { custom_id: 'ticket:new:appeal' } });
+  });
+
+  it('opens the ticket from the submitted form, and replies privately once it is made', async () => {
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) =>
+      new Response(
+        JSON.stringify(
+          init?.method === 'GET'
+            ? []
+            : {
+                id: '1000',
+                permission_overwrites: [
+                  { id: '777', type: 0, allow: '0', deny: String(1 << 10) },
+                  { id: '555', type: 0, allow: String(1 << 10), deny: '0' },
+                  { id: '300', type: 1, allow: String(1 << 10), deny: '0' },
+                  { id: '111', type: 1, allow: String(1 << 10), deny: '0' },
+                ],
+              },
+        ),
+        { status: 200 },
+      )) as typeof fetch;
+    const d = deps();
+    const { body, signature, timestamp } = await signed(
+      press('ticket:new:query', {
+        type: 5,
+        data: {
+          custom_id: 'ticket:new:query',
+          components: [
+            { type: 1, components: [{ type: 4, custom_id: 'subject', value: 'Hello' }] },
+            { type: 1, components: [{ type: 4, custom_id: 'details', value: 'A question' }] },
+          ],
+        },
+      }),
+    );
+    const result = await handleInteraction(body, signature, timestamp, { ...d, tickets: { rule, fetchFn } });
+    expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
+    await result.followUp?.();
+    expect(d.editReply).toHaveBeenCalledWith('111', 'tok', { content: '✅ Your ticket is open: <#1000>', allowed_mentions: { parse: [] } });
+  });
+
+  it('only lets staff close, by Staff role', async () => {
+    const asMember = await signed(press('ticket:close'));
+    const refused = await handleInteraction(asMember.body, asMember.signature, asMember.timestamp, { ...deps(), tickets: { rule } });
+    expect(JSON.stringify(refused.body)).toContain('Only staff');
+    const asStaff = await signed(press('ticket:close', { member: member(['555']) }));
+    const asked = await handleInteraction(asStaff.body, asStaff.signature, asStaff.timestamp, { ...deps(), tickets: { rule } });
+    expect(JSON.stringify(asked.body)).toContain('ticket:close-yes');
+  });
+
+  it('ignores tickets in another server', async () => {
+    const { body, signature, timestamp } = await signed(press('ticket:open:appeal', { guild_id: '999' }));
+    const result = await handleInteraction(body, signature, timestamp, { ...deps(), tickets: { rule } });
+    expect(JSON.stringify(result.body)).toContain('only work in the Discord server');
+  });
+
+  it('posts the panel for staff only', async () => {
+    const command = { type: 2, application_id: '111', token: 'tok', guild_id: '777', channel_id: '900', data: { name: 'ticketpanel' } };
+    const member1 = await signed({ ...command, member: member() });
+    const refused = await handleInteraction(member1.body, member1.signature, member1.timestamp, { ...deps(), tickets: { rule } });
+    expect(JSON.stringify(refused.body)).toContain('Only staff');
+    const posted: string[] = [];
+    const fetchFn = (async (url: string | URL | Request) => {
+      posted.push(String(url));
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    const staff = await signed({ ...command, member: member(['555']) });
+    const result = await handleInteraction(staff.body, staff.signature, staff.timestamp, { ...deps(), tickets: { rule, fetchFn } });
+    await result.followUp?.();
+    expect(posted).toEqual(['https://discord.com/api/v10/channels/900/messages']);
+  });
+});

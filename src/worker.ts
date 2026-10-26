@@ -188,6 +188,7 @@ import {
   type CommandRequest,
   type Choice,
 } from './interactions.ts';
+import type { TicketRule } from './tickets.ts';
 import { fetchGuildCounts, fetchInviteCounts } from './invite.ts';
 import {
   createSessions,
@@ -4902,6 +4903,29 @@ const loadConfigQuiet = (vars: Record<string, string>): Config | null => {
 };
 
 // The slash commands, run and suggested for in the same way from Discord and from the staff page.
+// Support tickets (see tickets.ts): off unless the bot has its token, and the category tickets are made in is set. The staff
+// roles that see every ticket are the admin roles.
+const ticketRule = (vars: Record<string, string>): TicketRule | null => {
+  const id = (name: string): string | undefined => {
+    const value = vars[name]?.trim();
+    return value && /^\d+$/.test(value) ? value : undefined;
+  };
+  const botToken = vars['DISCORD_BOT_TOKEN']?.trim();
+  const guildId = id('DISCORD_GUILD_ID');
+  const categoryId = id('DISCORD_TICKET_CATEGORY_ID');
+  if (!botToken || guildId === undefined || categoryId === undefined) return null;
+  return {
+    botToken,
+    guildId,
+    categoryId,
+    logChannelId: id('DISCORD_TICKET_LOG_CHANNEL_ID'),
+    staffRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
+      .split(',')
+      .map((role) => role.trim())
+      .filter((role) => /^\d+$/.test(role) && role !== guildId),
+  };
+};
+
 const commandTools = (
   vars: Record<string, string>,
   watcher: () => DurableObjectStub<Watcher>,
@@ -5386,6 +5410,7 @@ export default {
         adminGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
         voteGuildId: vars['DISCORD_GUILD_ID']?.trim() || undefined,
         castVote: (press) => watcher().castMapVote(press),
+        tickets: { rule: ticketRule(vars) },
         adminRoleIds: (vars['DISCORD_ADMIN_ROLE_IDS'] ?? '')
           .split(',')
           .map((id) => id.trim())
