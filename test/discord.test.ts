@@ -888,6 +888,17 @@ describe('buildRoundupMessage', () => {
 });
 
 describe('roundup tags', () => {
+  it('shows no backslashes in a linked name with markdown characters', () => {
+    const roundup = { kind: 'week', start: Date.UTC(2026, 8, 28), end: Date.UTC(2026, 9, 5), partial: false, matches: 0, playedMs: 0, players: 1, peakPlayers: null,
+      busiestDay: null, teams: [], bestTeam: null, teamMinMatches: 3, kdMinMatches: 3, kills: [], kd: [], bestMatch: [], wins: [], mvps: [],
+      playtime: [{ name: '[INIT] **DDS**Danman', id: 'aaaaaaaaaaaa', minutes: 90 }],
+      seeding: [], biggestWin: null, closestMatch: null, topMap: null, regular: null, rookie: null, awards: null } as unknown as Roundup;
+    const value = field(buildRoundupMessage(roundup, 'https://gaminginit.com'), '⏱️ Most time played') ?? '';
+
+    expect(value).not.toContain('\\');
+    expect(value).toContain('［INIT］ *\u200b*\u200bDDS*\u200b*\u200bDanman');
+  });
+
   it('tags a player with a linked Discord account in place of their name', () => {
     const roundup = { kind: 'week', start: Date.UTC(2026, 8, 28), end: Date.UTC(2026, 9, 5), partial: false, matches: 0, playedMs: 0, players: 2, peakPlayers: null,
       busiestDay: null, teams: [], bestTeam: null, teamMinMatches: 3, kdMinMatches: 3, kills: [], kd: [], bestMatch: [], wins: [], mvps: [],

@@ -92,6 +92,15 @@ const MAX_PLAYER_NAME = 40;
 export const playerName = (name: string): string =>
   escapeMarkdown(name.length > MAX_PLAYER_NAME ? `${name.slice(0, MAX_PLAYER_NAME - 1)}…` : name);
 
+// A name as the label of a link. Discord shows a backslash in a link label as it is, so the name is cut short like
+// playerName but not escaped: a zero-width space after each markdown character stops it restyling the label, and the
+// square brackets that would end the label become full-width ones.
+const linkLabel = (name: string): string =>
+  (name.length > MAX_PLAYER_NAME ? `${name.slice(0, MAX_PLAYER_NAME - 1)}…` : name)
+    .replace(/[\\*_~`|>#]/g, '$&\u200b')
+    .replace(/\[/g, '［')
+    .replace(/\]/g, '］');
+
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 const kd = (kills: number, deaths: number): string => (kills / Math.max(deaths, 1)).toFixed(2);
@@ -773,8 +782,7 @@ type RoundupLinks = { pages: string | null; users: ReadonlyMap<string, string> }
 const roundupName = (p: RoundupPlayer, { pages, users }: RoundupLinks): string => {
   const user = p.id === undefined ? undefined : users.get(p.id);
   if (user !== undefined) return `**<@${user}>**`;
-  const name = playerName(p.name);
-  return `**${pages && p.id ? `[${name}](${pages}/player?id=${p.id})` : name}**`;
+  return `**${pages && p.id ? `[${linkLabel(p.name)}](${pages}/player?id=${p.id})` : playerName(p.name)}**`;
 };
 
 const roundupBoard = <T extends RoundupPlayer>(rows: T[], value: (p: T) => string, links: RoundupLinks): string =>
