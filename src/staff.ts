@@ -193,10 +193,15 @@ export const rulesNote = (siteUrl: string | undefined): string => {
 };
 
 // The reason given with the kick that comes with a ban, with where to appeal it.
-export const banKickReason = (reason: string, siteUrl: string | undefined): string => {
+const appealNote = (siteUrl: string | undefined): string => {
   const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-  return `Banned for: ${reason} | ${host ? `Appeal at ${host}/discord` : 'Appeal in our Discord'}`;
+  return host ? `Appeal at ${host}/discord` : 'Appeal in our Discord';
 };
+
+export const banKickReason = (reason: string, siteUrl: string | undefined): string => `Banned for: ${reason} | ${appealNote(siteUrl)}`;
+
+// The reason given with a staff /kick, with where to appeal it.
+export const kickReason = (reason: string, siteUrl: string | undefined): string => `Kicked for: ${reason} | ${appealNote(siteUrl)}`;
 
 const STEAM_ID = /^\d{17}$/;
 
@@ -493,7 +498,7 @@ export const runStaffCommand =
       if ('problem' in target) return { content: target.problem };
       const { player } = target;
       log.info(`/kick by ${staff}: ${logged(player)}: ${JSON.stringify(reason)}`);
-      await kickPlayer(rconUrl, rconPassword, player.steamId, `${reason} | ${rules}`, http);
+      await kickPlayer(rconUrl, rconPassword, player.steamId, kickReason(reason, siteUrl), http);
       await records.log(player.steamId, { action: 'kick', at: now(), by, ...named, name: player.name, reason });
       return { content: `👢 Kicked ${who(player)}: ${reason}` };
     }
