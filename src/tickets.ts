@@ -172,22 +172,30 @@ const privateMessage = (content: string, components?: unknown[]): TicketResult =
 
 // A failure whose cause is safe to show the person who pressed the button, because it says what staff must fix and nothing
 // private. Anything else gets the general message, with the detail in the log.
-export class TicketProblem extends Error {}
+// `detail` is what goes in the log: the operation, status and Discord's answer. It never reaches the person.
+export class TicketProblem extends Error {
+  detail: string;
+  constructor(message: string, detail: string = message) {
+    super(message);
+    this.detail = detail;
+  }
+}
 
 const PERMISSIONS_NEEDED = 'View Channel, Manage Channels, Send Messages, Embed Links, Attach Files, Read Message History and Mention Everyone';
 
 // What a refusal from Discord means for staff.
-export const discordProblem = (status: number, body: string): TicketProblem | null => {
+export const discordProblem = (action: string, status: number, body: string): TicketProblem | null => {
+  const detail = `${action}: ${status} ${body}`;
   const code = z.object({ code: z.number() }).safeParse((() => { try { return JSON.parse(body); } catch { return null; } })());
   const known = code.success ? code.data.code : undefined;
   if (known === 50013 || status === 403) {
-    return new TicketProblem(`I can't open tickets yet: the bot is missing permissions in the ticket category. It needs ${PERMISSIONS_NEEDED} there. Please tell staff. (Discord ${known ?? status})`);
+    return new TicketProblem(`I can't open tickets yet: the bot is missing permissions in the ticket category. It needs ${PERMISSIONS_NEEDED} there. Please tell staff. (Discord ${known ?? status})`, detail);
   }
   if (known === 30013 || known === 50035) {
-    return new TicketProblem(`I can't open tickets right now: the ticket category is full or set up wrong. Please tell staff. (Discord ${known})`);
+    return new TicketProblem(`I can't open tickets right now: the ticket category is full or set up wrong. Please tell staff. (Discord ${known})`, detail);
   }
   if (known === 10003 || status === 404) {
-    return new TicketProblem('I can\'t open tickets yet: the ticket category was not found. Please tell staff. (Discord 10003)');
+    return new TicketProblem('I can\'t open tickets yet: the ticket category was not found. Please tell staff. (Discord 10003)', detail);
   }
   return null;
 };
@@ -435,7 +443,7 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
   );
   if (!created.ok) {
     const text = await created.text();
-    throw discordProblem(created.status, text) ?? new Error(`Discord would not create the ticket channel: ${created.status} ${text}`);
+    throw discordProblem('creating the ticket channel', created.status, text) ?? new Error(`Discord would not create the ticket channel: ${created.status} ${text}`);
   }
   const made: unknown = await created.json();
   const channel = z.object({ id: z.string() }).parse(made);
@@ -445,7 +453,7 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
   const exposed = exposure(made, rule.guildId, [request.userId, request.applicationId, ...staffRoles(rule)]);
   if (exposed !== null) {
     await discard();
-    throw new TicketProblem(`I didn't open your ticket because I couldn't make it private (${exposed}). Please tell staff.`);
+    throw new TicketProblem("I didn't open your ticket because I couldn't make it private. Please tell staff.", `the new channel ${channel.id} was not private: ${exposed}`);
   }
 
   const ping = TICKET_KINDS[type].ping ? staffRoles(rule) : [];
@@ -461,7 +469,7 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
   if (!posted.ok) {
     await discard();
     const text = await posted.text();
-    throw discordProblem(posted.status, text) ?? new Error(`Discord would not post in the ticket channel: ${posted.status} ${text}`);
+    throw discordProblem('posting in the ticket channel', posted.status, text) ?? new Error(`Discord would not post in the ticket channel: ${posted.status} ${text}`);
   }
   return `✅ Your ticket is open: <#${channel.id}>`;
 };
@@ -593,7 +601,7 @@ export const handleTicket = async (
     body: { type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } },
     followUp: async () => {
       const content = await work().catch((error: unknown) => {
-        log.error(`Ticket ${request.customId} failed: ${errorText(error)}`);
+        log.error(`Ticket ${request.customId} failed: ${error instanceof TicketProblem ? error.detail : errorText(error)}`);
         return error instanceof TicketProblem ? error.message : failure;
       });
       await edit({ content });

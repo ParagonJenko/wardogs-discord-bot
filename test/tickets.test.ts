@@ -201,6 +201,8 @@ describe('failures', () => {
     await result.followUp?.();
     expect(edit).toHaveBeenCalledWith({ content: expect.stringContaining('missing permissions in the ticket category') });
     expect(edit).toHaveBeenCalledWith({ content: expect.stringContaining('Discord 50013') });
+    // The log keeps the operation, status and Discord's answer.
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('creating the ticket channel: 403 {"code":50013'));
   });
 
   it('says a private channel could not be made when it is exposed', async () => {
@@ -210,6 +212,9 @@ describe('failures', () => {
     const result = await handleTicket({ rule, fetchFn }, request(), edit, log);
     await result.followUp?.();
     expect(edit).toHaveBeenCalledWith({ content: expect.stringContaining("couldn't make it private") });
+    // Who the channel was shown to is for the log only.
+    expect(JSON.stringify(edit.mock.calls)).not.toContain('@everyone');
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('was not private: the channel is not hidden from @everyone'));
   });
 });
 
