@@ -137,7 +137,7 @@ describe('openTicket', () => {
       if (String(url).endsWith('/messages')) return json({ message: 'Missing Access' }, 403);
       return json(madeChannel());
     }) as typeof fetch;
-    await expect(openTicket({ rule, fetchFn }, 'query', request())).rejects.toThrow('post in the ticket channel');
+    await expect(openTicket({ rule, fetchFn }, 'query', request())).rejects.toThrow('missing permissions in the ticket category');
     expect(calls).toContain('DELETE https://discord.com/api/v10/channels/777');
   });
 });
