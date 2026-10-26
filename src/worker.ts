@@ -1435,7 +1435,7 @@ export class Watcher extends DurableObject<Env> {
 
   // The Discord user of each player in a roundup who linked their account, by public id, to tag them. A private profile has
   // no public id, so none is tagged.
-  private async roundupUsers(roundup: Roundup): Promise<Map<string, string>> {
+  async roundupUsers(roundup: Roundup): Promise<Map<string, string>> {
     try {
       const steamOf = new Map([...this.ids].map(([steamId, id]) => [id, steamId]));
       const wanted = roundupIds(roundup).flatMap((id) => steamOf.get(id) ?? []);
@@ -4940,6 +4940,7 @@ const commandTools = (
       lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
       privateProfiles: async () => privateSteamIds(await watcher().privateProfiles()),
       roundup: (choice) => watcher().roundup(choice),
+      roundupUsers: (roundup) => watcher().roundupUsers(roundup),
       seeders: (days) => watcher().seeders(days),
       removeMatch: (endedAt) => watcher().removeMatch(endedAt),
       seedCall: (message) => watcher().seedCall(message),

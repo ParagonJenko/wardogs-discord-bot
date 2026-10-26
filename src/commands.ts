@@ -34,6 +34,8 @@ type CommandDeps = {
   privateProfiles: () => Promise<ReadonlySet<string>>;
   // The best players and team of a week or month; null when nobody played in it.
   roundup: (choice: RoundupChoice) => Promise<Roundup | null>;
+  // The Discord user of each player in a roundup who linked their account, by public id: they are tagged in it.
+  roundupUsers?: (roundup: Roundup) => Promise<ReadonlyMap<string, string>>;
   seeders: (days: number) => Promise<SeederRow[]>;
   // Deletes the recent match that ended at this time, with its records; null if there is none.
   removeMatch: (endedAt: number) => Promise<{ match: RecentMatch; players: number } | null>;
@@ -87,7 +89,7 @@ const dayCount = (value: string | undefined): number => {
 };
 
 export const runCommand =
-  ({ config, http, lastMatch, privateProfiles, roundup, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
+  ({ config, http, lastMatch, privateProfiles, roundup, roundupUsers, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
   async (request: CommandRequest): Promise<CommandReply> => {
     const { name, options, userId } = request;
     if (isStaffCommand(name)) return runStaffCommand({ config, http, records, now, log })(name, request);
@@ -100,7 +102,7 @@ export const runCommand =
     if (name === 'roundup') {
       const choice = ROUNDUP_CHOICES.find((c) => c === options['period']) ?? 'week';
       const found = await roundup(choice);
-      return found ? { embeds: buildRoundupMessage(found, websiteOf(config)).embeds } : { content: NOBODY[choice] };
+      return found ? { embeds: buildRoundupMessage(found, websiteOf(config), await roundupUsers?.(found)).embeds } : { content: NOBODY[choice] };
     }
     if (name === 'removematch') {
       const endedAt = Number(options['match']);

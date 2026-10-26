@@ -939,6 +939,15 @@ describe('buildSeedersEmbed', () => {
 });
 
 describe('buildVipMessage', () => {
+  it('pings a linked renewal even when 20 players were added', () => {
+    const day = { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 };
+    const added = Array.from({ length: 20 }, (_, i) => ({ name: `P${i}` }));
+    const message = buildVipMessage(added, [{ name: 'Bo', discordId: '222222222222222222' }], day);
+
+    expect(message.content).toBe('<@222222222222222222>');
+    expect(message.allowed_mentions.users).toEqual(['222222222222222222']);
+  });
+
   it('tags and pings whoever linked their Discord account', () => {
     const day = { seedDays: 1, seedMinutes: 10, windowDays: 3, lengthDays: 3 };
     const message = buildVipMessage(

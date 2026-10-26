@@ -687,7 +687,7 @@ export const buildVipMessage = (
         `for ${span(vip.lengthDays)} by seeding. Thank you!`
       : null;
   // Whoever linked their Discord account is tagged, and pinged, for their slot.
-  const users = pinged([...added, ...renewed].slice(0, MAX_NAMES_ANNOUNCED).map((p) => p.discordId));
+  const users = pinged([...added.slice(0, MAX_NAMES_ANNOUNCED), ...renewed.slice(0, MAX_NAMES_ANNOUNCED)].map((p) => p.discordId));
   return {
     ...(users.length > 0 ? { content: users.map((id) => `<@${id}>`).join(' ') } : {}),
     embeds: [
