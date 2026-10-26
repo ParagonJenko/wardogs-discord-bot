@@ -6,6 +6,7 @@ import { PRIVATE_NAME } from './privacy.ts';
 import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
 import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, VIP_NOTE_MAX_LENGTH, VIP_REASONS, WARNING_MAX_LENGTH } from './staff.ts';
+import { handleTicket, TICKET_ID_PREFIX, TICKET_PANEL_COMMAND, type TicketRequest, type TicketTools } from './tickets.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
 
@@ -394,10 +395,14 @@ export const COMMANDS = [
   },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
 
+// Everything registered with Discord: the commands above, and /ticketpanel, which is not a staff page command.
+export const REGISTERED_COMMANDS: { name: string }[] = [...COMMANDS, TICKET_PANEL_COMMAND];
+
 const PING = 1;
 const APPLICATION_COMMAND = 2;
 const MESSAGE_COMPONENT = 3;
 const AUTOCOMPLETE = 4;
+const MODAL_SUBMIT = 5;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const UPDATE_MESSAGE = 7;
@@ -421,6 +426,8 @@ const InteractionSchema = z.object({
       // A button has a custom_id instead.
       name: z.string().optional(),
       custom_id: z.string().optional(),
+      // A submitted form: its rows, each holding the text input answered.
+      components: z.array(z.object({ components: z.array(z.object({ custom_id: z.string(), value: z.string().optional() })).optional() })).optional(),
       // A subcommand, such as /vip add, arrives as an option holding its own options.
       options: z.array(OptionSchema.extend({ options: z.array(OptionSchema).optional() })).optional(),
     })
@@ -434,6 +441,7 @@ const InteractionSchema = z.object({
     })
     .optional(),
   guild_id: z.string().optional(),
+  channel_id: z.string().optional(),
 });
 
 // A subcommand's name is in `options.subcommand`. `focused` is the option being typed in, for suggestions. `userName` is
@@ -475,6 +483,8 @@ type InteractionDeps = {
   castVote?: (press: { poll: string; map?: string; light?: string; weather?: string; userId: string; userName?: string }) => Promise<{ update: unknown | null; reply: string }>;
   // The one server whose members may vote.
   voteGuildId?: string | undefined;
+  // Support tickets (see tickets.ts). Without it the ticket buttons say tickets are not set up.
+  tickets?: TicketTools;
 };
 
 export type InteractionResult = { status: number; body: unknown; followUp?: () => Promise<void> };
@@ -666,6 +676,39 @@ const handleVotePress = async (interaction: z.infer<typeof InteractionSchema>, d
   }
 };
 
+// A ticket button, form or the panel command. Only the server that runs the bot has tickets, and only its staff run them.
+const ticketInteraction = async (
+  interaction: z.infer<typeof InteractionSchema>,
+  kind: TicketRequest['kind'],
+  deps: InteractionDeps,
+): Promise<InteractionResult> => {
+  const user = interaction.member?.user;
+  const token = interaction.token;
+  if (!deps.adminGuildId || interaction.guild_id !== deps.adminGuildId || user === undefined || !token) {
+    return { status: 200, body: privateMessage('Tickets only work in the Discord server that runs this bot.') };
+  }
+  const request: TicketRequest = {
+    kind,
+    customId: interaction.data?.custom_id ?? '',
+    fields: Object.fromEntries(
+      (interaction.data?.components ?? []).flatMap((row) => (row.components ?? []).map((input) => [input.custom_id, input.value ?? ''])),
+    ),
+    channelId: interaction.channel_id,
+    userId: user.id,
+    userName: interaction.member?.nick || user.global_name || user.username || user.id,
+    staff: isAdmin(interaction.member, deps.adminRoleIds),
+    applicationId: interaction.application_id,
+    token,
+  };
+  const tickets = deps.tickets ?? { rule: null };
+  return handleTicket(
+    tickets,
+    request,
+    (reply) => deps.editReply(interaction.application_id, token, { content: reply.content, allowed_mentions: { parse: [] } }),
+    deps.log,
+  );
+};
+
 export const handleInteraction = async (
   body: string,
   signature: string | null,
@@ -723,7 +766,21 @@ export const handleInteraction = async (
     return { status: 200, body: { type: AUTOCOMPLETE_RESULT, data: { choices } } };
   }
 
+  const customId = interaction.data?.custom_id;
+  if (
+    (interaction.type === MESSAGE_COMPONENT || interaction.type === MODAL_SUBMIT) &&
+    customId?.startsWith(TICKET_ID_PREFIX) &&
+    interaction.token
+  ) {
+    return ticketInteraction(interaction, interaction.type === MODAL_SUBMIT ? 'modal' : 'button', deps);
+  }
   if (interaction.type === MESSAGE_COMPONENT) return handleVotePress(interaction, deps);
+  if (interaction.type === APPLICATION_COMMAND && name === TICKET_PANEL_COMMAND.name && interaction.token) {
+    if (!deps.adminGuildId || interaction.guild_id !== deps.adminGuildId) {
+      return { status: 200, body: privateMessage('This command can only be used in the Discord server that runs this bot.') };
+    }
+    return ticketInteraction(interaction, 'panel', deps);
+  }
 
   if (interaction.type !== APPLICATION_COMMAND || !isCommandName(name) || !interaction.token) {
     return { status: 200, body: privateMessage('Unknown command.') };

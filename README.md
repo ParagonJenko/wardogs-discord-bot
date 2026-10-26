@@ -343,6 +343,7 @@ The Node/Docker version does not serve the season roundup.
 | `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP. Not [staff](#staff-steam-accounts) |
 | `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |
 | `/removematch`  | Staff only           | Deletes a wrongly recorded match, picked from the recent matches, and its leaderboard counts |
+| `/ticketpanel`  | Staff only           | Posts the [support ticket](#support-tickets) panel in this channel |
 | `/warn`         | Staff only           | Sends a player in game a private message: "Staff warning: …"       |
 | `/player`       | Staff only           | A player's Steam ID, playtime and seeding (90 days), team kills today, [Steam account](#risky-steam-accounts), VIP, ban and staff history |
 | `/kick`         | Staff only           | Removes a player from the server, with a reason they see; they can rejoin |
@@ -511,6 +512,39 @@ also logged in the Worker logs with the staff member's Discord user ID. If a rep
 confirmed, check in game before trying again: it may have gone through.
 
 There is no chat log command: the game's RCON API has no way to read chat.
+
+## Support tickets
+
+Members open a private ticket from a panel of buttons in Discord. The bot makes a channel in a category you choose that only
+that member, your staff roles and the bot can see.
+
+| Button | For | Form asks |
+| ------ | --- | --------- |
+| 🚨 Urgent support | A hacker on the server, or anything that can't wait. **Pings the staff roles** | Player, what they're doing, evidence |
+| ⚠️ Player report | Griefing, team killing, abuse | Player, what happened, evidence |
+| ⚖️ Ban appeal | Asking for a ban to be reviewed | Name or Steam ID, why banned, why it should be lifted |
+| 💬 General query | Anything else | Subject, question |
+
+In the ticket, staff have **Claim** (says who is handling it) and **Close**. Close asks to confirm, saves a transcript (a
+text file) to the log channel, then deletes the channel. If the transcript can't be saved, the ticket is kept. Only staff can
+claim or close. A member can have 3 tickets open at once.
+
+### Set up
+
+1. In the Discord server, make a **category** for tickets. Set its permissions so the bot has **View Channel, Manage Channels,
+   Send Messages, Embed Links, Attach Files and Read Message History**. Tickets inherit nothing else: each one is hidden from
+   `@everyone` and opened to the member, the staff roles and the bot only.
+2. Optional: make a staff-only **log channel** for transcripts (the bot needs View Channel, Send Messages and Attach Files).
+3. Copy the IDs (Developer Mode → right-click → Copy Channel ID) into `wrangler.jsonc`:
+   `DISCORD_TICKET_CATEGORY_ID` and, optionally, `DISCORD_TICKET_LOG_CHANNEL_ID`. The staff roles are the existing
+   `DISCORD_ADMIN_ROLE_IDS`. `DISCORD_BOT_TOKEN` must already be set.
+4. Deploy, then register the new command: `npm run register`.
+5. In the channel you want the panel in (such as `#support`), run **`/ticketpanel`**. Make that channel read-only for members.
+
+Tickets work on Cloudflare only. To change the wording or add a kind of ticket, edit `TICKET_KINDS` in `src/tickets.ts`.
+Nothing is stored: a ticket is its channel, and the channel topic (`appeal ticket · opener 123…`) is how the bot knows
+what it is and who opened it, so don't edit the topic. The bot never deletes a channel unless it is in the ticket category
+and has such a topic.
 
 ## Private profiles
 
