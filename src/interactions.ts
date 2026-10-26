@@ -442,6 +442,8 @@ const InteractionSchema = z.object({
     .optional(),
   guild_id: z.string().optional(),
   channel_id: z.string().optional(),
+  // The message a button was pressed on.
+  message: z.object({ id: z.string(), embeds: z.array(z.unknown()).default([]) }).optional(),
 });
 
 // A subcommand's name is in `options.subcommand`. `focused` is the option being typed in, for suggestions. `userName` is
@@ -698,6 +700,7 @@ const ticketInteraction = async (
     userName: interaction.member?.nick || user.global_name || user.username || user.id,
     staff: isAdmin(interaction.member, deps.adminRoleIds),
     applicationId: interaction.application_id,
+    message: interaction.message,
     token,
   };
   const tickets = deps.tickets ?? { rule: null };
