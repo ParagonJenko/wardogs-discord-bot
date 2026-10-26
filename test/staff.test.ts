@@ -268,6 +268,40 @@ describe('runStaffCommand', () => {
     expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
   });
 
+  it('/moveclan moves no one if the team would go over 33 players', async () => {
+    const filler = Array.from({ length: 32 }, (_, i) => ({ name: `Fill${i}`, steamId: `7656119800001${String(i).padStart(4, '0')}`, faction: 'Manticore', kills: 0, deaths: 0 }));
+    const clan = {
+      players: [
+        { name: '[WD] Ash', steamId: ASH, faction: 'Valkyra', kills: 0, deaths: 0 },
+        { name: '[WD] Bo', steamId: BO, faction: 'Valkyra', kills: 0, deaths: 0 },
+        ...filler,
+      ],
+    };
+    const { run, sent, records } = setup({ 'GET /v1/players': [200, clan] });
+
+    await expect(run('moveclan', { clan: 'WD', team: 'Manticore' })).resolves.toEqual({
+      content: '🦂 **Manticore** has 32 of 33 players and room for 1 more, but 2 with the tag "WD" would move. No one was moved.',
+    });
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
+    expect(records.log).not.toHaveBeenCalled();
+  });
+
+  it('/moveclan fills a team to exactly 33', async () => {
+    const filler = Array.from({ length: 31 }, (_, i) => ({ name: `Fill${i}`, steamId: `7656119800001${String(i).padStart(4, '0')}`, faction: 'Manticore', kills: 0, deaths: 0 }));
+    const clan = {
+      players: [
+        { name: '[WD] Ash', steamId: ASH, faction: 'Valkyra', kills: 0, deaths: 0 },
+        { name: '[WD] Bo', steamId: BO, faction: 'Valkyra', kills: 0, deaths: 0 },
+        ...filler,
+      ],
+    };
+    const { run, sent } = setup({ 'GET /v1/players': [200, clan] });
+
+    await run('moveclan', { clan: 'WD', team: 'Manticore' });
+
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toHaveLength(2);
+  });
+
   it('/switchteam refuses a team that is not in the match', async () => {
     const { run, sent } = setup();
 

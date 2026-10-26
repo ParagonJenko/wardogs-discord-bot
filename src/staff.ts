@@ -168,6 +168,9 @@ export const inClan = (name: string, tag: string): boolean => {
   return new RegExp(`^\\s*(?:[[({<|]\\s*${escaped}\\s*[\\])}>|]|${escaped}(?![\\p{L}\\p{N}]))`, 'iu').test(name);
 };
 
+// The most players a team can hold: a 98 player server split three ways.
+export const TEAM_MAX_PLAYERS = 33;
+
 // The game's three teams. /switchteam only moves players to one of them, each with its colour: "🔵 Lonestar".
 export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
 export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionDot(team)}${team}`, value: team }));
@@ -533,6 +536,14 @@ export const runStaffCommand =
       if (members.length === 0) return { content: `No one in game has the clan tag "${tag}".` };
       const moving = members.filter((p) => !same(team, p.faction));
       if (moving.length === 0) return { content: `All ${members.length} players with the tag "${tag}" are already on ${team}.` };
+      // Nobody moves if they would not all fit: half a clan on each side is worse than none.
+      const onTeam = live.filter((p) => same(team, p.faction)).length;
+      const free = Math.max(0, TEAM_MAX_PLAYERS - onTeam);
+      if (moving.length > free) {
+        return {
+          content: `${factionBadge(team)}**${team}** has ${onTeam} of ${TEAM_MAX_PLAYERS} players and room for ${free} more, but ${moving.length} with the tag "${tag}" would move. No one was moved.`,
+        };
+      }
       log.info(`/moveclan by ${staff}: ${JSON.stringify(tag)} (${moving.length} players) to ${team}`);
       const failed: Player[] = [];
       for (const p of moving) {
