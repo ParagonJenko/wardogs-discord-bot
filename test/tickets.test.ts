@@ -213,6 +213,88 @@ describe('failures', () => {
   });
 });
 
+describe('claiming', () => {
+  const log = { error: vi.fn() };
+  const edit = vi.fn(async () => undefined);
+  const details = { title: 'Ban appeal', type: 'rich', fields: [{ name: 'Why', value: 'Sorry', inline: false }] };
+  const claimed = (id: string) => ({ ...details, fields: [...details.fields, { name: 'Claimed by', value: `<@${id}>`, inline: false }] });
+  const press = (embed: unknown, over: Partial<TicketRequest> = {}) =>
+    request({ kind: 'button', customId: 'ticket:claim', staff: true, userId: '400', message: { id: '555', embeds: [embed] }, ...over });
+
+  it('marks an unclaimed ticket as claimed on its message', async () => {
+    const result = await handleTicket({ rule }, press(details), edit, log);
+    const data = (result.body as { type: number; data: { embeds: { fields: { name: string; value: string }[] }[] } });
+    expect(data.type).toBe(7);
+    expect(data.data.embeds[0]?.fields.at(-1)).toMatchObject({ name: 'Claimed by', value: '<@400>' });
+    expect(data.data.embeds[0]?.fields).toHaveLength(2);
+  });
+
+  it('tells you if you already have it', async () => {
+    const result = await handleTicket({ rule }, press(claimed('400')), edit, log);
+    expect(JSON.stringify(result.body)).toContain('already claimed this ticket');
+    expect(result.body).toMatchObject({ type: 4, data: { flags: 64 } });
+  });
+
+  it('asks before claiming a ticket someone else has, and changes nothing', async () => {
+    const result = await handleTicket({ rule }, press(claimed('300')), edit, log);
+    expect(result.body).toMatchObject({ type: 4, data: { flags: 64 } });
+    const text = JSON.stringify(result.body);
+    expect(text).toContain('<@300> has already claimed');
+    expect(text).toContain('ticket:takeover:555');
+    expect(result.followUp).toBeUndefined();
+  });
+
+  it('only lets staff take over, and only from a real message id', async () => {
+    const member = await handleTicket({ rule }, request({ kind: 'button', customId: 'ticket:takeover:555', staff: false }), edit, log);
+    expect(JSON.stringify(member.body)).toContain('Only staff');
+    const bad = await handleTicket({ rule }, request({ kind: 'button', customId: 'ticket:takeover:../x', staff: true }), edit, log);
+    expect(JSON.stringify(bad.body)).toContain('Unknown ticket');
+  });
+
+  it('takes over, saying so in the channel, from a fresh read of the message', async () => {
+    const calls: { method: string; url: string; body?: any }[] = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (String(url).endsWith('/channels/900')) return json({ id: '900', parent_id: '50', topic: 'appeal ticket · opener 300' });
+      if (String(url).endsWith('/messages/555') && init?.method !== 'PATCH') return json({ author: { id: '111' }, embeds: [claimed('300')] });
+      return json({});
+    }) as typeof fetch;
+    const done = vi.fn(async () => undefined);
+    const result = await handleTicket(
+      { rule, fetchFn },
+      request({ kind: 'button', customId: 'ticket:takeover:555', staff: true, userId: '400' }),
+      done,
+      log,
+    );
+    await result.followUp?.();
+    const patch = calls.find((c) => c.method === 'PATCH');
+    expect(patch?.body.embeds[0].fields.filter((f: { name: string }) => f.name === 'Claimed by')).toEqual([
+      { name: 'Claimed by', value: '<@400>', inline: false },
+    ]);
+    const note = calls.find((c) => c.method === 'POST');
+    expect(note?.body).toEqual({ content: '🔁 <@400> took this ticket over from <@300>.', allowed_mentions: { parse: [] } });
+    expect(done).toHaveBeenCalledWith({ content: '✅ You now have this ticket.' });
+  });
+
+  it('will not edit a message that is not the bot\'s, or a channel that is not a ticket', async () => {
+    for (const [channel, message] of [
+      [{ id: '900', parent_id: '50', topic: 'appeal ticket · opener 300' }, { author: { id: '999' }, embeds: [] }],
+      [{ id: '900', parent_id: '51', topic: 'appeal ticket · opener 300' }, { author: { id: '111' }, embeds: [] }],
+      [{ id: '900', parent_id: '50', topic: 'general' }, { author: { id: '111' }, embeds: [] }],
+    ] as const) {
+      const methods: string[] = [];
+      const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+        methods.push(init?.method ?? 'GET');
+        return json(String(url).endsWith('/channels/900') ? channel : message);
+      }) as typeof fetch;
+      const result = await handleTicket({ rule, fetchFn }, request({ kind: 'button', customId: 'ticket:takeover:555', staff: true }), vi.fn(async () => undefined), log);
+      await result.followUp?.();
+      expect(methods).not.toContain('PATCH');
+      expect(methods).not.toContain('POST');
+    }
+  });
+});
+
 describe('openTicket cleanup', () => {
   it('deletes the channel when posting rejects outright', async () => {
     const calls: string[] = [];

@@ -525,7 +525,7 @@ that member, your staff roles and the bot can see.
 | ⚖️ Ban appeal | Asking for a ban to be reviewed | Name or Steam ID, why banned, why it should be lifted |
 | 💬 General query | Anything else | Subject, question |
 
-In the ticket, staff have **Claim** (says who is handling it) and **Close**. Close asks to confirm, saves a transcript (a
+In the ticket, staff have **Claim** and **Close**. Claim shows "Claimed by" on the ticket's first message. If someone has already claimed it, a second person is told so privately and has to press **Take over anyway**; the channel then says who took it over from whom. Close asks to confirm, saves a transcript (a
 text file) to the log channel, then deletes the channel. If the transcript can't be saved, the ticket is kept. Only staff can
 claim or close. A member can have 3 tickets open at once.
 

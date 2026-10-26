@@ -152,6 +152,8 @@ export type TicketRequest = {
   userName: string;
   staff: boolean;
   applicationId: string;
+  // The message a button was pressed on: the ticket's first message for Claim.
+  message?: { id: string; embeds: unknown[] } | undefined;
   token: string;
 };
 
@@ -243,6 +245,56 @@ export const ticketModal = (type: TicketType) => ({
     })),
   },
 });
+
+// Who has claimed a ticket is kept on its first message, in a "Claimed by" field of the details embed. Only the bot edits that
+// message, so nobody can fake a claim.
+const CLAIM_FIELD = 'Claimed by';
+
+const EmbedsSchema = z.array(z.object({ fields: z.array(z.object({ name: z.string(), value: z.string() }).passthrough()).optional() }).passthrough());
+
+export const claimedBy = (embeds: unknown): string | null => {
+  const parsed = EmbedsSchema.safeParse(embeds);
+  const value = parsed.success ? parsed.data[0]?.fields?.find((f) => f.name === CLAIM_FIELD)?.value : undefined;
+  return /^<@(\d+)>$/.exec(value ?? '')?.[1] ?? null;
+};
+
+// The embeds with the claim set to this person.
+export const withClaim = (embeds: unknown, userId: string): unknown[] => {
+  const parsed = EmbedsSchema.safeParse(embeds);
+  if (!parsed.success || parsed.data[0] === undefined) return [];
+  const [first, ...rest] = parsed.data;
+  const others = (first?.fields ?? []).filter((f) => f.name !== CLAIM_FIELD);
+  return [{ ...first, fields: [...others, { name: CLAIM_FIELD, value: `<@${userId}>`, inline: false }] }, ...rest];
+};
+
+const TAKE_OVER_BUTTON = (messageId: string) => [
+  { type: 1, components: [{ type: 2, style: 4, label: 'Take over anyway', custom_id: `${TICKET_ID_PREFIX}takeover:${messageId}` }] },
+];
+
+// Takes a ticket over from whoever claimed it: re-reads the ticket's message so a claim made a moment ago is not overwritten
+// unseen, changes the claim, and says so in the channel so the previous person knows.
+export const takeOverTicket = async (tools: TicketTools & { rule: TicketRule }, channelId: string, messageId: string, request: TicketRequest): Promise<string> => {
+  const { rule } = tools;
+  const send = call(rule, tools.fetchFn ?? fetch);
+  const found = await send(`/channels/${channelId}`, 'GET');
+  if (!found.ok) throw new Error(`Discord would not show the channel: ${found.status} ${await found.text()}`);
+  const channel = ChannelSchema.parse(await found.json());
+  if (parseTopic(channel.topic) === null || channel.parent_id !== rule.categoryId) return 'This is not a ticket channel.';
+  const got = await send(`/channels/${channelId}/messages/${messageId}`, 'GET');
+  if (!got.ok) throw new Error(`Discord would not show the ticket message: ${got.status} ${await got.text()}`);
+  const message = z.object({ author: z.object({ id: z.string() }), embeds: z.array(z.unknown()) }).parse(await got.json());
+  // Only the bot's own ticket message holds a claim.
+  if (message.author.id !== request.applicationId) return 'That is not the ticket message.';
+  const previous = claimedBy(message.embeds);
+  if (previous === request.userId) return 'You have already claimed this ticket.';
+  const edited = await send(`/channels/${channelId}/messages/${messageId}`, 'PATCH', { embeds: withClaim(message.embeds, request.userId) });
+  if (!edited.ok) throw new Error(`Discord would not update the ticket: ${edited.status} ${await edited.text()}`);
+  await send(`/channels/${channelId}/messages`, 'POST', {
+    content: `🔁 <@${request.userId}> took this ticket over${previous === null ? '' : ` from <@${previous}>`}.`,
+    allowed_mentions: { parse: [] },
+  });
+  return '✅ You now have this ticket.';
+};
 
 const STAFF_BUTTONS = [
   {
@@ -571,9 +623,31 @@ export const handleTicket = async (
 
   if (action === 'claim') {
     if (!request.staff) return privateMessage('Only staff can claim tickets.');
+    const message = request.message;
+    if (message === undefined) return privateMessage('Unknown message.');
+    const owner = claimedBy(message.embeds);
+    if (owner === request.userId) return privateMessage('You have already claimed this ticket.');
+    // Someone else has it: ask first, so two staff don't both work a ticket without knowing.
+    if (owner !== null) {
+      return privateMessage(`<@${owner}> has already claimed this ticket. Take it over only if you have agreed it with them.`, TAKE_OVER_BUTTON(message.id));
+    }
+    return { status: 200, body: { type: UPDATE_MESSAGE, data: { embeds: withClaim(message.embeds, request.userId), allowed_mentions: { parse: [] } } } };
+  }
+
+  if (action === 'takeover') {
+    if (!request.staff) return privateMessage('Only staff can claim tickets.');
+    const channelId = request.channelId;
+    if (channelId === undefined || argument === undefined || !/^\d+$/.test(argument)) return privateMessage('Unknown ticket.');
     return {
       status: 200,
-      body: { type: CHANNEL_MESSAGE, data: { content: `🙋 <@${request.userId}> is handling this ticket.`, allowed_mentions: { parse: [] } } },
+      body: { type: UPDATE_MESSAGE, data: { content: 'Taking the ticket over…', components: [] } },
+      followUp: async () => {
+        const content = await takeOverTicket(ready, channelId, argument, request).catch((error: unknown) => {
+          log.error(`Taking over ticket ${channelId} failed: ${errorText(error)}`);
+          return "Couldn't take the ticket over right now. Try again.";
+        });
+        await edit({ content }).catch(() => undefined);
+      },
     };
   }
 
