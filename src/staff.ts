@@ -12,6 +12,7 @@ import {
   mapEmoji,
   mapName,
   playerName,
+  type ClanMove,
   type PlayerProfile,
 } from './discord.ts';
 import type { PlayerGrief } from './griefing.ts';
@@ -104,7 +105,10 @@ export type StaffRecords = {
   player: (steamId: string) => Promise<PlayerRecord>;
   // Players seen lately, given VIP or banned by the bot, to pick from when they are not online.
   knownPlayers: () => Promise<Named[]>;
-  log: (steamId: string, entry: ModEntry) => Promise<void>;
+  // `quiet`: kept in the player's history but not posted to the moderation log.
+  log: (steamId: string, entry: ModEntry, quiet?: boolean) => Promise<void>;
+  // A whole clan moved, as one message in the moderation log.
+  clanMoved: (move: ClanMove) => Promise<void>;
   ban: (request: BanRequest) => Promise<BanResult>;
   unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
   // `days` null: permanent, until staff remove it. `reason` is why, as the staff history and moderation log show it.
@@ -553,16 +557,23 @@ export const runStaffCommand =
           failed.push(p);
           continue;
         }
-        await records.log(p.steamId, {
-          action: 'switchteam',
-          at: now(),
-          by,
-          ...named,
-          name: p.name,
-          detail: p.faction ? `${p.faction} to ${team}` : `to ${team}`,
-        });
+        await records.log(
+          p.steamId,
+          { action: 'switchteam', at: now(), by, ...named, name: p.name, detail: p.faction ? `${p.faction} to ${team}` : `to ${team}` },
+          true,
+        );
       }
       const moved = moving.filter((p) => !failed.includes(p));
+      if (moved.length > 0 || failed.length > 0) {
+        await records.clanMoved({
+          clan: tag,
+          team,
+          at: now(),
+          by,
+          moved: moved.map((p) => ({ name: p.name, from: p.faction })),
+          failed: failed.map((p) => ({ name: p.name })),
+        });
+      }
       const names = moved.map(who).join(', ');
       const lines = [`🔀 Moved ${moved.length} player${moved.length === 1 ? '' : 's'} with the tag "${tag}" to ${factionBadge(team)}**${team}**: ${names}. They respawn on the new side.`];
       if (failed.length > 0) lines.push(`⚠️ Could not move: ${failed.map(who).join(', ')}.`);

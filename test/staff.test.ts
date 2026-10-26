@@ -103,6 +103,7 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   player: vi.fn(async () => emptyRecord),
   knownPlayers: vi.fn(async () => [{ steamId: OLD, name: 'Oldtimer' }]),
   log: vi.fn(async () => undefined),
+  clanMoved: vi.fn(async () => undefined),
   ban: vi.fn(async (): Promise<BanResult> => ({ outcome: 'banned', until: NOW + 86_400_000, byBot: true })),
   unban: vi.fn(async () => true),
   vipAdd: vi.fn(async () => ({ outcome: 'added' as const, until: NOW + 30 * 86_400_000 })),
@@ -203,6 +204,7 @@ describe('runStaffCommand', () => {
     await expect(run('kick', { player: OLD, reason: 'x' })).resolves.toEqual({ content: `**${OLD}** isn't on the server.` });
     expect(sent.some((s) => s.startsWith('POST'))).toBe(false);
     expect(records.log).not.toHaveBeenCalled();
+    expect(records.clanMoved).not.toHaveBeenCalled();
   });
 
   it('/kick needs a reason, and passes it on', async () => {
@@ -250,7 +252,20 @@ describe('runStaffCommand', () => {
 
     expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'Manticore' })}`]);
     expect(records.log).toHaveBeenCalledTimes(1);
-    expect(records.log).toHaveBeenCalledWith(ASH, { action: 'switchteam', at: NOW, by: '42', name: '[WD] Ash', detail: 'Valkyra to Manticore' });
+    expect(records.log).toHaveBeenCalledWith(
+      ASH,
+      { action: 'switchteam', at: NOW, by: '42', name: '[WD] Ash', detail: 'Valkyra to Manticore' },
+      true,
+    );
+    expect(records.clanMoved).toHaveBeenCalledTimes(1);
+    expect(records.clanMoved).toHaveBeenCalledWith({
+      clan: 'wd',
+      team: 'Manticore',
+      at: NOW,
+      by: '42',
+      moved: [{ name: '[WD] Ash', from: 'Valkyra' }],
+      failed: [],
+    });
     expect(reply.content).toContain('Moved 1 player with the tag "wd" to 🦂 **Manticore**: **\\[WD\\] Ash**');
   });
 

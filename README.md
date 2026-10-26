@@ -451,6 +451,8 @@ works when it matches exactly one player.
 - **`/moveclan`** moves every player in game whose name starts with the tag: `[WD] Ash`, `WD | Ash` and `WD_Ash` all
   match `WD`, whatever the case. Players already on the team are left alone, and each move is logged like `/switchteam`.
   A team holds 33 players: if the clan would not all fit, no one is moved.
+  The mod log gets one post for the whole clan, not one for each player; each player's own history still has the move.
+  The staff page has it too, under Players: "Move a clan to a team".
 - **`/ban`** needs a length and a reason. The server's own bans are permanent (they go into `ServerSettings.ini`), so
   for a timed ban the bot writes when it ends into the reason, remembers it, and lifts the ban itself at the first
   check after it ends (within a minute), logging `Ban ended: …`. It only lifts a ban whose reason is still exactly

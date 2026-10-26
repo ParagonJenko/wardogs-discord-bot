@@ -5,6 +5,7 @@ import {
   buildGriefAlert,
   buildHeadshotAlert,
   buildLastMatchEmbed,
+  buildClanMoveMessage,
   buildModLogMessage,
   buildOutageAlert,
   buildPlayerEmbed,
@@ -1225,6 +1226,45 @@ describe('buildPlayerEmbed', () => {
     expect(field(buildPlayerEmbed({ ...profile, record: { ...record, log } }), 'Staff history')).toBe(
       ['1 ban', `${t(NOW, 'd')} **Ban** (By Admin) by someone outside the bot: Cheating`].join('\n'),
     );
+  });
+});
+
+describe('buildClanMoveMessage', () => {
+  const NOW = Date.UTC(2026, 8, 30, 12);
+
+  it('is one message for the whole clan, with who was moved and who could not be', () => {
+    const message = buildClanMoveMessage(
+      {
+        clan: 'WD',
+        team: 'Manticore',
+        at: NOW,
+        by: '42',
+        moved: [{ name: '[WD] Ash', from: 'Valkyra' }, { name: 'WD | Bo' }],
+        failed: [{ name: 'WD_Cy' }],
+      },
+      'https://gaminginit.com',
+    );
+
+    expect(message.embeds).toHaveLength(1);
+    expect(message.embeds?.[0]).toMatchObject({
+      title: '🔀 Clan move · WD',
+      url: 'https://gaminginit.com/admin',
+      description: '\\[WD\\] Ash · from Valkyra\nWD \\| Bo',
+      fields: [
+        { name: 'Moved', value: '2 players to 🦂 Manticore' },
+        { name: 'By', value: '<@42>' },
+        { name: 'Could not move', value: 'WD\\_Cy' },
+      ],
+    });
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+
+  it('keeps a long list inside the embed', () => {
+    const moved = Array.from({ length: 200 }, (_, i) => ({ name: `Player number ${i} with a long name`.padEnd(40, 'x') }));
+    const embed = buildClanMoveMessage({ clan: 'WD', team: 'Valkyra', at: NOW, by: '42', moved, failed: [] }).embeds?.[0];
+
+    expect((embed?.description ?? '').length).toBeLessThan(4096);
+    expect(embed?.description).toMatch(/And \d+ more\.$/);
   });
 });
 

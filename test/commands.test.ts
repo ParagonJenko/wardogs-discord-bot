@@ -11,6 +11,7 @@ const records: StaffRecords = {
   player: vi.fn(),
   knownPlayers: vi.fn(),
   log: vi.fn(),
+  clanMoved: vi.fn(),
   ban: vi.fn(),
   unban: vi.fn(),
   vipAdd: vi.fn(),
