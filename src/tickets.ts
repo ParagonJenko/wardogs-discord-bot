@@ -168,6 +168,28 @@ const privateMessage = (content: string, components?: unknown[]): TicketResult =
   body: { type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL, allowed_mentions: { parse: [] }, ...(components ? { components } : {}) } },
 });
 
+// A failure whose cause is safe to show the person who pressed the button, because it says what staff must fix and nothing
+// private. Anything else gets the general message, with the detail in the log.
+export class TicketProblem extends Error {}
+
+const PERMISSIONS_NEEDED = 'View Channel, Manage Channels, Send Messages, Embed Links, Attach Files, Read Message History and Mention Everyone';
+
+// What a refusal from Discord means for staff.
+export const discordProblem = (status: number, body: string): TicketProblem | null => {
+  const code = z.object({ code: z.number() }).safeParse((() => { try { return JSON.parse(body); } catch { return null; } })());
+  const known = code.success ? code.data.code : undefined;
+  if (known === 50013 || status === 403) {
+    return new TicketProblem(`I can't open tickets yet: the bot is missing permissions in the ticket category. It needs ${PERMISSIONS_NEEDED} there. Please tell staff. (Discord ${known ?? status})`);
+  }
+  if (known === 30013 || known === 50035) {
+    return new TicketProblem(`I can't open tickets right now: the ticket category is full or set up wrong. Please tell staff. (Discord ${known})`);
+  }
+  if (known === 10003 || status === 404) {
+    return new TicketProblem('I can\'t open tickets yet: the ticket category was not found. Please tell staff. (Discord 10003)');
+  }
+  return null;
+};
+
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -359,7 +381,10 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
     },
     `${TICKET_KINDS[type].label} ticket opened by ${request.userName}`,
   );
-  if (!created.ok) throw new Error(`Discord would not create the ticket channel: ${created.status} ${await created.text()}`);
+  if (!created.ok) {
+    const text = await created.text();
+    throw discordProblem(created.status, text) ?? new Error(`Discord would not create the ticket channel: ${created.status} ${text}`);
+  }
   const made: unknown = await created.json();
   const channel = z.object({ id: z.string() }).parse(made);
   // A channel without its details and buttons is worse than none, and would count against the person's limit.
@@ -368,7 +393,7 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
   const exposed = exposure(made, rule.guildId, [request.userId, request.applicationId, ...staffRoles(rule)]);
   if (exposed !== null) {
     await discard();
-    throw new Error(`Refused to open a ticket: ${exposed}`);
+    throw new TicketProblem(`I didn't open your ticket because I couldn't make it private (${exposed}). Please tell staff.`);
   }
 
   const ping = TICKET_KINDS[type].ping ? staffRoles(rule) : [];
@@ -383,7 +408,8 @@ export const openTicket = async (tools: TicketTools & { rule: TicketRule }, type
   });
   if (!posted.ok) {
     await discard();
-    throw new Error(`Discord would not post in the ticket channel: ${posted.status} ${await posted.text()}`);
+    const text = await posted.text();
+    throw discordProblem(posted.status, text) ?? new Error(`Discord would not post in the ticket channel: ${posted.status} ${text}`);
   }
   return `✅ Your ticket is open: <#${channel.id}>`;
 };
@@ -516,7 +542,7 @@ export const handleTicket = async (
     followUp: async () => {
       const content = await work().catch((error: unknown) => {
         log.error(`Ticket ${request.customId} failed: ${errorText(error)}`);
-        return failure;
+        return error instanceof TicketProblem ? error.message : failure;
       });
       await edit({ content });
     },

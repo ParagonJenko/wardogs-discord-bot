@@ -191,6 +191,28 @@ describe('privacy', () => {
   });
 });
 
+describe('failures', () => {
+  const log = { error: vi.fn() };
+  it('tells the person when the bot lacks permissions, without leaking details', async () => {
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) =>
+      init?.method === 'GET' ? json([]) : json({ code: 50013, message: 'Missing Permissions' }, 403)) as typeof fetch;
+    const edit = vi.fn(async () => undefined);
+    const result = await handleTicket({ rule, fetchFn }, request(), edit, log);
+    await result.followUp?.();
+    expect(edit).toHaveBeenCalledWith({ content: expect.stringContaining('missing permissions in the ticket category') });
+    expect(edit).toHaveBeenCalledWith({ content: expect.stringContaining('Discord 50013') });
+  });
+
+  it('says a private channel could not be made when it is exposed', async () => {
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) =>
+      init?.method === 'GET' ? json([]) : json({ id: '777', permission_overwrites: [] })) as typeof fetch;
+    const edit = vi.fn(async () => undefined);
+    const result = await handleTicket({ rule, fetchFn }, request(), edit, log);
+    await result.followUp?.();
+    expect(edit).toHaveBeenCalledWith({ content: expect.stringContaining("couldn't make it private") });
+  });
+});
+
 describe('openTicket cleanup', () => {
   it('deletes the channel when posting rejects outright', async () => {
     const calls: string[] = [];
