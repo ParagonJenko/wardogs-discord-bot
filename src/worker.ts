@@ -92,6 +92,7 @@ import {
   linkedSteamIds,
   isMemberNow,
   steamLinks,
+  discordUsers,
   linkWithProof,
   recordSignIn,
   setAlerts,
@@ -352,6 +353,7 @@ import {
 } from './rcon.ts';
 import {
   buildRoundup,
+  roundupIds,
   dueRoundups,
   markPosted,
   parseRoundupsPosted,
@@ -1209,6 +1211,7 @@ export class Watcher extends DurableObject<Env> {
       lines: () => this.lines(),
       staff: () => this.staffSteam(),
       linked: () => this.linkedSteam(),
+      discordUsers: (steamIds) => discordUsers(this.bookStorage(), steamIds),
       ranks: () => this.leaderboardRanks(),
       nudges: () => this.linkNudges(),
       nudged: (steamIds) => this.linkNudged(steamIds),
@@ -1292,7 +1295,7 @@ export class Watcher extends DurableObject<Env> {
         const label = `${period.kind === 'week' ? 'weekly' : 'monthly'} roundup from ${dayOf(period.start)}`;
         try {
           const roundup = await this.roundupFor(period, now);
-          if (roundup !== null) await postWebhook(rule.webhookUrl, buildRoundupMessage(roundup, config.siteUrl));
+          if (roundup !== null) await postWebhook(rule.webhookUrl, buildRoundupMessage(roundup, config.siteUrl, await this.roundupUsers(roundup)));
           posted = markPosted(posted, period);
           await storage.put('roundups', posted);
           console.info(roundup === null ? `No ${label}: nobody played` : `Posted the ${label}`);
@@ -1428,6 +1431,20 @@ export class Watcher extends DurableObject<Env> {
     ]);
     const idOf = publicIdOf(hidden, (steamId) => ids.get(steamId));
     return buildRoundup({ period, days, matches, idOf, ...(feed === null ? {} : { feed }) });
+  }
+
+  // The Discord user of each player in a roundup who linked their account, by public id, to tag them. A private profile has
+  // no public id, so none is tagged.
+  async roundupUsers(roundup: Roundup): Promise<Map<string, string>> {
+    try {
+      const steamOf = new Map([...this.ids].map(([steamId, id]) => [id, steamId]));
+      const wanted = roundupIds(roundup).flatMap((id) => steamOf.get(id) ?? []);
+      const users = await discordUsers(this.bookStorage(), wanted);
+      return new Map([...users].flatMap(([steamId, user]) => (this.ids.has(steamId) ? [[this.ids.get(steamId)!, user] as const] : [])));
+    } catch (error) {
+      console.error(`Roundup tags failed: ${errorText(error)}`);
+      return new Map();
+    }
   }
 
   // The kill feed's records over a period's days. Null before the first kill, or if the database cannot be read, so
@@ -2771,7 +2788,17 @@ export class Watcher extends DurableObject<Env> {
       await storage.put('vip', next.state);
       // Posted once, after the list is saved: a failed post is logged, not retried, so nobody is announced twice.
       if (rule !== null && (next.added.length > 0 || next.renewed.length > 0)) {
-        const message = buildVipMessage(publicNames(next.added, hidden), publicNames(next.renewed, hidden), rule, config.siteUrl);
+        // Whoever linked their Discord account is tagged; a private profile is never named, so never tagged.
+        const users = await discordUsers(
+          this.bookStorage(),
+          [...next.added, ...next.renewed].map((p) => p.steamId).filter((steamId) => !hidden.has(steamId)),
+        ).catch(() => new Map<string, string>());
+        const tag = (rows: typeof next.added) =>
+          publicNames(rows, hidden).map((row) => {
+            const discordId = users.get(row.steamId);
+            return discordId === undefined ? row : { ...row, discordId };
+          });
+        const message = buildVipMessage(tag(next.added), tag(next.renewed), rule, config.siteUrl);
         await postWebhook(config.webhookUrl, message).catch((error: unknown) =>
           console.error(`VIP announcement failed: ${errorText(error)}`),
         );
@@ -4913,6 +4940,7 @@ const commandTools = (
       lastMatch: async () => (await watcher().recentMatches())[0] ?? null,
       privateProfiles: async () => privateSteamIds(await watcher().privateProfiles()),
       roundup: (choice) => watcher().roundup(choice),
+      roundupUsers: (roundup) => watcher().roundupUsers(roundup),
       seeders: (days) => watcher().seeders(days),
       removeMatch: (endedAt) => watcher().removeMatch(endedAt),
       seedCall: (message) => watcher().seedCall(message),
