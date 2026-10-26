@@ -289,7 +289,7 @@ describe('runStaffCommand', () => {
 
     const reply = await run('moveclan', { clan: 'WD', team: 'Manticore' });
 
-    expect(reply.content.length).toBeLessThan(2000);
+    expect(reply.content?.length).toBeLessThan(2000);
     expect(reply.content).toContain('Moved 30 players');
     expect(reply.content).toContain('and 22 more');
   });
