@@ -1214,6 +1214,50 @@ export const buildModLogMessage = (steamId: string, entry: ModEntry, siteUrl?: s
   };
 };
 
+export type ClanMove = {
+  clan: string;
+  team: string;
+  at: number;
+  by: string;
+  // Who moved, and the team they left; who could not be moved.
+  moved: { name: string; from?: string | undefined }[];
+  failed: { name: string }[];
+};
+
+const MAX_CLAN_LIST = 3500;
+
+// A whole clan moved by /moveclan, as one message in the moderation log instead of one for each player.
+export const buildClanMoveMessage = (move: ClanMove, siteUrl?: string): DiscordMessage => {
+  const lines = move.moved.map((p) => `${playerName(p.name)}${p.from ? ` · from ${p.from}` : ''}`);
+  const shown: string[] = [];
+  let length = 0;
+  for (const line of lines) {
+    if (length + line.length + 1 > MAX_CLAN_LIST) break;
+    shown.push(line);
+    length += line.length + 1;
+  }
+  const more = lines.length - shown.length;
+  return {
+    embeds: [
+      {
+        title: `🔀 Clan move · ${escapeMarkdown(move.clan.slice(0, 50))}`,
+        ...staffPage(siteUrl),
+        description: [...shown, ...(more > 0 ? [`And ${more} more.`] : [])].join('\n') || 'No one was moved.',
+        color: INFO_COLOR,
+        fields: [
+          { name: 'Moved', value: `${plural(move.moved.length, 'player')} to ${factionBadge(move.team)}${escapeMarkdown(move.team)}`, inline: true },
+          { name: 'By', value: staffName(move.by), inline: true },
+          ...(move.failed.length === 0
+            ? []
+            : [{ name: 'Could not move', value: move.failed.map((p) => playerName(p.name)).join(', ').slice(0, MAX_FIELD), inline: false }]),
+        ],
+        timestamp: new Date(move.at).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
 // A player passing a griefing flag's mark today. `weapon` names a cause tag. `steam` is the player's saved Steam check:
 // an account worth a look or high risk is shown, as griefing on one is more telling.
 export const buildGriefAlert = (

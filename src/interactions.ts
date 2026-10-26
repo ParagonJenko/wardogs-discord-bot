@@ -37,7 +37,7 @@ const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow
 export const isAdminCommand = (name: CommandName): boolean => ADMIN_COMMANDS.includes(name);
 
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
-const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'];
+const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'];
 
 // What /roundup can show, as Discord lists it.
 const ROUNDUP_PERIODS: { name: string; value: RoundupChoice }[] = [
@@ -188,6 +188,15 @@ export const COMMANDS = [
         required: false,
         choices: TEAM_CHOICES,
       },
+    ],
+  },
+  {
+    name: 'moveclan',
+    description: 'Move everyone in game with a clan tag to one team (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      { type: STRING, name: 'clan', description: 'The clan tag at the start of their names, such as WD', required: true, max_length: 20 },
+      { type: STRING, name: 'team', description: 'The team to move them to', required: true, choices: TEAM_CHOICES },
     ],
   },
   {

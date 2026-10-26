@@ -158,7 +158,9 @@ import {
   buildGriefAlert,
   buildHeadshotAlert,
   buildLiveStatus,
+  buildClanMoveMessage,
   buildModLogMessage,
+  type ClanMove,
   buildOutageAlert,
   buildRoundupMessage,
   buildSteamAlerts,
@@ -4340,8 +4342,19 @@ export class Watcher extends DurableObject<Env> {
     return all.filter((p) => !ids.has(p.steamId) && ids.add(p.steamId)).map(({ steamId, name }) => ({ steamId, name }));
   }
 
-  async logAction(steamId: string, entry: ModEntry): Promise<void> {
-    await this.record(steamId, entry);
+  async logAction(steamId: string, entry: ModEntry, quiet = false): Promise<void> {
+    await this.record(steamId, entry, { quiet });
+  }
+
+  // A clan moved with /moveclan: each player's own entry was kept quietly, so this is the one post for all of them.
+  clanMoved(move: ClanMove): void {
+    const { modLogWebhookUrl, siteUrl } = this.posting();
+    if (modLogWebhookUrl === undefined) return;
+    this.ctx.waitUntil(
+      postWebhook(modLogWebhookUrl, buildClanMoveMessage(move, siteUrl)).catch((error: unknown) =>
+        console.error(`Moderation log post failed (clan move ${JSON.stringify(move.clan)}): ${errorText(error)}`),
+      ),
+    );
   }
 
   // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A player who is already
@@ -4873,7 +4886,8 @@ const commandTools = (
   const records: StaffRecords = {
     player: (steamId) => watcher().playerRecord(steamId),
     knownPlayers: () => watcher().knownPlayers(),
-    log: (steamId, entry) => watcher().logAction(steamId, entry),
+    log: (steamId, entry, quiet) => watcher().logAction(steamId, entry, quiet),
+    clanMoved: async (move) => watcher().clanMoved(move),
     ban: (ban) => watcher().ban(ban),
     unban: (target, by, byName) => watcher().unban(target, by, byName),
     vipAdd: (grant) => watcher().vipAdd(grant),

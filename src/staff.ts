@@ -12,6 +12,7 @@ import {
   mapEmoji,
   mapName,
   playerName,
+  type ClanMove,
   type PlayerProfile,
 } from './discord.ts';
 import type { PlayerGrief } from './griefing.ts';
@@ -104,7 +105,10 @@ export type StaffRecords = {
   player: (steamId: string) => Promise<PlayerRecord>;
   // Players seen lately, given VIP or banned by the bot, to pick from when they are not online.
   knownPlayers: () => Promise<Named[]>;
-  log: (steamId: string, entry: ModEntry) => Promise<void>;
+  // `quiet`: kept in the player's history but not posted to the moderation log.
+  log: (steamId: string, entry: ModEntry, quiet?: boolean) => Promise<void>;
+  // A whole clan moved, as one message in the moderation log.
+  clanMoved: (move: ClanMove) => Promise<void>;
   ban: (request: BanRequest) => Promise<BanResult>;
   unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
   // `days` null: permanent, until staff remove it. `reason` is why, as the staff history and moderation log show it.
@@ -144,7 +148,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -159,6 +163,21 @@ export const VIP_REASONS = [
   { value: 'other', name: 'Other' },
 ] as const;
 export const VIP_NOTE_MAX_LENGTH = 200;
+// A clan is the tag at the start of a name: "[WD] Ash", "WD | Ash" or "WD_Ash". Matched whatever the case, with or
+// without the brackets typed.
+export const inClan = (name: string, tag: string): boolean => {
+  const bare = tag.trim().replace(/^[[({<|]+|[\])}>|]+$/g, '').trim();
+  if (!bare) return false;
+  const escaped = bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^\\s*(?:[[({<|]\\s*${escaped}\\s*[\\])}>|]|${escaped}(?![\\p{L}\\p{N}]))`, 'iu').test(name);
+};
+
+// The most players a team can hold: a 98 player server split three ways.
+export const TEAM_MAX_PLAYERS = 33;
+
+// How many names /moveclan lists in its reply.
+const CLAN_REPLY_NAMES = 8;
+
 // The game's three teams. /switchteam only moves players to one of them, each with its colour: "🔵 Lonestar".
 export const TEAMS = ['Lonestar', 'Manticore', 'Valkyra'] as const;
 export const TEAM_CHOICES = TEAMS.map((team) => ({ name: `${factionDot(team)}${team}`, value: team }));
@@ -508,6 +527,64 @@ export const runStaffCommand =
         detail: current ? `${current} to ${team}` : `to ${team}`,
       });
       return { content: `🔀 Moved ${who(player)} to ${factionBadge(team)}**${team}**. They respawn on the new side.` };
+    }
+
+    if (name === 'moveclan') {
+      const tag = text('clan');
+      if (!tag) return { content: 'Write the clan tag, such as WD.' };
+      const [live, status] = await Promise.all([online(), fetchStatus(rconUrl, rconPassword, http)]);
+      const teams = status.factionScores.map((f) => f.name);
+      const same = (a: string, b: string | null | undefined): boolean => b != null && factionKey(a) === factionKey(b);
+      const known = TEAMS.find((t) => same(t, text('team')));
+      if (known === undefined) return { content: `Pick ${TEAMS.slice(0, -1).join(', ')} or ${TEAMS.at(-1)}.` };
+      const team = teams.find((t) => same(t, known)) ?? (teams.length === 0 ? known : null);
+      if (team === null) return { content: `${known} is not in this match. Teams now: ${teams.join(', ')}.` };
+      const members = live.filter((p) => inClan(p.name, tag));
+      if (members.length === 0) return { content: `No one in game has the clan tag "${tag}".` };
+      const moving = members.filter((p) => !same(team, p.faction));
+      if (moving.length === 0) return { content: `All ${members.length} players with the tag "${tag}" are already on ${team}.` };
+      // Nobody moves if they would not all fit: half a clan on each side is worse than none.
+      const onTeam = live.filter((p) => same(team, p.faction)).length;
+      const free = Math.max(0, TEAM_MAX_PLAYERS - onTeam);
+      if (moving.length > free) {
+        return {
+          content: `${factionBadge(team)}**${team}** has ${onTeam} of ${TEAM_MAX_PLAYERS} players and room for ${free} more, but ${moving.length} with the tag "${tag}" would move. No one was moved.`,
+        };
+      }
+      log.info(`/moveclan by ${staff}: ${JSON.stringify(tag)} (${moving.length} players) to ${team}`);
+      const failed: Player[] = [];
+      for (const p of moving) {
+        try {
+          await switchFaction(rconUrl, rconPassword, p.steamId, team, http);
+        } catch {
+          failed.push(p);
+          continue;
+        }
+        await records.log(
+          p.steamId,
+          { action: 'switchteam', at: now(), by, ...named, name: p.name, detail: p.faction ? `${p.faction} to ${team}` : `to ${team}` },
+          true,
+        );
+      }
+      const moved = moving.filter((p) => !failed.includes(p));
+      if (moved.length > 0 || failed.length > 0) {
+        await records.clanMoved({
+          clan: tag,
+          team,
+          at: now(),
+          by,
+          moved: moved.map((p) => ({ name: p.name, from: p.faction })),
+          failed: failed.map((p) => ({ name: p.name })),
+        });
+      }
+      // A short preview of each list, with the rest counted: a whole clan's names could pass Discord's 2000 characters.
+      const preview = (list: Player[]): string =>
+        list.length <= CLAN_REPLY_NAMES
+          ? list.map(who).join(', ')
+          : `${list.slice(0, CLAN_REPLY_NAMES).map(who).join(', ')} and ${list.length - CLAN_REPLY_NAMES} more`;
+      const lines = [`🔀 Moved ${moved.length} player${moved.length === 1 ? '' : 's'} with the tag "${tag}" to ${factionBadge(team)}**${team}**: ${preview(moved)}. They respawn on the new side.`];
+      if (failed.length > 0) lines.push(`⚠️ Could not move ${failed.length}: ${preview(failed)}.`);
+      return { content: lines.join('\n') };
     }
 
     if (name === 'ban') {

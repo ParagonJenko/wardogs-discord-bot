@@ -9,6 +9,7 @@ import { editRotations, parseRotationBook, rotationDay, type RotationBook, type 
 import type { SteamLookup } from '../src/steam.ts';
 import {
   findPlayer,
+  inClan,
   runStaffCommand,
   suggestStaff,
   type BanResult,
@@ -102,6 +103,7 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   player: vi.fn(async () => emptyRecord),
   knownPlayers: vi.fn(async () => [{ steamId: OLD, name: 'Oldtimer' }]),
   log: vi.fn(async () => undefined),
+  clanMoved: vi.fn(async () => undefined),
   ban: vi.fn(async (): Promise<BanResult> => ({ outcome: 'banned', until: NOW + 86_400_000, byBot: true })),
   unban: vi.fn(async () => true),
   vipAdd: vi.fn(async () => ({ outcome: 'added' as const, until: NOW + 30 * 86_400_000 })),
@@ -149,6 +151,20 @@ describe('findPlayer', () => {
   });
 });
 
+describe('inClan', () => {
+  it('matches a tag at the start of a name, with or without brackets, whatever the case', () => {
+    for (const name of ['[WD] Ash', '(wd)Ash', 'WD | Ash', 'wd_Ash', 'WD Ash']) expect(inClan(name, 'WD')).toBe(true);
+    expect(inClan('[WD] Ash', '[wd]')).toBe(true);
+  });
+
+  it('does not match a longer word, a tag later in the name, or an empty tag', () => {
+    for (const name of ['WDX Ash', 'Ash [WD]', 'Wardog']) expect(inClan(name, 'WD')).toBe(false);
+    expect(inClan('Ash', ' ')).toBe(false);
+    expect(inClan('[a.b] Ash', 'a.b')).toBe(true);
+    expect(inClan('[axb] Ash', 'a.b')).toBe(false);
+  });
+});
+
 describe('runStaffCommand', () => {
   it('/warn sends a private message and records it', async () => {
     const { run, sent, records } = setup();
@@ -188,6 +204,7 @@ describe('runStaffCommand', () => {
     await expect(run('kick', { player: OLD, reason: 'x' })).resolves.toEqual({ content: `**${OLD}** isn't on the server.` });
     expect(sent.some((s) => s.startsWith('POST'))).toBe(false);
     expect(records.log).not.toHaveBeenCalled();
+    expect(records.clanMoved).not.toHaveBeenCalled();
   });
 
   it('/kick needs a reason, and passes it on', async () => {
@@ -219,6 +236,96 @@ describe('runStaffCommand', () => {
     await expect(run('switchteam', { player: ASH, team: 'valkyra' })).resolves.toEqual({ content: '**Ash** is already on Valkyra.' });
     await expect(run('switchteam', { player: ASH, team: 'Lonestar' })).resolves.toMatchObject({ content: expect.stringContaining('🤠 **LONESTAR**') });
     expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'LONESTAR' })}`]);
+  });
+
+  it('/moveclan moves everyone with the tag who is not on the team already, and logs each move', async () => {
+    const clan = {
+      players: [
+        { name: '[WD] Ash', steamId: ASH, faction: 'Valkyra', kills: 0, deaths: 0 },
+        { name: 'WD | Bo', steamId: BO, faction: 'Manticore', kills: 0, deaths: 0 },
+        { name: 'Cy', steamId: CY, faction: 'Valkyra', kills: 0, deaths: 0 },
+      ],
+    };
+    const { run, sent, records } = setup({ 'GET /v1/players': [200, clan] });
+
+    const reply = await run('moveclan', { clan: 'wd', team: 'Manticore' });
+
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([`PATCH /v1/players/${ASH} ${JSON.stringify({ faction: 'Manticore' })}`]);
+    expect(records.log).toHaveBeenCalledTimes(1);
+    expect(records.log).toHaveBeenCalledWith(
+      ASH,
+      { action: 'switchteam', at: NOW, by: '42', name: '[WD] Ash', detail: 'Valkyra to Manticore' },
+      true,
+    );
+    expect(records.clanMoved).toHaveBeenCalledTimes(1);
+    expect(records.clanMoved).toHaveBeenCalledWith({
+      clan: 'wd',
+      team: 'Manticore',
+      at: NOW,
+      by: '42',
+      moved: [{ name: '[WD] Ash', from: 'Valkyra' }],
+      failed: [],
+    });
+    expect(reply.content).toContain('Moved 1 player with the tag "wd" to 🦂 **Manticore**: **\\[WD\\] Ash**');
+  });
+
+  it('/moveclan says when nobody has the tag, everyone is there already, or the team is not in the match', async () => {
+    const { run, sent } = setup();
+
+    await expect(run('moveclan', { clan: 'WD', team: 'Manticore' })).resolves.toEqual({ content: 'No one in game has the clan tag "WD".' });
+    await expect(run('moveclan', { clan: 'Ash', team: 'Valkyra' })).resolves.toMatchObject({
+      content: expect.stringContaining('already on Valkyra'),
+    });
+    await expect(run('moveclan', { clan: 'Ash', team: 'Lonestar' })).resolves.toEqual({
+      content: 'Lonestar is not in this match. Teams now: Valkyra, Manticore.',
+    });
+    await expect(run('moveclan', { clan: ' ', team: 'Valkyra' })).resolves.toEqual({ content: 'Write the clan tag, such as WD.' });
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
+  });
+
+  it('/moveclan keeps its reply short for a big clan, and counts the rest', async () => {
+    const big = Array.from({ length: 30 }, (_, i) => ({ name: `[WD] ${'Longname'.repeat(5)}${i}`, steamId: `7656119800002${String(i).padStart(4, '0')}`, faction: 'Valkyra', kills: 0, deaths: 0 }));
+    const { run } = setup({ 'GET /v1/players': [200, { players: big }] });
+
+    const reply = await run('moveclan', { clan: 'WD', team: 'Manticore' });
+
+    expect(reply.content?.length).toBeLessThan(2000);
+    expect(reply.content).toContain('Moved 30 players');
+    expect(reply.content).toContain('and 22 more');
+  });
+
+  it('/moveclan moves no one if the team would go over 33 players', async () => {
+    const filler = Array.from({ length: 32 }, (_, i) => ({ name: `Fill${i}`, steamId: `7656119800001${String(i).padStart(4, '0')}`, faction: 'Manticore', kills: 0, deaths: 0 }));
+    const clan = {
+      players: [
+        { name: '[WD] Ash', steamId: ASH, faction: 'Valkyra', kills: 0, deaths: 0 },
+        { name: '[WD] Bo', steamId: BO, faction: 'Valkyra', kills: 0, deaths: 0 },
+        ...filler,
+      ],
+    };
+    const { run, sent, records } = setup({ 'GET /v1/players': [200, clan] });
+
+    await expect(run('moveclan', { clan: 'WD', team: 'Manticore' })).resolves.toEqual({
+      content: '🦂 **Manticore** has 32 of 33 players and room for 1 more, but 2 with the tag "WD" would move. No one was moved.',
+    });
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toEqual([]);
+    expect(records.log).not.toHaveBeenCalled();
+  });
+
+  it('/moveclan fills a team to exactly 33', async () => {
+    const filler = Array.from({ length: 31 }, (_, i) => ({ name: `Fill${i}`, steamId: `7656119800001${String(i).padStart(4, '0')}`, faction: 'Manticore', kills: 0, deaths: 0 }));
+    const clan = {
+      players: [
+        { name: '[WD] Ash', steamId: ASH, faction: 'Valkyra', kills: 0, deaths: 0 },
+        { name: '[WD] Bo', steamId: BO, faction: 'Valkyra', kills: 0, deaths: 0 },
+        ...filler,
+      ],
+    };
+    const { run, sent } = setup({ 'GET /v1/players': [200, clan] });
+
+    await run('moveclan', { clan: 'WD', team: 'Manticore' });
+
+    expect(sent.filter((s) => s.startsWith('PATCH'))).toHaveLength(2);
   });
 
   it('/switchteam refuses a team that is not in the match', async () => {
