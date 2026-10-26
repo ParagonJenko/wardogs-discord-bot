@@ -194,7 +194,7 @@ export const rulesNote = (siteUrl: string | undefined): string => {
 
 // The reason given with the kick that comes with a ban, with where to appeal it.
 const appealNote = (siteUrl: string | undefined): string => {
-  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const host = siteUrl === undefined ? '' : URL.canParse(siteUrl) ? new URL(siteUrl).host : '';
   return host ? `Appeal at ${host}/discord` : 'Appeal in our Discord';
 };
 
