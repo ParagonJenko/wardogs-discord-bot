@@ -390,6 +390,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
             siteHost: new URL(e.SITE_URL).host,
             scoreToWin: e.SCORE_TO_WIN,
             ...(e.MAP_VOTE === 'on' && e.DISCORD_VOTE_CHANNEL_ID && e.DISCORD_BOT_TOKEN ? { vote: true } : {}),
+            ...(e.COINS === null ? {} : { coins: true }),
           }
         : null,
     seedingMessages:
@@ -415,7 +416,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
         : null,
     matchEndMessages:
       (e.TOP_PLAYER_MESSAGES > 0 || e.AWARD_MESSAGES === 'on') && e.SITE_URL
-        ? { count: e.TOP_PLAYER_MESSAGES, awards: e.AWARD_MESSAGES === 'on', siteHost: new URL(e.SITE_URL).host }
+        ? { count: e.TOP_PLAYER_MESSAGES, awards: e.AWARD_MESSAGES === 'on', siteHost: new URL(e.SITE_URL).host, ...(e.COINS === null ? {} : { coins: true }) }
         : null,
     roundups:
       e.ROUNDUPS === 'on' ? { hour: e.ROUNDUP_HOUR, webhookUrl: e.DISCORD_ROUNDUP_WEBHOOK_URL ?? e.DISCORD_WEBHOOK_URL } : null,

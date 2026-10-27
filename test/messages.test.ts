@@ -79,6 +79,9 @@ describe('milestones', () => {
     expect(halfway?.text).not.toContain('whitelist');
     const nearly = milestones(match({ factionScores: [{ name: 'Valkyra', score: 92 }] }), 0, voting, null, () => 0).find((m) => m.key === 'nearly');
     expect(nearly?.text).toContain('Last call! Vote the next map: gaminginit.com/vote');
+    // With INITcoins on and no vote, the same message sends people to earn them.
+    const coined = milestones(match({ factionScores: [{ name: 'Valkyra', score: 92 }] }), 0, { ...rule, coins: true }, null, () => 0).find((m) => m.key === 'nearly');
+    expect(coined?.text).toContain('earn INITcoins for whitelist: gaminginit.com/coins');
   });
 
   it('keeps every vote message within the game\'s line', () => {
@@ -360,6 +363,13 @@ describe('seederThanks', () => {
       { steamId: 'a', name: 'A', text: (lines.SEEDER_THANKS[1] ?? '').replace('{name}', 'A').replace('{minutes}', '12 minutes') },
     ]);
     expect(recent['seederThanks']).toHaveLength(2);
+  });
+
+  it('ends with a pointer to INITcoins, when they are on', () => {
+    const [thanks] = seederThanks([credit('a', 40)], new Set(['a']), new Set(), 10, () => 0, undefined, {}, { siteHost: 'gaminginit.com' }).messages;
+
+    expect(thanks?.text.endsWith('Earn INITcoins: gaminginit.com/coins')).toBe(true);
+    expect((thanks?.text ?? '').length).toBeLessThanOrEqual(200);
   });
 
   it('thanks at most 15', () => {

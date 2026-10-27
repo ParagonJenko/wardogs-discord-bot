@@ -18,6 +18,7 @@ import {
   nearlyScore,
   seedingReward,
   welcomeLinks,
+  coinsCall,
 } from './messages.ts';
 
 // The staff page's Lines tab: staff put their own lines in place of any of the bot's lists (see lines.ts), and can go
@@ -39,6 +40,8 @@ export type LinesContext = {
   vip: VipRule | null;
   // Whether the next-map vote runs each match, so the halfway and nearly messages send people to it.
   vote?: boolean;
+  // Whether INITcoins are on, so the nearly message sends people to them.
+  coins?: boolean;
   scoreToWin: number;
   live: number;
   // Whether the bot sends the match messages, the seeding messages, the welcomes and the end-of-match messages.
@@ -58,6 +61,7 @@ export const linesContext = (config: Config): LinesContext => ({
   discord: config.inviteCode ? discordLink(config.inviteCode) : null,
   vip: config.vip,
   vote: config.matchMessages?.vote ?? false,
+  coins: config.coins !== null,
   scoreToWin: config.scoreToWin,
   live: config.rules.live,
   match: config.matchMessages !== null,
@@ -115,7 +119,7 @@ const nameValues = { values: { name: PREVIEW_NAME }, longest: { name: 'x'.repeat
 // Placeholders whose value is the same in the preview and in game.
 const exact = (values: Record<string, string>) => ({ values, longest: values });
 const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vote)}`;
-const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context), context.vote)}`;
+const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context), context.vote, context.coins)}`;
 
 // Every list, in the order the page shows them.
 export const LISTS: ListDefinition[] = [
@@ -138,15 +142,15 @@ export const LISTS: ListDefinition[] = [
     id: 'seederThanks',
     group: 'Seeding',
     name: 'Thanks when live',
-    note: 'A private message to each seeder still in game the moment the server goes live: those on long enough for the seed to count (VIP_SEED_MINUTES), not staff, at most 15. {minutes} is how long they seeded. The line is the whole message.',
+    note: 'A private message to each seeder still in game the moment the server goes live: those on long enough for the seed to count (VIP_SEED_MINUTES), not staff, at most 15. {minutes} is how long they seeded. With INITcoins on, a pointer to them goes after the line.',
     kind: 'seeding',
     get: (lines) => lines.seederThanks,
     set: (lines, seederThanks) => ({ ...lines, seederThanks }),
-    frame: () => ({
+    frame: (context) => ({
       values: { ...nameValues.values, minutes: minutesText(25) },
       longest: { ...nameValues.longest, minutes: minutesText(9999) },
       before: '',
-      after: '',
+      after: context.coins && context.siteHost !== null ? ` ${coinsCall(context.siteHost)}` : '',
     }),
   },
   {
@@ -348,7 +352,8 @@ export const LISTS: ListDefinition[] = [
         values: { ...nameValues.values, ...extra.values, site: site(context) },
         longest: { ...nameValues.longest, ...extra.longest, site: site(context) },
         before: '',
-        after: '',
+        // The nemesis message has no link of its own, so with INITcoins on it ends with a pointer to them.
+        after: extra.id === 'nemesis' && context.coins ? ` ${coinsCall(site(context))}` : '',
       }),
     }),
   ),
