@@ -1789,19 +1789,24 @@ player sees their own on `/account`.
 
 ### How they are earned
 
+INITcoins have one variable, `COINS`: `"on"`, `"off"`, or JSON (which means on) to change what is in the *Setting* columns below,
+such as `{"seed":150,"vipWeekPrice":600,"roles":[{"id":"123456789012345678","name":"Night Owl","price":1500}]}`. What is left out
+keeps its default, and a key it doesn't know, or a number out of range, stops the bot with a message saying which. It is one variable
+because a Worker on Cloudflare's free plan can have only 64 variables and secrets between them, and a deploy over that fails.
+
 Coins go to a Steam ID as it earns them, linked to a Discord account or not, so nobody loses what they earned before they
 linked. [Staff](#staff-steam-accounts) who linked their Steam account earn nothing, as they never count as seeders.
 Spending needs a linked account, as that is how the bot knows who is buying. Every number is a variable in `wrangler.jsonc`.
 
-| What | Pays | Variable |
+| What | Pays | Setting |
 | ---- | ---- | -------- |
-| A successful seed (on for more than `VIP_SEED_MINUTES` while the server seeds, and it goes live), once a day | **150** | `COIN_SEED` |
-| Minutes seeding past that, up to 30 a day | 1 per 2 minutes | `COIN_SEED_MINUTES_PER`, `COIN_SEED_MINUTES_CAP` |
-| Time with the server live | 1 per 10 minutes | `COIN_PLAY_MINUTES` |
-| A match played (at least `COIN_PLAYED_LEAST` kills and deaths together, so sitting in one pays nothing) | 6 | `COIN_MATCH` |
-| A match won, on top | 6 | `COIN_WIN` |
-| (those two, for the first matches of the day) | 6 matches | `COIN_MATCHES_PAID` |
-| The most playing, seeding minutes and matches can pay in a day (the seed itself is not counted) | **100** | `COIN_DAILY_CAP` |
+| A successful seed (on for more than `VIP_SEED_MINUTES` while the server seeds, and it goes live), once a day | **150** | `seed` |
+| Minutes seeding past that, up to 30 a day | 1 per 2 minutes | `seedMinutesPer`, `seedMinutesCap` |
+| Time with the server live | 1 per 10 minutes | `playMinutes` |
+| A match played (at least `playedLeast` kills and deaths together, so sitting in one pays nothing) | 6 | `match` |
+| A match won, on top | 6 | `win` |
+| (those two, for the first matches of the day) | 6 matches | `matchesPaid` |
+| The most playing, seeding minutes and matches can pay in a day (the seed itself is not counted) | **100** | `dailyCap` |
 | Missions | below | |
 
 **Missions** are worked out from what the bot already records (the kill feed, match results and seeding), the same for
@@ -1809,18 +1814,18 @@ everyone. Each day there are three, one easy (10 coins), one medium (15) and one
 "Win a match" or "Get 12 kills in one match". Each week there are three more, worth 30, 50 and 80: "Play 10 matches", "Win
 5 matches", "Seed the server on 4 days". They are paid the moment they are done, and the player is told by a private message
 in game. "End an enemy kill streak" needs the [streak breaker](#streak-breaker-vip) (`BOUNTY_STREAK`) to be on. A daily mission that isn't done
-can be swapped for another of the same tier for `COIN_REROLL_PRICE` coins, three times a day. The missions are in `src/coins.ts`.
+can be swapped for another of the same tier for `rerollPrice` coins, three times a day. The missions are in `src/coins.ts`.
 
 ### What they buy
 
-| Item | Price | Variable |
+| Item | Price | Setting |
 | ---- | ----- | -------- |
-| Whitelist, 1 day | 100 | `COIN_VIP_DAY_PRICE` |
-| Whitelist, 7 days | 600 | `COIN_VIP_WEEK_PRICE` |
+| Whitelist, 1 day | 100 | `vipDayPrice` |
+| Whitelist, 7 days | 600 | `vipWeekPrice` |
 | A title shown on the player's page: Sprout, Seeder, Grunt, Hound, Wardog, Alpha | 300 to 6,000 | |
-| A Discord role | what you set | `COIN_ROLES`, JSON such as `[{"id":"123456789012345678","name":"Night Owl","price":1500}]` |
+| A Discord role | what you set | `roles`, JSON such as `[{"id":"123456789012345678","name":"Night Owl","price":1500}]` |
 
-Whitelist is added to the days the player has left, and nobody can hold more than `COIN_VIP_AHEAD_DAYS` (14) days at once,
+Whitelist is added to the days the player has left, and nobody can hold more than `vipAheadDays` (14) days at once,
 so it can't be stockpiled. It is given the same way as `/vip add` (see [Automatic VIP](#automatic-vip) for how the server
 changes), shows in the staff page's whitelist as "Bought with INITcoins", ends on time, and the player gets the usual Discord
 message. Players staff took VIP from with `/vip remove` can't buy it back until that block has run out, staff can't buy

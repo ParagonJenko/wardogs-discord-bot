@@ -103,32 +103,12 @@
     // INITcoins (README, "INITcoins"): "on" replaces automatic seeder VIP above (it stops giving VIP; the VIP already given runs
     // out on its own date) with coins that players earn by seeding, playing and missions, and spend on whitelist days and
     // cosmetics. The first time it is on, seeders get the coins for their seeds in the last 14 days. "off" brings automatic VIP
-    // back. The rest are the rates and prices: change them here and deploy. They are balanced against each other (a week of
-    // whitelist is about 4 seeds, or 3 seeds and a few evenings of play; playing alone takes well over a week), so change them
-    // together.
+    // back. To change a rate or price, or to sell Discord roles, put JSON here instead (it means "on"), such as
+    // "{\"seed\":150,\"vipWeekPrice\":600,\"roles\":[{\"id\":\"123456789012345678\",\"name\":\"Night Owl\",\"price\":1500}]}":
+    // the keys and their defaults are in the README. It is one variable because a Worker on the free plan can have only 64
+    // variables and secrets between them. The defaults are balanced against each other (a week of whitelist is about 4 seeds, or 3
+    // seeds and a few evenings of play), so change them together.
     "COINS": "on",
-    // Paid once a day for a successful seed (the VIP_SEED_MINUTES rule), then 1 more for each COIN_SEED_MINUTES_PER minutes past
-    // that, up to COIN_SEED_MINUTES_CAP a day.
-    "COIN_SEED": "150",
-    "COIN_SEED_MINUTES_PER": "2",
-    "COIN_SEED_MINUTES_CAP": "30",
-    // 1 for each this many minutes with the server live; a match played, and a match won (the first COIN_MATCHES_PAID matches of
-    // the day); and the most all of that and seeding minutes pay in a day. Missions are on top of it.
-    "COIN_PLAY_MINUTES": "10",
-    "COIN_MATCH": "6",
-    "COIN_WIN": "6",
-    "COIN_MATCHES_PAID": "6",
-    "COIN_DAILY_CAP": "100",
-    // A match counts as played for coins with this many kills and deaths together, so sitting in a match earns nothing.
-    "COIN_PLAYED_LEAST": "3",
-    // The shop: whitelist for a day, for a week, the most days of whitelist anyone can hold at once, and swapping a daily mission.
-    "COIN_VIP_DAY_PRICE": "100",
-    "COIN_VIP_WEEK_PRICE": "600",
-    "COIN_VIP_AHEAD_DAYS": "14",
-    "COIN_REROLL_PRICE": "40",
-    // Discord roles for sale, as JSON, such as [{"id":"123456789012345678","name":"Night Owl","price":1500}]. The bot's own role must
-    // be above them. Needs DISCORD_BOT_TOKEN. Empty for none.
-    "COIN_ROLES": "",
     // The hour (UTC, 0 to 23) each day's map rotation starts (see /rotations). 5 is 6am in the UK in summer, 5am in winter,
     // so a late night keeps the evening's rotation.
     "ROTATION_HOUR": "5",
