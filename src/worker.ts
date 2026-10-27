@@ -3781,7 +3781,15 @@ export class Watcher extends DurableObject<Env> {
     const idOf = publicIdOf(privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))), (steamId) => ids.get(steamId));
     const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
-    const extras = { leaderboard: board, recentSeeders: recent, vip: config.vip, seederVip: seeders, weapons, teams: teamBoard(records, LEADERBOARD_DAYS, now) };
+    const extras = {
+      leaderboard: board,
+      recentSeeders: recent,
+      vip: config.vip,
+      seederVip: seeders,
+      weapons,
+      teams: teamBoard(records, LEADERBOARD_DAYS, now),
+      ...(config.coins === null ? {} : { coins: { seed: config.coins.seed, vipWeek: config.coins.vipWeekPrice } }),
+    };
     return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, extras, idOf);
   }
 

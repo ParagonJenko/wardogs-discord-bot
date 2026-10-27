@@ -1494,6 +1494,7 @@ that is what the outcomes below are for.
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
 | `leaderboard`  | Top 10 by kills, K/D (10+ matches, `kdMinMatches`), time played and seeding, over the last 30 days (UTC). A match counts for anyone seen in it, even for one reading, so K/D needs more than one evening (such as an evening on the mortar) can reach; a shorter period needs its share, never fewer than 3 |
+| `coins`        | While [INITcoins](#initcoins) are on: `seed` (what a seed pays) and `vipWeek` (what a week of whitelist costs). Left out otherwise |
 | `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off (always, while [INITcoins](#initcoins) are on) |
 | `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`), nor [staff](#staff-steam-accounts). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |

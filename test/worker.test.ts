@@ -700,6 +700,8 @@ describe('INITcoins in workerd', { timeout: 30_000 }, () => {
     const stats = await json('/api/stats');
     expect(stats.status).toBe(200);
     expect(stats.body.vip ?? null).toBeNull();
+    // It says what seeding pays instead.
+    expect(stats.body.coins).toEqual({ seed: 150, vipWeek: 600 });
   });
 
   it('runs checks with players in game without trouble', async () => {
