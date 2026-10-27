@@ -134,7 +134,8 @@ const EnvSchema = z
     // Which automatic VIP rule: "week" (seed on VIP_SEED_DAYS days in a week for a week) or "day" (seed on one day for
     // 3 days). "day" turns automatic VIP on whatever VIP_SEED_DAYS says.
     VIP_MODE: z.enum(['week', 'day']).default('week'),
-    // A seed counts when a player was on for more than this many minutes while the server seeded, and it then went live.
+    // A seed counts when a player was on for more than this many minutes in a row while the server seeded, and was still on when
+    // it went live.
     VIP_SEED_MINUTES: z.coerce.number().int().min(1).default(10),
     // Kill a player on a streak of this many kills or more without dying and get a whitelist slot for the next BOUNTY_VIP_DAYS calendar days (UTC), starting tomorrow.
     // 0 turns it off. On by default, at 15.

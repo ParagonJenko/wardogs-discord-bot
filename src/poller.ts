@@ -171,7 +171,8 @@ const Scores = z.array(z.object({ name: z.string(), score: z.number(), colorHex:
 
 const BotStateSchema = z.object({
   alerts: AlertsSchema,
-  seeding: z.record(z.string(), z.object({ name: z.string(), checks: z.number() })),
+  // `missed`: checks in a row the player has been away for, missing from state saved before it.
+  seeding: z.record(z.string(), z.object({ name: z.string(), checks: z.number(), missed: z.number().optional() })),
   match: z
     .object({
       key: z.string(),
@@ -569,9 +570,11 @@ export const createPoller = ({
     // low-pop alert that starts a re-seed cannot be posted, the phase stays live (so the alert is retried) while the
     // re-seed is already being counted.
     const wentLive = after === 'live' && (before !== 'live' || Object.keys(state.seeding).length > 0);
-    const credits = wentLive
-      ? Object.entries(state.seeding).map(([steamId, s]) => ({ steamId, name: s.name, minutes: minutes(s.checks) }))
-      : [];
+    // A seed only counts for who is still on the server when it goes live, and has been on without leaving (see tallySeeding): a
+    // player who seeded for half an hour and then left is not paid for the seed someone else finished.
+    const onNow = new Set(players.map((p) => p.steamId));
+    const seededBy = wentLive ? Object.fromEntries(Object.entries(state.seeding).filter(([steamId]) => onNow.has(steamId))) : state.seeding;
+    const credits = wentLive ? Object.entries(seededBy).map(([steamId, s]) => ({ steamId, name: s.name, minutes: minutes(s.checks) })) : [];
 
     await report((sink) => sink.check({ at: time, status, players, phase: after, seeding: seedingNow, match }));
     // Not caught, like the seed below: nothing has been saved yet, so the next check tries again.
@@ -584,7 +587,7 @@ export const createPoller = ({
     const ending = endRule === null ? null : ([finished, won].find((m) => unthanked(m, state)) ?? null);
     const naming = wentLive || finished !== null || state.unsentSummary !== null || ending !== null;
     const hidden = naming && privateProfiles !== undefined ? await privateProfiles() : new Set<string>();
-    const publicSeeding = publicNamesBySteamId(state.seeding, hidden);
+    const publicSeeding = publicNamesBySteamId(seededBy, hidden);
     const topped = wentLive ? topSeeders(publicSeeding, TOP_SEEDERS, staffIds) : [];
     // The top seeders who linked their Discord account are tagged. A private profile is never named, so never tagged.
     const steamOf = new Map(Object.entries(publicSeeding).map(([steamId, s]) => [s, steamId]));
