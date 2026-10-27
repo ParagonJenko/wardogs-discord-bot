@@ -69,7 +69,7 @@ import {
   settled,
   watchRestart,
 } from './restartmap.ts';
-import { runCommand, suggestOptions } from './commands.ts';
+import { runCommand, suggestOptions, type CoinTools } from './commands.ts';
 import { nextMap, parseBoardRef, parseReadRotation, parseStagedMap, rotationReadDue, showBoard, type ReadRotation, type StagedMap } from './board.ts';
 import {
   ADMIN_DEFAULT_DAYS,
@@ -166,6 +166,7 @@ import {
   buildRoundupMessage,
   buildSteamAlerts,
   buildVipMessage,
+  factionKey,
   luckOdds,
   mapName,
   postWebhook,
@@ -292,7 +293,7 @@ import {
   type LifetimeShard,
   type Milestone,
 } from './achievements.ts';
-import { feedRecordOf, type EndExtras } from './matchend.ts';
+import { feedRecordOf, hasWinner, type EndExtras } from './matchend.ts';
 import { createFeedJoins, createJoinCheck, createMatchEndCheck, createPoller, JOIN_CHECK_MS, parseState, type StateStore } from './poller.ts';
 import { discordLink, JOIN_WAIT_MS, leaderboardPlaces } from './messages.ts';
 import {
@@ -350,6 +351,7 @@ import {
   type Rotation,
   type ServerConfig,
   type ServerStatus,
+  type Player,
   type Snapshot,
 } from './rcon.ts';
 import {
@@ -523,6 +525,7 @@ import {
   addVip,
   parseVipState,
   removeVip,
+  reservedIds,
   reservedListing,
   seederVip,
   staffSpotsDue,
@@ -580,6 +583,42 @@ import {
 import { isCurrent, liveStats, liveSteamIds, parseLiveMatch, phaseOf, recordLive, type LiveMatch, type LiveSnapshot, type StreakBreak, type StreakStart } from './live.ts';
 import { addBounties, BOUNTY_KEY, bountyLines, parseBountyPending, planBounties } from './bounty.ts';
 import {
+  adjust as adjustCoins,
+  blankAccount,
+  buy as buyItem,
+  canBuy,
+  catalogue,
+  COIN_NAME,
+  COIN_PREFIX,
+  coinKey,
+  coinsInfo,
+  itemById,
+  migrationGrant,
+  missionDoneText,
+  onBreak,
+  onMatch,
+  onPlay,
+  onSeed,
+  parseAccount as parseCoins,
+  playerCoins,
+  reroll as rerollMission,
+  rolled,
+  seedPaidText,
+  setTitle,
+  titleName,
+  topEarners,
+  type CoinAccount,
+  type CoinAction,
+  type CoinReply,
+  type CoinRule,
+  type CoinsAccountView,
+  type Item,
+  type Completed,
+  type Earned,
+  type PlayerCoins,
+  type PublicCoins,
+} from './coins.ts';
+import {
   adminFeed,
   alertedOn,
   buildAdminKills,
@@ -632,6 +671,51 @@ const SEEDERS_LISTED = 25;
 const MATCH_RECORDS_SEARCHED = 50;
 // Durable Object storage writes at most 128 keys at once.
 const RECORDS_PER_WRITE = 128;
+// INITcoins: playing time is paid this often, the seeds before them are paid for this many days back when they begin, and
+// this many players are on the public board.
+const COIN_FLUSH_MS = 10 * 60_000;
+const COIN_MIGRATION_DAYS = 14;
+const COIN_LEADERS = 20;
+const COINS_MIGRATED_KEY = 'coinsMigrated';
+// Awards waiting to be paid, and playing time waiting to be paid.
+const COIN_PENDING_KEY = 'coinPending';
+const COIN_PLAY_KEY = 'coinPlay';
+
+type VipAddArgs = Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' | 'coins' };
+
+// An award to pay: its time is when it was earned.
+const PendingCoinSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('seed'), steamId: z.string(), name: z.string(), minutes: z.number(), least: z.number(), at: z.number() }),
+  z.object({
+    kind: z.literal('match'),
+    steamId: z.string(),
+    name: z.string(),
+    id: z.number(),
+    kills: z.number(),
+    deaths: z.number(),
+    won: z.boolean(),
+    at: z.number(),
+  }),
+  z.object({ kind: z.literal('break'), steamId: z.string(), name: z.string(), eventId: z.string(), at: z.number() }),
+]);
+type PendingCoin = z.infer<typeof PendingCoinSchema>;
+const parsePendingCoins = (raw: unknown): Record<string, PendingCoin> => {
+  const parsed = z.record(z.string(), PendingCoinSchema).safeParse(raw);
+  return parsed.success ? parsed.data : {};
+};
+
+type PlayBuffer = { at: number; players: Record<string, { name: string; minutes: number }> };
+const parsePlayBuffer = (raw: unknown): PlayBuffer => {
+  const parsed = z
+    .object({ at: z.number(), players: z.record(z.string(), z.object({ name: z.string(), minutes: z.number() })) })
+    .safeParse(raw);
+  return parsed.success ? parsed.data : { at: 0, players: {} };
+};
+
+// `at` is when it happened; `seed` marks a seed, which is paid for by the day and said so in game.
+type CoinEvent = { steamId: string; name: string; at: number; seed?: true; run: (account: CoinAccount) => Earned };
+type CoinResult = { paid: number; seed: number; balance: number; completed: Completed[] };
+
 const LEADERBOARD_DAYS = 30;
 const LEADERBOARD_SIZE = 10;
 // The weapons in /api/stats: the top this many over the leaderboard's days.
@@ -742,6 +826,12 @@ export class Watcher extends DurableObject<Env> {
   // Kill feed event ids already counted, oldest first.
   private eventsSeen = new Set<string>();
   private payingBounties = false;
+  // INITcoins: account changes run one at a time; playing time waits here to be paid (see coinPlay); and whether the move
+  // from automatic VIP was done.
+  private coining = oneAtATime();
+  private playBuffer: PlayBuffer | null = null;
+  private playFlushedAt = 0;
+  private coinsMigrated = false;
   // Past days' weapons, like dayCache: only today's and yesterday's are read each time.
   private weaponDayCache = new Map<string, WeaponDay>();
   // Steam checks once read, by Steam ID; null for a player with none. Every write goes through saveSteam, so it is never
@@ -1091,6 +1181,11 @@ export class Watcher extends DurableObject<Env> {
     }
     // Once the log is saved, so a check that failed before it is noted again by the next, and never twice.
     if (joins.added.length > 0) this.recordSessions(joins.added, observation.at);
+    if (!observation.seeding && observation.phase !== 'empty') {
+      await this.coinPlay(observation.players, minutes, observation.at).catch((error: unknown) =>
+        console.error(`INITcoins: paying playing time failed: ${errorText(error)}`),
+      );
+    }
   }
 
   // The SQLite database, with the History tab's sessions table, which is made the first time.
@@ -1128,6 +1223,7 @@ export class Watcher extends DurableObject<Env> {
   private async recordSeed(seeders: SeedCredit[], at: number, minMinutes: number): Promise<void> {
     const dayKey = playerDayKey(at);
     await this.ctx.storage.put(dayKey, recordSeed(parsePlayerDay(await this.ctx.storage.get(dayKey)), seeders, minMinutes));
+    await this.coinSeed(seeders, at, minMinutes).catch((error: unknown) => console.error(`INITcoins: paying seeders failed: ${errorText(error)}`));
   }
 
   // The match, the recent matches list and the players' totals are written together, and only once per match. Gives
@@ -1144,6 +1240,9 @@ export class Watcher extends DurableObject<Env> {
       stats: recordMatch(parseStats(stored.get('stats')), summarise(match), at, zone),
       [dayKey]: recordMatchPlayers(parsePlayerDay(stored.get(dayKey)), match),
     });
+    await this.coinMatch(match, at, this.rcon().config.scoreToWin).catch((error: unknown) =>
+      console.error(`INITcoins: paying the match failed: ${errorText(error)}`),
+    );
     return at;
   }
 
@@ -1240,6 +1339,8 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.watchBans(config, seen.snapshot));
     await this.serial(() => this.rollupLifetime(Date.now()));
     await this.serial(() => this.updateVip(config));
+    await this.coinDrain().catch((error: unknown) => console.error(`INITcoins: paying waiting awards failed: ${errorText(error)}`));
+    await this.coinMigrate().catch((error: unknown) => console.error(`INITcoins: the move from automatic VIP failed: ${errorText(error)}`));
     await this.payBounties();
     await this.keepAccounts(config);
     await this.askBack(config, seen.snapshot);
@@ -2902,6 +3003,9 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
     if (streaks !== undefined && streaks.found.length > 0) this.ctx.waitUntil(this.payBounties());
+    if (streaks !== undefined && streaks.found.length > 0) {
+      this.ctx.waitUntil(this.coinBreaks(streaks.found, now).catch((error: unknown) => console.error(`INITcoins: paying streak breakers failed: ${errorText(error)}`)));
+    }
     if (streaks !== undefined && bounty?.announce === true) this.announceBounties(streaks.started, streaks.found, bounty.days, happened.map((e) => e.eventId));
     if (staffKills.length > 0) this.broadcastStaff({ type: 'kills', kills: adminFeed(staffKills) });
     // The game waits for the reply, and the seeding message and the live pages are not part of it: they are seen to once
@@ -2962,6 +3066,489 @@ export class Watcher extends DurableObject<Env> {
     } finally {
       this.payingBounties = false;
     }
+  }
+
+  // ---- INITcoins (see coins.ts) ----
+  // Each player's account is `coin:<Steam ID>`. Everything that reads and writes them runs through `coining`, one at a time,
+  // so two awards close together never overwrite each other. Seeds, matches and streak breaks are put in `coinPending` before
+  // they are paid and taken out once they are, so a failure (storage, a restart) loses nothing: each check pays what is left.
+  // Paying is by key, so paying one twice does nothing. Playing time is added up in `coinPlay` and paid every few minutes, so
+  // a full server doesn't write every account on every check.
+
+  private coinRule(): CoinRule | null {
+    return loadConfig(stringVars(this.env)).coins;
+  }
+
+  // storage.get and put take at most 128 keys.
+  private async getMany(keys: string[]): Promise<Map<string, unknown>> {
+    const found = new Map<string, unknown>();
+    for (let i = 0; i < keys.length; i += RECORDS_PER_WRITE) {
+      for (const [key, value] of await this.ctx.storage.get(keys.slice(i, i + RECORDS_PER_WRITE))) found.set(key, value);
+    }
+    return found;
+  }
+
+  private async putMany(entries: Record<string, unknown>): Promise<void> {
+    const keys = Object.keys(entries);
+    for (let i = 0; i < keys.length; i += RECORDS_PER_WRITE) {
+      await this.ctx.storage.put(Object.fromEntries(keys.slice(i, i + RECORDS_PER_WRITE).map((key) => [key, entries[key]])));
+    }
+  }
+
+  // Runs each player's event on their account and saves them, inside `coining`. Staff earn nothing, as they never count as
+  // seeders.
+  private async coinApply(events: CoinEvent[]): Promise<Map<string, CoinResult>> {
+    const staff = await this.staffSteam();
+    const todo = events.filter((e) => !staff.has(e.steamId) && /^\d{17}$/.test(e.steamId));
+    const stored = await this.getMany([...new Set(todo.map((e) => coinKey(e.steamId)))]);
+    const latest = new Map<string, CoinAccount>();
+    const results = new Map<string, CoinResult>();
+    for (const e of todo) {
+      const name = e.name.slice(0, 64);
+      const known = latest.get(e.steamId) ?? parseCoins(stored.get(coinKey(e.steamId))) ?? blankAccount(name, e.at);
+      const earned = e.run({ ...known, name });
+      latest.set(e.steamId, earned.account);
+      const before = results.get(e.steamId);
+      const missions = earned.completed.reduce((sum, c) => sum + c.paid, 0);
+      results.set(e.steamId, {
+        paid: (before?.paid ?? 0) + earned.paid,
+        seed: (before?.seed ?? 0) + (e.seed ? earned.paid - missions : 0),
+        balance: earned.account.balance,
+        completed: [...(before?.completed ?? []), ...earned.completed],
+      });
+    }
+    await this.putMany(Object.fromEntries([...latest].map(([steamId, account]) => [coinKey(steamId), account])));
+    return results;
+  }
+
+  private coinEarn(events: CoinEvent[]): Promise<Map<string, CoinResult>> {
+    return events.length === 0 ? Promise.resolve(new Map()) : this.coining(() => this.coinApply(events));
+  }
+
+  // The event a pending award is.
+  private coinEventOf(item: PendingCoin, rule: CoinRule): CoinEvent {
+    switch (item.kind) {
+      case 'seed':
+        return { steamId: item.steamId, name: item.name, at: item.at, seed: true, run: (a) => onSeed(a, item.minutes, item.least, item.at, rule) };
+      case 'match':
+        return {
+          steamId: item.steamId,
+          name: item.name,
+          at: item.at,
+          run: (a) => onMatch(a, { id: item.id, kills: item.kills, deaths: item.deaths, won: item.won }, item.at, rule),
+        };
+      case 'break':
+        return { steamId: item.steamId, name: item.name, at: item.at, run: (a) => onBreak(a, item.eventId, item.at, rule) };
+    }
+  }
+
+  // Keeps awards to be paid, then pays what is waiting. A failure is only logged: the awards stay, and the next check pays them.
+  private async coinQueue(items: Record<string, PendingCoin>): Promise<void> {
+    if (Object.keys(items).length === 0) return;
+    await this.coining(async () => {
+      await this.ctx.storage.put(COIN_PENDING_KEY, { ...parsePendingCoins(await this.ctx.storage.get(COIN_PENDING_KEY)), ...items });
+    });
+    await this.coinDrain();
+  }
+
+  // Pays the awards waiting, oldest first, and takes them out once the accounts are saved.
+  private async coinDrain(): Promise<void> {
+    const rule = this.coinRule();
+    if (rule === null) return;
+    const results = await this.coining(async () => {
+      const pending = parsePendingCoins(await this.ctx.storage.get(COIN_PENDING_KEY));
+      const items = Object.values(pending).sort((a, b) => a.at - b.at);
+      if (items.length === 0) return new Map<string, CoinResult>();
+      const paid = await this.coinApply(items.map((item) => this.coinEventOf(item, rule)));
+      await this.ctx.storage.delete(COIN_PENDING_KEY);
+      return paid;
+    });
+    const host = loadConfig(stringVars(this.env)).siteUrl;
+    this.tellPlayers([
+      ...[...results].flatMap(([steamId, r]): [string, string][] =>
+        r.seed > 0 ? [[steamId, seedPaidText(r.seed, r.balance, host === undefined ? null : new URL(host).host)]] : [],
+      ),
+      ...this.missionMessages(results),
+    ]);
+  }
+
+  // Private messages in game, said once and not tried again. Anyone who has left just doesn't get theirs.
+  private tellPlayers(messages: [steamId: string, text: string][]): void {
+    if (messages.length === 0) return;
+    const { config, http } = this.rcon();
+    this.ctx.waitUntil(
+      (async () => {
+        for (const [steamId, text] of messages) {
+          try {
+            await messagePlayer(config.rconUrl, config.rconPassword, steamId, text.slice(0, 200), http);
+          } catch (error) {
+            console.error(`INITcoins message to ${steamId} failed: ${errorText(error)}`);
+          }
+        }
+      })(),
+    );
+  }
+
+  private missionMessages(results: ReadonlyMap<string, CoinResult>): [string, string][] {
+    return [...results].flatMap(([steamId, r]) => r.completed.map((c): [string, string] => [steamId, missionDoneText(c, r.balance)]));
+  }
+
+  // The server went live: the seeders are paid.
+  private async coinSeed(seeders: SeedCredit[], at: number, least: number): Promise<void> {
+    if (this.coinRule() === null) return;
+    await this.coinQueue(
+      Object.fromEntries(
+        seeders
+          .filter((s) => s.minutes > least)
+          .map((s): [string, PendingCoin] => [`seed:${dayOf(at)}:${s.steamId}`, { kind: 'seed', steamId: s.steamId, name: s.name, minutes: s.minutes, least, at }]),
+      ),
+    );
+  }
+
+  // The playing time waiting to be paid, kept in storage too so a restart loses none.
+  private async playBuffered(): Promise<PlayBuffer> {
+    this.playBuffer ??= parsePlayBuffer(await this.ctx.storage.get(COIN_PLAY_KEY));
+    return this.playBuffer;
+  }
+
+  // Time with the server live, added up for each player and paid every COIN_FLUSH_MS, and at midnight, so minutes are paid on
+  // the day they were played.
+  private async coinPlay(players: Player[], minutes: number, at: number): Promise<void> {
+    if (this.coinRule() === null) return;
+    let buffer = await this.playBuffered();
+    if (Object.keys(buffer.players).length > 0 && dayOf(buffer.at) !== dayOf(at)) {
+      await this.coinFlush();
+      buffer = await this.playBuffered();
+    }
+    const next: PlayBuffer = { at, players: { ...buffer.players } };
+    for (const p of players) next.players[p.steamId] = { name: p.name, minutes: (next.players[p.steamId]?.minutes ?? 0) + minutes };
+    this.playBuffer = next;
+    await this.ctx.storage.put(COIN_PLAY_KEY, next);
+    if (at - this.playFlushedAt >= COIN_FLUSH_MS) await this.coinFlush();
+  }
+
+  // Pays the waiting playing time. It stays in storage until paid, so a restart in between pays a few minutes twice at worst.
+  private async coinFlush(): Promise<void> {
+    const rule = this.coinRule();
+    const flushing = await this.playBuffered();
+    if (rule === null || Object.keys(flushing.players).length === 0) return;
+    this.playBuffer = { at: flushing.at, players: {} };
+    this.playFlushedAt = flushing.at;
+    let results: Map<string, CoinResult>;
+    try {
+      results = await this.coinEarn(
+        Object.entries(flushing.players).map(([steamId, b]) => ({
+          steamId,
+          name: b.name,
+          at: flushing.at,
+          run: (a) => onPlay(a, b.minutes, flushing.at, rule),
+        })),
+      );
+    } catch (error) {
+      // Put back, to be paid with the next.
+      const newer = this.playBuffer ?? { at: flushing.at, players: {} };
+      const merged: PlayBuffer = { at: Math.max(newer.at, flushing.at), players: { ...newer.players } };
+      for (const [steamId, b] of Object.entries(flushing.players)) {
+        merged.players[steamId] = { name: newer.players[steamId]?.name ?? b.name, minutes: b.minutes + (newer.players[steamId]?.minutes ?? 0) };
+      }
+      this.playBuffer = merged;
+      throw error;
+    }
+    const left = this.playBuffer;
+    await (Object.keys(left.players).length === 0 ? this.ctx.storage.delete(COIN_PLAY_KEY) : this.ctx.storage.put(COIN_PLAY_KEY, left));
+    this.tellPlayers(this.missionMessages(results));
+  }
+
+  // A match ended: everyone who played it, and the side that won.
+  private async coinMatch(match: MatchState, at: number, scoreToWin: number): Promise<void> {
+    if (this.coinRule() === null) return;
+    const scores = settleWin(match.factionScores, scoreToWin);
+    const winner = hasWinner(scores, scoreToWin) ? [...scores].sort((a, b) => b.score - a.score)[0] : undefined;
+    await this.coinQueue(
+      Object.fromEntries(
+        Object.entries(match.players).map(([steamId, p]): [string, PendingCoin] => [
+          `match:${match.startedAt}:${steamId}`,
+          {
+            kind: 'match',
+            steamId,
+            name: p.name,
+            id: match.startedAt,
+            kills: p.kills,
+            deaths: p.deaths,
+            won: winner !== undefined && p.faction !== undefined && factionKey(p.faction) === factionKey(winner.name),
+            at,
+          },
+        ]),
+      ),
+    );
+  }
+
+  // Kills that ended a kill streak.
+  private async coinBreaks(found: StreakBreak[], at: number): Promise<void> {
+    if (this.coinRule() === null) return;
+    await this.coinQueue(
+      Object.fromEntries(found.map((b): [string, PendingCoin] => [`break:${b.eventId}`, { kind: 'break', steamId: b.steamId, name: b.name, eventId: b.eventId, at }])),
+    );
+  }
+
+  // When INITcoins take over from automatic VIP, once: the seeds of the last COIN_MIGRATION_DAYS days are paid, as if coins
+  // had always been paid for them, and a seed today is paid as a seed is, unless it already was. VIP the bot already gave runs
+  // out on its own date.
+  private async coinMigrate(): Promise<void> {
+    const rule = this.coinRule();
+    if (rule === null || this.coinsMigrated) return;
+    if ((await this.ctx.storage.get(COINS_MIGRATED_KEY)) !== undefined) {
+      this.coinsMigrated = true;
+      return;
+    }
+    const now = Date.now();
+    const keys = recentDayKeys(now, COIN_MIGRATION_DAYS);
+    const today = playerDayKey(now);
+    const [days, staff] = await Promise.all([this.getMany(keys), this.staffSteam()]);
+    const before = totals(keys.filter((key) => key !== today).map((key) => withoutStaffSeeding(parsePlayerDay(days.get(key)), staff)));
+    const seededToday = new Set(
+      totals([withoutStaffSeeding(parsePlayerDay(days.get(today)), staff)])
+        .filter((p) => p.seedDays > 0)
+        .map((p) => p.steamId),
+    );
+    const names = new Map<string, string>();
+    const seedDays = new Map<string, number>();
+    for (const p of totals(keys.map((key) => withoutStaffSeeding(parsePlayerDay(days.get(key)), staff)))) names.set(p.steamId, p.name);
+    for (const p of before) if (p.seedDays > 0) seedDays.set(p.steamId, p.seedDays);
+    const players = [...new Set([...seedDays.keys(), ...seededToday])];
+    await this.coining(async () => {
+      const stored = await this.getMany(players.map(coinKey));
+      await this.putMany(
+        Object.fromEntries(
+          players.map((steamId) => [
+            coinKey(steamId),
+            migrationGrant(
+              parseCoins(stored.get(coinKey(steamId))) ?? blankAccount(names.get(steamId) ?? steamId, now),
+              seedDays.get(steamId) ?? 0,
+              seededToday.has(steamId),
+              now,
+              rule,
+            ),
+          ]),
+        ),
+      );
+    });
+    await this.ctx.storage.put(COINS_MIGRATED_KEY, { at: now, players: players.length });
+    this.coinsMigrated = true;
+    console.info(`INITcoins: paid ${players.length} seeders for their seeds in the last ${COIN_MIGRATION_DAYS} days.`);
+  }
+
+  // The Steam account a signed-in player linked, and their name.
+  private async coinPlayer(userId: string): Promise<{ steamId: string; name: string } | null> {
+    const account = parseAccount(await this.ctx.storage.get(accountKey(userId)));
+    return account?.steamId == null ? null : { steamId: account.steamId, name: account.name };
+  }
+
+  private async coinSnapshot(steamId: string, name: string, rule: CoinRule, now: number): Promise<PlayerCoins> {
+    const stored = await this.ctx.storage.get([coinKey(steamId), 'vip']);
+    const grant = parseVipState(stored.get('vip')).granted[steamId];
+    const account = parseCoins(stored.get(coinKey(steamId))) ?? blankAccount(name, now);
+    return playerCoins(account, grant !== undefined && grant.expiresAt > now ? grant.expiresAt : null, true, now, rule);
+  }
+
+  // What a signed-in player's coins page shows.
+  async coinsView(userId: string): Promise<CoinsAccountView> {
+    const rule = this.coinRule();
+    if (rule === null) return { enabled: false, linked: false, coins: null };
+    const player = await this.coinPlayer(userId);
+    if (player === null) return { enabled: true, linked: false, coins: null };
+    return { enabled: true, linked: true, coins: await this.coinSnapshot(player.steamId, player.name, rule, Date.now()) };
+  }
+
+  // What is for sale, for /buy's suggestions: the settings only, so typing doesn't read the ledger.
+  async coinsShop(): Promise<{ id: string; name: string; price: number }[]> {
+    const rule = this.coinRule();
+    return rule === null ? [] : catalogue(rule).map(({ id, name, price }) => ({ id, name, price }));
+  }
+
+  // Whitelist for a player, bought: the checks and the grant are one step in `serial`, so staff taking VIP away, or adding to it,
+  // cannot slip in between them. Gives `ok` with what to tell the player, or why not.
+  private async deliverWhitelist(
+    steamId: string,
+    name: string,
+    item: Extract<Item, { kind: 'vip' }>,
+    before: CoinAccount,
+    rule: CoinRule,
+  ): Promise<{ ok: true; message: string } | { ok: false; problem: string; refund: boolean }> {
+    let priorExpiry: number | null = null;
+    try {
+      const given = await this.serial(async (): Promise<{ problem: string } | { added: VipAddResult }> => {
+        const now = Date.now();
+        const state = parseVipState(await this.ctx.storage.get('vip'));
+        if ((await this.staffSteam()).has(steamId)) return { problem: 'Staff have a whitelist slot already.' };
+        const blocked = state.revoked[steamId] ?? 0;
+        if (blocked > now) return { problem: `Staff took your VIP away, so it can't be bought until ${new Date(blocked).toISOString().slice(0, 10)}.` };
+        const grant = state.granted[steamId];
+        priorExpiry = grant !== undefined && grant.expiresAt > now ? grant.expiresAt : null;
+        const check = canBuy(before, item, priorExpiry, now, rule);
+        if (!check.ok) return { problem: check.reason };
+        return { added: await this.vipAddNow({ steamId, name, days: item.days, reason: `Bought with ${COIN_NAME}`, by: 'bot', source: 'coins' }) };
+      });
+      if (!('added' in given)) return { ok: false, problem: given.problem, refund: true };
+      if (given.added.outcome === 'already-reserved') {
+        return { ok: false, problem: "You already have a whitelist slot that doesn't run out, so there is nothing to buy.", refund: true };
+      }
+      return { ok: true, message: this.whitelistMessage(given.added.until) };
+    } catch (error) {
+      console.error(`INITcoins: whitelist for ${steamId} could not be confirmed: ${errorText(error)}`);
+      return this.reconcileWhitelist(steamId, name, item.days, priorExpiry);
+    }
+  }
+
+  private whitelistMessage(until: number | undefined): string {
+    return `Whitelist added until ${until === undefined ? 'a week from now' : new Date(until).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'}. The server picks it up at its next restart.`;
+  }
+
+  // The server may have taken the whitelist change even though the answer never came back. Looks at what it has: a player on the
+  // list is given what they paid for (and the bot keeps it in step), one who is not is given their coins back, and when the list
+  // can't be read at all nothing was written, as nothing could be.
+  private async reconcileWhitelist(
+    steamId: string,
+    name: string,
+    days: number,
+    priorExpiry: number | null,
+  ): Promise<{ ok: true; message: string } | { ok: false; problem: string; refund: boolean }> {
+    const failed = { ok: false as const, problem: "Couldn't deliver that just now, so you haven't been charged. Try again in a minute.", refund: true };
+    try {
+      return await this.serial(async () => {
+        const onList = reservedIds((await this.settingsFile(this.rcon()).fetchConfig()).text).includes(steamId);
+        if (!onList) return failed;
+        const now = Date.now();
+        const state = parseVipState(await this.ctx.storage.get('vip'));
+        const want = Math.max(priorExpiry ?? now, now) + days * DAY_MS;
+        const have = state.granted[steamId];
+        if (have === undefined || have.expiresAt < want - 60_000) {
+          const grant = { name, grantedAt: now, expiresAt: want, source: 'coins' as const };
+          await this.record(steamId, null, { vip: { ...state, granted: { ...state.granted, [steamId]: grant } } });
+        }
+        return { ok: true as const, message: this.whitelistMessage(want) };
+      });
+    } catch (error) {
+      console.error(`INITcoins: could not read the whitelist to check ${steamId}: ${errorText(error)}`);
+      return failed;
+    }
+  }
+
+  // Buying, swapping a mission and choosing a title, for a signed-in player. What is bought is paid for first and given back if it
+  // cannot be delivered.
+  async coinsAct(userId: string, action: CoinAction): Promise<CoinReply> {
+    const config = loadConfig(stringVars(this.env));
+    const rule = config.coins;
+    if (rule === null) return { ok: false, problem: 'INITcoins are not on yet.' };
+    const player = await this.coinPlayer(userId);
+    if (player === null) return { ok: false, problem: 'Link your Steam account on the website first: that is how we know who is buying.' };
+    const { steamId } = player;
+    const result = await this.coining(async (): Promise<{ ok: true; message: string } | { ok: false; problem: string }> => {
+      const now = Date.now();
+      const key = coinKey(steamId);
+      const before = rolled(parseCoins(await this.ctx.storage.get(key)) ?? blankAccount(player.name, now), now);
+      if (action.action === 'reroll') {
+        const swapped = rerollMission(before, action.slot, now, rule);
+        if (!swapped.ok) return { ok: false, problem: swapped.reason };
+        await this.ctx.storage.put(key, swapped.account);
+        return { ok: true, message: `Swapped for "${swapped.mission.text}".` };
+      }
+      if (action.action === 'title') {
+        const next = setTitle(before, action.id);
+        if (next === null) return { ok: false, problem: "You don't own that title." };
+        await this.ctx.storage.put(key, next);
+        return { ok: true, message: next.title === null ? 'Title hidden.' : `Your title is now ${titleName(next.title) ?? ''}.` };
+      }
+      const item = itemById(rule, action.item);
+      if (item === undefined) return { ok: false, problem: 'There is no such thing in the shop.' };
+      if (item.kind === 'vip') {
+        // Whether they can have it is checked when it is given (deliverWhitelist), but not being able to pay is known now.
+        if (before.balance < item.price) return { ok: false, problem: `That costs ${item.price} INITcoins and you have ${before.balance}.` };
+        await this.ctx.storage.put(key, buyItem(before, item, now));
+        const delivered = await this.deliverWhitelist(steamId, player.name, item, before, rule);
+        if (!delivered.ok) {
+          if (delivered.refund) await this.ctx.storage.put(key, before);
+          return { ok: false, problem: delivered.problem };
+        }
+        this.syncSoon(config);
+        return delivered;
+      }
+      const check = canBuy(before, item, null, now, rule);
+      if (!check.ok) return { ok: false, problem: check.reason };
+      await this.ctx.storage.put(key, buyItem(before, item, now));
+      try {
+        if (item.kind === 'role') {
+          const guildId = stringVars(this.env)['DISCORD_GUILD_ID']?.trim() ?? '';
+          const { botToken } = config.accounts;
+          if (botToken === undefined || !/^\d+$/.test(guildId)) throw new Error('The bot cannot give roles here.');
+          if ((await setRole(botToken, guildId, userId, item.roleId, true)) === 'gone') {
+            await this.ctx.storage.put(key, before);
+            return { ok: false, problem: 'Join the Discord server first, then buy it.' };
+          }
+          return { ok: true, message: `You have the ${item.name.replace('Discord role: ', '')} role.` };
+        }
+        return { ok: true, message: `You bought ${item.name.replace('Title: ', '')}. It shows on your player page.` };
+      } catch (error) {
+        await this.ctx.storage.put(key, before);
+        console.error(`INITcoins purchase of ${item.id} for ${steamId} failed, and was given back: ${errorText(error)}`);
+        return { ok: false, problem: "Couldn't deliver that just now, so you haven't been charged. Try again in a minute." };
+      }
+    });
+    if (!result.ok) return result;
+    return { ok: true, message: result.message, coins: await this.coinSnapshot(steamId, player.name, rule, Date.now()) };
+  }
+
+  // The public side of INITcoins: how they work, today's missions, and who has earned the most.
+  async publicCoins(): Promise<PublicCoins | null> {
+    const rule = this.coinRule();
+    if (rule === null) return null;
+    const now = Date.now();
+    const [all, hidden, staff] = await Promise.all([this.ctx.storage.list({ prefix: COIN_PREFIX, limit: 20_000 }), this.privateSteam(), this.staffSteam()]);
+    const accounts = [...all].flatMap(([key, raw]): [string, CoinAccount][] => {
+      const steamId = key.slice(COIN_PREFIX.length);
+      const account = parseCoins(raw);
+      return account === null || hidden.has(steamId) || staff.has(steamId) ? [] : [[steamId, account]];
+    });
+    const leaders = topEarners(accounts, COIN_LEADERS);
+    const ids = await this.idsFor(leaders.map((l) => l.steamId));
+    return {
+      info: coinsInfo(rule, now),
+      leaders: leaders.flatMap((l) => {
+        const id = ids.get(l.steamId);
+        return id === undefined ? [] : [{ id, name: l.name, earned: l.earned, title: l.title }];
+      }),
+      players: accounts.length,
+      held: accounts.reduce((sum, [, a]) => sum + a.balance, 0),
+      earned: accounts.reduce((sum, [, a]) => sum + a.earned, 0),
+    };
+  }
+
+  // The title a player shows next to their name, if they chose one.
+  private async coinTitle(steamId: string): Promise<string | null> {
+    if (this.coinRule() === null) return null;
+    return titleName(parseCoins(await this.ctx.storage.get(coinKey(steamId)))?.title ?? null);
+  }
+
+  // What staff see of one player's coins.
+  async coinsOf(steamId: string): Promise<CoinAccount | null> {
+    return this.coining(async () => {
+      const account = parseCoins(await this.ctx.storage.get(coinKey(steamId)));
+      return account === null ? null : rolled(account, Date.now());
+    });
+  }
+
+  // Staff giving or taking coins. The reason and who did it are in the player's log.
+  async coinsAdjust({ steamId, name, delta, reason, by, byName }: Named & { delta: number; reason: string; by: string; byName?: string }): Promise<number | null> {
+    if (this.coinRule() === null) return null;
+    return this.coining(async () => {
+      const now = Date.now();
+      const key = coinKey(steamId);
+      const account = parseCoins(await this.ctx.storage.get(key)) ?? blankAccount(name, now);
+      const next = adjustCoins(rolled(account, now), delta, `${reason} (${byName ?? by})`.slice(0, 120), now);
+      await this.ctx.storage.put(key, next);
+      console.info(`INITcoins: ${byName ?? by} ${delta >= 0 ? 'gave' : 'took'} ${Math.abs(delta)} ${delta >= 0 ? 'to' : 'from'} ${JSON.stringify(name)} (${steamId}): ${reason}`);
+      return next.balance;
+    });
   }
 
   // The SQLite database, with the staff page's kill_days table, which is made the first time.
@@ -3383,7 +3970,15 @@ export class Watcher extends DurableObject<Env> {
     const idOf = publicIdOf(privateSteamIds(parsePrivateProfiles(stored.get(PRIVATE_PROFILES_KEY))), (steamId) => ids.get(steamId));
     const weapons = typeof since === 'string' ? weaponBoard(weaponDays, LEADERBOARD_DAYS, since, WEAPONS_LISTED, idOf) : null;
     const { seeding, live } = config.rules;
-    const extras = { leaderboard: board, recentSeeders: recent, vip: config.vip, seederVip: seeders, weapons, teams: teamBoard(records, LEADERBOARD_DAYS, now) };
+    const extras = {
+      leaderboard: board,
+      recentSeeders: recent,
+      vip: config.vip,
+      seederVip: seeders,
+      weapons,
+      teams: teamBoard(records, LEADERBOARD_DAYS, now),
+      ...(config.coins === null ? {} : { coins: { seed: config.coins.seed, vipWeek: config.coins.vipWeekPrice } }),
+    };
     return publicStats(stats, { seeding, live, busy: config.busyThreshold }, now, extras, idOf);
   }
 
@@ -3488,7 +4083,8 @@ export class Watcher extends DurableObject<Env> {
     const config = loadConfig(stringVars(this.env));
     const since = stored.get('killFeedSince');
     const serverBans = parseServerBans(stored.get('serverBans'));
-    return buildProfile({
+    const title = await this.coinTitle(steamId);
+    const page = buildProfile({
       steamId,
       id,
       now,
@@ -3507,6 +4103,7 @@ export class Watcher extends DurableObject<Env> {
           ? { since, used: playerWeaponDays(parsePlayerWeapons(stored.get(playerWeaponsKey(steamId))), days[0]?.day ?? since) }
           : null,
     });
+    return page === null ? null : { ...page, title };
   }
 
   // The staff page: who is in game now, possible griefers and their incidents over the last `days` UTC days, risky Steam
@@ -3713,6 +4310,7 @@ export class Watcher extends DurableObject<Env> {
         messages: acting,
         siteUrl: config.siteUrl,
         vip: config.vip,
+        coins: config.coins?.seed ?? null,
       },
       discord: acting
         ? {
@@ -3789,7 +4387,7 @@ export class Watcher extends DurableObject<Env> {
           })
           .sort((a, b) => b.seen.localeCompare(a.seen))
           .slice(0, RETURN_PER_DAY);
-        const rule = { siteUrl: config.siteUrl, vip: config.vip, serverId: config.serverId };
+        const rule = { siteUrl: config.siteUrl, vip: config.vip, coins: config.coins?.seed ?? null, serverId: config.serverId };
         for (const { userId, account } of due) {
           let next: Account = { ...account, returnedAt: now };
           try {
@@ -4442,8 +5040,13 @@ export class Watcher extends DurableObject<Env> {
     });
   }
 
-  async vipAdd({ steamId, name, days, reason, by, byName, source }: Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' }): Promise<VipAddResult> {
-    return this.serial(async () => {
+  async vipAdd(args: VipAddArgs): Promise<VipAddResult> {
+    return this.serial(() => this.vipAddNow(args));
+  }
+
+  // Gives VIP, as vipAdd does, but for a caller already in `serial`.
+  private async vipAddNow({ steamId, name, days, reason, by, byName, source }: VipAddArgs): Promise<VipAddResult> {
+    {
       const now = Date.now();
       const state = parseVipState(await this.ctx.storage.get('vip'));
       const change = await addVip({ steamId, name, days, now, state, rcon: this.settingsFile(this.rcon()), ...(source === undefined ? {} : { source }) });
@@ -4466,7 +5069,7 @@ export class Watcher extends DurableObject<Env> {
       };
       await this.record(steamId, entry, { vip: change.state });
       return { outcome, ...(change.until === undefined ? {} : { until: change.until }) };
-    });
+    }
   }
 
   async vipRemove({ steamId, name, reason, by, byName }: Named & { reason?: string; by: string; byName?: string }): Promise<VipRemoveResult> {
@@ -4637,6 +5240,7 @@ const publicRoute = (
   if (url.pathname === '/api/players') return { key: 'players', load: () => watcher().players() };
   if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/shame') return { key: 'shame', load: () => watcher().shame() };
+  if (url.pathname === '/api/coins') return { key: 'coins', load: () => watcher().publicCoins() };
   if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
   // Kept for the usual time and no longer: it names the regulars, so a profile made private must leave it within a minute.
   if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime() };
@@ -4817,6 +5421,24 @@ const steamCallback = async (request: Request, vars: Record<string, string>): Pr
 
 // The account page's data and the website vote, for a signed-in player only. Like the staff page's: only the website may
 // read it from a browser, and nothing keeps a copy.
+const CoinActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('buy'), item: z.string().max(60) }),
+  z.object({ action: z.literal('reroll'), slot: z.number().int().min(0).max(2) }),
+  z.object({ action: z.literal('title'), id: z.string().max(60).nullable() }),
+]);
+
+const readCoinAction = async (request: Request): Promise<CoinAction | null> => {
+  if (Number(request.headers.get('content-length') ?? 0) > 1_024) return null;
+  const body = await request.arrayBuffer();
+  if (body.byteLength > 1_024) return null;
+  try {
+    const parsed = CoinActionSchema.safeParse(JSON.parse(new TextDecoder().decode(body)));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+};
+
 const accountApi = async (request: Request, vars: Record<string, string>, watcher: () => DurableObjectStub<Watcher>): Promise<Response> => {
   const config = adminAuthConfig(vars);
   const headers = {
@@ -4860,6 +5482,23 @@ const accountApi = async (request: Request, vars: Record<string, string>, watche
       return 'problem' in result ? Response.json({ error: result.problem }, { status: 400, headers }) : Response.json({ ok: true }, { headers });
     } catch (error) {
       return unavailable(action.action, error);
+    }
+  }
+  if (route === 'GET /api/account/coins') {
+    try {
+      return Response.json(await watcher().coinsView(session.userId), { headers });
+    } catch (error) {
+      return unavailable('coins', error);
+    }
+  }
+  if (route === 'POST /api/account/coins') {
+    const action = await readCoinAction(request);
+    if (action === null) return Response.json({ error: 'Not a coins request' }, { status: 400, headers });
+    try {
+      const reply = await watcher().coinsAct(session.userId, action);
+      return 'problem' in reply ? Response.json({ error: reply.problem }, { status: 400, headers }) : Response.json(reply, { headers });
+    } catch (error) {
+      return unavailable('coins', error);
     }
   }
   if (route === 'POST /api/account/vote') {
@@ -4943,6 +5582,8 @@ const commandTools = (
     unban: (target, by, byName) => watcher().unban(target, by, byName),
     vipAdd: (grant) => watcher().vipAdd(grant),
     vipRemove: (target) => watcher().vipRemove(target),
+    coinsOf: (steamId) => watcher().coinsOf(steamId),
+    coinsAdjust: (request) => watcher().coinsAdjust(request),
     nextMap: (map, playing) => watcher().stageNextMap(map, playing),
     steam: (steamId) => watcher().steamLookup(steamId),
     rotations: () => watcher().rotationBook(),
@@ -4957,6 +5598,11 @@ const commandTools = (
     setVoteRain: (on, by, byName) => watcher().setVoteRain(on, by, byName),
     setVoteMap: (map, on, by, byName) => watcher().setVoteMap(map, on, by, byName),
   };
+  const coins: CoinTools = {
+    view: (userId) => watcher().coinsView(userId),
+    buy: (userId, item) => watcher().coinsAct(userId, { action: 'buy', item }),
+    items: () => watcher().coinsShop(),
+  };
   return {
     run: runCommand({
       config: () => loadConfig(vars),
@@ -4969,6 +5615,7 @@ const commandTools = (
       removeMatch: (endedAt) => watcher().removeMatch(endedAt),
       seedCall: (message) => watcher().seedCall(message),
       records,
+      coins,
       now: Date.now,
       log: console,
     }),
@@ -4977,6 +5624,7 @@ const commandTools = (
       config: () => loadConfig(vars),
       http: socketHttp(connect, SUGGEST_TIMEOUT_MS),
       records,
+      coins,
     }),
     // The staff page's player record: what /player shows.
     record: async (steamId) =>
@@ -5360,7 +6008,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/auth/steam') return steamLogin(request, stringVars(env));
     if (request.method === 'GET' && url.pathname === STEAM_CALLBACK_PATH) return steamCallback(request, stringVars(env));
     if (request.method === 'GET' && url.pathname === '/go/discord') return goDiscord(request, stringVars(env), watcher, ctx);
-    if (url.pathname === '/api/account' || url.pathname === '/api/account/vote') return accountApi(request, stringVars(env), watcher);
+    if (url.pathname === '/api/account' || url.pathname === '/api/account/vote' || url.pathname === '/api/account/coins') return accountApi(request, stringVars(env), watcher);
     if (url.pathname.startsWith('/api/admin/')) return staffApi(request, stringVars(env), watcher);
     if (request.method === 'GET' && url.pathname === '/api/review') return reviewApi(request, stringVars(env), watcher);
     // The live page's WebSocket goes straight to the Durable Object, which keeps it.

@@ -17,7 +17,8 @@ import type { MatchState } from './tracking.ts';
 export type MessageRule = { siteHost: string; scoreToWin: number; vote?: boolean };
 
 // The seeding message goes out every `everyMs`, and points at the website when there is one.
-export type SeedingMessageRule = { everyMs: number; siteHost: string | null };
+// `coins` is what a seed pays in INITcoins, when they are on.
+export type SeedingMessageRule = { everyMs: number; siteHost: string | null; coins?: number };
 
 // The welcome goes to each player `afterMs` after they join, with the Discord invite ("discord.gg/abc123") and the
 // website when there are.
@@ -200,7 +201,11 @@ export const nextMessage = (
 
 // What seeding earns, after the seeding line: free VIP (a whitelist slot) when automatic VIP is on, with the website's
 // seeding page for how, otherwise a place on the website's top seeders board.
-export const seedingReward = (siteHost: string | null, vip: VipRule | null): string => {
+export const seedingReward = (siteHost: string | null, vip: VipRule | null, coins?: number): string => {
+  if (coins) {
+    const offer = `Seed to earn ${coins} INITcoins for whitelist days`;
+    return siteHost ? `${offer}: ${siteHost}/coins` : `${offer}.`;
+  }
   if (vip) {
     const offer =
       vip.seedDays === 1
@@ -223,7 +228,7 @@ export const seedingPick = (
   recent: Recent = {},
 ): Picked => {
   const pick = pickLine('seeding', lines.seeding, { needed: morePlayers(Math.max(1, live - players)) }, random, recent);
-  return { ...pick, text: fit(`${pick.text} ${seedingReward(rule.siteHost, vip)}`) };
+  return { ...pick, text: fit(`${pick.text} ${seedingReward(rule.siteHost, vip, rule.coins)}`) };
 };
 
 export const seedingMessage = (

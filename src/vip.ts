@@ -12,7 +12,7 @@ import type { ConfigResult, ServerConfig } from './rcon.ts';
 
 // `source`: how they got it, by seeding or from staff with /vip add. Grants saved before the bot kept track have none,
 // and count as seeding, as nearly all of them were; a staff grant among them is gone once its time is up.
-export type VipGrant = { name: string; grantedAt: number; expiresAt: number; source?: 'seeding' | 'staff' | 'bounty' };
+export type VipGrant = { name: string; grantedAt: number; expiresAt: number; source?: 'seeding' | 'staff' | 'bounty' | 'coins' };
 
 // A staff member's whitelist slot (see staffprofiles.ts): theirs while their Steam account is linked, since `since`.
 export type StaffSpot = { name: string; since: number };
@@ -34,7 +34,7 @@ const DAY_MS = 24 * 60 * 60_000;
 const VipStateSchema = z.object({
   granted: z.record(
     z.string(),
-    z.object({ name: z.string(), grantedAt: z.number(), expiresAt: z.number(), source: z.enum(['seeding', 'staff', 'bounty']).optional() }),
+    z.object({ name: z.string(), grantedAt: z.number(), expiresAt: z.number(), source: z.enum(['seeding', 'staff', 'bounty', 'coins']).optional() }),
   ),
   checkedAt: z.number(),
   // Missing from state saved before staff could remove VIP.
@@ -297,7 +297,7 @@ export type VipChange = {
 // a seeder still counts as theirs from seeding. `days` null makes it permanent: the bot puts them on the list and
 // forgets any end it had for them, so, like a slot added by hand, it stays until staff remove it.
 export const addVip = async (
-  { steamId, name, days, now, state, rcon, source: given = 'staff' }: { steamId: string; name: string; days: number | null; now: number; state: VipState; rcon: VipRcon; source?: 'staff' | 'bounty' },
+  { steamId, name, days, now, state, rcon, source: given = 'staff' }: { steamId: string; name: string; days: number | null; now: number; state: VipState; rcon: VipRcon; source?: 'staff' | 'bounty' | 'coins' },
 ): Promise<VipChange> => {
   const config = await rcon.fetchConfig();
   const onList = reservedIds(config.text).includes(steamId);
@@ -309,10 +309,12 @@ export const addVip = async (
     const { [steamId]: _forgotten, ...granted } = state.granted;
     return { state: { ...state, revoked, granted }, outcome: onList ? 'extended' : 'added' };
   }
-  const expiresAt = Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
-  const source = onList ? (current?.source ?? 'seeding') : given;
+  // Whitelist bought with INITcoins is added to what they have left, not folded into it.
+  const stacked = given === 'coins' && onList && (current?.expiresAt ?? 0) > now;
+  const expiresAt = stacked ? (current?.expiresAt ?? now) + days * DAY_MS : Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
+  const source = given === 'coins' ? 'coins' : onList ? (current?.source ?? 'seeding') : given;
   return {
-    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: current?.grantedAt ?? now, expiresAt, source } } },
+    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: given === 'coins' ? now : (current?.grantedAt ?? now), expiresAt, source } } },
     outcome: onList ? 'extended' : 'added',
     until: expiresAt,
   };

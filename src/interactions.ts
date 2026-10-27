@@ -5,7 +5,7 @@ import { parseLightButton, parseVoteButton, parseWeatherButton } from './mapvote
 import { PRIVATE_NAME } from './privacy.ts';
 import { DAY_CHOICES, MAX_ROTATION_MAPS, ROTATION_NAME_MAX } from './rotations.ts';
 import type { RoundupChoice } from './roundup.ts';
-import { STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, VIP_NOTE_MAX_LENGTH, VIP_REASONS, WARNING_MAX_LENGTH } from './staff.ts';
+import { COIN_ADJUST_MAX, STAFF_COMMANDS, TEAM_CHOICES, VIP_MAX_DAYS, VIP_NOTE_MAX_LENGTH, VIP_REASONS, WARNING_MAX_LENGTH } from './staff.ts';
 import { handleTicket, TICKET_ID_PREFIX, TICKET_PANEL_COMMAND, type TicketRequest, type TicketTools } from './tickets.ts';
 
 // Discord slash commands arrive as signed HTTP POSTs to the Worker's URL ("Interactions Endpoint URL").
@@ -20,6 +20,9 @@ const COMMAND_NAMES = [
   'seeders',
   'seednow',
   'removematch',
+  'coins',
+  'shop',
+  'buy',
   ...STAFF_COMMANDS,
 ] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
@@ -35,10 +38,13 @@ const ADMINISTRATOR = 1n << 3n;
 // to the person who ran them.
 const ADMIN_COMMANDS: readonly CommandName[] = ['broadcast', 'seeders', 'seednow', 'removematch', ...STAFF_COMMANDS];
 
+// Commands whose replies only the person who ran them sees.
+const PRIVATE_COMMANDS: readonly CommandName[] = ['coins', 'shop', 'buy'];
+
 export const isAdminCommand = (name: CommandName): boolean => ADMIN_COMMANDS.includes(name);
 
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
-const ACTIONS: readonly CommandName[] = ['seednow', 'warn', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'];
+const ACTIONS: readonly CommandName[] = ['seednow', 'coinadmin', 'warn', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'];
 
 // What /roundup can show, as Discord lists it.
 const ROUNDUP_PERIODS: { name: string; value: RoundupChoice }[] = [
@@ -97,6 +103,14 @@ export const COMMANDS = [
   { name: 'serverstatus', description: 'Show the WARDOGS server status', type: 1 },
   { name: 'players', description: 'Who is on the server, with kills and deaths', type: 1 },
   { name: 'lastmatch', description: 'Summary of the last finished match', type: 1 },
+  { name: 'coins', description: 'Your INITcoins, and today and this week\'s missions (only you see it)', type: 1 },
+  { name: 'shop', description: 'What INITcoins buy (only you see it)', type: 1 },
+  {
+    name: 'buy',
+    description: 'Spend INITcoins: whitelist days, titles and roles (only you see it)',
+    type: 1,
+    options: [{ type: STRING, name: 'item', description: 'Pick what to buy', required: true, autocomplete: true }],
+  },
   { name: 'rotation', description: 'The current map and what is coming next', type: 1 },
   {
     name: 'roundup',
@@ -368,6 +382,34 @@ export const COMMANDS = [
         options: [{ type: STRING, name: 'circle', description: 'Pick from the blocked circles', required: true, autocomplete: true }],
       },
       { type: SUBCOMMAND, name: 'list', description: 'The blocked circles' },
+    ],
+  },
+  {
+    name: 'coinadmin',
+    description: "Give or take a player's INITcoins (staff only)",
+    ...STAFF_ONLY,
+    options: [
+      {
+        type: SUBCOMMAND,
+        name: 'give',
+        description: 'Give a player INITcoins',
+        options: [
+          steamId('Pick the player, or type a name or Steam ID'),
+          { type: INTEGER, name: 'amount', description: 'How many', required: true, min_value: 1, max_value: COIN_ADJUST_MAX },
+          reason('Why; kept in their coin log'),
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: 'take',
+        description: 'Take INITcoins from a player (never below 0)',
+        options: [
+          steamId('Pick the player, or type a name or Steam ID'),
+          { type: INTEGER, name: 'amount', description: 'How many', required: true, min_value: 1, max_value: COIN_ADJUST_MAX },
+          reason('Why; kept in their coin log'),
+        ],
+      },
+      { type: SUBCOMMAND, name: 'show', description: "A player's INITcoins", options: [steamId('Pick the player, or type a name or Steam ID')] },
     ],
   },
   {
@@ -790,6 +832,8 @@ export const handleInteraction = async (
   }
 
   const admin = ADMIN_COMMANDS.includes(name);
+  // A player's own coins are for them alone.
+  const quiet = PRIVATE_COMMANDS.includes(name);
   if (admin && (!deps.adminGuildId || interaction.guild_id !== deps.adminGuildId)) {
     return { status: 200, body: privateMessage('This command can only be used in the Discord server that runs this bot.') };
   }
@@ -813,10 +857,10 @@ export const handleInteraction = async (
       },
     );
     // Staff replies are already private. A public command's failure should not be shown to the whole channel.
-    if (failed && !admin) return replyPrivately(deps, name, interaction.application_id, token, reply);
+    if (failed && !admin && !quiet) return replyPrivately(deps, name, interaction.application_id, token, reply);
     await deps.editReply(interaction.application_id, token, reply);
   };
-  const deferred = admin ? { type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } } : { type: DEFERRED_CHANNEL_MESSAGE };
+  const deferred = admin || quiet ? { type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } } : { type: DEFERRED_CHANNEL_MESSAGE };
   return { status: 200, body: deferred, followUp };
 };
 

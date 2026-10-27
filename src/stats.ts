@@ -361,6 +361,9 @@ export type PublicExtras = {
   seederVip: SeederVip[] | null;
   weapons: WeaponBoard | null;
   teams: TeamBoard;
+  // INITcoins, when they are on (see coins.ts): what a seed pays and what a week of whitelist costs, for the pages that
+  // say what seeding earns. Left out otherwise.
+  coins?: { seed: number; vipWeek: number };
 };
 
 // Looks up a player's public id by Steam ID (see profiles.ts).
@@ -384,6 +387,7 @@ export type PublicStats = Omit<SiteStats, 'hours' | 'crashes' | 'matches' | 'cur
   seederVip: Public<SeederVip>[] | null;
   weapons: WeaponBoard | null;
   teams: TeamBoard;
+  coins?: { seed: number; vipWeek: number };
 };
 
 const named = <T extends { steamId?: string; name: string }>(rows: T[], idOf: PublicIdOf): Public<T>[] =>
@@ -458,7 +462,7 @@ export const publicStats = (
   { hours, crashes: _crashes, matches, currentMatch, ...stats }: SiteStats,
   thresholds: Thresholds,
   now: number,
-  { leaderboard, recentSeeders, vip, seederVip, weapons, teams }: PublicExtras,
+  { leaderboard, recentSeeders, vip, seederVip, weapons, teams, coins }: PublicExtras,
   idOf: PublicIdOf,
 ): PublicStats => ({
   generatedAt: now,
@@ -480,4 +484,5 @@ export const publicStats = (
   seederVip: seederVip === null ? null : named(seederVip, idOf),
   weapons,
   teams,
+  ...(coins === undefined ? {} : { coins }),
 });

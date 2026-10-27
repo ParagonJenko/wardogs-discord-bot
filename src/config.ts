@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CoinRule } from './coins.ts';
 import type { AlertRules, QuietHours } from './alerts.ts';
 import { MAX_TOP_PLAYERS, type MatchEndRule } from './matchend.ts';
 import type { MapVoteRule } from './mapvote.ts';
@@ -111,6 +112,47 @@ const EnvSchema = z
     BOUNTY_VIP_DAYS: z.coerce.number().int().min(1).max(30).default(1),
     // Tell the whole server in game who has a bounty (a player reaching BOUNTY_STREAK kills) and who ended it.
     BOUNTY_ANNOUNCE: z.enum(['on', 'off']).default('on'),
+    // INITcoins (see coins.ts): earned by seeding, playing and missions, spent on whitelist days and cosmetics. "on" replaces
+    // automatic seeder VIP (VIP_SEED_DAYS and VIP_MODE stop giving it); "off" leaves things as they were. Every rate and price
+    // can be changed: the defaults are balanced against each other, see the README.
+    COINS: z.enum(['on', 'off']).default('off'),
+    COIN_SEED: z.coerce.number().int().min(0).default(150),
+    COIN_SEED_MINUTES_PER: z.coerce.number().int().min(0).default(2),
+    COIN_SEED_MINUTES_CAP: z.coerce.number().int().min(0).default(30),
+    COIN_PLAY_MINUTES: z.coerce.number().int().min(0).default(10),
+    COIN_MATCH: z.coerce.number().int().min(0).default(6),
+    COIN_WIN: z.coerce.number().int().min(0).default(6),
+    COIN_MATCHES_PAID: z.coerce.number().int().min(0).default(6),
+    COIN_DAILY_CAP: z.coerce.number().int().min(0).default(100),
+    COIN_VIP_DAY_PRICE: z.coerce.number().int().min(1).default(100),
+    COIN_VIP_WEEK_PRICE: z.coerce.number().int().min(1).default(600),
+    COIN_VIP_AHEAD_DAYS: z.coerce.number().int().min(1).max(60).default(14),
+    COIN_REROLL_PRICE: z.coerce.number().int().min(0).default(40),
+    // Kills and deaths together for a match to count as played for coins.
+    COIN_PLAYED_LEAST: z.coerce.number().int().min(0).default(3),
+    // Discord roles for sale, as JSON: [{"id":"123456789012345678","name":"Night Owl","price":1500}]. Needs DISCORD_BOT_TOKEN, and the
+    // bot's own role above them. Leave out for none.
+    COIN_ROLES: z
+      .string()
+      .optional()
+      .transform((text, ctx): { id: string; name: string; price: number }[] => {
+        if (text === undefined || text.trim() === '') return [];
+        const parsed = z
+          .array(z.object({ id: numericId, name: z.string().trim().min(1).max(40), price: z.number().int().min(1) }))
+          .max(20)
+          .safeParse((() => {
+            try {
+              return JSON.parse(text);
+            } catch {
+              return null;
+            }
+          })());
+        if (!parsed.success) {
+          ctx.addIssue({ code: 'custom', message: 'must be JSON like [{"id":"123456789012345678","name":"Night Owl","price":1500}]' });
+          return [];
+        }
+        return parsed.data;
+      }),
     // In-game messages during matches, pointing players at SITE_URL. Need SITE_URL.
     MATCH_MESSAGES: z.enum(['on', 'off']).default('on'),
     // The score a faction needs to win: for "halfway" and "nearly there" messages, and to record a win the last check
@@ -235,6 +277,8 @@ export type Config = {
   // A player must seed for more than this for it to count as a successful seed, whether or not VIP is on.
   seedMinutes: number;
   vip: VipRule | null;
+  // INITcoins (see coins.ts), when COINS is on. Then `vip` is null: coins replace automatic VIP.
+  coins: CoinRule | null;
   // A whitelist slot for killing a player on a long kill streak, when it is on.
   bounty: { streak: number; days: number; announce: boolean } | null;
   // Null when MATCH_MESSAGES is off or there is no SITE_URL to point players at.
@@ -301,7 +345,27 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     busyThreshold: e.BUSY_THRESHOLD,
     scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,
-    vip: vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
+    vip: e.COINS === 'on' ? null : vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
+    coins:
+      e.COINS === 'on'
+        ? {
+            seed: e.COIN_SEED,
+            seedMinutesPer: e.COIN_SEED_MINUTES_PER,
+            seedMinutesCap: e.COIN_SEED_MINUTES_CAP,
+            playMinutesPer: e.COIN_PLAY_MINUTES,
+            match: e.COIN_MATCH,
+            win: e.COIN_WIN,
+            matchesPaid: e.COIN_MATCHES_PAID,
+            activityCap: e.COIN_DAILY_CAP,
+            vipDayPrice: e.COIN_VIP_DAY_PRICE,
+            vipWeekPrice: e.COIN_VIP_WEEK_PRICE,
+            vipAheadDays: e.COIN_VIP_AHEAD_DAYS,
+            rerollPrice: e.COIN_REROLL_PRICE,
+            roles: e.COIN_ROLES,
+            streaks: e.BOUNTY_STREAK > 0,
+            playedLeast: e.COIN_PLAYED_LEAST,
+          }
+        : null,
     bounty: e.BOUNTY_STREAK > 0 ? { streak: e.BOUNTY_STREAK, days: e.BOUNTY_VIP_DAYS, announce: e.BOUNTY_ANNOUNCE === 'on' } : null,
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
@@ -313,7 +377,11 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
         : null,
     seedingMessages:
       e.SEEDING_MESSAGE_MINUTES > 0
-        ? { everyMs: e.SEEDING_MESSAGE_MINUTES * 60_000, siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null }
+        ? {
+            everyMs: e.SEEDING_MESSAGE_MINUTES * 60_000,
+            siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null,
+            ...(e.COINS === 'on' ? { coins: e.COIN_SEED } : {}),
+          }
         : null,
     welcomeMessages:
       e.WELCOME_MESSAGE_MINUTES > 0

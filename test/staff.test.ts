@@ -44,6 +44,7 @@ const config: Config = {
   scoreToWin: 100,
   seedMinutes: 10,
   vip: null,
+  coins: null,
   bounty: null,
   matchMessages: null,
   seedingMessages: null,
@@ -108,6 +109,8 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   unban: vi.fn(async () => true),
   vipAdd: vi.fn(async () => ({ outcome: 'added' as const, until: NOW + 30 * 86_400_000 })),
   vipRemove: vi.fn(async () => ({ outcome: 'removed' as const })),
+  coinsOf: vi.fn(async () => ({ balance: 700, earned: 1500, spent: 800 }) as { balance: number; earned: number; spent: number } | null),
+  coinsAdjust: vi.fn(async () => 650 as number | null),
   nextMap: vi.fn(async () => undefined),
   steam: vi.fn(async (): Promise<SteamLookup> => 'off'),
   rotations: vi.fn(async () => parseRotationBook(undefined)),
@@ -1232,5 +1235,54 @@ describe('/rotations', () => {
     await expect(suggest({ name: 'rotations', options: { subcommand: 'add', map: 'zest' }, focused: 'map' })).resolves.toEqual([
       { name: '🟪 Zestafona', value: 'NorthAmerica' },
     ]);
+  });
+});
+
+describe('/coinadmin', () => {
+  it('gives coins with a reason, and says the new balance', async () => {
+    const { run, records, log } = setup();
+
+    const reply = await run('coinadmin', { subcommand: 'give', steam_id: BO, amount: '50', reason: 'Event winner' });
+
+    expect(records.coinsAdjust).toHaveBeenCalledWith({ steamId: BO, name: 'Bo', delta: 50, reason: 'Event winner', by: '42' });
+    expect(reply.content).toMatch(/Gave 50 INITcoins to \*\*Bo\*\*\. They now have 650/);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('/coinadmin give by Discord user 42'));
+  });
+
+  it('takes coins', async () => {
+    const { run, records } = setup();
+
+    await run('coinadmin', { subcommand: 'take', steam_id: BO, amount: '20', reason: 'Exploit' });
+
+    expect(records.coinsAdjust).toHaveBeenCalledWith(expect.objectContaining({ delta: -20 }));
+  });
+
+  it('needs a sensible amount and a reason', async () => {
+    const { run, records } = setup();
+
+    await expect(run('coinadmin', { subcommand: 'give', steam_id: BO, amount: '0', reason: 'x' })).resolves.toEqual({
+      content: expect.stringMatching(/Give or take 1 to 10,000/),
+    });
+    await expect(run('coinadmin', { subcommand: 'give', steam_id: BO, amount: '5', reason: ' ' })).resolves.toEqual({ content: 'Say why.' });
+    expect(records.coinsAdjust).not.toHaveBeenCalled();
+  });
+
+  it('shows what a player has', async () => {
+    const { run, records } = setup();
+
+    await expect(run('coinadmin', { subcommand: 'show', steam_id: BO })).resolves.toEqual({
+      content: expect.stringMatching(/has 700 INITcoins \(earned 1,500, spent 800\)/),
+    });
+    records.coinsOf.mockResolvedValueOnce(null);
+    await expect(run('coinadmin', { subcommand: 'show', steam_id: BO })).resolves.toEqual({ content: expect.stringMatching(/has no INITcoins/) });
+  });
+
+  it('says so when coins are off', async () => {
+    const { run, records } = setup();
+    records.coinsAdjust.mockResolvedValueOnce(null);
+
+    await expect(run('coinadmin', { subcommand: 'give', steam_id: BO, amount: '5', reason: 'x' })).resolves.toEqual({
+      content: expect.stringMatching(/not on/),
+    });
   });
 });

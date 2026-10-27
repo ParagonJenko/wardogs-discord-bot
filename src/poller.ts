@@ -691,6 +691,7 @@ export const createPoller = ({
             roleId: quiet ? undefined : config.roleId,
             seeders,
             vip: config.vip,
+            ...(config.coins === null ? {} : { coins: config.coins.seed }),
             siteUrl: config.siteUrl,
             serverId: config.serverId,
           }),
