@@ -28,9 +28,9 @@ describe('seeding tally', () => {
     ].reduce(tallySeeding, {});
 
     expect(topSeeders(tally, 3)).toEqual([
-      { name: 'Pa', checks: 4 },
-      { name: 'Pc', checks: 3 },
-      { name: 'Pb', checks: 2 },
+      { steamId: 'a', name: 'Pa', checks: 4 },
+      { steamId: 'c', name: 'Pc', checks: 3 },
+      { steamId: 'b', name: 'Pb', checks: 2 },
     ]);
   });
 
@@ -38,8 +38,8 @@ describe('seeding tally', () => {
     const tally = [[player('a'), player('b')], [player('a'), player('b'), player('c')]].reduce(tallySeeding, {});
 
     expect(topSeeders(tally, 3, new Set(['a']))).toEqual([
-      { name: 'Pb', checks: 2 },
-      { name: 'Pc', checks: 1 },
+      { steamId: 'b', name: 'Pb', checks: 2 },
+      { steamId: 'c', name: 'Pc', checks: 1 },
     ]);
   });
 
@@ -48,8 +48,8 @@ describe('seeding tally', () => {
 
     // Away for 3 checks in a row: back to 1, not 2 + 1.
     expect(topSeeders(away, 3)).toEqual([
-      { name: 'Pb', checks: 5 },
-      { name: 'Pa', checks: 1 },
+      { steamId: 'b', name: 'Pb', checks: 5 },
+      { steamId: 'a', name: 'Pa', checks: 1 },
     ]);
   });
 
@@ -57,8 +57,8 @@ describe('seeding tally', () => {
     const tally = [[player('a'), player('b')], [player('b')], [player('b')], [player('a'), player('b')]].reduce(tallySeeding, {});
 
     expect(topSeeders(tally, 3)).toEqual([
-      { name: 'Pb', checks: 4 },
-      { name: 'Pa', checks: 2 },
+      { steamId: 'b', name: 'Pb', checks: 4 },
+      { steamId: 'a', name: 'Pa', checks: 2 },
     ]);
   });
 
@@ -72,7 +72,7 @@ describe('seeding tally', () => {
   it('keeps the latest name a player used', () => {
     const tally = tallySeeding(tallySeeding({}, [player('a')]), [{ ...player('a'), name: 'Renamed' }]);
 
-    expect(topSeeders(tally, 3)).toEqual([{ name: 'Renamed', checks: 2 }]);
+    expect(topSeeders(tally, 3)).toEqual([{ steamId: 'a', name: 'Renamed', checks: 2 }]);
   });
 });
 

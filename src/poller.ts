@@ -590,14 +590,10 @@ export const createPoller = ({
     const publicSeeding = publicNamesBySteamId(seededBy, hidden);
     const topped = wentLive ? topSeeders(publicSeeding, TOP_SEEDERS, staffIds) : [];
     // The top seeders who linked their Discord account are tagged. A private profile is never named, so never tagged.
-    const steamOf = new Map(Object.entries(publicSeeding).map(([steamId, s]) => [s, steamId]));
-    const toppedIds = topped.flatMap((s) => {
-      const steamId = steamOf.get(s);
-      return steamId === undefined || hidden.has(steamId) ? [] : [steamId];
-    });
+    const toppedIds = topped.flatMap((s) => (hidden.has(s.steamId) ? [] : [s.steamId]));
     const users = toppedIds.length > 0 && discordUsers !== undefined ? await discordUsers(toppedIds).catch(() => new Map<string, string>()) : new Map<string, string>();
     const seeders = topped.map((s) => {
-      const discordId = users.get(steamOf.get(s) ?? '');
+      const discordId = users.get(s.steamId);
       return { name: s.name, minutes: minutes(s.checks), ...(discordId === undefined ? {} : { discordId }) };
     });
     // Not caught: nothing has been saved yet, so if recording fails, the next check tries again.
@@ -661,7 +657,8 @@ export const createPoller = ({
     // is already recorded. While live, the seeding count is kept so a retried live alert can still name the seeders.
     let tracked: BotState = {
       ...state,
-      seeding: tallied ?? (after === 'live' ? state.seeding : {}),
+      // Kept as the go-live check saw it, so a retried alert credits the same players even if someone has rejoined since.
+      seeding: tallied ?? (after === 'live' ? seededBy : {}),
       match,
       messages,
       seedMessageAt,

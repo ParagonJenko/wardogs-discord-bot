@@ -26,9 +26,9 @@ export const topSeeders = (
   tally: SeedingTally,
   count: number,
   staff: ReadonlySet<string> = new Set(),
-): { name: string; checks: number }[] =>
+): { steamId: string; name: string; checks: number }[] =>
   Object.entries(tally)
-    .flatMap(([steamId, s]) => (staff.has(steamId) ? [] : [{ name: s.name, checks: s.checks }]))
+    .flatMap(([steamId, s]) => (staff.has(steamId) ? [] : [{ steamId, name: s.name, checks: s.checks }]))
     .sort((a, b) => b.checks - a.checks)
     .slice(0, count);
 
