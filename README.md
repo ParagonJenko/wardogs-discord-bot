@@ -1820,6 +1820,13 @@ everyone. Each day there are three, one easy (10 coins), one medium (15) and one
 in game. "End an enemy kill streak" needs the [streak breaker](#streak-breaker-vip) (`BOUNTY_STREAK`) to be on. A daily mission that isn't done
 can be swapped for another of the same tier for `rerollPrice` coins, three times a day. The missions are in `src/coins.ts`.
 
+With the kill feed on (`KILL_FEED_TOKEN`) there are more to draw from, and they are added to the others, not instead of them:
+**headshots** ("Get 10 headshots"), **kill streaks** ("Get a 7-kill streak") and **a lesser-used weapon** ("Get 6 kills with the
+Mosin Nagant", "Get 3 headshots with it"). The weapon is chosen once a day (and a different one once a week) from the 12
+hand-held weapons with the fewest kills over the last 30 days that at least 15 kills were got with, so it follows what players
+really use; it is kept in storage so it doesn't change during the day. Team kills (both sides known, the same) count for none of
+these. Kills are added up in memory and paid with the playing time, every 10 minutes, so a restart can lose a few minutes of them.
+
 ### What they buy
 
 | Item | Price | Setting |
