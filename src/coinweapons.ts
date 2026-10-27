@@ -25,10 +25,12 @@ export const lesserWeapons = (days: WeaponDay[], least = LESSER_LEAST, count = L
     .map((w) => ({ tag: w.tag, name: weaponName(w.tag) }));
 };
 
-// The day's weapon and the week's, a different one, chosen by the date so everyone is asked for the same. Null when there are too few.
-export const weaponPicks = (list: WeaponPick[], at: number): { day: WeaponPick; week: WeaponPick } | null => {
-  if (list.length < LESSER_MIN) return null;
-  const day = list[hash(`weapon:${dayOf(at)}`) % list.length] as WeaponPick;
-  const others = list.filter((w) => w.tag !== day.tag);
-  return { day, week: others[hash(`weapon:${weekOf(at)}`) % others.length] as WeaponPick };
+// The week's weapon: chosen by the week's date so everyone is asked for the same, and kept for the week by the caller.
+export const weekPick = (list: WeaponPick[], at: number): WeaponPick | null =>
+  list.length < LESSER_MIN ? null : (list[hash(`weapon:${weekOf(at)}`) % list.length] as WeaponPick);
+
+// The day's weapon, a different one from the week's, chosen by the date.
+export const dayPick = (list: WeaponPick[], at: number, week: WeaponPick): WeaponPick | null => {
+  const others = list.filter((w) => w.tag.toLowerCase() !== week.tag.toLowerCase());
+  return others.length === 0 ? null : (others[hash(`weapon:${dayOf(at)}`) % others.length] as WeaponPick);
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lesserWeapons, weaponPicks } from '../src/coinweapons.ts';
+import { dayPick, lesserWeapons, weekPick } from '../src/coinweapons.ts';
 import { isLockOn, namedWeapons, type WeaponDay } from '../src/weapons.ts';
 
 const totals = (kills: number) => ({ kills, headshots: 0, ranged: 0, distance: 0, longest: null });
@@ -25,12 +25,15 @@ describe('the day’s and the week’s weapon', () => {
   const at = Date.parse('2026-10-27T12:00:00Z');
 
   it('are chosen by the date, so the same all day, and are different', () => {
-    const a = weaponPicks(list, at);
-    expect(weaponPicks(list, at + 3_600_000)).toEqual(a);
-    expect(a?.day.tag).not.toBe(a?.week.tag);
+    const week = weekPick(list, at);
+    expect(week).not.toBeNull();
+    expect(weekPick(list, at + 3 * 86_400_000)).toEqual(week);
+    const day = week === null ? null : dayPick(list, at, week);
+    expect(dayPick(list, at + 3_600_000, week as NonNullable<typeof week>)).toEqual(day);
+    expect(day?.tag).not.toBe(week?.tag);
   });
 
   it('are none when there are too few to choose from', () => {
-    expect(weaponPicks(list.slice(0, 2), at)).toBeNull();
+    expect(weekPick(list.slice(0, 2), at)).toBeNull();
   });
 });

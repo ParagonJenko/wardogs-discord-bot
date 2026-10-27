@@ -622,7 +622,7 @@ import {
   type PlayerCoins,
   type PublicCoins,
 } from './coins.ts';
-import { lesserWeapons, weaponPicks } from './coinweapons.ts';
+import { dayPick, lesserWeapons, weekPick } from './coinweapons.ts';
 import {
   adminFeed,
   alertedOn,
@@ -693,6 +693,8 @@ const CoinWeaponsSchema = z.object({
   day: z.string(),
   week: z.string(),
   picks: z.object({ day: WeaponPickSchema, week: WeaponPickSchema }).nullable(),
+  // The week's weapon, kept for the week even on a day when there is no day's weapon to go with it.
+  weekPick: WeaponPickSchema.nullable().default(null),
 });
 
 type VipAddArgs = Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' | 'coins' };
@@ -846,6 +848,10 @@ export class Watcher extends DurableObject<Env> {
   private weaponChoice: { day: string; week: string; picks: { day: WeaponPick; week: WeaponPick } | null } | null = null;
   // What players did with the kill feed since it was last paid, by Steam ID; paid with the playing time.
   private killTally: Record<string, { name: string; t: KillTally }> = {};
+  // When the tally began and was last added to, and the rule it was counted under (its weapons), so a flush pays it as it was earned.
+  private killTallyStart = 0;
+  private killTallyAt = 0;
+  private killTallyRule: CoinRule | null = null;
   private playBuffer: PlayBuffer | null = null;
   private playFlushedAt = 0;
   private coinsMigrated = false;
@@ -1358,6 +1364,7 @@ export class Watcher extends DurableObject<Env> {
     await this.serial(() => this.updateVip(config));
     await this.coinDrain().catch((error: unknown) => console.error(`INITcoins: paying waiting awards failed: ${errorText(error)}`));
     await this.coinMigrate().catch((error: unknown) => console.error(`INITcoins: the move from automatic VIP failed: ${errorText(error)}`));
+    await this.coinKillsDue().catch((error: unknown) => console.error(`INITcoins: paying kills failed: ${errorText(error)}`));
     await this.payBounties();
     await this.keepAccounts(config);
     await this.askBack(config, seen.snapshot);
@@ -3019,7 +3026,7 @@ export class Watcher extends DurableObject<Env> {
     if (grief !== null && grief.alerts.length > 0) this.postGriefAlerts(grief.alerts);
     if (grief !== null && grief.teamKillers.length > 0) this.warnTeamKillers(grief.teamKillers);
     if (kills.length > 0) this.enforceRules(kills, now);
-    if (kills.length > 0) this.ctx.waitUntil(this.coinKills(kills, factionOf, live).catch((error: unknown) => console.error(`INITcoins: counting kills failed: ${errorText(error)}`)));
+    if (kills.length > 0) this.ctx.waitUntil(this.coinKills(kills, factionOf, live, now).catch((error: unknown) => console.error(`INITcoins: counting kills failed: ${errorText(error)}`)));
     if (streaks !== undefined && streaks.found.length > 0) this.ctx.waitUntil(this.payBounties());
     if (streaks !== undefined && streaks.found.length > 0) {
       this.ctx.waitUntil(this.coinBreaks(streaks.found, now).catch((error: unknown) => console.error(`INITcoins: paying streak breakers failed: ${errorText(error)}`)));
@@ -3109,14 +3116,19 @@ export class Watcher extends DurableObject<Env> {
     const week = weekOf(now);
     if (this.weaponChoice?.day === day && this.weaponChoice.week === week) return this.weaponChoice.picks;
     const saved = CoinWeaponsSchema.safeParse(await this.ctx.storage.get(COIN_WEAPONS_KEY));
-    if (saved.success && saved.data.day === day && saved.data.week === week) {
-      this.weaponChoice = { day, week, picks: saved.data.picks };
-      return saved.data.picks;
+    const kept = saved.success ? saved.data : null;
+    if (kept !== null && kept.day === day && kept.week === week) {
+      this.weaponChoice = { day, week, picks: kept.picks };
+      return kept.picks;
     }
     const keys = Array.from({ length: LESSER_DAYS }, (_, i) => weaponDayKey(now - i * DAY_MS));
     const found = await this.getMany(keys);
-    const picks = weaponPicks(lesserWeapons(keys.map((key) => parseWeaponDay(found.get(key)))), now);
-    await this.ctx.storage.put(COIN_WEAPONS_KEY, { day, week, picks });
+    const list = lesserWeapons(keys.map((key) => parseWeaponDay(found.get(key))));
+    // The week's weapon is kept for the whole week, so progress towards it isn't lost; the day's is chosen from the others.
+    const wk = kept !== null && kept.week === week ? kept.weekPick : weekPick(list, now);
+    const dy = wk === null ? null : dayPick(list, now, wk);
+    const picks = wk === null || dy === null ? null : { day: dy, week: wk };
+    await this.ctx.storage.put(COIN_WEAPONS_KEY, { day, week, picks, weekPick: wk });
     this.weaponChoice = { day, week, picks };
     return picks;
   }
@@ -3237,7 +3249,7 @@ export class Watcher extends DurableObject<Env> {
 
   // The server went live: the seeders are paid.
   private async coinSeed(seeders: SeedCredit[], at: number, least: number): Promise<void> {
-    if (this.coinRule() === null) return;
+    if ((await this.coinRule()) === null) return;
     await this.coinQueue(
       Object.fromEntries(
         seeders
@@ -3256,7 +3268,7 @@ export class Watcher extends DurableObject<Env> {
   // Time with the server live, added up for each player and paid every COIN_FLUSH_MS, and at midnight, so minutes are paid on
   // the day they were played.
   private async coinPlay(players: Player[], minutes: number, at: number): Promise<void> {
-    if (this.coinRule() === null) return;
+    if ((await this.coinRule()) === null) return;
     let buffer = await this.playBuffered();
     if (Object.keys(buffer.players).length > 0 && dayOf(buffer.at) !== dayOf(at)) {
       await this.coinFlush();
@@ -3270,14 +3282,21 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // Kills from the kill feed, added up for each killer to be paid with the playing time (a restart loses at most that many
-  // minutes of them). A team kill (both sides known, the same) counts for nothing; `streak` is the killer's best in the match.
-  private async coinKills(kills: FeedKill[], factionOf: (steamId: string) => string | null, live: LiveMatch | null): Promise<void> {
+  // minutes of them). A team kill (both sides known, the same) counts for nothing; a kill's streak is the killer's streak after it,
+  // as the live match worked it out. A tally is paid before the next day's kills are added, so every kill counts on its own day
+  // (and week) and against the weapon asked for then.
+  private async coinKills(kills: FeedKill[], factionOf: (steamId: string) => string | null, live: LiveMatch | null, now: number): Promise<void> {
     const rule = await this.coinRule();
     if (rule === null || rule.feed !== true) return;
+    if (Object.keys(this.killTally).length > 0 && dayOf(this.killTallyAt) !== dayOf(now)) await this.coinFlush();
     for (const k of kills) {
       const theirs = factionOf(k.killerSteamId);
       const victims = factionOf(k.victimSteamId);
       if (theirs !== null && victims !== null && factionKey(theirs) === factionKey(victims)) continue;
+      if (Object.keys(this.killTally).length === 0) {
+        this.killTallyStart = now;
+        this.killTallyRule = rule;
+      }
       const entry = (this.killTally[k.killerSteamId] ??= {
         name: k.killerName,
         t: { kills: 0, headshots: 0, streak: 0, dayWeapon: 0, dayWeaponHeads: 0, weekWeapon: 0, weekWeaponHeads: 0 },
@@ -3287,7 +3306,7 @@ export class Watcher extends DurableObject<Env> {
       entry.name = k.killerName || entry.name;
       entry.t.kills += 1;
       entry.t.headshots += head;
-      entry.t.streak = Math.max(entry.t.streak, live?.players.find((p) => p.steamId === k.killerSteamId)?.bestStreak ?? 0);
+      entry.t.streak = Math.max(entry.t.streak, live?.feed.find((d) => d.eventId === k.eventId)?.streak ?? 0);
       if (rule.weapons?.day.tag.toLowerCase() === cause) {
         entry.t.dayWeapon += 1;
         entry.t.dayWeaponHeads += head;
@@ -3297,18 +3316,25 @@ export class Watcher extends DurableObject<Env> {
         entry.t.weekWeaponHeads += head;
       }
     }
+    this.killTallyAt = now;
   }
 
-  // Pays the kills waiting. A failure puts them back, to be paid with the next.
-  private async coinKillsFlush(rule: CoinRule): Promise<void> {
+  // Pays the kills waiting, as of when they were earned. A failure puts them back, to be paid with the next.
+  private async coinKillsFlush(): Promise<void> {
     const flushing = this.killTally;
-    if (Object.keys(flushing).length === 0) return;
+    const rule = this.killTallyRule;
+    if (Object.keys(flushing).length === 0 || rule === null) return;
+    const at = this.killTallyAt;
+    const start = this.killTallyStart;
     this.killTally = {};
-    const at = Date.now();
+    this.killTallyRule = null;
     let results: Map<string, CoinResult>;
     try {
       results = await this.coinEarn(Object.entries(flushing).map(([steamId, k]) => ({ steamId, name: k.name, at, run: (a) => onKills(a, k.t, at, rule) })));
     } catch (error) {
+      // Put back with what came since (the same period, or the new one's would not have been added before this was paid).
+      this.killTallyStart = Math.min(start, this.killTallyStart || start);
+      this.killTallyRule ??= rule;
       for (const [steamId, k] of Object.entries(flushing)) {
         const now = this.killTally[steamId];
         this.killTally[steamId] =
@@ -3327,15 +3353,21 @@ export class Watcher extends DurableObject<Env> {
                 },
               };
       }
+      this.killTallyAt = Math.max(this.killTallyAt, at);
       throw error;
     }
     this.tellPlayers(this.missionMessages(results));
   }
 
+  // Every COIN_FLUSH_MS the kills waiting are paid, whether or not anyone is earning playing time (the server may be seeding).
+  private async coinKillsDue(): Promise<void> {
+    if (Object.keys(this.killTally).length > 0 && Date.now() - this.killTallyStart >= COIN_FLUSH_MS) await this.coinFlush();
+  }
+
   // Pays the waiting playing time. It stays in storage until paid, so a restart in between pays a few minutes twice at worst.
   private async coinFlush(): Promise<void> {
     const rule = (await this.coinRule());
-    if (rule !== null) await this.coinKillsFlush(rule);
+    await this.coinKillsFlush();
     const flushing = await this.playBuffered();
     if (rule === null || Object.keys(flushing.players).length === 0) return;
     this.playBuffer = { at: flushing.at, players: {} };
@@ -3367,7 +3399,7 @@ export class Watcher extends DurableObject<Env> {
 
   // A match ended: everyone who played it, and the side that won.
   private async coinMatch(match: MatchState, at: number, scoreToWin: number): Promise<void> {
-    if (this.coinRule() === null) return;
+    if ((await this.coinRule()) === null) return;
     const scores = settleWin(match.factionScores, scoreToWin);
     const winner = hasWinner(scores, scoreToWin) ? [...scores].sort((a, b) => b.score - a.score)[0] : undefined;
     await this.coinQueue(
@@ -3391,7 +3423,7 @@ export class Watcher extends DurableObject<Env> {
 
   // Kills that ended a kill streak.
   private async coinBreaks(found: StreakBreak[], at: number): Promise<void> {
-    if (this.coinRule() === null) return;
+    if ((await this.coinRule()) === null) return;
     await this.coinQueue(
       Object.fromEntries(found.map((b): [string, PendingCoin] => [`break:${b.eventId}`, { kind: 'break', steamId: b.steamId, name: b.name, eventId: b.eventId, at }])),
     );
@@ -3544,7 +3576,7 @@ export class Watcher extends DurableObject<Env> {
   // cannot be delivered.
   async coinsAct(userId: string, action: CoinAction): Promise<CoinReply> {
     const config = loadConfig(stringVars(this.env));
-    const rule = config.coins;
+    const rule = await this.coinRule();
     if (rule === null) return { ok: false, problem: 'INITcoins are not on yet.' };
     const player = await this.coinPlayer(userId);
     if (player === null) return { ok: false, problem: 'Link your Steam account on the website first: that is how we know who is buying.' };
@@ -3631,7 +3663,7 @@ export class Watcher extends DurableObject<Env> {
 
   // The title a player shows next to their name, if they chose one.
   private async coinTitle(steamId: string): Promise<string | null> {
-    if (this.coinRule() === null) return null;
+    if ((await this.coinRule()) === null) return null;
     return titleName(parseCoins(await this.ctx.storage.get(coinKey(steamId)))?.title ?? null);
   }
 
@@ -3645,7 +3677,7 @@ export class Watcher extends DurableObject<Env> {
 
   // Staff giving or taking coins. The reason and who did it are in the player's log.
   async coinsAdjust({ steamId, name, delta, reason, by, byName }: Named & { delta: number; reason: string; by: string; byName?: string }): Promise<number | null> {
-    if (this.coinRule() === null) return null;
+    if ((await this.coinRule()) === null) return null;
     return this.coining(async () => {
       const now = Date.now();
       const key = coinKey(steamId);
