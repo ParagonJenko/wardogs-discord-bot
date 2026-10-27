@@ -1845,6 +1845,15 @@ The first check after `COINS` is turned on pays every player the coins for their
 seeders can keep their whitelist by buying it. VIP the bot already gave runs out on its own date. Turning `COINS` off brings
 automatic VIP back; coins already earned are kept.
 
+### If something fails
+
+Seeds, matches and streak breaks are kept in storage (`coinPending`) before they are paid and taken out once they are, and each check
+pays what is left, so a failure or a restart loses nothing; paying is by key, so paying twice does nothing. Playing time waits in
+storage (`coinPlay`) and is paid every 10 minutes and at midnight, on the day it was played; a restart in the middle of paying can
+pay a few minutes twice. An award that arrives after midnight for something before it counts in the new day. If the server does not
+answer while a whitelist is being bought, the bot looks at the whitelist: a player who is on it is given what they paid for, one who is
+not gets their coins back.
+
 ### Staff
 
 `/coinadmin give`, `take` and `show` (see [Slash commands](#slash-commands)). A player's log (their last 30 changes, with the

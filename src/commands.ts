@@ -105,6 +105,9 @@ const dayCount = (value: string | undefined): number => {
   return Number.isFinite(days) ? Math.min(SEEDERS_MAX_DAYS, Math.max(1, days)) : SEEDERS_DEFAULT_DAYS;
 };
 
+// Discord shows at most 25 fields in an embed.
+const SHOP_FIELDS_PER_EMBED = 24;
+
 const NO_COINS = "INITcoins aren't on yet.";
 
 const siteLink = (site: string | undefined, path: string): string => (site === undefined ? '' : ` ${site.replace(/\/+$/, '')}${path}`);
@@ -132,19 +135,22 @@ const coinsCommand = async (
   }
   const c = view.coins;
   if (name === 'shop') {
+    const fields = c.shop.map((s) => ({
+      name: s.name,
+      value: `${coinsText(s.price)}${s.owned ? ' · owned' : s.afford ? '' : ' · ✖'}`,
+      inline: true,
+    }));
+    // Discord allows 25 fields in an embed, and a shop with many roles for sale has more items than that.
+    const pages = Array.from({ length: Math.max(1, Math.ceil(fields.length / SHOP_FIELDS_PER_EMBED)) }, (_, i) =>
+      fields.slice(i * SHOP_FIELDS_PER_EMBED, (i + 1) * SHOP_FIELDS_PER_EMBED),
+    );
     return {
-      embeds: [
-        {
-          title: '🛒 INITcoins shop',
-          color: 0xf1c40f,
-          description: `You have **${coinsText(c.balance)}**. Buy with \`/buy\`.${siteLink(site, '/coins')}`,
-          fields: c.shop.map((s) => ({
-            name: s.name,
-            value: `${coinsText(s.price)}${s.owned ? ' · owned' : s.afford ? '' : ' · ✖'}`,
-            inline: true,
-          })),
-        },
-      ],
+      embeds: pages.map((page, i) => ({
+        title: i === 0 ? '🛒 INITcoins shop' : '🛒 INITcoins shop (more)',
+        color: 0xf1c40f,
+        ...(i === 0 ? { description: `You have **${coinsText(c.balance)}**. Buy with \`/buy\`.${siteLink(site, '/coins')}` } : {}),
+        fields: page,
+      })),
     };
   }
   return {

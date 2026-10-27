@@ -314,7 +314,7 @@ export const addVip = async (
   const expiresAt = stacked ? (current?.expiresAt ?? now) + days * DAY_MS : Math.max(onList ? (current?.expiresAt ?? 0) : 0, now + days * DAY_MS);
   const source = given === 'coins' ? 'coins' : onList ? (current?.source ?? 'seeding') : given;
   return {
-    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: current?.grantedAt ?? now, expiresAt, source } } },
+    state: { ...state, revoked, granted: { ...state.granted, [steamId]: { name, grantedAt: given === 'coins' ? now : (current?.grantedAt ?? now), expiresAt, source } } },
     outcome: onList ? 'extended' : 'added',
     until: expiresAt,
   };

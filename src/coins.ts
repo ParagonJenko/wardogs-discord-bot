@@ -269,6 +269,10 @@ export const rolled = (account: CoinAccount, now: number): CoinAccount => {
 
 const touch = (account: CoinAccount, now: number): CoinAccount => ({ ...account, updatedAt: now });
 
+// An event can arrive after the account has moved on to a new day (a match that ended just before midnight, paid just after the
+// play time of the new day was): it counts in the account's current day, never rolls it back.
+const clock = (account: CoinAccount, now: number): number => Math.max(now, Date.parse(`${account.day.day}T00:00:00Z`));
+
 type Credit = { key: string; amount: number; why: Why; note?: string; capped?: boolean };
 
 // Pays a credit once: a key already paid, or a day's cap already reached, pays nothing.
@@ -343,10 +347,12 @@ const finish = (account: CoinAccount, paid: number, now: number, rule: CoinRule)
 
 // A successful seed: the server went live with this player on for `minutes` minutes of its seeding, more than the least
 // (`least`). Once a day.
-export const onSeed = (account: CoinAccount, minutes: number, least: number, now: number, rule: CoinRule): Earned => {
+export const onSeed = (account: CoinAccount, minutes: number, least: number, at: number, rule: CoinRule): Earned => {
+  const now = clock(account, at);
   const a = rolled(account, now);
   const today = dayOf(now);
-  if (a.keys.includes(`seed:${today}`)) return { account: a, paid: 0, completed: [] };
+  // The day's own count, not a key: keys are only the last few awards, and a busy day pushes the seed's out.
+  if (a.day.m.seeded === 1 || a.keys.includes(`seed:${today}`)) return { account: a, paid: 0, completed: [] };
   let next = withActiveDay(a, today);
   next = { ...next, day: { ...next.day, m: { ...next.day.m, seeded: 1 } }, week: { ...next.week, m: { ...next.week.m, seedDays: next.week.m.seedDays + 1 } } };
   const base = credit(next, { key: `seed:${today}`, amount: rule.seed, why: 'seed' }, now, rule);
@@ -356,7 +362,8 @@ export const onSeed = (account: CoinAccount, minutes: number, least: number, now
 };
 
 // `minutes` more with the server live.
-export const onPlay = (account: CoinAccount, minutes: number, now: number, rule: CoinRule): Earned => {
+export const onPlay = (account: CoinAccount, minutes: number, at: number, rule: CoinRule): Earned => {
+  const now = clock(account, at);
   const a = rolled(account, now);
   const today = dayOf(now);
   let next = withActiveDay(a, today);
@@ -373,9 +380,10 @@ export const onPlay = (account: CoinAccount, minutes: number, now: number, rule:
 export const onMatch = (
   account: CoinAccount,
   match: { id: number; kills: number; deaths: number; won: boolean },
-  now: number,
+  at: number,
   rule: CoinRule,
 ): Earned => {
+  const now = clock(account, at);
   const a = rolled(account, now);
   if (a.keys.includes(`match:${match.id}`)) return { account: a, paid: 0, completed: [] };
   if (match.kills + match.deaths < rule.playedLeast) return { account: a, paid: 0, completed: [] };
@@ -411,7 +419,8 @@ export const onMatch = (
 };
 
 // A kill that ended another player's kill streak.
-export const onBreak = (account: CoinAccount, eventId: string, now: number, rule: CoinRule): Earned => {
+export const onBreak = (account: CoinAccount, eventId: string, at: number, rule: CoinRule): Earned => {
+  const now = clock(account, at);
   const a = rolled(account, now);
   if (a.keys.includes(`break:${eventId}`)) return { account: a, paid: 0, completed: [] };
   const next = withActiveDay(a, dayOf(now));
@@ -495,21 +504,28 @@ export const adjust = (account: CoinAccount, delta: number, note: string, now: n
   );
 };
 
-// What the bot gave seeders when INITcoins took over from automatic VIP: the seeds they had in `seedDays`, as if the coins
-// had always been paid. Once.
-export const migrationGrant = (account: CoinAccount, seedDays: number, now: number, rule: Pick<CoinRule, 'seed'>): CoinAccount =>
-  seedDays <= 0 || account.keys.includes('migrate')
-    ? account
-    : touch(
-        {
-          ...account,
-          balance: account.balance + seedDays * rule.seed,
-          earned: account.earned + seedDays * rule.seed,
-          keys: [...account.keys, 'migrate'].slice(-KEYS_KEPT),
-          log: [...account.log, { at: now, delta: seedDays * rule.seed, why: 'migrate' as const, note: `${seedDays} seeds before INITcoins` }].slice(-LOG_KEPT),
-        },
-        now,
-      );
+// What the bot gave seeders when INITcoins took over from automatic VIP: the seeds they had on the days before today
+// (`seedDays`), as if the coins had always been paid. A seed today (`seededToday`) is paid the way a seed is, once, unless it
+// already was. Once.
+export const migrationGrant = (account: CoinAccount, seedDays: number, seededToday: boolean, now: number, rule: Pick<CoinRule, 'seed'>): CoinAccount => {
+  if (account.keys.includes('migrate')) return account;
+  const a = rolled(account, now);
+  const today = dayOf(now);
+  const paysToday = seededToday && a.day.m.seeded !== 1 && !a.keys.includes(`seed:${today}`);
+  const total = Math.max(0, seedDays) * rule.seed + (paysToday ? rule.seed : 0);
+  if (total === 0) return a;
+  return touch(
+    {
+      ...a,
+      balance: a.balance + total,
+      earned: a.earned + total,
+      day: paysToday ? { ...a.day, m: { ...a.day.m, seeded: 1 } } : a.day,
+      keys: [...a.keys, 'migrate', ...(paysToday ? [`seed:${today}`] : [])].slice(-KEYS_KEPT),
+      log: [...a.log, { at: now, delta: total, why: 'migrate' as const, note: `${seedDays + (paysToday ? 1 : 0)} seeds before INITcoins` }].slice(-LOG_KEPT),
+    },
+    now,
+  );
+};
 
 // ---- What the website and Discord show ----
 

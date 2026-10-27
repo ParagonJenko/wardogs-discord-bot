@@ -494,6 +494,21 @@ describe('INITcoins commands', () => {
     expect(fields[1]?.value).toContain('✖');
   });
 
+  it('/shop splits a long list across embeds, within Discord’s 25 fields each', async () => {
+    const many = {
+      ...view,
+      shop: Array.from({ length: 28 }, (_, i) => ({ id: `item-${i}`, kind: 'title', name: `Item ${i}`, price: 100 + i, owned: false, afford: true, reason: null })),
+    };
+    const coins = { ...tools(), view: vi.fn(async () => ({ enabled: true, linked: true, coins: many as never })) };
+
+    const reply = await run(coins, { name: 'shop', options: {}, userId: '9' });
+
+    expect(reply.embeds).toHaveLength(2);
+    expect(reply.embeds?.map((e) => e.fields?.length)).toEqual([24, 4]);
+    expect(reply.embeds?.[0]?.description).toContain('720 INITcoins');
+    expect(reply.embeds?.[1]?.description).toBeUndefined();
+  });
+
   it('/buy buys, or says why not', async () => {
     const coins = tools();
 

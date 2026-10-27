@@ -256,10 +256,42 @@ describe('staff and the move from VIP', () => {
   });
 
   it('gives seeders what their seeds would have earned, once', () => {
-    const once = migrationGrant(blankAccount('Ash', NOW), 4, NOW, rule);
+    const once = migrationGrant(blankAccount('Ash', NOW), 4, false, NOW, rule);
     expect(once.balance).toBe(600);
-    expect(migrationGrant(once, 4, NOW, rule).balance).toBe(600);
-    expect(migrationGrant(blankAccount('Bea', NOW), 0, NOW, rule).balance).toBe(0);
+    expect(migrationGrant(once, 4, false, NOW, rule).balance).toBe(600);
+    expect(migrationGrant(blankAccount('Bea', NOW), 0, false, NOW, rule).balance).toBe(0);
+  });
+});
+
+describe('seeds on the day of the move, and late events', () => {
+  it('pays a seed from today once, whichever of the move and the live seed comes first', () => {
+    const moved = migrationGrant(blankAccount('Ash', NOW), 2, true, NOW, rule);
+    expect(moved.balance).toBe(450);
+    // The live seed finds today's already paid.
+    expect(onSeed(moved, 30, 10, NOW + 60_000, rule).paid).toBe(0);
+    // And the other way round: the move leaves a seed already paid today alone.
+    const seeded = onSeed(blankAccount('Bea', NOW), 30, 10, NOW, rule).account;
+    expect(migrationGrant(seeded, 2, true, NOW + 1, rule).balance).toBe(seeded.balance + 300);
+  });
+
+  it('does not pay a second seed for a day when busy play has pushed the seed out of the recent keys', () => {
+    let a = onSeed(blankAccount('Ash', NOW), 20, 10, NOW, rule).account;
+    for (let i = 1; i <= 90; i++) a = onBreak(a, `e${i}`, NOW + i, rule).account;
+    expect(a.keys.includes(`seed:2026-10-27`)).toBe(false);
+    expect(onSeed(a, 20, 10, NOW + 100_000, rule).paid).toBe(0);
+    expect(a.week.m.seedDays).toBe(1);
+  });
+
+  it('counts an event from before midnight in the account’s current day, never rolling it back', () => {
+    const lateEvening = Date.parse('2026-10-27T23:59:30Z');
+    let a = blankAccount('Ash', lateEvening);
+    a = onPlay(a, 30, lateEvening + 60_000, rule).account;
+    expect(a.day.day).toBe('2026-10-28');
+    const before = a.day.m.minutes;
+    a = onMatch(a, { id: lateEvening, kills: 5, deaths: 5, won: true }, lateEvening, rule).account;
+    expect(a.day.day).toBe('2026-10-28');
+    expect(a.day.m.minutes).toBe(before);
+    expect(a.day.m.matches).toBe(1);
   });
 });
 
