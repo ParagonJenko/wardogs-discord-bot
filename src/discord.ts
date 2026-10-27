@@ -46,6 +46,8 @@ type MessageOptions = {
   roleId?: string;
   seeders?: Seeder[];
   vip?: VipRule | null;
+  // What a seed pays in INITcoins, when they are on.
+  coins?: number;
   siteUrl?: string;
   serverId?: string;
 };
@@ -286,6 +288,9 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
     ...(seeders.length > 0 ? [{ name: 'Top seeders', value: ranked(seeders) }] : []),
     ...(kind === 'seeding' && options.vip
       ? [{ name: '🎖️ Seeder VIP', value: `${vipOffer(options.vip)}\n${vipRule(options.vip)}` }]
+      : []),
+    ...(kind === 'seeding' && options.coins
+      ? [{ name: '🪙 INITcoins', value: `Seed and earn **${options.coins} INITcoins**, which buy whitelist days.\nA seed counts when you're on for more than a few minutes and the server goes live.` }]
       : []),
     ...joinField(options.serverId),
   ];

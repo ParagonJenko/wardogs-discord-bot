@@ -16,6 +16,8 @@ const records: StaffRecords = {
   unban: vi.fn(),
   vipAdd: vi.fn(),
   vipRemove: vi.fn(),
+  coinsOf: vi.fn(),
+  coinsAdjust: vi.fn(),
   nextMap: vi.fn(async () => undefined),
   steam: vi.fn(async () => 'off' as const),
   rotations: vi.fn(),
@@ -57,6 +59,7 @@ const config: Config = {
   scoreToWin: 100,
   seedMinutes: 10,
   vip: null,
+  coins: null,
   bounty: null,
   matchMessages: null,
   seedingMessages: null,
@@ -420,5 +423,106 @@ describe('runCommand', () => {
       content: 'Nothing to send.',
     });
     expect(sent).toEqual([]);
+  });
+});
+
+describe('INITcoins commands', () => {
+  const view = {
+    balance: 720,
+    earned: 1500,
+    spent: 780,
+    title: 'Grunt',
+    today: { earned: 40, cap: 100 },
+    daily: [
+      { id: 'd-play-2', text: 'Play 2 matches', tier: 0, reward: 10, progress: 2, target: 2, done: true, scope: 'day', slot: 0 },
+      { id: 'd-win-1', text: 'Win a match', tier: 1, reward: 15, progress: 0, target: 1, done: false, scope: 'day', slot: 1 },
+    ],
+    weekly: [],
+    rerolls: { left: 3, price: 40 },
+    shop: [
+      { id: 'vip-7', kind: 'vip', name: 'Whitelist, 7 days', price: 600, owned: false, afford: true, reason: null },
+      { id: 'title-alpha', kind: 'title', name: 'Title: Alpha', price: 6000, owned: false, afford: false, reason: 'x' },
+    ],
+    log: [],
+    vipUntil: Date.UTC(2026, 10, 3),
+    linked: true,
+  } as const;
+  const tools = (enabled = true, linked = true) => ({
+    view: vi.fn(async () => ({ enabled, linked, coins: enabled && linked ? (view as never) : null })),
+    buy: vi.fn(async (_userId: string, item: string) =>
+      item === 'vip-7'
+        ? { ok: true as const, message: 'Whitelist added.', coins: { ...view, balance: 120 } as never }
+        : { ok: false as const, problem: 'There is no such thing in the shop.' },
+    ),
+    items: vi.fn(async () => [
+      { id: 'vip-7', name: 'Whitelist, 7 days', price: 600 },
+      { id: 'title-alpha', name: 'Title: Alpha', price: 6000 },
+    ]),
+  });
+  const run = (coins: ReturnType<typeof tools> | undefined, request: Parameters<ReturnType<typeof runCommand>>[0]) =>
+    runCommand({
+      config: () => ({ ...config, siteUrl: 'https://gaminginit.com' }),
+      http: rcon({}).http,
+      lastMatch: async () => null,
+      privateProfiles: async () => new Set(),
+      roundup: async () => null,
+      seeders: async () => [],
+      removeMatch: async () => null,
+      seedCall: async () => undefined,
+      records,
+      ...(coins === undefined ? {} : { coins }),
+      now: () => 0,
+      log: { info: vi.fn() },
+    })(request);
+
+  it('/coins shows the balance, the missions and the whitelist', async () => {
+    const reply = await run(tools(), { name: 'coins', options: {}, userId: '9' });
+
+    const embed = reply.embeds?.[0];
+    expect(embed?.title).toBe('🪙 Your INITcoins');
+    expect(embed?.description).toContain('720 INITcoins');
+    expect(embed?.description).toContain('Grunt');
+    expect(embed?.fields?.[0]?.value).toBe('✅ Play 2 matches · +10\n▫️ Win a match (0/1) · +15');
+    expect(embed?.fields?.some((f) => f.name === 'Whitelist')).toBe(true);
+  });
+
+  it('/shop lists what is for sale, marking what they cannot afford', async () => {
+    const reply = await run(tools(), { name: 'shop', options: {}, userId: '9' });
+
+    const fields = reply.embeds?.[0]?.fields ?? [];
+    expect(fields[0]).toEqual({ name: 'Whitelist, 7 days', value: '600 INITcoins', inline: true });
+    expect(fields[1]?.value).toContain('✖');
+  });
+
+  it('/buy buys, or says why not', async () => {
+    const coins = tools();
+
+    await expect(run(coins, { name: 'buy', options: { item: 'vip-7' }, userId: '9' })).resolves.toEqual({
+      content: '✅ Whitelist added. You have 120 INITcoins left.',
+    });
+    await expect(run(coins, { name: 'buy', options: { item: 'nope' }, userId: '9' })).resolves.toEqual({
+      content: '❌ There is no such thing in the shop.',
+    });
+    expect(coins.buy).toHaveBeenCalledWith('9', 'vip-7');
+  });
+
+  it('asks players to link their Steam account, and says when coins are off', async () => {
+    await expect(run(tools(true, false), { name: 'coins', options: {}, userId: '9' })).resolves.toEqual({
+      content: 'Link your Steam account to see and spend your INITcoins: https://gaminginit.com/account',
+    });
+    await expect(run(tools(false), { name: 'shop', options: {}, userId: '9' })).resolves.toEqual({ content: "INITcoins aren't on yet." });
+    await expect(run(undefined, { name: 'coins', options: {}, userId: '9' })).resolves.toEqual({ content: "INITcoins aren't on yet." });
+  });
+
+  it('suggests what is for sale while /buy is typed', async () => {
+    const choices = await suggestOptions({
+      recentMatches: async () => [],
+      config: () => config,
+      http: rcon({}).http,
+      records,
+      coins: tools(),
+    })({ name: 'buy', options: { item: 'white' }, userId: '9', focused: 'item' });
+
+    expect(choices).toEqual([{ name: 'Whitelist, 7 days · 600 INITcoins', value: 'vip-7' }]);
   });
 });

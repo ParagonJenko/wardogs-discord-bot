@@ -35,6 +35,7 @@ describe('loadConfig', () => {
       scoreToWin: 100,
       seedMinutes: 10,
       vip: null,
+      coins: null,
       bounty: { streak: 15, days: 1, announce: true },
       matchMessages: null,
       seedingMessages: { everyMs: 300_000, siteHost: null },
@@ -292,5 +293,26 @@ describe('loadConfig', () => {
 
   it('rejects a seeding threshold at or above the live threshold', () => {
     expect(() => loadConfig({ ...required, SEEDING_THRESHOLD: '20' })).toThrow(/SEEDING_THRESHOLD/);
+  });
+});
+
+describe('INITcoins', () => {
+  it('are off by default, and leave automatic VIP as it was', () => {
+    expect(loadConfig(required).coins).toBeNull();
+    expect(loadConfig({ ...required, VIP_SEED_DAYS: '3' }).vip).not.toBeNull();
+  });
+
+  it('replace automatic VIP when on, with the default rates', () => {
+    const config = loadConfig({ ...required, COINS: 'on', VIP_SEED_DAYS: '3' });
+    expect(config.vip).toBeNull();
+    expect(config.coins).toMatchObject({ seed: 150, vipWeekPrice: 600, vipAheadDays: 14, streaks: true, roles: [] });
+  });
+
+  it('read the roles for sale, and refuse ones that are not JSON', () => {
+    const roles = '[{"id":"123456789012345678","name":"Night Owl","price":1500}]';
+    expect(loadConfig({ ...required, COINS: 'on', COIN_ROLES: roles }).coins?.roles).toEqual([
+      { id: '123456789012345678', name: 'Night Owl', price: 1500 },
+    ]);
+    expect(() => loadConfig({ ...required, COINS: 'on', COIN_ROLES: 'night owl' })).toThrow(/COIN_ROLES/);
   });
 });

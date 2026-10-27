@@ -110,6 +110,8 @@ export type PlayerProfile = {
   seeding: { rule: VipRule; seedDays: number } | null;
   // Their kills by weapon each day, from the game's kill feed. Null when the bot has never had the feed.
   weapons: PlayerWeaponsPage | null;
+  // The title they bought with INITcoins, when they show one.
+  title?: string | null;
 };
 
 export type DayRecords = { day: string; players: PlayerDay };

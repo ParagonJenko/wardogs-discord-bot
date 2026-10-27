@@ -112,8 +112,12 @@ export type StaffRecords = {
   ban: (request: BanRequest) => Promise<BanResult>;
   unban: (target: Named, by: string, byName?: string) => Promise<boolean>;
   // `days` null: permanent, until staff remove it. `reason` is why, as the staff history and moderation log show it.
-  vipAdd: (request: Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' }) => Promise<VipAddResult>;
+  vipAdd: (request: Named & { days: number | null; reason: string; by: string; byName?: string; source?: 'staff' | 'bounty' | 'coins' }) => Promise<VipAddResult>;
   vipRemove: (request: Named & { reason?: string; by: string; byName?: string }) => Promise<VipRemoveResult>;
+  // A player's INITcoins (see coins.ts), null when they have none or coins are off; and giving or taking some. The new balance is
+  // null when coins are off.
+  coinsOf: (steamId: string) => Promise<{ balance: number; earned: number; spent: number } | null>;
+  coinsAdjust: (request: Named & { delta: number; reason: string; by: string; byName?: string }) => Promise<number | null>;
   // Notes the map staff set to play next, for the live status: the rotation does not show it. `playing` is the map
   // the server was on when staff set it, or null when that could not be read.
   nextMap: (map: string, playing: string | null) => Promise<void>;
@@ -148,12 +152,14 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions', 'coinadmin'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
 
 export const VIP_MAX_DAYS = 365;
+// The most INITcoins staff give or take in one go.
+export const COIN_ADJUST_MAX = 10_000;
 // Why staff give a player VIP with /vip add, by the value Discord sends. Other needs a note to say what it is.
 export const VIP_REASONS = [
   { value: 'friend', name: 'Friend' },
@@ -389,6 +395,7 @@ export const suggestStaff =
       if (focused === 'player' && ['warn', 'kick', 'switchteam'].includes(name)) return players(false);
       if (focused === 'player' && ['player', 'ban'].includes(name)) return players(true);
       if (name === 'vip' && options['subcommand'] === 'add') return players(true);
+      if (name === 'coinadmin') return players(true);
       if (name === 'private' && options['subcommand'] === 'add') return players(true);
       if (name === 'private' && options['subcommand'] === 'remove') {
         const hidden = Object.entries(await records.privateProfiles()).map(([steamId, p]) => ({ steamId, name: p.name }));
@@ -751,6 +758,29 @@ export const runStaffCommand =
       };
     }
 
+    if (name === 'coinadmin') {
+      const { found } = await anyTarget('steam_id');
+      if ('problem' in found) return { content: found.problem };
+      const { player } = found;
+      if (options['subcommand'] === 'show') {
+        const coins = await records.coinsOf(player.steamId);
+        return {
+          content:
+            coins === null
+              ? `${who(player)} has no INITcoins.`
+              : `🪙 ${who(player)} has ${coins.balance.toLocaleString('en-GB')} INITcoins (earned ${coins.earned.toLocaleString('en-GB')}, spent ${coins.spent.toLocaleString('en-GB')}).`,
+        };
+      }
+      const amount = Math.trunc(Number(options['amount']));
+      if (!Number.isFinite(amount) || amount < 1 || amount > COIN_ADJUST_MAX) return { content: `Give or take 1 to ${COIN_ADJUST_MAX.toLocaleString('en-GB')} INITcoins.` };
+      const reason = text('reason');
+      if (!reason) return { content: 'Say why.' };
+      const taking = options['subcommand'] === 'take';
+      log.info(`/coinadmin ${taking ? 'take' : 'give'} by ${staff}: ${logged(player)} ${amount}: ${JSON.stringify(reason)}`);
+      const balance = await records.coinsAdjust({ ...player, delta: taking ? -amount : amount, reason, by, ...named });
+      if (balance === null) return { content: 'INITcoins are not on (COINS in wrangler.jsonc).' };
+      return { content: `🪙 ${taking ? 'Took' : 'Gave'} ${amount.toLocaleString('en-GB')} INITcoins ${taking ? 'from' : 'to'} ${who(player)}. They now have ${balance.toLocaleString('en-GB')}.` };
+    }
     if (name === 'vip') {
       const { found } = await anyTarget('steam_id');
       if ('problem' in found) return { content: found.problem };

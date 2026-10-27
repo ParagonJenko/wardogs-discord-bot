@@ -190,6 +190,21 @@ describe('handleInteraction', () => {
     expect(d.runCommand).toHaveBeenCalledWith({ name, options: {}, userId: null });
   });
 
+  it.each(['coins', 'shop'])('defers /%s so only the player sees it, and a failure stays private too', async (name) => {
+    const { body, signature, timestamp } = await signed({ ...statusCommand, data: { name }, member: { user: { id: '9' } } });
+    const d = deps();
+    d.runCommand.mockRejectedValueOnce(new Error('boom'));
+
+    const result = await handleInteraction(body, signature, timestamp, d);
+    await result.followUp?.();
+
+    expect(result.body).toEqual({ type: 5, data: { flags: 64 } });
+    expect(d.runCommand).toHaveBeenCalledWith({ name, options: {}, userId: '9' });
+    // Already private: the reply is edited in place, nothing is deleted.
+    expect(d.deleteReply).not.toHaveBeenCalled();
+    expect(d.editReply).toHaveBeenCalled();
+  });
+
   const broadcast = (permissions: string | undefined, guildId: string | null = '777') => ({
     ...statusCommand,
     ...(guildId === null ? {} : { guild_id: guildId }),
@@ -626,6 +641,9 @@ describe('COMMANDS', () => {
       'serverstatus',
       'players',
       'lastmatch',
+      'coins',
+      'shop',
+      'buy',
       'rotation',
       'roundup',
       'broadcast',
@@ -645,9 +663,10 @@ describe('COMMANDS', () => {
       'rotations',
       'private',
       'circles',
+      'coinadmin',
       'voteoptions',
     ]);
-    for (const command of COMMANDS.slice(5)) {
+    for (const command of COMMANDS.slice(8)) {
       expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
       expect(command.description).toMatch(/\(staff only\)$/);
       expect(command.description.length).toBeLessThanOrEqual(100);

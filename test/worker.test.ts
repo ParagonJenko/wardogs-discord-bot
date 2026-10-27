@@ -186,6 +186,8 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
             SITE_URL: SITE,
             DISCORD_INVITE: '',
             ROUNDUPS: 'off',
+            // Pinned off: these tests are of the Worker with automatic VIP. INITcoins have their own, below.
+            COINS: 'off',
           },
           secrets: {
             RCON_URL: rcon.url,
@@ -607,6 +609,15 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       }
     });
 
+    it('has no INITcoins until they are switched on', async () => {
+      expect((await server.fetch('/api/coins')).status).toBe(404);
+      expect((await server.fetch('/api/account/coins')).status).toBe(401);
+      expect(await json('/api/account/coins', { headers: await asPlayer() })).toEqual({
+        status: 200,
+        body: { enabled: false, linked: false, coins: null },
+      });
+    });
+
     it('has no Discord link to count clicks for until the invite is set', async () => {
       expect((await server.fetch('/go/discord?src=hero', { redirect: 'manual' })).status).toBe(404);
     });
@@ -620,5 +631,115 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
         accounts: { accounts: 0, linked: 0, members: 0, joinedOnSite: 0, withVipRole: 0 },
       });
     });
+  });
+});
+
+describe('INITcoins in workerd', { timeout: 30_000 }, () => {
+  let rcon: FakeRcon;
+  let server: TestHarness;
+  const player = { id: '100000000000000009', name: 'Player' };
+  const asPlayer = async () => ({ authorization: `Bearer ${await createPlayerSession(CLIENT_SECRET, player, Date.now())}`, 'content-type': 'application/json' });
+  const json = async (path: string, init?: Parameters<TestHarness['fetch']>[1]): Promise<{ status: number; body: any }> => {
+    const response = await server.fetch(path, init);
+    const text = await response.text();
+    return { status: response.status, body: text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : text };
+  };
+
+  beforeAll(async () => {
+    rcon = await startFakeRcon('rcon-password');
+    server = createTestHarness({
+      workers: [
+        {
+          configPath: './wrangler.jsonc',
+          vars: {
+            DISCORD_GUILD_ID: GUILD,
+            DISCORD_ADMIN_ROLE_IDS: STAFF_ROLE,
+            DISCORD_APPLICATION_ID: APPLICATION_ID,
+            SITE_URL: SITE,
+            DISCORD_INVITE: '',
+            ROUNDUPS: 'off',
+            COINS: 'on',
+            COIN_ROLES: '[{"id":"100000000000000077","name":"Night Owl","price":1500}]',
+          },
+          secrets: {
+            RCON_URL: rcon.url,
+            RCON_PASSWORD: 'rcon-password',
+            DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/not-a-real-webhook',
+            DISCORD_PUBLIC_KEY: PUBLIC_KEY_HEX,
+            DISCORD_CLIENT_SECRET: CLIENT_SECRET,
+            KILL_FEED_TOKEN: FEED_TOKEN,
+            REVIEW_TOKEN,
+          },
+        },
+      ],
+    });
+    await server.listen();
+  }, 120_000);
+
+  afterAll(async () => {
+    await server?.close();
+    await rcon?.close();
+  });
+
+  afterEach((context) => {
+    if (context.task.result?.state === 'fail') server.debug();
+  });
+
+  it('tells the website how they work: what they pay, what they cost, and the missions', async () => {
+    const { status, body } = await json('/api/coins');
+    expect(status).toBe(200);
+    expect(body.info.rates).toMatchObject({ seed: 150, playMinutes: 10, activityCap: 100 });
+    expect(body.info.prices).toMatchObject({ vipDay: 100, vipWeek: 600, vipAheadDays: 14 });
+    expect(body.info.shop.map((i: { id: string }) => i.id)).toEqual(expect.arrayContaining(['vip-1', 'vip-7', 'title-seeder', 'role-100000000000000077']));
+    expect(body.info.missions.daily).toHaveLength(3);
+    expect(body.info.missions.weekly).toHaveLength(3);
+    expect(body).toMatchObject({ leaders: [], players: 0, held: 0, earned: 0 });
+  });
+
+  it('replaces automatic VIP: the website is told there is no seeder VIP rule', async () => {
+    const stats = await json('/api/stats');
+    expect(stats.status).toBe(200);
+    expect(stats.body.vip ?? null).toBeNull();
+  });
+
+  it('runs checks with players in game without trouble', async () => {
+    rcon.players = [
+      { name: 'Ash', steamId: ASH, kills: 3, deaths: 1, faction: 'Valkyra' },
+      { name: 'Bo', steamId: BO, kills: 1, deaths: 3, faction: 'Kharr' },
+    ];
+    server.clearLogs();
+    expect(await server.getWorker().scheduled({ cron: '* * * * *' })).toMatchObject({ outcome: 'ok' });
+    expect(await server.getWorker().scheduled({ cron: '* * * * *' })).toMatchObject({ outcome: 'ok' });
+    expect(server.getLogs().flatMap((log) => (log.level === 'error' ? [log.message] : []))).toEqual([]);
+  });
+
+  it('shows a player who has not linked Steam how to, and will not sell to them', async () => {
+    expect((await server.fetch('/api/account/coins')).status).toBe(401);
+    expect(await json('/api/account/coins', { headers: await asPlayer() })).toEqual({
+      status: 200,
+      body: { enabled: true, linked: false, coins: null },
+    });
+    const buy = await json('/api/account/coins', { method: 'POST', headers: await asPlayer(), body: JSON.stringify({ action: 'buy', item: 'vip-1' }) });
+    expect(buy.status).toBe(400);
+    expect(buy.body.error).toMatch(/Link your Steam account/);
+  });
+
+  it('refuses coin requests it cannot read', async () => {
+    const post = async (body: unknown) =>
+      (await server.fetch('/api/account/coins', { method: 'POST', headers: await asPlayer(), body: JSON.stringify(body) })).status;
+    expect(await post({ action: 'nope' })).toBe(400);
+    expect(await post({ action: 'buy' })).toBe(400);
+    expect(await post({ action: 'reroll', slot: 7 })).toBe(400);
+    expect(await post({ action: 'title', id: 5 })).toBe(400);
+  });
+
+  it('offers the coin commands to anyone, and keeps their replies private', async () => {
+    const member = { ...playerMember };
+    const { body } = await json('/', signed({ ...command('coins', member), data: { name: 'coins' } }));
+    expect(body).toEqual({ type: 5, data: { flags: EPHEMERAL } });
+    // Suggestions for /buy list what is for sale.
+    const typing = { ...command('buy', member), type: AUTOCOMPLETE, data: { name: 'buy', options: [{ type: 3, name: 'item', value: 'owl', focused: true }] } };
+    const suggested = await json('/', signed(typing));
+    expect(suggested.body.data.choices).toEqual([{ name: 'Discord role: Night Owl · 1,500 INITcoins', value: 'role-100000000000000077' }]);
   });
 });

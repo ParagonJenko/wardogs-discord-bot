@@ -1,3 +1,4 @@
+import { coinsText, type CoinReply, type CoinsAccountView, type MissionView } from './coins.ts';
 import type { Config } from './config.ts';
 import {
   buildLastMatchEmbed,
@@ -25,7 +26,16 @@ import { ROUNDUP_CHOICES, type Roundup, type RoundupChoice } from './roundup.ts'
 import { isStaffCommand, runStaffCommand, suggestStaff, type StaffRecords } from './staff.ts';
 import type { RecentMatch } from './stats.ts';
 
+// What the player commands for INITcoins need from the bot's records.
+export type CoinTools = {
+  view: (userId: string) => Promise<CoinsAccountView>;
+  buy: (userId: string, item: string) => Promise<CoinReply>;
+  // What is for sale, for /buy's suggestions. Empty when INITcoins are off.
+  items: () => Promise<{ id: string; name: string; price: number }[]>;
+};
+
 type CommandDeps = {
+  coins?: CoinTools;
   // Read lazily, so Discord's endpoint check works before the RCON secrets are set.
   config: () => Config;
   http: HttpClient;
@@ -65,15 +75,22 @@ const NOBODY: Record<RoundupChoice, string> = {
 // Discord shows at most 25 choices.
 const MAX_CHOICES = 25;
 
-type SuggestDeps = Pick<CommandDeps, 'config' | 'http' | 'records'> & { recentMatches: () => Promise<RecentMatch[]> };
+type SuggestDeps = Pick<CommandDeps, 'config' | 'http' | 'records' | 'coins'> & { recentMatches: () => Promise<RecentMatch[]> };
 
 // Choices offered while staff type: in /removematch the recent matches, narrowed to what has been typed; in the other
 // staff commands players, teams, maps and bans.
 export const suggestOptions =
-  ({ recentMatches, ...staff }: SuggestDeps) =>
+  ({ recentMatches, coins, ...staff }: SuggestDeps) =>
   async (request: CommandRequest): Promise<Choice[]> => {
     const { name, options } = request;
     if (isStaffCommand(name)) return suggestStaff(staff)(request);
+    if (name === 'buy') {
+      const typed = (options['item'] ?? '').trim().toLowerCase();
+      return ((await coins?.items()) ?? [])
+        .map((i) => ({ name: `${i.name} · ${coinsText(i.price)}`.slice(0, 100), value: i.id }))
+        .filter((choice) => choice.name.toLowerCase().includes(typed))
+        .slice(0, MAX_CHOICES);
+    }
     if (name !== 'removematch') return [];
     const typed = (options['match'] ?? '').trim().toLowerCase();
     return (await recentMatches())
@@ -88,11 +105,73 @@ const dayCount = (value: string | undefined): number => {
   return Number.isFinite(days) ? Math.min(SEEDERS_MAX_DAYS, Math.max(1, days)) : SEEDERS_DEFAULT_DAYS;
 };
 
+const NO_COINS = "INITcoins aren't on yet.";
+
+const siteLink = (site: string | undefined, path: string): string => (site === undefined ? '' : ` ${site.replace(/\/+$/, '')}${path}`);
+
+const missionLine = (m: MissionView): string =>
+  `${m.done ? '✅' : '▫️'} ${m.text}${m.done ? '' : ` (${m.progress}/${m.target})`} · +${m.reward}`;
+
+// /coins, /shop and /buy. Replies go to the person who asked only.
+const coinsCommand = async (
+  name: 'coins' | 'shop' | 'buy',
+  item: string | undefined,
+  userId: string | null,
+  tools: CoinTools | undefined,
+  site: string | undefined,
+): Promise<CommandReply> => {
+  if (tools === undefined || userId === null) return { content: NO_COINS };
+  if (name === 'buy') {
+    const reply = await tools.buy(userId, (item ?? '').trim());
+    return { content: reply.ok ? `✅ ${reply.message} You have ${coinsText(reply.coins.balance)} left.` : `❌ ${reply.problem}` };
+  }
+  const view = await tools.view(userId);
+  if (!view.enabled) return { content: NO_COINS };
+  if (!view.linked || view.coins === null) {
+    return { content: `Link your Steam account to see and spend your INITcoins:${siteLink(site, '/account')}` };
+  }
+  const c = view.coins;
+  if (name === 'shop') {
+    return {
+      embeds: [
+        {
+          title: '🛒 INITcoins shop',
+          color: 0xf1c40f,
+          description: `You have **${coinsText(c.balance)}**. Buy with \`/buy\`.${siteLink(site, '/coins')}`,
+          fields: c.shop.map((s) => ({
+            name: s.name,
+            value: `${coinsText(s.price)}${s.owned ? ' · owned' : s.afford ? '' : ' · ✖'}`,
+            inline: true,
+          })),
+        },
+      ],
+    };
+  }
+  return {
+    embeds: [
+      {
+        title: '🪙 Your INITcoins',
+        color: 0xf1c40f,
+        description: `**${coinsText(c.balance)}**${c.title === null ? '' : ` · ${c.title}`}\nEarned ${coinsText(c.earned)} in all. Today's playing and seeding has paid ${c.today.earned} of ${c.today.cap}.`,
+        fields: [
+          { name: 'Today', value: c.daily.map(missionLine).join('\n') || 'None' },
+          { name: 'This week', value: c.weekly.map(missionLine).join('\n') || 'None' },
+          ...(c.vipUntil === null ? [] : [{ name: 'Whitelist', value: `Until <t:${Math.floor(c.vipUntil / 1000)}:f>` }]),
+        ],
+        footer: { text: siteLink(site, '/coins').trim() || 'Spend them with /shop and /buy' },
+      },
+    ],
+  };
+};
+
 export const runCommand =
-  ({ config, http, lastMatch, privateProfiles, roundup, roundupUsers, seeders, removeMatch, seedCall, records, now, log }: CommandDeps) =>
+  ({ config, http, lastMatch, privateProfiles, roundup, roundupUsers, seeders, removeMatch, seedCall, records, coins, now, log }: CommandDeps) =>
   async (request: CommandRequest): Promise<CommandReply> => {
     const { name, options, userId } = request;
     if (isStaffCommand(name)) return runStaffCommand({ config, http, records, now, log })(name, request);
+    if (name === 'coins' || name === 'shop' || name === 'buy') {
+      return coinsCommand(name, options['item'], userId, coins, websiteOf(config));
+    }
     if (name === 'lastmatch') {
       const [match, hidden] = await Promise.all([lastMatch(), privateProfiles()]);
       return match
@@ -119,7 +198,7 @@ export const runCommand =
       return { embeds: [buildSeedersEmbed(await seeders(days), days, seedMinutes, vip)] };
     }
 
-    const { rconUrl, rconPassword, rules, siteUrl, serverId, roleId, vip } = config();
+    const { rconUrl, rconPassword, rules, siteUrl, serverId, roleId, vip, coins: coinRule } = config();
     if (name === 'serverstatus') {
       return { embeds: [buildStatusEmbed(await fetchStatus(rconUrl, rconPassword, http), rules, siteUrl, serverId)] };
     }
@@ -136,7 +215,7 @@ export const runCommand =
       if (status.players >= rules.live) {
         return { content: `The server is already live (${status.players}/${status.maxPlayers} players), so no seeding call was sent.` };
       }
-      await seedCall(buildSeedCall(status, { lowPop: rules.lowPop, live: rules.live, roleId, vip, siteUrl, serverId, note, calledBy: userId }));
+      await seedCall(buildSeedCall(status, { lowPop: rules.lowPop, live: rules.live, roleId, vip, ...(coinRule === null ? {} : { coins: coinRule.seed }), siteUrl, serverId, note, calledBy: userId }));
       log.info(`/seednow posted for Discord user ${userId ?? 'unknown'} at ${status.players}/${status.maxPlayers} players`);
       return {
         content: roleId

@@ -581,9 +581,11 @@ export const buildAdminOverview = (s: AdminSources): AdminOverview => {
                         ? (given ?? 'Added by hand in ServerSettings.ini')
                         : grant.source === 'bounty'
                           ? 'Ended a long kill streak'
-                          : grant.source === 'staff'
-                            ? (given ?? 'Given by staff')
-                            : 'Earned by seeding',
+                          : grant.source === 'coins'
+                            ? 'Bought with INITcoins'
+                            : grant.source === 'staff'
+                              ? (given ?? 'Given by staff')
+                              : 'Earned by seeding',
                 };
               })
               .sort((a, b) => a.player.name.localeCompare(b.player.name)),

@@ -170,10 +170,11 @@ export type VipView = Pick<VipGrant, 'grantedAt' | 'expiresAt' | 'source'>;
 export const activeGrant = (account: Account, grant: VipView | null | undefined, now: number): VipView | null =>
   account.steamId !== null && grant != null && grant.expiresAt > now ? grant : null;
 
-export type DmKind = 'earned' | 'renewed' | 'staff' | 'bounty' | 'expiring' | 'ended';
+export type DmKind = 'earned' | 'renewed' | 'staff' | 'bounty' | 'bought' | 'expiring' | 'ended';
 
 // The roles to give or take: only those with a role ID set (`ids`) are looked at.
-export type AccountRule = { roles: Partial<Record<RoleName, string>>; messages: boolean; siteUrl: string | undefined; vip: VipRule | null };
+// `coins` is what a seed pays in INITcoins, when they are on (then `vip` is null).
+export type AccountRule = { roles: Partial<Record<RoleName, string>>; messages: boolean; siteUrl: string | undefined; vip: VipRule | null; coins?: number | null };
 
 export type AccountPlan = {
   next: Account;
@@ -198,7 +199,7 @@ export const planAccount = (account: Account, grant: VipView | null | undefined,
   } else if (active !== null) {
     if (notified === null || notified.grantedAt !== active.grantedAt) {
       const renewal = notified !== null && !notified.ended && notified.expiresAt <= active.grantedAt + RENEW_SLACK_MS;
-      dms.push(active.source === 'staff' ? 'staff' : active.source === 'bounty' ? 'bounty' : renewal ? 'renewed' : 'earned');
+      dms.push(active.source === 'staff' ? 'staff' : active.source === 'bounty' ? 'bounty' : active.source === 'coins' ? 'bought' : renewal ? 'renewed' : 'earned');
       notified = { grantedAt: active.grantedAt, expiresAt: active.expiresAt, warned: false, ended: false };
     } else if (notified.expiresAt !== active.expiresAt) {
       // Staff made it longer: the warning is for the new end.
@@ -261,19 +262,21 @@ export const adopt = (account: Account, grant: VipView | null | undefined, now: 
   };
 };
 
-export const dmText = (kind: DmKind, expiresAt: number | null, rule: Pick<AccountRule, 'siteUrl' | 'vip'>): string => {
+export const dmText = (kind: DmKind, expiresAt: number | null, rule: Pick<AccountRule, 'siteUrl' | 'vip' | 'coins'>): string => {
   const until = expiresAt === null ? '' : `<t:${unix(expiresAt)}:f>`;
   const site = rule.siteUrl === undefined ? null : rule.siteUrl.replace(/\/+$/, '');
   const keep = rule.vip === null ? '' : ` Seed ${seedTerms(rule.vip)} to keep it.`;
-  const more = site === null ? '' : ` ${site}/seeding`;
+  const renew = rule.coins ? ` Spend INITcoins to get it back: seeding earns ${rule.coins}.` : keep;
+  const more = site === null ? '' : rule.coins ? ` ${site}/coins` : ` ${site}/seeding`;
   const off = site === null ? '' : `\n-# Turn these messages off at ${site}/account`;
   const body = {
     earned: `You earned **seeder VIP** on the WARDOGS server, thanks for seeding. It lasts until ${until}. The server picks it up at its next restart.${keep}`,
     renewed: `Your **seeder VIP** on the WARDOGS server is renewed until ${until}. Thanks for seeding again.`,
     staff: `Staff gave you **VIP** on the WARDOGS server until ${until}. The server picks it up at its next restart.`,
     bounty: `You ended a long kill streak and earned **VIP** on the WARDOGS server until ${until}. The server picks it up at its next restart.`,
-    expiring: `Your VIP on the WARDOGS server ends <t:${unix(expiresAt ?? 0)}:R>.${keep}${more}`,
-    ended: `Your VIP on the WARDOGS server has ended.${keep}${more}`,
+    bought: `You bought **VIP** on the WARDOGS server with INITcoins. It lasts until ${until}. The server picks it up at its next restart.`,
+    expiring: `Your VIP on the WARDOGS server ends <t:${unix(expiresAt ?? 0)}:R>.${renew}${more}`,
+    ended: `Your VIP on the WARDOGS server has ended.${renew}${more}`,
   }[kind];
   return `${body}${off}`;
 };
@@ -286,7 +289,7 @@ export type AccountView = {
   steam: { linked: boolean; via: 'discord' | 'steam' | null };
   // The page of their linked Steam account, by the public id players have. Null without one, or before they were seen.
   playerId: string | null;
-  vip: { until: number; source: 'seeding' | 'staff' | 'bounty' } | null;
+  vip: { until: number; source: 'seeding' | 'staff' | 'bounty' | 'coins' } | null;
   alerts: boolean;
   // Whether their profile is private, and whether they made it so (staff keep control of what they made private).
   private: { on: boolean; byYou: boolean };
@@ -417,10 +420,10 @@ export const returnDue = (account: Account, lastSeen: string | null, now: number
 
 // The message: the server is seeding with `players` on, how to join (`serverId`, when set), what seeding earns, and how
 // to turn these off.
-export const returnText = (name: string, players: number, rule: Pick<AccountRule, 'siteUrl' | 'vip'> & { serverId: string | undefined }): string => {
+export const returnText = (name: string, players: number, rule: Pick<AccountRule, 'siteUrl' | 'vip' | 'coins'> & { serverId: string | undefined }): string => {
   const site = rule.siteUrl === undefined ? null : rule.siteUrl.replace(/\/+$/, '');
   const join = rule.serverId === undefined ? '' : ` Join by ID: \`${rule.serverId}\`.`;
-  const earn = rule.vip === null ? '' : ` Seed ${seedTerms(rule.vip)} for a VIP whitelist slot.`;
+  const earn = rule.coins ? ` Seeding earns ${rule.coins} INITcoins, which buy a VIP whitelist slot.` : rule.vip === null ? '' : ` Seed ${seedTerms(rule.vip)} for a VIP whitelist slot.`;
   const off = site === null ? '' : `\n-# Turn these messages off at ${site}/account`;
   return `Hey ${playerName(name)}, it's been a while! The WARDOGS server is seeding now with ${players} on. Jump in and help get it live.${join}${earn}${off}`;
 };

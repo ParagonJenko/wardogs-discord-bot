@@ -493,6 +493,30 @@ describe('addVip and removeVip', () => {
     expect(shorter).toMatchObject({ outcome: 'extended', until: NOW + 6 * DAY });
   });
 
+  it('adds whitelist bought with INITcoins to what the player has left', async () => {
+    const rcon = server(editReserved(settings, [ASH], []));
+    const state = { ...empty, granted: { [ASH]: { name: 'Ash', grantedAt: NOW - DAY, expiresAt: NOW + 3 * DAY, source: 'coins' as const } } };
+
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: 7, now: NOW, state, rcon, source: 'coins' });
+
+    expect(result).toMatchObject({ outcome: 'extended', until: NOW + 10 * DAY });
+    expect(result.state.granted[ASH]).toMatchObject({ expiresAt: NOW + 10 * DAY, source: 'coins' });
+    expect(rcon.put).not.toHaveBeenCalled();
+  });
+
+  it('starts bought whitelist from now when the player has none left, and keeps it out of the seeders', async () => {
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: 7, now: NOW, state: empty, rcon: server(), source: 'coins' });
+
+    expect(result.state.granted[ASH]).toEqual({ name: 'Ash', grantedAt: NOW, expiresAt: NOW + 7 * DAY, source: 'coins' });
+    expect(seederVip(result.state, NOW)).toEqual([]);
+  });
+
+  it('gives nothing to a player with a permanent slot, so nothing is charged for', async () => {
+    const result = await addVip({ steamId: ASH, name: 'Ash', days: 7, now: NOW, state: empty, rcon: server(editReserved(settings, [ASH], [])), source: 'coins' });
+
+    expect(result.outcome).toBe('already-reserved');
+  });
+
   it('keeps how a player got VIP when staff extend it', async () => {
     const rcon = server(editReserved(settings, [ASH, BO], []));
     const state = {

@@ -19,7 +19,7 @@ It also posts:
 - **Tags**: a player who linked their Discord account on the website is tagged instead of named: the top seeders on the live
   alert and the players who earn or keep a whitelist slot (both ping them), and the players in a roundup's boards and awards
   (shown as a mention, no ping). A private profile is never named, so never tagged.
-- **What seeding earns** on the seeding alert, when [automatic VIP](#automatic-vip) is on.
+- **What seeding earns** on the seeding alert, when [INITcoins](#initcoins) or [automatic VIP](#automatic-vip) is on.
 - **A match summary** when a match ends, if the server was live during it: map, winning faction and score,
   length, peak population, and the top 5 players by kills with deaths and K/D. With the [kill feed](#weapon-stats)
   (Cloudflare), the game says when a match ends and the final score; without it, the bot works them out from its own
@@ -64,7 +64,7 @@ the public since the season ended on 15 October 2026. It keeps [player records](
 every finished match's full scoreboard, and each player's seeding, play time, kills and deaths. It takes the game's
 kill feed for [weapon stats](#weapon-stats): the weapons people use most, and each player's, and for a
 [live match page](#live-match): the kill feed, streaks and highlights of the match on now, as it happens. It gives
-[automatic VIP](#automatic-vip): seed on 3 days in a week and get a whitelist slot for a week. And it runs the website's
+[INITcoins](#initcoins): earned by seeding, playing and missions, and spent on whitelist days and cosmetics (or, with them off, [automatic VIP](#automatic-vip): seed on 3 days in a week and get a whitelist slot for a week). And it runs the website's
 [staff page](#staff-page): staff sign in with Discord to see possible griefers (team kills, suicides in vehicles),
 [risky Steam accounts](#risky-steam-accounts) (VAC and game bans, new and hidden accounts), the moderation log and the bans
 on the server. And it enforces [weapon rules](#weapon-rules): staff pick weapons the server doesn't allow, such as the
@@ -339,6 +339,9 @@ The Node/Docker version does not serve the season roundup.
 | `/lastmatch`    | Everyone             | The summary of the last finished match, and when it ended; its title links to the match on the website |
 | `/rotation`     | Everyone             | The current map and the next few in the rotation                   |
 | `/roundup`      | Everyone             | The [roundup](#roundups) of last week (default), last month, or this week or month so far |
+| `/coins`        | Everyone, private    | Your [INITcoins](#initcoins): balance, today's and this week's missions, and your whitelist |
+| `/shop`         | Everyone, private    | What INITcoins buy, and what you can afford                        |
+| `/buy`          | Everyone, private    | Spends INITcoins on something from the shop (picked from the list) |
 | `/broadcast`    | Staff only           | Sends a message (up to 200 characters) to everyone in game         |
 | `/seeders`      | Staff only           | Top 25 seeders over the last 7 days (or `days`: 1–90): seed days, minutes, Steam ID and VIP. Not [staff](#staff-steam-accounts) |
 | `/seednow`      | Staff only           | Posts "We're going to try to seed now. Come join!" to the alerts channel and pings the role, with an optional `message` |
@@ -356,6 +359,7 @@ The Node/Docker version does not serve the season roundup.
 | `/vip add`      | Staff only           | Gives a player a whitelist slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
 | `/vip remove`   | Staff only           | Takes a player off the whitelist, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
+| `/coinadmin …`  | Staff only           | [INITcoins](#initcoins): `give` or `take` coins (1–10,000, with a reason that goes in the player's log), `show` what a player has |
 | `/private …`    | Staff only           | [Private profiles](#private-profiles): `add` makes a player's profile private, `remove` makes it public again, `list` shows them |
 | `/circles …`    | Staff only           | [Blocked circles](#blocked-circles): `block` keeps a circle (control zone layout) from map votes, `unblock` allows it again, `list` shows them |
 | `/voteoptions …` | Staff only          | [Vote options](#vote-options): `rain` and `map` switch rain, or a map (such as Zestafona), off or on in map votes, `show` lists what is off |
@@ -1490,7 +1494,7 @@ that is what the outcomes below are for.
 | `discord`      | Server name, member count and online count, refreshed every 10 minutes                 |
 | `thresholds`   | The seeding and live thresholds, so the site can say how many players are needed, and `busy` (`BUSY_THRESHOLD`, default 97): the players from which the server counts as busy |
 | `leaderboard`  | Top 10 by kills, K/D (10+ matches, `kdMinMatches`), time played and seeding, over the last 30 days (UTC). A match counts for anyone seen in it, even for one reading, so K/D needs more than one evening (such as an evening on the mortar) can reach; a shorter period needs its share, never fewer than 3 |
-| `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off |
+| `vip`          | What seeding earns (`seedDays`, `seedMinutes`, `windowDays`, `lengthDays`), or `null` when automatic VIP is off (always, while [INITcoins](#initcoins) are on) |
 | `seederVip`    | Who has VIP from seeding now: each player's `name`, `id` and `until`, the latest to earn it first. Not VIP from staff (`/vip add`), nor [staff](#staff-steam-accounts). `null` when automatic VIP is off |
 | `weapons`      | The top 10 weapons by kills over the last 30 days (UTC), from the [kill feed](#weapon-stats). See below. `null` until the bot has had the feed |
 | `teams`        | Which team wins most over the last 30 days (UTC), overall and on each map, from the bot's match records. See below |
@@ -1774,7 +1778,89 @@ Steam ID, so they are private: `/api/stats` never includes them. Admins can see 
 
 The Node/Docker version does not keep player records.
 
+## INITcoins
+
+INITcoins are the community's currency. Players earn them by **seeding, playing and doing missions**, and spend them on
+**whitelist days** and cosmetics. They replace [automatic VIP](#automatic-vip) (`COINS` `"on"` in `wrangler.jsonc`, the
+default): seeding still gets you into the whitelist, but through the shop, along with everything else. It is Cloudflare
+only. The website explains it all at `/coins` (see the [gaminginit](https://github.com/ParagonJenko/gaminginit) repo), and a
+player sees their own on `/account`.
+
+### How they are earned
+
+Coins go to a Steam ID as it earns them, linked to a Discord account or not, so nobody loses what they earned before they
+linked. [Staff](#staff-steam-accounts) who linked their Steam account earn nothing, as they never count as seeders.
+Spending needs a linked account, as that is how the bot knows who is buying. Every number is a variable in `wrangler.jsonc`.
+
+| What | Pays | Variable |
+| ---- | ---- | -------- |
+| A successful seed (on for more than `VIP_SEED_MINUTES` while the server seeds, and it goes live), once a day | **150** | `COIN_SEED` |
+| Minutes seeding past that, up to 30 a day | 1 per 2 minutes | `COIN_SEED_MINUTES_PER`, `COIN_SEED_MINUTES_CAP` |
+| Time with the server live | 1 per 10 minutes | `COIN_PLAY_MINUTES` |
+| A match played (at least `COIN_PLAYED_LEAST` kills and deaths together, so sitting in one pays nothing) | 6 | `COIN_MATCH` |
+| A match won, on top | 6 | `COIN_WIN` |
+| (those two, for the first matches of the day) | 6 matches | `COIN_MATCHES_PAID` |
+| The most playing, seeding minutes and matches can pay in a day (the seed itself is not counted) | **100** | `COIN_DAILY_CAP` |
+| Missions | below | |
+
+**Missions** are worked out from what the bot already records (the kill feed, match results and seeding), the same for
+everyone. Each day there are three, one easy (10 coins), one medium (15) and one hard (25): for example "Play 2 matches",
+"Win a match" or "Get 12 kills in one match". Each week there are three more, worth 30, 50 and 80: "Play 10 matches", "Win
+5 matches", "Seed the server on 4 days". They are paid the moment they are done, and the player is told by a private message
+in game. "End an enemy kill streak" needs the [streak breaker](#streak-breaker-vip) (`BOUNTY_STREAK`) to be on. A daily mission that isn't done
+can be swapped for another of the same tier for `COIN_REROLL_PRICE` coins, three times a day. The missions are in `src/coins.ts`.
+
+### What they buy
+
+| Item | Price | Variable |
+| ---- | ----- | -------- |
+| Whitelist, 1 day | 100 | `COIN_VIP_DAY_PRICE` |
+| Whitelist, 7 days | 600 | `COIN_VIP_WEEK_PRICE` |
+| A title shown on the player's page: Sprout, Seeder, Grunt, Hound, Wardog, Alpha | 300 to 6,000 | |
+| A Discord role | what you set | `COIN_ROLES`, JSON such as `[{"id":"123456789012345678","name":"Night Owl","price":1500}]` |
+
+Whitelist is added to the days the player has left, and nobody can hold more than `COIN_VIP_AHEAD_DAYS` (14) days at once,
+so it can't be stockpiled. It is given the same way as `/vip add` (see [Automatic VIP](#automatic-vip) for how the server
+changes), shows in the staff page's whitelist as "Bought with INITcoins", ends on time, and the player gets the usual Discord
+message. Players staff took VIP from with `/vip remove` can't buy it back until that block has run out, staff can't buy
+it (they have a staff spot), and a player with a permanent slot is told there is nothing to buy and charged nothing. A purchase is paid for
+first and given back if it can't be delivered. A role needs the bot's role above it and `DISCORD_BOT_TOKEN`, and the player in the Discord server; buying
+a role you already have gives it back for nothing.
+
+### The balance
+
+Seeding is what the server needs most, so it pays most per hour. Playing and missions pay a little, with a cap, so the
+whitelist can't be had by grinding:
+
+- A week of whitelist (600) is about **4 seeds**, or 3 seeds and a few evenings of play: the old way, seeding on 3 days a
+  week, still keeps a seeder in VIP. A player who only plays, a few hours on 4 days a week, earns about 500 a week with missions.
+- A player at the caps (everything, every day) earns about 100 a day from playing, 50 from missions and 150 from a seed. What
+  they have over the whitelist ceiling goes on titles and roles.
+- The test `balance` in `test/coins.test.ts` checks these two stay true, so a change to the numbers that breaks them fails the build.
+
+### Moving from automatic VIP
+
+The first check after `COINS` is turned on pays every player the coins for their seed days in the last 14 days (150 each), once, so
+seeders can keep their whitelist by buying it. VIP the bot already gave runs out on its own date. Turning `COINS` off brings
+automatic VIP back; coins already earned are kept.
+
+### Staff
+
+`/coinadmin give`, `take` and `show` (see [Slash commands](#slash-commands)). A player's log (their last 30 changes, with the
+reason and who) is kept with their coins. Coins are in the Durable Object's storage as `coin:<Steam ID>`, one value per player.
+
+### API
+
+`GET /api/coins` (public, cached): how they work, today's missions, the 20 players who have earned most (never a private
+profile), and the totals. 404 while `COINS` is off. For a signed-in player: `GET /api/account/coins` (balance, missions with
+progress, the shop with what they can afford, their log) and `POST /api/account/coins` with `{"action":"buy","item":"vip-7"}`,
+`{"action":"reroll","slot":0}` or `{"action":"title","id":"title-grunt"}` (`null` hides it). A player's page, `GET /api/player`,
+has their `title`.
+
 ## Automatic VIP
+
+With [INITcoins](#initcoins) on (the default), seeding earns coins instead and none of this gives VIP; staff-given VIP and
+the streak breaker still work. What follows is how it works with `COINS` `"off"`.
 
 Players who seed get a whitelist slot, so they skip the queue when the server is full:
 
@@ -1978,7 +2064,8 @@ While the server seeds, the bot broadcasts a seeding message in game every 5 min
 | VIP and website                     | Message                                                                       |
 | ----------------------------------- | ----------------------------------------------------------------------------- |
 | Automatic VIP on, `SITE_URL` set    | Seeding! 15 more players and we're live. Seed over 10 min on 3 days in a week for free VIP: gaminginit.com/seeding |
-| Automatic VIP off, `SITE_URL` set   | Seeding! 15 more players and we're live. Top seeders make the leaderboard: gaminginit.com |
+| [INITcoins](#initcoins) on, `SITE_URL` set | Seeding! 15 more players and we're live. Seed to earn 150 INITcoins for whitelist days: gaminginit.com/coins |
+| Both off, `SITE_URL` set            | Seeding! 15 more players and we're live. Top seeders make the leaderboard: gaminginit.com |
 | Neither                             | Seeding! 15 more players and we're live. Thanks for seeding! |
 
 - **When someone joins:** 30 seconds after they join, so they have loaded in to see it. When several join close
