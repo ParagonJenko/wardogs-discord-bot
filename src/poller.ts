@@ -467,7 +467,7 @@ export const createPoller = ({
   // One that fails is not tried again. Gives back the lines used lately.
   const thankSeeders = async (credits: SeedCredit[], players: Player[], staffIds: ReadonlySet<string>, wording: Lines, recent: Recent) => {
     if (credits.length === 0 || config.seedingMessages === null || messagePlayer === undefined) return recent;
-    const sent = seederThanks(credits, new Set(steamIds(players)), staffIds, config.seedMinutes, random, wording, recent, config.coins === null ? undefined : { siteHost: config.seedingMessages.siteHost, seed: config.coins.seed });
+    const sent = seederThanks(credits, new Set(steamIds(players)), staffIds, config.seedMinutes, random, wording, recent, config.coins === null || config.seedingMessages.siteHost === null ? undefined : { siteHost: config.seedingMessages.siteHost });
     for (const { steamId, name, text } of sent.messages) {
       const who = `${JSON.stringify(name)} (${steamId})`;
       try {

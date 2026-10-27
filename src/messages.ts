@@ -363,10 +363,6 @@ export const MAX_SEEDER_THANKS = 15;
 // A short pointer to the coins page, for a message with no link of its own.
 export const coinsCall = (siteHost: string): string => `Earn INITcoins: ${siteHost}/coins`;
 
-// The end of a seeder's thanks with INITcoins on: "+150 INITcoins for whitelist: gaminginit.com/coins".
-export const seedCoinsCall = (seed: number, siteHost: string | null): string =>
-  siteHost ? `+${seed} INITcoins, spend them: ${siteHost}/coins` : `+${seed} INITcoins.`;
-
 export type SeederThanks = { steamId: string; name: string; text: string };
 
 // The thanks to each seeder still in game (`online`) the moment the server goes live, by name: those on for more than
@@ -379,8 +375,8 @@ export const seederThanks = (
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
   recent: Recent = {},
-  // With INITcoins on: the website, and what a seed pays, so each thanks says what they earned and where to spend it.
-  coins?: { siteHost: string | null; seed: number },
+  // With INITcoins on: the website, so each thanks ends with where to earn them. (Not what this seed paid: a seed pays once a day.)
+  coins?: { siteHost: string },
 ): { messages: SeederThanks[]; recent: Recent } => {
   let lately = recent;
   const messages: SeederThanks[] = [];
@@ -392,7 +388,7 @@ export const seederThanks = (
   for (const c of thanked) {
     const pick = pickLine('seederThanks', lines.seederThanks, { name: nameOf(c.name), minutes: minutesText(c.minutes) }, random, lately);
     lately = remember(lately, pick);
-    messages.push({ steamId: c.steamId, name: c.name, text: coins ? fitWithCall(pick.text, seedCoinsCall(coins.seed, coins.siteHost)) : fit(pick.text) });
+    messages.push({ steamId: c.steamId, name: c.name, text: coins ? fitWithCall(pick.text, coinsCall(coins.siteHost)) : fit(pick.text) });
   }
   return { messages, recent: lately };
 };

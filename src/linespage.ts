@@ -142,15 +142,15 @@ export const LISTS: ListDefinition[] = [
     id: 'seederThanks',
     group: 'Seeding',
     name: 'Thanks when live',
-    note: 'A private message to each seeder still in game the moment the server goes live: those on long enough for the seed to count (VIP_SEED_MINUTES), not staff, at most 15. {minutes} is how long they seeded. The line is the whole message.',
+    note: 'A private message to each seeder still in game the moment the server goes live: those on long enough for the seed to count (VIP_SEED_MINUTES), not staff, at most 15. {minutes} is how long they seeded. With INITcoins on, a pointer to them goes after the line.',
     kind: 'seeding',
     get: (lines) => lines.seederThanks,
     set: (lines, seederThanks) => ({ ...lines, seederThanks }),
-    frame: () => ({
+    frame: (context) => ({
       values: { ...nameValues.values, minutes: minutesText(25) },
       longest: { ...nameValues.longest, minutes: minutesText(9999) },
       before: '',
-      after: '',
+      after: context.coins && context.siteHost !== null ? ` ${coinsCall(context.siteHost)}` : '',
     }),
   },
   {

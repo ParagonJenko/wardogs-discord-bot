@@ -365,10 +365,10 @@ describe('seederThanks', () => {
     expect(recent['seederThanks']).toHaveLength(2);
   });
 
-  it('says what a seed earned and where to spend it, when INITcoins are on', () => {
-    const [thanks] = seederThanks([credit('a', 40)], new Set(['a']), new Set(), 10, () => 0, undefined, {}, { siteHost: 'gaminginit.com', seed: 150 }).messages;
+  it('ends with a pointer to INITcoins, when they are on', () => {
+    const [thanks] = seederThanks([credit('a', 40)], new Set(['a']), new Set(), 10, () => 0, undefined, {}, { siteHost: 'gaminginit.com' }).messages;
 
-    expect(thanks?.text.endsWith('+150 INITcoins, spend them: gaminginit.com/coins')).toBe(true);
+    expect(thanks?.text.endsWith('Earn INITcoins: gaminginit.com/coins')).toBe(true);
     expect((thanks?.text ?? '').length).toBeLessThanOrEqual(200);
   });
 
