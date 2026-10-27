@@ -658,8 +658,8 @@ describe('INITcoins in workerd', { timeout: 30_000 }, () => {
             SITE_URL: SITE,
             DISCORD_INVITE: '',
             ROUNDUPS: 'off',
-            COINS: 'on',
-            COIN_ROLES: '[{"id":"100000000000000077","name":"Night Owl","price":1500}]',
+            // One variable: the free plan allows 64 variables and secrets in all.
+            COINS: '{"roles":[{"id":"100000000000000077","name":"Night Owl","price":1500}]}',
           },
           secrets: {
             RCON_URL: rcon.url,

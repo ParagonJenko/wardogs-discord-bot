@@ -300,6 +300,7 @@ describe('INITcoins', () => {
   it('are off by default, and leave automatic VIP as it was', () => {
     expect(loadConfig(required).coins).toBeNull();
     expect(loadConfig({ ...required, VIP_SEED_DAYS: '3' }).vip).not.toBeNull();
+    expect(loadConfig({ ...required, COINS: 'off' }).coins).toBeNull();
   });
 
   it('replace automatic VIP when on, with the default rates', () => {
@@ -308,11 +309,41 @@ describe('INITcoins', () => {
     expect(config.coins).toMatchObject({ seed: 150, vipWeekPrice: 600, vipAheadDays: 14, streaks: true, roles: [] });
   });
 
-  it('read the roles for sale, and refuse ones that are not JSON', () => {
+  it('take JSON in the same variable to change a rate or sell roles, and leave the rest as they were', () => {
     const roles = '[{"id":"123456789012345678","name":"Night Owl","price":1500}]';
-    expect(loadConfig({ ...required, COINS: 'on', COIN_ROLES: roles }).coins?.roles).toEqual([
-      { id: '123456789012345678', name: 'Night Owl', price: 1500 },
-    ]);
-    expect(() => loadConfig({ ...required, COINS: 'on', COIN_ROLES: 'night owl' })).toThrow(/COIN_ROLES/);
+    const config = loadConfig({ ...required, COINS: `{"seed":100,"playMinutes":15,"roles":${roles}}` });
+    expect(config.vip).toBeNull();
+    expect(config.coins).toMatchObject({
+      seed: 100,
+      playMinutesPer: 15,
+      vipWeekPrice: 600,
+      roles: [{ id: '123456789012345678', name: 'Night Owl', price: 1500 }],
+    });
+    expect(loadConfig({ ...required, COINS: '{}' }).coins).toMatchObject({ seed: 150 });
+  });
+
+  it('refuse what it cannot read, naming what is wrong', () => {
+    expect(() => loadConfig({ ...required, COINS: 'yes please' })).toThrow(/COINS/);
+    expect(() => loadConfig({ ...required, COINS: '{"seed":-5}' })).toThrow(/seed/);
+    expect(() => loadConfig({ ...required, COINS: '{"sead":150}' })).toThrow(/COINS/);
+    expect(() => loadConfig({ ...required, COINS: '{"roles":[{"id":"x","name":"a","price":1}]}' })).toThrow(/roles/);
+  });
+
+  it('keep the seeding message to what a seed pays', () => {
+    expect(loadConfig({ ...required, COINS: 'on', SEEDING_MESSAGE_MINUTES: '5' }).seedingMessages).toMatchObject({ coins: 150 });
+  });
+});
+
+describe('wrangler.jsonc', () => {
+  // A Worker on Cloudflare's free plan can have only 64 variables and secrets together, and a deploy over it fails. The secrets
+  // are set in the dashboard (11 when this was written, from the README), so the file itself must stay at 52 or fewer. Settings
+  // that come in groups, like INITcoins', go in one JSON variable.
+  it('keeps its variables to a number the free plan can carry beside the secrets', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const text = (await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8')).replace(/^\s*\/\/.*$/gm, '');
+    const vars = JSON.parse(text).vars as Record<string, string>;
+    expect(Object.keys(vars).length).toBeLessThanOrEqual(52);
+    // And it is a COINS the bot can read.
+    expect(() => loadConfig({ ...required, ...vars })).not.toThrow();
   });
 });

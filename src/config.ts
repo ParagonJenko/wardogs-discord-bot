@@ -45,6 +45,36 @@ const isTimeZone = (name: string): boolean => {
   }
 };
 
+const coinInt = (fallback: number, least = 0, most?: number) => {
+  const base = z.number().int().min(least);
+  return (most === undefined ? base : base.max(most)).default(fallback);
+};
+
+// What COINS can say when it is JSON: every key is optional, and what is left out is the default.
+// `seed` is paid for a successful seed and `seedMinutes*` for the minutes past the least; `playMinutes` is minutes for 1 coin;
+// `match` and `win` are paid for the first `matchesPaid` matches of the day; `dailyCap` is the most those and seeding minutes
+// pay in a day; `playedLeast` is kills and deaths together for a match to count; `roles` are Discord roles for sale, which need
+// DISCORD_BOT_TOKEN and the bot's own role above them.
+const CoinSettingsSchema = z
+  .object({
+    seed: coinInt(150),
+    seedMinutesPer: coinInt(2),
+    seedMinutesCap: coinInt(30),
+    playMinutes: coinInt(10),
+    match: coinInt(6),
+    win: coinInt(6),
+    matchesPaid: coinInt(6),
+    dailyCap: coinInt(100),
+    playedLeast: coinInt(3),
+    vipDayPrice: coinInt(100, 1),
+    vipWeekPrice: coinInt(600, 1),
+    vipAheadDays: coinInt(14, 1, 60),
+    rerollPrice: coinInt(40),
+    roles: z.array(z.object({ id: numericId, name: z.string().trim().min(1).max(40), price: z.number().int().min(1) })).max(20).default([]),
+  })
+  .strict();
+type CoinSettings = z.infer<typeof CoinSettingsSchema>;
+
 const EnvSchema = z
   .object({
     RCON_URL: rconUrl,
@@ -113,43 +143,29 @@ const EnvSchema = z
     // Tell the whole server in game who has a bounty (a player reaching BOUNTY_STREAK kills) and who ended it.
     BOUNTY_ANNOUNCE: z.enum(['on', 'off']).default('on'),
     // INITcoins (see coins.ts): earned by seeding, playing and missions, spent on whitelist days and cosmetics. "on" replaces
-    // automatic seeder VIP (VIP_SEED_DAYS and VIP_MODE stop giving it); "off" leaves things as they were. Every rate and price
-    // can be changed: the defaults are balanced against each other, see the README.
-    COINS: z.enum(['on', 'off']).default('off'),
-    COIN_SEED: z.coerce.number().int().min(0).default(150),
-    COIN_SEED_MINUTES_PER: z.coerce.number().int().min(0).default(2),
-    COIN_SEED_MINUTES_CAP: z.coerce.number().int().min(0).default(30),
-    COIN_PLAY_MINUTES: z.coerce.number().int().min(0).default(10),
-    COIN_MATCH: z.coerce.number().int().min(0).default(6),
-    COIN_WIN: z.coerce.number().int().min(0).default(6),
-    COIN_MATCHES_PAID: z.coerce.number().int().min(0).default(6),
-    COIN_DAILY_CAP: z.coerce.number().int().min(0).default(100),
-    COIN_VIP_DAY_PRICE: z.coerce.number().int().min(1).default(100),
-    COIN_VIP_WEEK_PRICE: z.coerce.number().int().min(1).default(600),
-    COIN_VIP_AHEAD_DAYS: z.coerce.number().int().min(1).max(60).default(14),
-    COIN_REROLL_PRICE: z.coerce.number().int().min(0).default(40),
-    // Kills and deaths together for a match to count as played for coins.
-    COIN_PLAYED_LEAST: z.coerce.number().int().min(0).default(3),
-    // Discord roles for sale, as JSON: [{"id":"123456789012345678","name":"Night Owl","price":1500}]. Needs DISCORD_BOT_TOKEN, and the
-    // bot's own role above them. Leave out for none.
-    COIN_ROLES: z
+    // automatic seeder VIP (VIP_SEED_DAYS and VIP_MODE stop giving it); "off" leaves things as they were. To change a rate or
+    // price, or to sell Discord roles, put JSON in its place (it means "on"): see CoinSettingsSchema. It is one variable
+    // because a Worker on the free plan can have only 64 variables and secrets between them. The defaults are balanced against
+    // each other: see the README.
+    COINS: z
       .string()
-      .optional()
-      .transform((text, ctx): { id: string; name: string; price: number }[] => {
-        if (text === undefined || text.trim() === '') return [];
-        const parsed = z
-          .array(z.object({ id: numericId, name: z.string().trim().min(1).max(40), price: z.number().int().min(1) }))
-          .max(20)
-          .safeParse((() => {
-            try {
-              return JSON.parse(text);
-            } catch {
-              return null;
-            }
-          })());
+      .trim()
+      .default('off')
+      .transform((text, ctx): CoinSettings | null => {
+        if (text === '' || text === 'off') return null;
+        let raw: unknown = {};
+        if (text !== 'on') {
+          try {
+            raw = JSON.parse(text);
+          } catch {
+            ctx.addIssue({ code: 'custom', message: 'must be "on", "off", or JSON such as {"seed":150,"vipWeekPrice":600}' });
+            return null;
+          }
+        }
+        const parsed = CoinSettingsSchema.safeParse(raw);
         if (!parsed.success) {
-          ctx.addIssue({ code: 'custom', message: 'must be JSON like [{"id":"123456789012345678","name":"Night Owl","price":1500}]' });
-          return [];
+          for (const issue of parsed.error.issues) ctx.addIssue({ code: 'custom', message: `${issue.path.join('.') || 'COINS'}: ${issue.message}` });
+          return null;
         }
         return parsed.data;
       }),
@@ -345,27 +361,27 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     busyThreshold: e.BUSY_THRESHOLD,
     scoreToWin: e.SCORE_TO_WIN,
     seedMinutes: e.VIP_SEED_MINUTES,
-    vip: e.COINS === 'on' ? null : vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
+    vip: e.COINS !== null ? null : vipRule(e.VIP_MODE, e.VIP_SEED_DAYS, e.VIP_SEED_MINUTES),
     coins:
-      e.COINS === 'on'
-        ? {
-            seed: e.COIN_SEED,
-            seedMinutesPer: e.COIN_SEED_MINUTES_PER,
-            seedMinutesCap: e.COIN_SEED_MINUTES_CAP,
-            playMinutesPer: e.COIN_PLAY_MINUTES,
-            match: e.COIN_MATCH,
-            win: e.COIN_WIN,
-            matchesPaid: e.COIN_MATCHES_PAID,
-            activityCap: e.COIN_DAILY_CAP,
-            vipDayPrice: e.COIN_VIP_DAY_PRICE,
-            vipWeekPrice: e.COIN_VIP_WEEK_PRICE,
-            vipAheadDays: e.COIN_VIP_AHEAD_DAYS,
-            rerollPrice: e.COIN_REROLL_PRICE,
-            roles: e.COIN_ROLES,
+      e.COINS === null
+        ? null
+        : {
+            seed: e.COINS.seed,
+            seedMinutesPer: e.COINS.seedMinutesPer,
+            seedMinutesCap: e.COINS.seedMinutesCap,
+            playMinutesPer: e.COINS.playMinutes,
+            match: e.COINS.match,
+            win: e.COINS.win,
+            matchesPaid: e.COINS.matchesPaid,
+            activityCap: e.COINS.dailyCap,
+            vipDayPrice: e.COINS.vipDayPrice,
+            vipWeekPrice: e.COINS.vipWeekPrice,
+            vipAheadDays: e.COINS.vipAheadDays,
+            rerollPrice: e.COINS.rerollPrice,
+            roles: e.COINS.roles,
             streaks: e.BOUNTY_STREAK > 0,
-            playedLeast: e.COIN_PLAYED_LEAST,
-          }
-        : null,
+            playedLeast: e.COINS.playedLeast,
+          },
     bounty: e.BOUNTY_STREAK > 0 ? { streak: e.BOUNTY_STREAK, days: e.BOUNTY_VIP_DAYS, announce: e.BOUNTY_ANNOUNCE === 'on' } : null,
     matchMessages:
       e.MATCH_MESSAGES === 'on' && e.SITE_URL
@@ -380,7 +396,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
         ? {
             everyMs: e.SEEDING_MESSAGE_MINUTES * 60_000,
             siteHost: e.SITE_URL ? new URL(e.SITE_URL).host : null,
-            ...(e.COINS === 'on' ? { coins: e.COIN_SEED } : {}),
+            ...(e.COINS === null ? {} : { coins: e.COINS.seed }),
           }
         : null,
     welcomeMessages:
