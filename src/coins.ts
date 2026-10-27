@@ -41,13 +41,33 @@ export type CoinRule = {
   streaks: boolean;
   // The least kills and deaths together for a match to count as played, so sitting in a match earns nothing.
   playedLeast: number;
+  // Whether the bot takes the kill feed (KILL_FEED_TOKEN), which the headshot, streak and weapon missions need.
+  feed?: boolean;
+  // The day's and the week's lesser-used weapon, for the weapon missions; null when there is none to ask for.
+  weapons?: { day: WeaponPick; week: WeaponPick } | null;
 };
+
+// A weapon named by its tag in the kill feed (such as Id.Item.AK74M), with the name players know it by.
+export type WeaponPick = { tag: string; name: string };
 
 export const MISSION_REROLLS_PER_DAY = 3;
 
 // ---- Missions ----
 
-export type Metric = 'kills' | 'matches' | 'wins' | 'minutes' | 'bestKills' | 'breaks' | 'seeded' | 'seedDays' | 'activeDays';
+export type Metric =
+  | 'kills'
+  | 'matches'
+  | 'wins'
+  | 'minutes'
+  | 'bestKills'
+  | 'breaks'
+  | 'seeded'
+  | 'seedDays'
+  | 'activeDays'
+  | 'headshots'
+  | 'bestStreak'
+  | 'weaponKills'
+  | 'weaponHeads';
 export type Scope = 'day' | 'week';
 export type Tier = 0 | 1 | 2;
 
@@ -59,11 +79,13 @@ export type Mission = {
   metric: Metric;
   target: number;
   reward: number;
-  // Needs the kill streak bounty to be on.
-  streaks?: true;
-};
+} & Needs;
 
-const day = (id: string, tier: Tier, text: string, metric: Metric, target: number, reward: number, streaks?: true): Mission => ({
+// What a mission needs from the server: the kill streak bounty, the kill feed, or a lesser-used weapon to ask for ({weapon} in
+// its text is that weapon's name).
+type Needs = { streaks?: true; feed?: true; weapon?: true };
+
+const day = (id: string, tier: Tier, text: string, metric: Metric, target: number, reward: number, needs: Needs = {}): Mission => ({
   id,
   scope: 'day',
   tier,
@@ -71,9 +93,9 @@ const day = (id: string, tier: Tier, text: string, metric: Metric, target: numbe
   metric,
   target,
   reward,
-  ...(streaks ? { streaks } : {}),
+  ...needs,
 });
-const week = (id: string, tier: Tier, text: string, metric: Metric, target: number, reward: number): Mission => ({
+const week = (id: string, tier: Tier, text: string, metric: Metric, target: number, reward: number, needs: Needs = {}): Mission => ({
   id,
   scope: 'week',
   tier,
@@ -81,6 +103,7 @@ const week = (id: string, tier: Tier, text: string, metric: Metric, target: numb
   metric,
   target,
   reward,
+  ...needs,
 });
 
 // Three a day, one of each tier, the same for everyone: easy 10, medium 15, hard 25. Three a week: 30, 50, 80.
@@ -93,7 +116,14 @@ export const MISSIONS: Mission[] = [
   day('d-play-4', 1, 'Play 4 matches', 'matches', 4, 15),
   day('d-best-12', 2, 'Get 12 kills in one match', 'bestKills', 12, 25),
   day('d-win-2', 2, 'Win 2 matches', 'wins', 2, 25),
-  day('d-streak-end', 2, 'End an enemy bounty (a long kill streak)', 'breaks', 1, 25, true),
+  day('d-streak-end', 2, 'End an enemy bounty (a long kill streak)', 'breaks', 1, 25, { streaks: true }),
+  day('d-weapon-3', 1, 'Get 3 kills with the {weapon}', 'weaponKills', 3, 15, { weapon: true }),
+  day('d-heads-5', 1, 'Get 5 headshots', 'headshots', 5, 15, { feed: true }),
+  day('d-streak-4', 1, 'Get a 4-kill streak', 'bestStreak', 4, 15, { feed: true }),
+  day('d-heads-10', 2, 'Get 10 headshots', 'headshots', 10, 25, { feed: true }),
+  day('d-streak-7', 2, 'Get a 7-kill streak', 'bestStreak', 7, 25, { feed: true }),
+  day('d-weapon-6', 2, 'Get 6 kills with the {weapon}', 'weaponKills', 6, 25, { weapon: true }),
+  day('d-weaponhead-3', 2, 'Get 3 headshots with the {weapon}', 'weaponHeads', 3, 25, { weapon: true }),
   week('w-play-10', 0, 'Play 10 matches', 'matches', 10, 30),
   week('w-days-3', 0, 'Play on 3 different days', 'activeDays', 3, 30),
   week('w-seed-2', 0, 'Seed the server on 2 days', 'seedDays', 2, 30),
@@ -103,25 +133,38 @@ export const MISSIONS: Mission[] = [
   week('w-seed-4', 2, 'Seed the server on 4 days', 'seedDays', 4, 80),
   week('w-win-8', 2, 'Win 8 matches', 'wins', 8, 80),
   week('w-kills-300', 2, 'Get 300 kills', 'kills', 300, 80),
+  week('w-heads-30', 1, 'Get 30 headshots', 'headshots', 30, 50, { feed: true }),
+  week('w-streak-6', 1, 'Get a 6-kill streak', 'bestStreak', 6, 50, { feed: true }),
+  week('w-weapon-15', 1, 'Get 15 kills with the {weapon}', 'weaponKills', 15, 50, { weapon: true }),
+  week('w-heads-75', 2, 'Get 75 headshots', 'headshots', 75, 80, { feed: true }),
+  week('w-streak-10', 2, 'Get a 10-kill streak', 'bestStreak', 10, 80, { feed: true }),
+  week('w-weaponhead-10', 2, 'Get 10 headshots with the {weapon}', 'weaponHeads', 10, 80, { weapon: true }),
 ];
 
 export const missionById = (id: string): Mission | undefined => MISSIONS.find((m) => m.id === id);
 
-const hash = (text: string): number => {
+export const hash = (text: string): number => {
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
   return h >>> 0;
 };
 
-const available = (m: Mission, rule: Pick<CoinRule, 'streaks'>): boolean => m.streaks !== true || rule.streaks;
-const poolOf = (scope: Scope, tier: Tier, rule: Pick<CoinRule, 'streaks'>): Mission[] =>
+type MissionRule = Pick<CoinRule, 'streaks' | 'feed' | 'weapons'>;
+
+const available = (m: Mission, rule: MissionRule): boolean =>
+  (m.streaks !== true || rule.streaks) && (m.feed !== true || rule.feed === true) && (m.weapon !== true || (rule.feed === true && rule.weapons != null));
+const poolOf = (scope: Scope, tier: Tier, rule: MissionRule): Mission[] =>
   MISSIONS.filter((m) => m.scope === scope && m.tier === tier && available(m, rule));
 
+// The mission with the name of its weapon in its text.
+const resolved = (m: Mission, rule: Pick<CoinRule, 'weapons'>): Mission =>
+  m.weapon === true && rule.weapons != null ? { ...m, text: m.text.replace('{weapon}', rule.weapons[m.scope].name) } : m;
+
 // The day's (or week's) three missions, easiest first. `key` is the UTC date, or the date of the week's Monday.
-export const missionsFor = (scope: Scope, key: string, rule: Pick<CoinRule, 'streaks'>): Mission[] =>
+export const missionsFor = (scope: Scope, key: string, rule: MissionRule): Mission[] =>
   ([0, 1, 2] as const).flatMap((tier) => {
     const pool = poolOf(scope, tier, rule);
-    return pool.length === 0 ? [] : [pool[hash(`${scope}:${key}:${tier}`) % pool.length] as Mission];
+    return pool.length === 0 ? [] : [resolved(pool[hash(`${scope}:${key}:${tier}`) % pool.length] as Mission, rule)];
   });
 
 // ---- Titles and the shop ----
@@ -153,8 +196,10 @@ export const titleName = (id: string | null): string | null => TITLES.find((t) =
 
 // ---- Accounts ----
 
-export type Metrics = { kills: number; matches: number; wins: number; minutes: number; bestKills: number; breaks: number; seeded: number };
-export type WeekMetrics = { kills: number; matches: number; wins: number; seedDays: number; activeDays: number };
+// `weaponKills` and `weaponHeads` are with the day's (or the week's) lesser-used weapon; `bestStreak` the longest kill streak.
+type Feed = { headshots: number; bestStreak: number; weaponKills: number; weaponHeads: number };
+export type Metrics = Feed & { kills: number; matches: number; wins: number; minutes: number; bestKills: number; breaks: number; seeded: number };
+export type WeekMetrics = Feed & { kills: number; matches: number; wins: number; seedDays: number; activeDays: number };
 
 export type Why = 'seed' | 'seed-time' | 'play' | 'match' | 'win' | 'mission' | 'migrate' | 'staff' | 'buy' | 'reroll';
 export type Tx = { at: number; delta: number; why: Why; note?: string };
@@ -194,8 +239,9 @@ export const coinKey = (steamId: string): string => `${COIN_PREFIX}${steamId}`;
 const LOG_KEPT = 30;
 const KEYS_KEPT = 80;
 
-const blankMetrics = (): Metrics => ({ kills: 0, matches: 0, wins: 0, minutes: 0, bestKills: 0, breaks: 0, seeded: 0 });
-const blankWeekMetrics = (): WeekMetrics => ({ kills: 0, matches: 0, wins: 0, seedDays: 0, activeDays: 0 });
+const blankFeed = (): Feed => ({ headshots: 0, bestStreak: 0, weaponKills: 0, weaponHeads: 0 });
+const blankMetrics = (): Metrics => ({ kills: 0, matches: 0, wins: 0, minutes: 0, bestKills: 0, breaks: 0, seeded: 0, ...blankFeed() });
+const blankWeekMetrics = (): WeekMetrics => ({ kills: 0, matches: 0, wins: 0, seedDays: 0, activeDays: 0, ...blankFeed() });
 
 export const weekOf = (at: number): string => {
   const behind = (new Date(at).getUTCDay() + 6) % 7;
@@ -220,8 +266,9 @@ export const blankAccount = (name: string, now: number): CoinAccount => ({
 });
 
 const num = z.number().default(0);
-const MetricsSchema = z.object({ kills: num, matches: num, wins: num, minutes: num, bestKills: num, breaks: num, seeded: num }).default(blankMetrics());
-const WeekMetricsSchema = z.object({ kills: num, matches: num, wins: num, seedDays: num, activeDays: num }).default(blankWeekMetrics());
+const FeedSchema = { headshots: num, bestStreak: num, weaponKills: num, weaponHeads: num };
+const MetricsSchema = z.object({ kills: num, matches: num, wins: num, minutes: num, bestKills: num, breaks: num, seeded: num, ...FeedSchema }).default(blankMetrics());
+const WeekMetricsSchema = z.object({ kills: num, matches: num, wins: num, seedDays: num, activeDays: num, ...FeedSchema }).default(blankWeekMetrics());
 const WHY = ['seed', 'seed-time', 'play', 'match', 'win', 'mission', 'migrate', 'staff', 'buy', 'reroll'] as const;
 
 const AccountSchema = z.object({
@@ -304,17 +351,16 @@ const remember = (account: CoinAccount, key: string): CoinAccount =>
 // ---- Missions: what a player has done, and when it pays ----
 
 // The day's three missions for this account: the day's own, with any the player swapped.
-export const dayMissions = (account: CoinAccount, rule: Pick<CoinRule, 'streaks'>): Mission[] =>
-  missionsFor('day', account.day.day, rule).map((m, slot) => missionById(account.day.swaps[String(slot)] ?? '') ?? m);
+export const dayMissions = (account: CoinAccount, rule: MissionRule): Mission[] =>
+  missionsFor('day', account.day.day, rule).map((m, slot) => {
+    const swapped = missionById(account.day.swaps[String(slot)] ?? '');
+    return swapped === undefined ? m : resolved(swapped, rule);
+  });
 
-export const weekMissions = (account: CoinAccount, rule: Pick<CoinRule, 'streaks'>): Mission[] => missionsFor('week', account.week.week, rule);
+export const weekMissions = (account: CoinAccount, rule: MissionRule): Mission[] => missionsFor('week', account.week.week, rule);
 
-const valueOf = (account: CoinAccount, m: Mission): number => {
-  if (m.scope === 'day') return m.metric === 'seedDays' || m.metric === 'activeDays' ? 0 : account.day.m[m.metric as keyof Metrics];
-  return m.metric === 'bestKills' || m.metric === 'breaks' || m.metric === 'minutes' || m.metric === 'seeded'
-    ? 0
-    : account.week.m[m.metric as keyof WeekMetrics];
-};
+// A metric the day (or the week) doesn't keep counts as 0.
+const valueOf = (account: CoinAccount, m: Mission): number => ((m.scope === 'day' ? account.day.m : account.week.m) as Record<string, number>)[m.metric] ?? 0;
 
 export type Completed = { mission: Mission; paid: number };
 
@@ -359,6 +405,29 @@ export const onSeed = (account: CoinAccount, minutes: number, least: number, at:
   const extra = rule.seedMinutesPer > 0 ? Math.min(rule.seedMinutesCap, Math.max(0, Math.floor((minutes - least) / rule.seedMinutesPer))) : 0;
   const bonus = credit(remember(base.account, `seed:${today}`), { key: `seed-time:${today}`, amount: extra, why: 'seed-time', capped: true }, now, rule);
   return finish(bonus.account, base.paid + bonus.paid, now, rule);
+};
+
+// What a player did with the kill feed since they were last paid for it: kills on the other side (never a team kill), how many
+// were headshots, their longest streak, and the kills and headshots with the day's and the week's lesser-used weapon.
+export type KillTally = { kills: number; headshots: number; streak: number; dayWeapon: number; dayWeaponHeads: number; weekWeapon: number; weekWeaponHeads: number };
+
+export const onKills = (account: CoinAccount, t: KillTally, at: number, rule: CoinRule): Earned => {
+  const now = clock(account, at);
+  const a = withActiveDay(rolled(account, now), dayOf(now));
+  const d = a.day.m;
+  const w = a.week.m;
+  const next = {
+    ...a,
+    day: {
+      ...a.day,
+      m: { ...d, headshots: d.headshots + t.headshots, bestStreak: Math.max(d.bestStreak, t.streak), weaponKills: d.weaponKills + t.dayWeapon, weaponHeads: d.weaponHeads + t.dayWeaponHeads },
+    },
+    week: {
+      ...a.week,
+      m: { ...w, headshots: w.headshots + t.headshots, bestStreak: Math.max(w.bestStreak, t.streak), weaponKills: w.weaponKills + t.weekWeapon, weaponHeads: w.weaponHeads + t.weekWeaponHeads },
+    },
+  };
+  return finish(touch(next, now), 0, now, rule);
 };
 
 // `minutes` more with the server live.
@@ -444,7 +513,7 @@ export const reroll = (account: CoinAccount, slot: number, now: number, rule: Co
   if (a.balance < rule.rerollPrice) return { ok: false, reason: `Swapping costs ${rule.rerollPrice} INITcoins.` };
   const spent = debit(a, rule.rerollPrice, 'reroll', current.text, now);
   const next = { ...spent, day: { ...spent.day, swaps: { ...spent.day.swaps, [String(slot)]: pick.id }, rerolls: spent.day.rerolls + 1 } };
-  return { ok: true, account: settle(next, now, rule).account, mission: pick };
+  return { ok: true, account: settle(next, now, rule).account, mission: resolved(pick, rule) };
 };
 
 // ---- Spending ----

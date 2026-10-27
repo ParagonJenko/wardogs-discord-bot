@@ -11,6 +11,7 @@ import {
   migrationGrant,
   missionsFor,
   onBreak,
+  onKills,
   onMatch,
   onPlay,
   onSeed,
@@ -165,6 +166,60 @@ describe('kill streaks', () => {
     const a = onBreak(blankAccount('Ash', NOW), 'e1', NOW, rule).account;
     expect(onBreak(a, 'e1', NOW, rule).account.day.m.breaks).toBe(1);
     expect(onBreak(a, 'e2', NOW, rule).account.day.m.breaks).toBe(2);
+  });
+});
+
+describe('kill feed missions', () => {
+  const feed: CoinRule = { ...rule, feed: true, weapons: { day: { tag: 'Id.Item.Mosin', name: 'Mosin Nagant' }, week: { tag: 'Id.Item.MP5', name: 'MP5' } } };
+  const none = { kills: 0, headshots: 0, streak: 0, dayWeapon: 0, dayWeaponHeads: 0, weekWeapon: 0, weekWeaponHeads: 0 };
+  const ids = (r: CoinRule, scope: 'day' | 'week') =>
+    new Set(Array.from({ length: 80 }, (_, i) => missionsFor(scope, new Date(Date.parse('2026-01-05T00:00:00Z') + i * 7 * DAY).toISOString().slice(0, 10), r).map((m) => m.id)).flat());
+
+  it('are only offered with the kill feed, and the weapon ones only with a weapon to ask for', () => {
+    const wanted = (r: CoinRule) => [...ids(r, 'day'), ...ids(r, 'week')].filter((id) => /heads|streak-[0-9]|weapon/.test(id));
+    expect(wanted(rule)).toEqual([]);
+    expect(wanted({ ...rule, feed: true, weapons: null }).some((id) => id.includes('weapon'))).toBe(false);
+    expect(wanted({ ...rule, feed: true, weapons: null }).length).toBeGreaterThan(0);
+    expect(wanted(feed).some((id) => id.includes('weapon'))).toBe(true);
+  });
+
+  it('name the weapon in the mission', () => {
+    const texts = [...Array.from(ids(feed, 'day')), ...Array.from(ids(feed, 'week'))];
+    expect(texts.length).toBeGreaterThan(0);
+    const all = Array.from({ length: 200 }, (_, i) => new Date(Date.parse('2026-01-01T00:00:00Z') + i * DAY).toISOString().slice(0, 10)).flatMap((key) => missionsFor('day', key, feed));
+    const weapon = all.find((m) => m.id.startsWith('d-weapon'));
+    expect(weapon?.text).toContain('Mosin Nagant');
+    expect(weapon?.text).not.toContain('{weapon}');
+    const week = Array.from({ length: 80 }, (_, i) => new Date(Date.parse('2026-01-05T00:00:00Z') + i * 7 * DAY).toISOString().slice(0, 10)).flatMap((key) => missionsFor('week', key, feed));
+    expect(week.find((m) => m.id.startsWith('w-weapon'))?.text).toContain('MP5');
+  });
+
+  it('count headshots, the best streak and the weapons, and pay a mission when it is done', () => {
+    let a = blankAccount('Ash', NOW);
+    a = onKills(a, { ...none, kills: 5, headshots: 3, streak: 4, dayWeapon: 2, dayWeaponHeads: 1, weekWeapon: 1 }, NOW, feed).account;
+    a = onKills(a, { ...none, kills: 2, headshots: 2, streak: 2, dayWeapon: 1, weekWeaponHeads: 1 }, NOW + 1000, feed).account;
+    expect(a.day.m).toMatchObject({ headshots: 5, bestStreak: 4, weaponKills: 3, weaponHeads: 1 });
+    expect(a.week.m).toMatchObject({ headshots: 5, bestStreak: 4, weaponKills: 1, weaponHeads: 1 });
+  });
+
+  it('pay the streak and headshot missions of the day', () => {
+    // Find a day that asks for a streak.
+    const key = Array.from({ length: 200 }, (_, i) => new Date(Date.parse('2026-01-01T00:00:00Z') + i * DAY).toISOString().slice(0, 10)).find((k) =>
+      missionsFor('day', k, feed).some((m) => m.id === 'd-streak-4'),
+    );
+    expect(key).toBeDefined();
+    const at = Date.parse(`${key}T12:00:00Z`);
+    const done = onKills(blankAccount('Ash', at), { ...none, kills: 4, streak: 4 }, at, feed);
+    expect(done.completed.map((c) => c.mission.id)).toContain('d-streak-4');
+    expect(done.paid).toBeGreaterThanOrEqual(15);
+  });
+
+  it('name the weapon of a mission swapped in', () => {
+    const a = { ...blankAccount('Ash', NOW), balance: 1000 };
+    for (let slot = 0; slot < 3; slot++) {
+      const r = reroll(a, slot, NOW, feed);
+      if (r.ok) expect(r.mission.text).not.toContain('{weapon}');
+    }
   });
 });
 
