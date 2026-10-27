@@ -360,6 +360,9 @@ export const minutesText = (count: number): string => `${count} minute${count ==
 // The most seeders thanked when the server goes live, so they all go out with the rest of the check.
 export const MAX_SEEDER_THANKS = 15;
 
+// A short pointer to the coins page, for a message with no link of its own.
+export const coinsCall = (siteHost: string): string => `Earn INITcoins: ${siteHost}/coins`;
+
 // The end of a seeder's thanks with INITcoins on: "+150 INITcoins for whitelist: gaminginit.com/coins".
 export const seedCoinsCall = (seed: number, siteHost: string | null): string =>
   siteHost ? `+${seed} INITcoins, spend them: ${siteHost}/coins` : `+${seed} INITcoins.`;

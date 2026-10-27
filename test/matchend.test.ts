@@ -272,6 +272,14 @@ describe('the others at the end of a match', () => {
     expect(milestones).toEqual(new Map([['b', { kind: 'kills', value: 1000 }]]));
   });
 
+  it('ends only the nemesis message with a pointer to INITcoins, when they are on', () => {
+    const text = (rule: typeof one) => matchEndMessages(round, pairs, everyone, new Set(), rule, () => 0, DEFAULT_LINES, {}, extras).messages.map((m) => m.text);
+    const plain = text(one);
+    const coined = text({ ...one, coins: true });
+
+    expect(coined.filter((t, i) => t !== plain[i])).toEqual([`${plain[5]} Earn INITcoins: gaminginit.com/coins`]);
+  });
+
   it('sends nothing more without the records or the kill feed', () => {
     expect(matchEndMessages(round, null, everyone, new Set(), one, () => 0).messages.map((m) => m.steamId)).toEqual(['a']);
   });

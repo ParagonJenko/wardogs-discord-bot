@@ -18,6 +18,7 @@ import {
   nearlyScore,
   seedingReward,
   welcomeLinks,
+  coinsCall,
 } from './messages.ts';
 
 // The staff page's Lines tab: staff put their own lines in place of any of the bot's lists (see lines.ts), and can go
@@ -351,7 +352,8 @@ export const LISTS: ListDefinition[] = [
         values: { ...nameValues.values, ...extra.values, site: site(context) },
         longest: { ...nameValues.longest, ...extra.longest, site: site(context) },
         before: '',
-        after: '',
+        // The nemesis message has no link of its own, so with INITcoins on it ends with a pointer to them.
+        after: extra.id === 'nemesis' && context.coins ? ` ${coinsCall(site(context))}` : '',
       }),
     }),
   ),

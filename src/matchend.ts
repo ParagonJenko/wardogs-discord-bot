@@ -3,7 +3,7 @@ import { isPersonalBest, milestoneText, type Milestone } from './achievements.ts
 import { DEFAULT_LINES, type Lines } from './lines.ts';
 import type { LiveMatch, LivePlayer } from './live.ts';
 import { sameMap } from './matchfeed.ts';
-import { fit, nameOf, ordinal, pickLine, remember, type Recent } from './messages.ts';
+import { coinsCall, fit, fitWithCall, nameOf, ordinal, pickLine, remember, type Recent } from './messages.ts';
 import type { FactionScore } from './rcon.ts';
 import { byKills, matchMap, topPlayers, type MatchState } from './tracking.ts';
 import { countsForLongest, weaponRole, type WeaponRole } from './weapons.ts';
@@ -14,7 +14,8 @@ import { countsForLongest, weaponRole, type WeaponRole } from './weapons.ts';
 // longest kill and the best kill streak. Each player gets one message, naming all they earned.
 
 // `count` is how many of the scoreboard's top players get one (none at 0), and `awards` whether the award winners do.
-export type MatchEndRule = { count: number; awards: boolean; siteHost: string };
+// `coins`: INITcoins are on, so the nemesis message (the only one with no link of its own) ends with a pointer to them.
+export type MatchEndRule = { count: number; awards: boolean; siteHost: string; coins?: boolean };
 
 // The most scoreboard places TOP_PLAYER_MESSAGES can ask for.
 export const MAX_TOP_PLAYERS = 100;
@@ -199,7 +200,7 @@ export const matchEndMessages = (
   const say = (steamId: string, name: string, kind: EndKind, list: string, from: string[], values: Record<string, string>): void => {
     const pick = pickLine(list, from, { name: nameOf(name), site: rule.siteHost, ...values }, random, lately);
     lately = remember(lately, pick);
-    messages.push({ steamId, name, text: fit(pick.text), kind });
+    messages.push({ steamId, name, text: kind === 'nemesis' && rule.coins ? fitWithCall(pick.text, coinsCall(rule.siteHost)) : fit(pick.text), kind });
   };
   const sendable = (steamId: string): boolean => online.has(steamId) && !hidden.has(steamId);
   const kills = (steamId: string): number => match.players[steamId]?.kills ?? 0;
