@@ -39,6 +39,8 @@ export type LinesContext = {
   vip: VipRule | null;
   // Whether the next-map vote runs each match, so the halfway and nearly messages send people to it.
   vote?: boolean;
+  // Whether INITcoins are on, so the nearly message sends people to them.
+  coins?: boolean;
   scoreToWin: number;
   live: number;
   // Whether the bot sends the match messages, the seeding messages, the welcomes and the end-of-match messages.
@@ -58,6 +60,7 @@ export const linesContext = (config: Config): LinesContext => ({
   discord: config.inviteCode ? discordLink(config.inviteCode) : null,
   vip: config.vip,
   vote: config.matchMessages?.vote ?? false,
+  coins: config.coins !== null,
   scoreToWin: config.scoreToWin,
   live: config.rules.live,
   match: config.matchMessages !== null,
@@ -115,7 +118,7 @@ const nameValues = { values: { name: PREVIEW_NAME }, longest: { name: 'x'.repeat
 // Placeholders whose value is the same in the preview and in game.
 const exact = (values: Record<string, string>) => ({ values, longest: values });
 const halfwayAfter = (context: LinesContext): string => ` ${halfwayCall(site(context), context.vote)}`;
-const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context), context.vote)}`;
+const nearlyAfter = (context: LinesContext): string => ` ${nearlyCall(site(context), context.vote, context.coins)}`;
 
 // Every list, in the order the page shows them.
 export const LISTS: ListDefinition[] = [

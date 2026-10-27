@@ -14,7 +14,8 @@ import type { MatchState } from './tracking.ts';
 
 // `vote` is true while the next-map vote runs each match (see mapvote.ts): the halfway and nearly messages then send people
 // to it. Missing means no.
-export type MessageRule = { siteHost: string; scoreToWin: number; vote?: boolean };
+// `coins`: INITcoins are on, so the "nearly" message sends people to them (unless a vote is running).
+export type MessageRule = { siteHost: string; scoreToWin: number; vote?: boolean; coins?: boolean };
 
 // The seeding message goes out every `everyMs`, and points at the website when there is one.
 // `coins` is what a seed pays in INITcoins, when they are on.
@@ -58,8 +59,8 @@ export const HALFWAY_START = 'Halfway there!';
 // can type: the vote is on the website as well as in the Discord.
 export const halfwayCall = (siteHost: string, vote = false): string =>
   vote ? `Vote the next map (infantry only): ${siteHost}/vote` : `Watch this match live: ${siteHost}/live`;
-export const nearlyCall = (siteHost: string, vote = false): string =>
-  vote ? `Last call! Vote the next map: ${siteHost}/vote` : `Where do you rank? ${siteHost}`;
+export const nearlyCall = (siteHost: string, vote = false, coins = false): string =>
+  vote ? `Last call! Vote the next map: ${siteHost}/vote` : coins ? `Seed and play to earn INITcoins for whitelist: ${siteHost}/coins` : `Where do you rank? ${siteHost}`;
 
 // A line the bot chose: its message, which list it came from and the line as written (before placeholders).
 export type Picked = { text: string; list: string; line: string };
@@ -143,7 +144,7 @@ const reached = (
   lines: Lines = DEFAULT_LINES,
   recent: Recent,
 ): Reached[] => {
-  const { siteHost, scoreToWin, vote = false } = rule;
+  const { siteHost, scoreToWin, vote = false, coins = false } = rule;
   const [leader] = [...match.factionScores].sort((a, b) => b.score - a.score);
   const top = Math.max(0, leader?.score ?? 0);
   const nearly = nearlyScore(scoreToWin);
@@ -160,7 +161,7 @@ const reached = (
   // Once per match, for the first team to get there.
   if (leader && leader.score >= nearly) {
     const pick = teamLine('nearly', lines.nearly, lines.nearlyOther, leader, nearly, random, recent);
-    out.push({ key: 'nearly', text: fitWithCall(pick.text, nearlyCall(siteHost, vote)), pick });
+    out.push({ key: 'nearly', text: fitWithCall(pick.text, nearlyCall(siteHost, vote, coins)), pick });
   }
   return out.map((m) => ({ ...m, text: fit(m.text) }));
 };
@@ -359,6 +360,10 @@ export const minutesText = (count: number): string => `${count} minute${count ==
 // The most seeders thanked when the server goes live, so they all go out with the rest of the check.
 export const MAX_SEEDER_THANKS = 15;
 
+// The end of a seeder's thanks with INITcoins on: "+150 INITcoins for whitelist: gaminginit.com/coins".
+export const seedCoinsCall = (seed: number, siteHost: string | null): string =>
+  siteHost ? `+${seed} INITcoins, spend them: ${siteHost}/coins` : `+${seed} INITcoins.`;
+
 export type SeederThanks = { steamId: string; name: string; text: string };
 
 // The thanks to each seeder still in game (`online`) the moment the server goes live, by name: those on for more than
@@ -371,6 +376,8 @@ export const seederThanks = (
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
   recent: Recent = {},
+  // With INITcoins on: the website, and what a seed pays, so each thanks says what they earned and where to spend it.
+  coins?: { siteHost: string | null; seed: number },
 ): { messages: SeederThanks[]; recent: Recent } => {
   let lately = recent;
   const messages: SeederThanks[] = [];
@@ -382,7 +389,7 @@ export const seederThanks = (
   for (const c of thanked) {
     const pick = pickLine('seederThanks', lines.seederThanks, { name: nameOf(c.name), minutes: minutesText(c.minutes) }, random, lately);
     lately = remember(lately, pick);
-    messages.push({ steamId: c.steamId, name: c.name, text: fit(pick.text) });
+    messages.push({ steamId: c.steamId, name: c.name, text: coins ? fitWithCall(pick.text, seedCoinsCall(coins.seed, coins.siteHost)) : fit(pick.text) });
   }
   return { messages, recent: lately };
 };

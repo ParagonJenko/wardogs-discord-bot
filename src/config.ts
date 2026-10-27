@@ -390,6 +390,7 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
             siteHost: new URL(e.SITE_URL).host,
             scoreToWin: e.SCORE_TO_WIN,
             ...(e.MAP_VOTE === 'on' && e.DISCORD_VOTE_CHANNEL_ID && e.DISCORD_BOT_TOKEN ? { vote: true } : {}),
+            ...(e.COINS === null ? {} : { coins: true }),
           }
         : null,
     seedingMessages:
