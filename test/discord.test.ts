@@ -34,7 +34,7 @@ import type { SteamCheck } from '../src/steam.ts';
 const server = { name: 'UK Wardogs #1', players: 7, maxPlayers: 64 };
 const vip = { seedDays: 3, seedMinutes: 10, windowDays: 7, lengthDays: 7 };
 const offer = 'Seed on 3 days in a week and get a whitelist slot for a week.';
-const rule = "A seed counts when you're on for more than 10 min and the server goes live.";
+const rule = "A seed counts when you're on for more than 10 min without leaving, and you're still on when the server goes live.";
 
 const serverId = '2615de90-da95-4950-913a-246b1db49237';
 const join = '```\n2615de90-da95-4950-913a-246b1db49237\n```\nIn game: Deploy → Server Browser → Join by ID, paste the code, then Lookup.';

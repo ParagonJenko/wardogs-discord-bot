@@ -267,7 +267,7 @@ export const vipOffer = (vip: VipRule): string =>
 
 // What counts as a seed.
 export const vipRule = (vip: VipRule): string =>
-  `A seed counts when you're on for more than ${vip.seedMinutes} min and the server goes live.`;
+  `A seed counts when you're on for more than ${vip.seedMinutes} min without leaving, and you're still on when the server goes live.`;
 
 const needed = (kind: AlertKind, server: Population, options: MessageOptions): EmbedField[] => {
   if ((kind === 'seeding' || kind === 'back') && options.live !== undefined) {
@@ -290,7 +290,7 @@ export const buildMessage = (kind: AlertKind, server: Population, options: Messa
       ? [{ name: '🎖️ Seeder VIP', value: `${vipOffer(options.vip)}\n${vipRule(options.vip)}` }]
       : []),
     ...(kind === 'seeding' && options.coins
-      ? [{ name: '🪙 INITcoins', value: `Seed and earn **${options.coins} INITcoins**, which buy whitelist days.\nA seed counts when you're on for more than a few minutes and the server goes live.` }]
+      ? [{ name: '🪙 INITcoins', value: `Seed and earn **${options.coins} INITcoins**, which buy whitelist days.\nA seed counts when you stay on until the server goes live, without leaving.` }]
       : []),
     ...joinField(options.serverId),
   ];

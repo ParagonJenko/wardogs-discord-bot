@@ -1794,13 +1794,17 @@ such as `{"seed":150,"vipWeekPrice":600,"roles":[{"id":"123456789012345678","nam
 keeps its default, and a key it doesn't know, or a number out of range, stops the bot with a message saying which. It is one variable
 because a Worker on Cloudflare's free plan can have only 64 variables and secrets between them, and a deploy over that fails.
 
+A seed only counts for a player who stays on the whole time and is still on the server when it goes live: someone who seeds for half an
+hour and leaves is not paid for the seed the others finish. Away for a minute or two (a crash and a rejoin) is forgiven; longer, and
+the count starts again from when they came back. This is how every seed counts, for the leaderboard and seeder lists too.
+
 Coins go to a Steam ID as it earns them, linked to a Discord account or not, so nobody loses what they earned before they
 linked. [Staff](#staff-steam-accounts) who linked their Steam account earn nothing, as they never count as seeders.
 Spending needs a linked account, as that is how the bot knows who is buying. Every number is a variable in `wrangler.jsonc`.
 
 | What | Pays | Setting |
 | ---- | ---- | -------- |
-| A successful seed (on for more than `VIP_SEED_MINUTES` while the server seeds, and it goes live), once a day | **150** | `seed` |
+| A successful seed (on for more than `VIP_SEED_MINUTES` in a row while the server seeds, and still on when it goes live), once a day | **150** | `seed` |
 | Minutes seeding past that, up to 30 a day | 1 per 2 minutes | `seedMinutesPer`, `seedMinutesCap` |
 | Time with the server live | 1 per 10 minutes | `playMinutes` |
 | A match played (at least `playedLeast` kills and deaths together, so sitting in one pays nothing) | 6 | `match` |
@@ -1899,7 +1903,7 @@ Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
 | ------------------ | ---------------------------------------------------------------------- | --------------------------- |
 | `VIP_SEED_DAYS`    | Days with a successful seed needed in a week. `0` turns automatic VIP off | `3`                      |
 | `VIP_MODE`         | `"week"` (seed on `VIP_SEED_DAYS` days in a week, VIP for a week) or `"day"` (seed on one day, VIP for 3 days). `"day"` is on whatever `VIP_SEED_DAYS` says | `"week"` |
-| `VIP_SEED_MINUTES` | A seed counts when a player is on for more than this, and it goes live | `10`                        |
+| `VIP_SEED_MINUTES` | A seed counts when a player is on for more than this many minutes in a row, and is still on when it goes live | `10` |
 
 How it changes the server:
 

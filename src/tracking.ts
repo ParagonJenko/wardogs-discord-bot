@@ -1,23 +1,34 @@
 import { resultScores, sameMap, type MatchFeed, type MatchResult } from './matchfeed.ts';
 import type { FactionScore, Player, ServerStatus } from './rcon.ts';
 
-// Seeding: how many checks each player was online for while the server was filling up.
-export type SeedingTally = Record<string, { name: string; checks: number }>;
+// Seeding: how many checks in a row each player has been online for while the server fills up. A player who is not there at a
+// check keeps their count for SEEDING_GRACE_CHECKS checks (`missed` counts them), so a crash and a quick rejoin is not leaving;
+// away for longer they start again from nothing. The count does not grow while they are away.
+export type SeedingTally = Record<string, { name: string; checks: number; missed?: number }>;
 
-export const tallySeeding = (tally: SeedingTally, players: Player[]): SeedingTally =>
-  players.reduce<SeedingTally>(
-    (acc, p) => ({ ...acc, [p.steamId]: { name: p.name, checks: (acc[p.steamId]?.checks ?? 0) + 1 } }),
-    tally,
-  );
+export const SEEDING_GRACE_CHECKS = 2;
+
+export const tallySeeding = (tally: SeedingTally, players: Player[]): SeedingTally => {
+  const here = new Set(players.map((p) => p.steamId));
+  const away = Object.entries(tally).flatMap(([steamId, t]): [string, SeedingTally[string]][] => {
+    if (here.has(steamId)) return [];
+    const missed = (t.missed ?? 0) + 1;
+    return missed > SEEDING_GRACE_CHECKS ? [] : [[steamId, { ...t, missed }]];
+  });
+  return {
+    ...Object.fromEntries(away),
+    ...Object.fromEntries(players.map((p) => [p.steamId, { name: p.name, checks: (tally[p.steamId]?.checks ?? 0) + 1 }])),
+  };
+};
 
 // Staff (`staff`, by Steam ID) are never top seeders.
 export const topSeeders = (
   tally: SeedingTally,
   count: number,
   staff: ReadonlySet<string> = new Set(),
-): { name: string; checks: number }[] =>
+): { steamId: string; name: string; checks: number }[] =>
   Object.entries(tally)
-    .flatMap(([steamId, s]) => (staff.has(steamId) ? [] : [s]))
+    .flatMap(([steamId, s]) => (staff.has(steamId) ? [] : [{ steamId, name: s.name, checks: s.checks }]))
     .sort((a, b) => b.checks - a.checks)
     .slice(0, count);
 

@@ -468,28 +468,56 @@ describe('poller with a grace time for drops', () => {
   };
   const minutes = (n: number, reading: Snapshot | Error) => Array.from({ length: n }, () => reading);
   const seedBy = (n: number, seeder: Player) => minutes(n, snapshot(crowd(10, [seeder])));
-  const live = (n: number) => minutes(n, snapshot(crowd(25)));
+  // The server live, with `who` among the players: a seed only counts for someone still on when it goes live.
+  const live = (n: number, ...who: Player[]) => minutes(n, snapshot(crowd(25, who)));
   const ash = player('ash');
   const bo = player('bo');
 
   it('counts a seed after a crash, even when the bot never saw the server empty', async () => {
     // Ash seeds it live; it crashes, and RCON is down until Bo is already seeding it again.
-    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30), ...minutes(60, new Error('down')), ...seedBy(60, bo), ...live(10)]);
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30, ash), ...minutes(60, new Error('down')), ...seedBy(60, bo), ...live(10, bo)]);
 
     // Bo's first 5 minutes are the grace time, while it could still have been a blip.
     expect(seeds).toEqual([['Pash 30'], ['Pbo 55']]);
   });
 
   it('counts a seed when players drift off and others get it back up, without it emptying', async () => {
-    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30), ...seedBy(90, bo), ...live(10)]);
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30, ash), ...seedBy(90, bo), ...live(10, bo)]);
 
     expect(seeds).toEqual([['Pash 30'], ['Pbo 85']]);
   });
 
   it('counts a seed after a quick crash that emptied the server for less than the grace time', async () => {
-    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30), ...minutes(3, snapshot([])), ...seedBy(87, bo), ...live(10)]);
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...live(30, ash), ...minutes(3, snapshot([])), ...seedBy(87, bo), ...live(10, bo)]);
 
     expect(seeds).toEqual([['Pash 30'], ['Pbo 85']]);
+  });
+
+  it('pays nobody for a seed they left before the server went live', async () => {
+    // Ash seeds for 30 minutes and leaves; Bo and the others then get it live.
+    const seeds = await day([snapshot([]), ...seedBy(30, ash), ...minutes(5, snapshot(crowd(10, [bo]))), ...live(10, bo)]);
+
+    expect(seeds).toEqual([['Pbo 5']]);
+  });
+
+  it('counts a seeder who stays on until it goes live, and not one who left halfway', async () => {
+    // Ash leaves for 10 minutes in the middle, and is back for the last 8 before it goes live.
+    const seeds = await day([
+      snapshot([]),
+      ...seedBy(12, ash),
+      ...minutes(10, snapshot(crowd(10, [bo]))),
+      ...minutes(8, snapshot(crowd(10, [ash, bo]))),
+      ...live(10, ash, bo),
+    ]);
+
+    // Away for longer than the grace time, so Ash starts again from the 8 minutes since they came back.
+    expect(seeds[0]?.sort()).toEqual(['Pash 8', 'Pbo 18']);
+  });
+
+  it('keeps a seeder who was away for a minute or two', async () => {
+    const seeds = await day([snapshot([]), ...seedBy(12, ash), ...minutes(2, snapshot(crowd(10, [bo]))), ...minutes(8, snapshot(crowd(10, [ash, bo]))), ...live(10, ash, bo)]);
+
+    expect(seeds[0]?.sort()).toEqual(['Pash 20', 'Pbo 10'].sort());
   });
 
   it('pings nobody, and counts nobody as seeding, when a live server restarts and fills again', async () => {
