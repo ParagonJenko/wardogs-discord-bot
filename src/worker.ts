@@ -3728,11 +3728,11 @@ export class Watcher extends DurableObject<Env> {
     const rule = (await this.coinRule());
     if (rule === null) return null;
     const now = Date.now();
-    const [all, hidden, staff] = await Promise.all([this.ctx.storage.list({ prefix: COIN_PREFIX, limit: 20_000 }), this.privateSteam(), this.staffSteam()]);
+    const [all, hidden] = await Promise.all([this.ctx.storage.list({ prefix: COIN_PREFIX, limit: 20_000 }), this.privateSteam()]);
     const accounts = [...all].flatMap(([key, raw]): [string, CoinAccount][] => {
       const steamId = key.slice(COIN_PREFIX.length);
       const account = parseCoins(raw);
-      return account === null || hidden.has(steamId) || staff.has(steamId) ? [] : [[steamId, account]];
+      return account === null || hidden.has(steamId) ? [] : [[steamId, account]];
     });
     const leaders = topEarners(accounts, COIN_LEADERS);
     const ids = await this.idsFor(leaders.map((l) => l.steamId));

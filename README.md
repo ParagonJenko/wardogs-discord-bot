@@ -1800,7 +1800,7 @@ the count starts again from when they came back. This is how every seed counts, 
 
 Coins go to a Steam ID as it earns them, linked to a Discord account or not, so nobody loses what they earned before they
 linked. [Staff](#staff-steam-accounts) earn them as anyone does, seeding included, though they still never count as seeders
-anywhere else (the top seeders, the seeder lists) and are left off the coin board.
+anywhere else (the top seeders, the seeder lists). They are on the coin board like anyone.
 
 When INITcoins began, the bot paid once for the 13 days before: first each seed (150), then, from the player and match records,
 the minutes seeding past the least, the time with the server live, and the matches and wins, each day to the day's cap, as they
