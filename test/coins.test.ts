@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   adjust,
+  backfillGrant,
+  backfillToday,
   blankAccount,
   buy,
   canBuy,
@@ -315,6 +317,45 @@ describe('staff and the move from VIP', () => {
     expect(once.balance).toBe(600);
     expect(migrationGrant(once, 4, false, NOW, rule).balance).toBe(600);
     expect(migrationGrant(blankAccount('Bea', NOW), 0, false, NOW, rule).balance).toBe(0);
+  });
+});
+
+describe('the days before INITcoins', () => {
+  const quiet = { seed: false, seedMinutes: 0, liveMinutes: 0, matches: [] };
+  let ids = 0;
+  const played = (won: boolean) => ({ id: ++ids, kills: 5, deaths: 3, won });
+
+  it('pays seeding minutes past the least, playing time, and matches and wins, once', () => {
+    // 40 minutes seeding (15 past 10), 2 hours live (12), a win (12) and a loss (6).
+    const days = [{ seed: false, seedMinutes: 40, liveMinutes: 120, matches: [played(true), played(false)] }, quiet];
+    const once = backfillGrant(blankAccount('Ash', NOW), days, 10, NOW, rule);
+    expect(once.balance).toBe(15 + 12 + 12 + 6);
+    expect(once.log.at(-1)?.why).toBe('migrate');
+    expect(backfillGrant(once, days, 10, NOW, rule).balance).toBe(once.balance);
+  });
+
+  it('keeps each day to the cap, pays only the first matches of a day, and none sat out', () => {
+    const busy = { seed: false, seedMinutes: 200, liveMinutes: 600, matches: Array.from({ length: 10 }, () => played(true)) };
+    expect(backfillGrant(blankAccount('Ash', NOW), [busy, busy], 10, NOW, rule).balance).toBe(200);
+    const sat = { ...quiet, matches: [{ id: 0, kills: 1, deaths: 1, won: true }, ...Array.from({ length: 7 }, () => played(false))] };
+    expect(backfillGrant(blankAccount('Bea', NOW), [sat], 10, NOW, rule).balance).toBe(6 * 6);
+  });
+
+  it('pays the seed itself only where asked (staff, whom the move left out), outside the cap', () => {
+    const staffDay = { seed: true, seedMinutes: 30, liveMinutes: 2000, matches: [] };
+    expect(backfillGrant(blankAccount('Ash', NOW), [staffDay], 10, NOW, rule).balance).toBe(150 + 100);
+    expect(backfillGrant(blankAccount('Bea', NOW), [quiet], 10, NOW, rule).balance).toBe(0);
+  });
+
+  it('pays staff today as if live, so the live checks carry on from it without paying it twice', () => {
+    const win = played(true);
+    const today = backfillToday(blankAccount('Ash', NOW), { seed: true, seedMinutes: 30, liveMinutes: 60, matches: [win] }, 10, NOW, rule);
+    // The seed (150) and 10 minutes past the least (10), an hour live (6), a won match (12).
+    expect(today.balance - today.log.filter((t) => t.why === 'mission').reduce((sum, t) => sum + t.delta, 0)).toBe(150 + 10 + 6 + 12);
+    expect(onSeed(today, 30, 10, NOW + 60_000, rule).paid).toBe(0);
+    expect(onMatch(today, win, NOW + 60_000, rule).paid).toBe(0);
+    // 9 more minutes live make 69: no new block of 10.
+    expect(onPlay(today, 9, NOW + 60_000, rule).account.day.playPaid).toBe(6);
   });
 });
 
