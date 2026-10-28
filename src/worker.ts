@@ -3155,9 +3155,11 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Runs each player's event on their account and saves them, inside `coining`. Staff earn as anyone does, seeding included.
+  // Runs each player's event on their account and saves them, inside `coining`. Staff earn as anyone does, seeding included, once
+  // the backfill has paid them for the time before (see coinBackfill); until then they earn nothing, so it pays them all of it.
   private async coinApply(events: CoinEvent[]): Promise<Map<string, CoinResult>> {
-    const todo = events.filter((e) => /^\d{17}$/.test(e.steamId));
+    const waiting = (await this.coinsBackfillDone()) ? new Set<string>() : await this.staffSteam();
+    const todo = events.filter((e) => !waiting.has(e.steamId) && /^\d{17}$/.test(e.steamId));
     const stored = await this.getMany([...new Set(todo.map((e) => coinKey(e.steamId)))]);
     const latest = new Map<string, CoinAccount>();
     const results = new Map<string, CoinResult>();
@@ -3480,19 +3482,19 @@ export class Watcher extends DurableObject<Env> {
     console.info(`INITcoins: paid ${players.length} seeders for their seeds in the last ${COIN_MIGRATION_DAYS} days.`);
   }
 
+  private async coinsBackfillDone(): Promise<boolean> {
+    if (!this.coinsBackfilled && (await this.ctx.storage.get(COINS_BACKFILLED_KEY)) !== undefined) this.coinsBackfilled = true;
+    return this.coinsBackfilled;
+  }
+
   // Once, after the move: the same days before INITcoins are paid for everything else they would have paid, from the player
-  // records and match records (see backfillGrant). Staff, who earned nothing until they could, are paid their seeds then too, and
-  // everything since: the days before today in full, and today run through their account as if paid live (see backfillToday), so
-  // today's cap and missions carry on from it. A minute or two of today's time may be paid twice, by this and by the live check.
+  // records and match records (see backfillGrant). Staff who have never earned (they couldn't, and still can't until this has run)
+  // are paid their seeds then too, and everything since: the days before today in full, and today run through their account as if
+  // paid live (see backfillToday), so today's cap and missions carry on from it. Someone who was staff then and isn't now isn't.
   private async coinBackfill(): Promise<void> {
     const rule = await this.coinRule();
-    if (rule === null || this.coinsBackfilled) return;
-    const stored = await this.ctx.storage.get([COINS_MIGRATED_KEY, COINS_BACKFILLED_KEY]);
-    if (stored.get(COINS_BACKFILLED_KEY) !== undefined) {
-      this.coinsBackfilled = true;
-      return;
-    }
-    const migrated = z.object({ at: z.number() }).safeParse(stored.get(COINS_MIGRATED_KEY));
+    if (rule === null || (await this.coinsBackfillDone())) return;
+    const migrated = z.object({ at: z.number() }).safeParse(await this.ctx.storage.get(COINS_MIGRATED_KEY));
     if (!migrated.success) return;
     const now = Date.now();
     const launch = migrated.data.at;
@@ -3503,7 +3505,7 @@ export class Watcher extends DurableObject<Env> {
     const keys = [...before, ...since, today];
     const dates = new Set(keys.map(dayOfKey));
     const first = Date.parse(`${dayOfKey(keys[0] ?? today)}T00:00:00Z`);
-    const [days, staff, records] = await Promise.all([
+    const [stored, staff, records] = await Promise.all([
       this.getMany(keys),
       this.staffSteam(),
       this.ctx.storage.list({ prefix: 'match:', start: matchRecordKey(first - DAY_MS) }),
@@ -3525,29 +3527,31 @@ export class Watcher extends DurableObject<Env> {
         matches.set(p.steamId, byDay);
       }
     }
-    const dayFor = (steamId: string, key: string): BackfillDay => {
-      const t = parsePlayerDay(days.get(key))[steamId];
+    const days = new Map(keys.map((key) => [key, parsePlayerDay(stored.get(key))]));
+    const dayFor = (steamId: string, key: string, unpaid: boolean): BackfillDay => {
+      const t = days.get(key)?.[steamId];
       const seeded = (t?.seedDays ?? 0) > 0;
       return {
-        seed: seeded && staff.has(steamId),
+        seed: seeded && unpaid,
         seedMinutes: seeded ? (t?.seedingMinutes ?? 0) : 0,
         liveMinutes: t?.liveMinutes ?? 0,
         matches: matches.get(steamId)?.get(dayOfKey(key)) ?? [],
       };
     };
     const names = new Map<string, string>();
-    for (const p of totals(keys.map((key) => parsePlayerDay(days.get(key))))) names.set(p.steamId, p.name);
+    for (const p of totals([...days.values()])) names.set(p.steamId, p.name);
     const players = [...new Set([...names.keys(), ...matches.keys()])].filter((steamId) => /^\d{17}$/.test(steamId));
     let paid = 0;
     await this.coining(async () => {
       const accounts = await this.getMany(players.map(coinKey));
       const updated: Record<string, CoinAccount> = {};
       for (const steamId of players) {
-        const isStaff = staff.has(steamId);
         const known = parseCoins(accounts.get(coinKey(steamId))) ?? blankAccount(names.get(steamId) ?? steamId, now);
-        const owed = (isStaff ? [...before, ...since] : before).map((key) => dayFor(steamId, key));
+        // Staff who were paid for anything (they weren't staff then) were paid as everyone was.
+        const unpaid = staff.has(steamId) && !known.log.some((t) => t.delta > 0 && t.why !== 'staff');
+        const owed = (unpaid ? [...before, ...since] : before).map((key) => dayFor(steamId, key, unpaid));
         const grown = backfillGrant(known, owed, config.seedMinutes, now, rule);
-        const next = isStaff ? backfillToday(grown, dayFor(steamId, today), config.seedMinutes, now, rule) : grown;
+        const next = unpaid ? backfillToday(grown, dayFor(steamId, today, true), config.seedMinutes, now, rule) : grown;
         if (next.earned === known.earned) continue;
         updated[coinKey(steamId)] = next;
         paid += 1;
