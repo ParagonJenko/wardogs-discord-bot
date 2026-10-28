@@ -1804,7 +1804,9 @@ anywhere else (the top seeders, the seeder lists) and are left off the coin boar
 
 When INITcoins began, the bot paid once for the 13 days before: first each seed (150), then, from the player and match records,
 the minutes seeding past the least, the time with the server live, and the matches and wins, each day to the day's cap, as they
-are paid now. Staff's seeds were paid in the second. Missions were not, as the kill feed was never kept for each player.
+are paid now. Missions were not, as the kill feed was never kept for each player. Staff, who earned nothing until then, were
+paid in the second for everything from those days to the day it ran, their seeds included; that day's as if paid live, so its
+cap and missions carried on from it.
 Spending needs a linked account, as that is how the bot knows who is buying. Every number is a variable in `wrangler.jsonc`.
 
 | What | Pays | Setting |

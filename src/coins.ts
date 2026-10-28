@@ -599,7 +599,7 @@ export const migrationGrant = (account: CoinAccount, seedDays: number, seededTod
 // One day before INITcoins, from the player records: whether its seed is paid here (staff's, which the move above left out),
 // minutes seeding (0 on a day without a seed; paid past `least`, as a seed's are), minutes with the server live, and the matches
 // played, oldest first.
-export type BackfillDay = { seed: boolean; seedMinutes: number; liveMinutes: number; matches: { kills: number; deaths: number; won: boolean }[] };
+export type BackfillDay = { seed: boolean; seedMinutes: number; liveMinutes: number; matches: { id: number; kills: number; deaths: number; won: boolean }[] };
 
 // What the days before INITcoins would have paid past the move's seeds: seeding minutes, playing time, and matches and wins, each
 // day to the day's cap, as they are paid now. Missions are not, as the kill feed was never kept for each player. Once.
@@ -625,6 +625,15 @@ export const backfillGrant = (account: CoinAccount, days: BackfillDay[], least: 
     },
     now,
   );
+};
+
+// Today so far, for a player who wasn't paid for it (staff, before they could earn), paid as it would have been live: the seed,
+// the playing time and each match, so today's cap, matches and missions carry on from here. The seed and each match only once.
+export const backfillToday = (account: CoinAccount, d: BackfillDay, least: number, now: number, rule: CoinRule): CoinAccount => {
+  let a = d.seed ? onSeed(account, d.seedMinutes, least, now, rule).account : account;
+  if (d.liveMinutes > 0) a = onPlay(a, d.liveMinutes, now, rule).account;
+  for (const m of d.matches) a = onMatch(a, m, now, rule).account;
+  return a;
 };
 
 // ---- What the website and Discord show ----
