@@ -1799,7 +1799,12 @@ hour and leaves is not paid for the seed the others finish. Away for a minute or
 the count starts again from when they came back. This is how every seed counts, for the leaderboard and seeder lists too.
 
 Coins go to a Steam ID as it earns them, linked to a Discord account or not, so nobody loses what they earned before they
-linked. [Staff](#staff-steam-accounts) who linked their Steam account earn nothing, as they never count as seeders.
+linked. [Staff](#staff-steam-accounts) earn them as anyone does, seeding included, though they still never count as seeders
+anywhere else (the top seeders, the seeder lists) and are left off the coin board.
+
+When INITcoins began, the bot paid once for the 13 days before: first each seed (150), then, from the player and match records,
+the minutes seeding past the least, the time with the server live, and the matches and wins, each day to the day's cap, as they
+are paid now. Staff's seeds were paid in the second. Missions were not, as the kill feed was never kept for each player.
 Spending needs a linked account, as that is how the bot knows who is buying. Every number is a variable in `wrangler.jsonc`.
 
 | What | Pays | Setting |

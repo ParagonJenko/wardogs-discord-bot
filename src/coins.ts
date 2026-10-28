@@ -596,6 +596,37 @@ export const migrationGrant = (account: CoinAccount, seedDays: number, seededTod
   );
 };
 
+// One day before INITcoins, from the player records: whether its seed is paid here (staff's, which the move above left out),
+// minutes seeding (0 on a day without a seed; paid past `least`, as a seed's are), minutes with the server live, and the matches
+// played, oldest first.
+export type BackfillDay = { seed: boolean; seedMinutes: number; liveMinutes: number; matches: { kills: number; deaths: number; won: boolean }[] };
+
+// What the days before INITcoins would have paid past the move's seeds: seeding minutes, playing time, and matches and wins, each
+// day to the day's cap, as they are paid now. Missions are not, as the kill feed was never kept for each player. Once.
+export const backfillGrant = (account: CoinAccount, days: BackfillDay[], least: number, now: number, rule: CoinRule): CoinAccount => {
+  if (account.keys.includes('backfill')) return account;
+  let total = 0;
+  for (const d of days) {
+    const seedTime = rule.seedMinutesPer > 0 ? Math.min(rule.seedMinutesCap, Math.max(0, Math.floor((d.seedMinutes - least) / rule.seedMinutesPer))) : 0;
+    const play = rule.playMinutesPer > 0 ? Math.floor(d.liveMinutes / rule.playMinutesPer) : 0;
+    const paid = d.matches.filter((m) => m.kills + m.deaths >= rule.playedLeast).slice(0, rule.matchesPaid);
+    const matches = paid.reduce((sum, m) => sum + rule.match + (m.won ? rule.win : 0), 0);
+    total += (d.seed ? rule.seed : 0) + Math.min(rule.activityCap, seedTime + play + matches);
+  }
+  const a = rolled(account, now);
+  if (total === 0) return a;
+  return touch(
+    {
+      ...a,
+      balance: a.balance + total,
+      earned: a.earned + total,
+      keys: [...a.keys, 'backfill'].slice(-KEYS_KEPT),
+      log: [...a.log, { at: now, delta: total, why: 'migrate' as const, note: 'Seeding, playing and matches before INITcoins' }].slice(-LOG_KEPT),
+    },
+    now,
+  );
+};
+
 // ---- What the website and Discord show ----
 
 export type MissionView = { id: string; text: string; tier: Tier; reward: number; progress: number; target: number; done: boolean; scope: Scope; slot: number };
