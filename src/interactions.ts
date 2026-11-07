@@ -44,7 +44,7 @@ const PRIVATE_COMMANDS: readonly CommandName[] = ['coins', 'shop', 'buy'];
 export const isAdminCommand = (name: CommandName): boolean => ADMIN_COMMANDS.includes(name);
 
 // Staff commands that change something in game. If one fails, it may still have happened, so the reply says to check.
-const ACTIONS: readonly CommandName[] = ['seednow', 'coinadmin', 'warn', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations'];
+const ACTIONS: readonly CommandName[] = ['seednow', 'coinadmin', 'warn', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'lighting', 'vip', 'rotations'];
 
 // What /roundup can show, as Discord lists it.
 const ROUNDUP_PERIODS: { name: string; value: RoundupChoice }[] = [
@@ -247,6 +247,12 @@ export const COMMANDS = [
     description: 'End the current match now and change map and setup (staff only)',
     ...STAFF_ONLY,
     options: matchSetup,
+  },
+  {
+    name: 'lighting',
+    description: 'Change the time of day and weather of the match now, without a map change (staff only)',
+    ...STAFF_ONLY,
+    options: [{ type: STRING, name: 'lighting', description: 'Time of day and weather', required: true, autocomplete: true }],
   },
   {
     name: 'vip',

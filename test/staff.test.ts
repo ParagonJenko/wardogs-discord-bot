@@ -446,6 +446,22 @@ describe('runStaffCommand', () => {
     ]);
   });
 
+  it('/lighting changes the lighting of the match now, and refuses one the server does not have', async () => {
+    const { run, sent } = setup({
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }, { id: 'NightFog', displayName: 'Night, fog' }] }],
+    });
+
+    await expect(run('lighting', { lighting: 'night, fog' })).resolves.toEqual({
+      content: '💡 Lighting changed to **Night, fog** for the match on now. The next map plays with its own lighting.',
+    });
+    await expect(run('lighting', { lighting: 'DayClear' })).resolves.toMatchObject({ content: expect.stringContaining('Day, clear') });
+    await expect(run('lighting', { lighting: 'Sunrise' })).resolves.toEqual({ content: 'Pick a lighting from the list.' });
+    expect(sent.filter((s) => s.startsWith('PUT'))).toEqual([
+      `PUT /v1/world/lighting ${JSON.stringify({ lighting: 'NightFog' })}`,
+      `PUT /v1/world/lighting ${JSON.stringify({ lighting: 'DayClear' })}`,
+    ]);
+  });
+
   it('notes the map being played as the server reports it when staff set the next map', async () => {
     const { run, records } = setup({ 'GET /v1/status': [200, { ...status, map: 'NorthAmerica' }] });
 
