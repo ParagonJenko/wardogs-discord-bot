@@ -306,6 +306,11 @@ export const queueMap = async (rconUrl: string, password: string, map: string, h
   await rconRequest(rconUrl, password, '/v1/match/map', http, json('POST', { map, ...setup }));
 };
 
+// Changes the lighting (time of day and weather) of the match being played, live, without a map change.
+export const setLighting = async (rconUrl: string, password: string, lighting: string, http: HttpClient) => {
+  await rconRequest(rconUrl, password, '/v1/world/lighting', http, json('PUT', { lighting }));
+};
+
 // The routes this build serves, as "METHOD /path" with each path parameter as `*` (e.g. "POST /v1/rotation/entries/*/move"),
 // from GET /v1/capabilities. Builds differ: some edit the rotation live, others only through the config document.
 const CapabilitiesSchema = z.object({ routes: z.array(z.string()).nullish() });

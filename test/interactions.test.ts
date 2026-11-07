@@ -659,6 +659,7 @@ describe('COMMANDS', () => {
       'unban',
       'setnextmap',
       'changemap',
+      'lighting',
       'vip',
       'rotations',
       'private',

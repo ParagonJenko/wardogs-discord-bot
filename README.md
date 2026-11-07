@@ -356,6 +356,7 @@ The Node/Docker version does not serve the season roundup.
 | `/unban`        | Staff only           | Lifts a ban                                                        |
 | `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
+| `/lighting`     | Staff only           | Changes the time of day and weather of the match on now, without a map change |
 | `/vip add`      | Staff only           | Gives a player a whitelist slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
 | `/vip remove`   | Staff only           | Takes a player off the whitelist, with an optional reason; automatic VIP skips them for 7 days. Not a [staff spot](#staff-steam-accounts) |
 | `/rotations …`  | Staff only           | Saved [map rotations](#map-rotations): `show`, `use`, `schedule`, `add`, `remove`, `save` and `delete` |
@@ -489,6 +490,9 @@ works when it matches exactly one player.
   server's own lighting and zones). So `/setnextmap map:Ozeti infantry_only:True` is the rotation's Ozeti, infantry
   only. `mode` and `zones` list the choices once a map is picked. The reply says the setup, such as
   "Next map: **Ozeti** · King of the Hill · Infantry only · Day, clear".
+- **`/lighting`** changes the time of day and weather of the match being played, live, with no map change and no
+  restart (`PUT /v1/world/lighting`). Pick the `lighting` from the server's list. It only lasts for this match: the next
+  map plays with its own lighting, from the rotation, a map vote or `/setnextmap`.
 - **`/vip add`** puts a player on the whitelist for the number of days given, and needs a `reason`: Friend,
   Regular, Seeder, Paid or Other. `note` adds more, such as "Patreon, October", and is needed for Other. The reason
   and note go in the staff history and the [moderation log](#moderation-log). It ends like automatic VIP: when

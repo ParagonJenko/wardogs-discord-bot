@@ -36,6 +36,7 @@ import {
   kickPlayer,
   messagePlayer,
   queueMap,
+  setLighting,
   switchFaction,
   type FactionScore,
   type HttpClient,
@@ -152,7 +153,7 @@ export type StaffDeps = {
   log: { info: (message: string) => void };
 };
 
-export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'vip', 'rotations', 'private', 'circles', 'voteoptions', 'coinadmin'] as const;
+export const STAFF_COMMANDS = ['warn', 'player', 'kick', 'switchteam', 'moveclan', 'ban', 'unban', 'setnextmap', 'changemap', 'lighting', 'vip', 'rotations', 'private', 'circles', 'voteoptions', 'coinadmin'] as const;
 export type StaffCommand = (typeof STAFF_COMMANDS)[number];
 
 export const isStaffCommand = (name: string): name is StaffCommand => STAFF_COMMANDS.some((command) => command === name);
@@ -677,6 +678,16 @@ export const runStaffCommand =
       }
       await endMatch(rconUrl, rconPassword, http);
       return { content: `🗺️ Ended the match. The server moves to ${described} after the end screen.` };
+    }
+
+    if (name === 'lighting') {
+      const lightings = await fetchLightings(rconUrl, rconPassword, http);
+      const typed = (options['lighting'] ?? '').trim().toLowerCase();
+      const chosen = lightings.find((l) => l.id.toLowerCase() === typed) ?? lightings.find((l) => l.name.toLowerCase() === typed);
+      if (chosen === undefined) return { content: 'Pick a lighting from the list.' };
+      log.info(`/lighting by ${staff}: ${chosen.id}`);
+      await setLighting(rconUrl, rconPassword, chosen.id, http);
+      return { content: `💡 Lighting changed to **${chosen.name}** for the match on now. The next map plays with its own lighting.` };
     }
 
     if (name === 'rotations') return runRotations({ config, http, records, now, log }, options, by, userName);
