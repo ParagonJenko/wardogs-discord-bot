@@ -18,21 +18,28 @@ import { weaponBoard, type WeaponBoard, type WeaponDay } from './weapons.ts';
 
 // The game's seasons, oldest first. Each ends with a wipe, and the next starts there; the first starts with the bot's
 // records. Matches count in the season they ended in. Season 1 ended with the wipe on 15 October 2026, 00:00 UTC (1am in
-// the UK), Season 2 with the one on 12 November 2026, 00:00 UTC. Add each new season here once its wipe is known.
-export type Season = { number: number; name: string; startsAt: number | null; endsAt: number };
+// the UK), Season 2 with the one on 12 November 2026, 00:00 UTC (midnight in the UK). A season whose wipe is not known
+// yet has no end (`endsAt: null`): it is never over, so only staff see it. Set its end once the wipe is announced, and
+// add the next season after it.
+export type Season = { number: number; name: string; startsAt: number | null; endsAt: number | null };
 export const SEASONS: readonly Season[] = [
   { number: 1, name: 'Season 1', startsAt: null, endsAt: Date.UTC(2026, 9, 15) },
   { number: 2, name: 'Season 2', startsAt: Date.UTC(2026, 9, 15), endsAt: Date.UTC(2026, 10, 12) },
+  { number: 3, name: 'Season 3', startsAt: Date.UTC(2026, 10, 12), endsAt: null },
 ];
 
-// The newest season listed: the one the season page shows unless asked for another.
-export const LATEST_SEASON = SEASONS[SEASONS.length - 1] as Season;
+// Whether a season is over at `now`, so the public gets its roundup.
+export const isOver = (season: Season, now: number): boolean => season.endsAt !== null && now >= season.endsAt;
+
+// The season the season page shows unless asked for another: the newest that is over, or the first while none is.
+export const shownSeason = (now: number): Season => SEASONS.findLast((s) => isOver(s, now)) ?? (SEASONS[0] as Season);
 
 // The season with this number, or null.
 export const seasonOf = (number: number): Season | null => SEASONS.find((s) => s.number === number) ?? null;
 
 // The season a time falls in (a match counts in the one it ended in), or null when it is after the last one listed.
-export const seasonAt = (at: number): Season | null => SEASONS.find((s) => at < s.endsAt && (s.startsAt === null || at >= s.startsAt)) ?? null;
+export const seasonAt = (at: number): Season | null =>
+  SEASONS.find((s) => (s.endsAt === null || at < s.endsAt) && (s.startsAt === null || at >= s.startsAt)) ?? null;
 
 // Each board's top this many.
 export const SEASON_SHOWN = 10;
@@ -79,9 +86,10 @@ export type SeasonRoundup = Roundup & {
 };
 
 // A season as the season page lists it: `open` once it is over, when the public gets its roundup.
-export type SeasonListed = { number: number; name: string; endsAt: number; open: boolean };
+export type SeasonListed = { number: number; name: string; endsAt: number | null; open: boolean };
 
-// What /api/season serves: one season, and every season listed so the page can link to the others. Before the season
+// What /api/season serves: one season, and every season listed so the page can link to the others. `endsAt` is null for
+// a season whose wipe is not known yet. Before the season
 // is over only staff get its roundup. `roundup` is null for the public before then, and when nobody played.
 export type SeasonPage = SeasonListed & { roundup: SeasonRoundup | null; seasons: SeasonListed[] };
 
@@ -89,7 +97,7 @@ export const listedSeason = (season: Season, now: number): SeasonListed => ({
   number: season.number,
   name: season.name,
   endsAt: season.endsAt,
-  open: now >= season.endsAt,
+  open: isOver(season, now),
 });
 
 export type SeasonSources = {
@@ -117,8 +125,9 @@ export const seasonPeriod = (season: Season, firstDay: string, now: number): Per
   const recordsStart = Date.parse(`${firstDay}T00:00:00Z`);
   if (Number.isNaN(recordsStart)) return null;
   const start = Math.max(recordsStart, season.startsAt ?? recordsStart);
-  const end = Math.min(now, season.endsAt);
-  return start >= end ? null : { kind: 'season', start, end, partial: now < season.endsAt };
+  const over = isOver(season, now);
+  const end = over && season.endsAt !== null ? season.endsAt : now;
+  return start >= end ? null : { kind: 'season', start, end, partial: !over };
 };
 
 // The roundup is built with every player's Steam ID as their `id`, so it can be kept and still follow players making

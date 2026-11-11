@@ -282,22 +282,23 @@ roundup. A message that fails is logged and not tried again, so the roundup is n
 ## Season roundup
 
 On Cloudflare the bot serves a roundup of each game season for the website's season page: **`GET /api/season`** for the
-newest season listed, or **`GET /api/season?number=1`** for another (404 for a season not listed). Each season ends with a
+newest season that is over, or **`GET /api/season?number=1`** for another (404 for a season not listed). Each season ends with a
 wipe and the next starts there:
 
 | Season   | From                                                     | To (the wipe)                              |
 | -------- | -------------------------------------------------------- | ------------------------------------------ |
 | Season 1 | The first day of the [player records](#player-records)   | **15 October 2026, 00:00 UTC** (1am UK)    |
 | Season 2 | 15 October 2026, 00:00 UTC                               | **12 November 2026, 00:00 UTC** (midnight UK) |
+| Season 3 | 12 November 2026, 00:00 UTC                              | Not known yet (`endsAt: null`)             |
 
 The public only gets a season's roundup once it is over; before then the endpoint says when it ends and nothing else,
-and staff signed in on the website can see the season so far at `GET /api/admin/season` (with `?number=` too), to check
-the page before it opens. Every answer lists all the seasons in `seasons`, so the page can link to the earlier ones.
+and staff signed in on the website can see the season going on now at `GET /api/admin/season` (or another with
+`?number=`), to check the page before it opens. A season with no end is never over, so only staff see it. Every answer lists all the seasons in `seasons`, so the page can link to the earlier ones.
 
 | Field     | What                                                                                        |
 | --------- | ------------------------------------------------------------------------------------------- |
 | `number`, `name` | The season: `2`, `"Season 2"`                                                        |
-| `endsAt`  | When the season ends (Unix ms): the wipe                                                    |
+| `endsAt`  | When the season ends (Unix ms): the wipe. Null while it is not known                        |
 | `open`    | Whether the season is over, so the public gets the roundup                                  |
 | `roundup` | The roundup (below), or null: for the public before the season is over, and when nobody played |
 | `seasons` | Every season listed, oldest first: `{ number, name, endsAt, open }`                        |
@@ -333,8 +334,8 @@ day the feed covers). And on top of those:
   deletes that season's, and the next check builds and saves it again without that match. To build them again after
   changing how they are made, raise `SEASON_VERSION` in `src/season.ts` (every season is built again, from the records
   still kept).
-- The seasons are `SEASONS` in `src/season.ts`; moving a season's end moves when its page opens too. **Add each new
-  season there once its wipe is known**: until then the newest listed is the one `/api/season` shows.
+- The seasons are `SEASONS` in `src/season.ts`; moving a season's end moves when its page opens too. **When a wipe is
+  announced, set that season's `endsAt` and add the next season** (starting at the wipe, with `endsAt: null`).
 - Like `/api/stats`, each Worker instance reuses an answer for 30 seconds, so the page opens up to 30 seconds after
   the wipe.
 

@@ -8,7 +8,7 @@ import {
   keptSteamIds,
   parseKeptSeason,
   publicSeason,
-  LATEST_SEASON,
+  isOver,
   listedSeason,
   SEASONS,
   SEASON_SHOWN,
@@ -17,6 +17,7 @@ import {
   seasonKey,
   seasonOf,
   seasonPeriod,
+  shownSeason,
   type SeasonRoundup,
   type SeasonSources,
 } from '../src/season.ts';
@@ -90,6 +91,7 @@ const weaponDays: WeaponDay[] = [
 
 const SEASON_1 = seasonOf(1)!;
 const SEASON_2 = seasonOf(2)!;
+const SEASON_3 = seasonOf(3)!;
 
 const sources = (values: Partial<SeasonSources> = {}): SeasonSources => ({
   season: SEASON_1,
@@ -125,11 +127,11 @@ describe('the season', () => {
 });
 
 describe('the seasons', () => {
-  it('lists Season 1 and Season 2, each starting where the last ended', () => {
-    expect(SEASONS.map((s) => s.number)).toEqual([1, 2]);
-    expect(LATEST_SEASON).toBe(SEASON_2);
+  it('lists the seasons, each starting where the last ended, and Season 3 with no end yet', () => {
+    expect(SEASONS.map((s) => s.number)).toEqual([1, 2, 3]);
     expect(SEASON_2).toMatchObject({ name: 'Season 2', startsAt: at('2026-10-15'), endsAt: at('2026-11-12') });
-    expect(seasonOf(3)).toBeNull();
+    expect(SEASON_3).toMatchObject({ name: 'Season 3', startsAt: at('2026-11-12'), endsAt: null });
+    expect(seasonOf(4)).toBeNull();
     expect(seasonKey(2)).toBe('season:2');
   });
 
@@ -137,7 +139,22 @@ describe('the seasons', () => {
     expect(seasonAt(at('2026-10-14', 23))).toBe(SEASON_1);
     expect(seasonAt(at('2026-10-15'))).toBe(SEASON_2);
     expect(seasonAt(at('2026-11-11', 23))).toBe(SEASON_2);
-    expect(seasonAt(at('2026-11-12'))).toBeNull();
+    expect(seasonAt(at('2026-11-12'))).toBe(SEASON_3);
+    expect(seasonAt(at('2027-06-01'))).toBe(SEASON_3);
+  });
+
+  it('shows the newest season that is over', () => {
+    expect(shownSeason(at('2026-11-11', 23))).toBe(SEASON_1);
+    expect(shownSeason(at('2026-11-12'))).toBe(SEASON_2);
+    expect(shownSeason(at('2027-06-01'))).toBe(SEASON_2);
+    expect(isOver(SEASON_3, at('2027-06-01'))).toBe(false);
+  });
+
+  it('runs a season with no end up to now', () => {
+    const now = at('2026-11-20', 9);
+    expect(seasonPeriod(SEASON_3, '2026-10-12', now)).toEqual({ kind: 'season', start: at('2026-11-12'), end: now, partial: true });
+    expect(seasonPeriod(SEASON_3, '2026-10-12', at('2026-11-11'))).toBeNull();
+    expect(listedSeason(SEASON_3, now)).toEqual({ number: 3, name: 'Season 3', endsAt: null, open: false });
   });
 
   it('opens each season once it is over', () => {

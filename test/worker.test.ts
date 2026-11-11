@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestHarness, type TestHarness } from 'wrangler';
 import { createPlayerSession, createSession, startLogin } from '../src/adminauth.ts';
-import { LATEST_SEASON as SEASON, SEASONS } from '../src/season.ts';
+import { isOver, seasonAt, SEASONS, shownSeason, type Season } from '../src/season.ts';
 
 // The Worker as Cloudflare runs it: built from wrangler.jsonc by Wrangler and run in workerd, the same runtime, with the
 // Durable Object and its SQLite storage. The other tests cover each part on its own; these check they still fit
@@ -449,17 +449,20 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     });
 
     it('sees the season roundup before the public does', async () => {
-      // The test's records start today, so once the season is over there is no season in them: then neither gets one.
-      const open = Date.now() >= SEASON.endsAt;
+      // The test's records start today: a season that is over has nobody in them, and the one going on has today.
+      const now = Date.now();
+      const listed = (s: Season) => ({ number: s.number, name: s.name, endsAt: s.endsAt, open: isOver(s, now) });
+      const seasons = SEASONS.map(listed);
       server.clearLogs();
-      const shown = { number: SEASON.number, name: SEASON.name, endsAt: SEASON.endsAt, open };
-      const seasons = SEASONS.map((s) => ({ number: s.number, name: s.name, endsAt: s.endsAt, open: Date.now() >= s.endsAt }));
       const page = await json('/api/season');
       expect(page.status).toBe(200);
-      expect(page.body).toEqual({ ...shown, roundup: null, seasons });
-      // An earlier season by its number: over, so open to everyone (the test's records start today, so it has nobody).
+      expect(page.body).toEqual({ ...listed(shownSeason(now)), roundup: null, seasons });
+      // Another season by its number.
       const first = await json('/api/season?number=1');
       expect(first.body).toMatchObject({ number: 1, name: 'Season 1', open: true, roundup: null, seasons });
+      const going = seasonAt(now)!;
+      // The season going on now: not over, so the public gets no roundup.
+      expect((await json(`/api/season?number=${going.number}`)).body).toEqual({ ...listed(going), roundup: null, seasons });
       expect((await server.fetch('/api/season?number=99')).status).toBe(404);
       expect((await server.fetch('/api/season?number=x')).status).toBe(404);
 
@@ -467,9 +470,11 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       const session = await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now());
       const early = await json('/api/admin/season', { headers: { authorization: `Bearer ${session}` } });
       expect(early.status).toBe(200);
-      expect(early.body).toMatchObject(shown);
-      if (open) expect(early.body.roundup).toBeNull();
-      else expect(early.body.roundup).toMatchObject({ kind: 'season', partial: true, players: 1 });
+      expect(early.body).toMatchObject({ ...listed(going), seasons });
+      expect(early.body.roundup).toMatchObject({ kind: 'season', partial: true, players: 1 });
+      const past = await json('/api/admin/season?number=1', { headers: { authorization: `Bearer ${session}` } });
+      expect(past.body).toMatchObject({ number: 1, open: true, roundup: null });
+      expect((await server.fetch('/api/admin/season?number=99', { headers: { authorization: `Bearer ${session}` } })).status).toBe(404);
       expect(errors()).toEqual([]);
     });
   });

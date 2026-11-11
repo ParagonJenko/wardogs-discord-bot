@@ -373,7 +373,7 @@ import {
   keptSeason,
   keptSteamIds,
   parseKeptSeason,
-  LATEST_SEASON,
+  isOver,
   listedSeason,
   publicSeason,
   SEASONS,
@@ -382,6 +382,7 @@ import {
   seasonOf,
   seasonKey,
   seasonPeriod,
+  shownSeason,
   type Season,
   type SeasonPage,
   type SeasonRoundup,
@@ -1605,10 +1606,11 @@ export class Watcher extends DurableObject<Env> {
     return this.roundupFor(periodFor(choice, now), now);
   }
 
-  // The website's season page (see season.ts): the season asked for, or the newest listed. The public gets its roundup
-  // once it is over; staff (`early`) get the season so far before that.
-  async season(season: Season = LATEST_SEASON, early = false): Promise<SeasonPage> {
+  // The website's season page (see season.ts): the season asked for, or else the newest that is over. The public gets
+  // its roundup once it is over; staff (`early`) get the season so far before that.
+  async season(asked: Season | null = null, early = false): Promise<SeasonPage> {
     const now = Date.now();
+    const season = asked ?? shownSeason(now);
     const page = { ...listedSeason(season, now), seasons: SEASONS.map((s) => listedSeason(s, now)) };
     if (!page.open && !early) return { ...page, roundup: null };
     const roundup = page.open ? await this.seasonOver(season, now) : await this.seasonRoundup(season, now);
@@ -1625,7 +1627,7 @@ export class Watcher extends DurableObject<Env> {
     const kept = parseKeptSeason(await storage.get(seasonKey(season.number)));
     if (kept !== null) return kept;
     const roundup = await this.seasonRoundup(season, now);
-    if (roundup !== null && now >= season.endsAt + SEASON_SETTLE_MS) {
+    if (roundup !== null && season.endsAt !== null && now >= season.endsAt + SEASON_SETTLE_MS) {
       await storage.put(seasonKey(season.number), keptSeason(roundup));
       console.info(`Kept the ${season.name} roundup`);
     }
@@ -1638,7 +1640,7 @@ export class Watcher extends DurableObject<Env> {
   private async keepSeasons(): Promise<void> {
     const now = Date.now();
     for (const season of SEASONS) {
-      if (this.seasonsLooked.has(season.number) || now < season.endsAt + SEASON_SETTLE_MS) continue;
+      if (this.seasonsLooked.has(season.number) || season.endsAt === null || now < season.endsAt + SEASON_SETTLE_MS) continue;
       try {
         await this.seasonOver(season, now);
         this.seasonsLooked.add(season.number);
@@ -5154,7 +5156,7 @@ export class Watcher extends DurableObject<Env> {
         : {};
     // A match of a season that is over leaves its kept roundup, which is built again without it.
     const ended = seasonAt(endedAt);
-    const gone = ended !== null && Date.now() >= ended.endsAt ? [found[0], seasonKey(ended.number)] : [found[0]];
+    const gone = ended !== null && isOver(ended, Date.now()) ? [found[0], seasonKey(ended.number)] : [found[0]];
     // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
     await Promise.all([storage.put({ stats, [dayKey]: day, ...unfolded }), storage.delete(gone)]);
     // The player pages read the records again, without it, and the next check keeps the season roundup again.
@@ -5468,10 +5470,11 @@ const serveJson = async (key: string, load: () => Promise<unknown>, ctx: Executi
   return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...headers } });
 };
 
-// The season `?number=` asks for, the newest listed without it, or null for one not listed.
-const seasonAsked = (url: URL): Season | null => {
+// The season `?number=` asks for, `'shown'` without it (the newest that is over, see shownSeason), or null for one not
+// listed.
+const seasonAsked = (url: URL): Season | 'shown' | null => {
   const asked = url.searchParams.get('number');
-  if (asked === null || asked === '') return LATEST_SEASON;
+  if (asked === null || asked === '') return 'shown';
   return /^\d{1,3}$/.test(asked) ? seasonOf(Number(asked)) : null;
 };
 
@@ -5489,7 +5492,9 @@ const publicRoute = (
   if (url.pathname === '/api/coins') return { key: 'coins', load: () => watcher().publicCoins() };
   if (url.pathname === '/api/season') {
     const season = seasonAsked(url);
-    return season === null ? null : { key: `season:${season.number}`, load: () => watcher().season(season) };
+    if (season === null) return null;
+    const chosen = season === 'shown' ? shownSeason(Date.now()) : season;
+    return { key: `season:${chosen.number}`, load: () => watcher().season(chosen) };
   }
   // Kept for the usual time and no longer: it names the regulars, so a profile made private must leave it within a minute.
   if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime() };
@@ -6029,7 +6034,10 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     const season = seasonAsked(new URL(request.url));
     if (season === null) return Response.json({ error: 'No such season.' }, { status: 404, headers });
     try {
-      return Response.json(await watcher().season(season, true), { headers });
+      // Without a number, staff get the season going on now, to check it before it opens.
+      const now = Date.now();
+      const chosen = season === 'shown' ? (seasonAt(now) ?? shownSeason(now)) : season;
+      return Response.json(await watcher().season(chosen, true), { headers });
     } catch (error) {
       console.error(`Staff page season roundup failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't build the season roundup right now." }, { status: 503, headers });
