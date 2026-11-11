@@ -281,26 +281,34 @@ roundup. A message that fails is logged and not tried again, so the roundup is n
 
 ## Season roundup
 
-On Cloudflare the bot serves a roundup of the whole game season for the website's season page: **`GET /api/season`**.
-Season 1 ran from the first day of the [player records](#player-records) up to the wipe on **15 October 2026, 00:00
-UTC** (1am in the UK). **It is over, so the roundup is open to everyone.** The public only gets the roundup once the
-season is over; before then the endpoint says when it ends and nothing else, and staff signed in on the website can
-see the season so far at `GET /api/admin/season`, to check the page before it opens.
+On Cloudflare the bot serves a roundup of each game season for the website's season page: **`GET /api/season`** for the
+newest season listed, or **`GET /api/season?number=1`** for another (404 for a season not listed). Each season ends with a
+wipe and the next starts there:
+
+| Season   | From                                                     | To (the wipe)                              |
+| -------- | -------------------------------------------------------- | ------------------------------------------ |
+| Season 1 | The first day of the [player records](#player-records)   | **15 October 2026, 00:00 UTC** (1am UK)    |
+| Season 2 | 15 October 2026, 00:00 UTC                               | **12 November 2026, 00:00 UTC** (midnight UK) |
+
+The public only gets a season's roundup once it is over; before then the endpoint says when it ends and nothing else,
+and staff signed in on the website can see the season so far at `GET /api/admin/season` (with `?number=` too), to check
+the page before it opens. Every answer lists all the seasons in `seasons`, so the page can link to the earlier ones.
 
 | Field     | What                                                                                        |
 | --------- | ------------------------------------------------------------------------------------------- |
-| `number`, `name` | The season: `1`, `"Season 1"`                                                        |
+| `number`, `name` | The season: `2`, `"Season 2"`                                                        |
 | `endsAt`  | When the season ends (Unix ms): the wipe                                                    |
 | `open`    | Whether the season is over, so the public gets the roundup                                  |
 | `roundup` | The roundup (below), or null: for the public before the season is over, and when nobody played |
+| `seasons` | Every season listed, oldest first: `{ number, name, endsAt, open }`                        |
 
 The roundup has everything a [weekly or monthly roundup](#roundups) has, with each board's top 10 rather than 3: `kind`
 (`"season"`), `start`, `end` and `partial` (true while the season is still going: staff only), `matches`, `playedMs`
 (the matches' length added up), `players`, `peakPlayers`, `busiestDay`, `teams` (every side's wins and losses) and
 `bestTeam` (from `teamMinMatches` matches), the boards `kills`, `kd` (from `kdMinMatches` matches: 10, as on the website's
 leaderboard, so a couple of evenings can't top it), `bestMatch` (most kills in a match), `wins`, `mvps`, `playtime` and `seeding`, the highlights
-`biggestWin`, `closestMatch` and `topMap`, `regular` (on the server on the most days), `rookie` (always null for Season 1:
-the records start with it) and `awards` from the kill feed (each role's top 10 and the shout-outs; `from` is the first
+`biggestWin`, `closestMatch` and `topMap`, `regular` (on the server on the most days), `rookie` (first seen in the season, by the
+28 days of records before it; always null for Season 1, as the records start with it) and `awards` from the kill feed (each role's top 10 and the shout-outs; `from` is the first
 day the feed covers). And on top of those:
 
 | Field          | What                                                                                   |
@@ -319,16 +327,18 @@ day the feed covers). And on top of those:
   profile]` and no `id` for a [private profile](#private-profiles), as they are now, whenever it was made private.
 - A match counts in the season it ended in, and a day by its UTC date, so a match that runs past midnight into 15
   October counts for Season 2. Staff's seeding counts as playing, as in the roundups.
-- **Kept for good.** 10 minutes after the season ends the bot's check saves the roundup (`season:1` in its storage),
+- **Kept for good.** 10 minutes after a season ends the bot's check saves its roundup (`season:<number>` in its storage),
   whether or not anyone has opened the page, and serves that from then on, so it stays the same once the kill feed's
-  records of those days are gone (after 62 days) and however the records change. `/removematch` on a Season 1 match
-  deletes it, and the next check builds and saves it again without that match. To build it again after changing how
-  it is made, raise `SEASON_VERSION` in `src/season.ts`.
-- The season's end is `SEASON` in `src/season.ts`; moving it moves when the page opens too.
+  records of those days are gone (after 62 days) and however the records change. `/removematch` on a match of a season that is over
+  deletes that season's, and the next check builds and saves it again without that match. To build them again after
+  changing how they are made, raise `SEASON_VERSION` in `src/season.ts` (every season is built again, from the records
+  still kept).
+- The seasons are `SEASONS` in `src/season.ts`; moving a season's end moves when its page opens too. **Add each new
+  season there once its wipe is known**: until then the newest listed is the one `/api/season` shows.
 - Like `/api/stats`, each Worker instance reuses an answer for 30 seconds, so the page opens up to 30 seconds after
   the wipe.
 
-The Node/Docker version does not serve the season roundup.
+The Node/Docker version does not serve the season roundups.
 
 ## Slash commands
 
@@ -1667,7 +1677,7 @@ them: the game sends them in a new form, and the bot needs changing.
   [Warcon](https://github.com/warcon-app/warcon)'s list. Some Warcon has no name for: `Id.Item.WEPN_030` is the FAL,
   `WEPN_033` the Bushmaster M17S, `WEPN_034` the M14, `SMG_03` the PP-19 Vityaz, `WEPN_028` the MP5, `WEPN_026` the M1911, `WEPN_027` the
   Deagle, `WEPN_032` the GGX 18, `WEPN_037` the TCX-SPR, `WEPN_031` the PP-19 Bizon and
-  `Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun` the M2 Browning, as staff found in game; `Id.Item.WEPN_035` the
+  `Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun` the MG Nest, as staff found in game; `Id.Item.WEPN_035` the
   Scout Rifle TD,
   `Id.Item.Launcher_04` the 9K333 Verba and `Vehicle.Variant.Stationary.STN_05` the Stingray, as [Wardogs
   Zone](https://wardogs.zone/database), whose pages go by the game's tags, names them; and `Id.Item.SR_04` the AMR 50,

@@ -228,7 +228,7 @@ describe('weaponName and weaponKind', () => {
     expect(weaponName('Id.Item.SMG_03')).toBe('PP-19 Vityaz');
     expect(weaponName('Id.Item.WEPN_028')).toBe('MP5');
     expect(weaponName('Id.Item.WEPN_031')).toBe('PP-19 Bizon');
-    expect(weaponName('Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun')).toBe('M2 Browning');
+    expect(weaponName('Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun')).toBe('MG Nest');
     expect(weaponName('Id.Item.WEPN_026')).toBe('M1911');
     expect(weaponName('Id.Item.WEPN_027')).toBe('Deagle');
     expect(weaponName('Id.Item.WEPN_032')).toBe('GGX 18');
