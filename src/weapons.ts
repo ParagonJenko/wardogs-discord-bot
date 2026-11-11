@@ -308,7 +308,7 @@ const NAMES: Record<string, string> = {
   'ID.Item.BuildTool.Hammer.Small': 'Small hammer',
   'ID.Item.RepairTool.Drill.Light': 'Light drill',
   'ID.Item.RepairTool.Drill.Heavy': 'Heavy drill',
-  'ID.Item.SmokeGrenade.White': 'White smoke grenade',
+  'ID.Item.SmokeGrenade.White': 'M18 Smoke Grenade: White',
   'Id.Item.VehicleSupplyCrate.Pallet.MunitionsSupply': 'Ammo supply pallet',
   'Id.Buildable.BremmerWall': 'Bremer wall',
   'Id.Buildable.BarbedWire': 'Barbed wire',
@@ -359,8 +359,8 @@ const NAMES: Record<string, string> = {
   'Id.Vehicle.WeaponExtension.WHL_07.MachineGun': 'Ural Defender M249',
   'Id.Vehicle.WeaponExtension.STN_01.MistralAA': 'Talon 9K-SAM',
   'Id.Vehicle.WeaponExtension.STN_03.MainBarrel': 'L81 mortar',
-  // Not in Warcon's list. The mounted machine gun emplacement, which staff think is the M2 Browning.
-  'Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun': 'M2 Browning',
+  // Not in Warcon's list. The mounted machine gun emplacement, as staff name it.
+  'Id.Vehicle.WeaponExtension.STN_06.MountedMachineGun': 'MG Nest',
 };
 
 const BY_TAG = new Map(Object.entries(NAMES).map(([cause, name]) => [cause.toLowerCase(), name]));

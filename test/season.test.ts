@@ -8,10 +8,16 @@ import {
   keptSteamIds,
   parseKeptSeason,
   publicSeason,
-  SEASON,
+  isOver,
+  listedSeason,
+  SEASONS,
   SEASON_SHOWN,
   SEASON_VERSION,
+  seasonAt,
+  seasonKey,
+  seasonOf,
   seasonPeriod,
+  shownSeason,
   type SeasonRoundup,
   type SeasonSources,
 } from '../src/season.ts';
@@ -83,7 +89,12 @@ const weaponDays: WeaponDay[] = [
   {},
 ];
 
+const SEASON_1 = seasonOf(1)!;
+const SEASON_2 = seasonOf(2)!;
+const SEASON_3 = seasonOf(3)!;
+
 const sources = (values: Partial<SeasonSources> = {}): SeasonSources => ({
+  season: SEASON_1,
   firstDay: '2026-10-12',
   now: AFTER,
   days,
@@ -98,20 +109,88 @@ const season = buildSeason(sources()) as SeasonRoundup;
 
 describe('the season', () => {
   it('runs from the first day of the records to the wipe, or to now while it is going on', () => {
-    expect(SEASON.endsAt).toBe(at('2026-10-15'));
-    expect(seasonPeriod('2026-10-12', AFTER)).toEqual({ kind: 'season', start: at('2026-10-12'), end: at('2026-10-15'), partial: false });
+    expect(SEASON_1.endsAt).toBe(at('2026-10-15'));
+    expect(seasonPeriod(SEASON_1, '2026-10-12', AFTER)).toEqual({ kind: 'season', start: at('2026-10-12'), end: at('2026-10-15'), partial: false });
     const now = at('2026-10-14', 9);
-    expect(seasonPeriod('2026-10-12', now)).toEqual({ kind: 'season', start: at('2026-10-12'), end: now, partial: true });
+    expect(seasonPeriod(SEASON_1, '2026-10-12', now)).toEqual({ kind: 'season', start: at('2026-10-12'), end: now, partial: true });
   });
 
   it('has no season before the records start', () => {
-    expect(seasonPeriod('2026-10-16', AFTER)).toBeNull();
-    expect(seasonPeriod('not a day', AFTER)).toBeNull();
+    expect(seasonPeriod(SEASON_1, '2026-10-16', AFTER)).toBeNull();
+    expect(seasonPeriod(SEASON_1, 'not a day', AFTER)).toBeNull();
     expect(buildSeason(sources({ firstDay: '2026-10-16' }))).toBeNull();
   });
 
   it('has no roundup when nobody played', () => {
     expect(buildSeason(sources({ days: [] }))).toBeNull();
+  });
+});
+
+describe('the seasons', () => {
+  it('lists the seasons, each starting where the last ended, and Season 3 with no end yet', () => {
+    expect(SEASONS.map((s) => s.number)).toEqual([1, 2, 3]);
+    expect(SEASON_2).toMatchObject({ name: 'Season 2', startsAt: at('2026-10-15'), endsAt: at('2026-11-12') });
+    expect(SEASON_3).toMatchObject({ name: 'Season 3', startsAt: at('2026-11-12'), endsAt: null });
+    expect(seasonOf(4)).toBeNull();
+    expect(seasonKey(2)).toBe('season:2');
+  });
+
+  it('puts a time in the season it falls in', () => {
+    expect(seasonAt(at('2026-10-14', 23))).toBe(SEASON_1);
+    expect(seasonAt(at('2026-10-15'))).toBe(SEASON_2);
+    expect(seasonAt(at('2026-11-11', 23))).toBe(SEASON_2);
+    expect(seasonAt(at('2026-11-12'))).toBe(SEASON_3);
+    expect(seasonAt(at('2027-06-01'))).toBe(SEASON_3);
+  });
+
+  it('shows the newest season that is over', () => {
+    expect(shownSeason(at('2026-11-11', 23))).toBe(SEASON_1);
+    expect(shownSeason(at('2026-11-12'))).toBe(SEASON_2);
+    expect(shownSeason(at('2027-06-01'))).toBe(SEASON_2);
+    expect(isOver(SEASON_3, at('2027-06-01'))).toBe(false);
+  });
+
+  it('runs a season with no end up to now', () => {
+    const now = at('2026-11-20', 9);
+    expect(seasonPeriod(SEASON_3, '2026-10-12', now)).toEqual({ kind: 'season', start: at('2026-11-12'), end: now, partial: true });
+    expect(seasonPeriod(SEASON_3, '2026-10-12', at('2026-11-11'))).toBeNull();
+    expect(listedSeason(SEASON_3, now)).toEqual({ number: 3, name: 'Season 3', endsAt: null, open: false });
+  });
+
+  it('opens each season once it is over', () => {
+    expect(listedSeason(SEASON_2, at('2026-11-11', 23))).toEqual({ number: 2, name: 'Season 2', endsAt: at('2026-11-12'), open: false });
+    expect(listedSeason(SEASON_2, at('2026-11-12')).open).toBe(true);
+  });
+
+  it('runs Season 2 from the wipe, not the first day of the records', () => {
+    const now = at('2026-11-12', 12);
+    expect(seasonPeriod(SEASON_2, '2026-10-12', now)).toEqual({ kind: 'season', start: at('2026-10-15'), end: at('2026-11-12'), partial: false });
+    expect(seasonPeriod(SEASON_2, '2026-10-20', now)?.start).toBe(at('2026-10-20'));
+  });
+
+  it('counts only Season 2 in its roundup, and names its rookie from the days before it', () => {
+    const before = Array.from({ length: 28 }, (_, i) => day(new Date(at('2026-09-17') + i * 86_400_000).toISOString().slice(0, 10), {}));
+    const s2 = buildSeason(
+      sources({ season: SEASON_2, firstDay: '2026-09-17', now: at('2026-11-12', 12), days: [day('2026-09-17', { a: totals('Ash', { liveMinutes: 60 }) }), ...before.slice(1, 25), ...days], weaponDays: [], weaponsSince: null }),
+    ) as SeasonRoundup;
+    expect(s2.start).toBe(at('2026-10-15'));
+    expect(s2.matches).toBe(1);
+    expect(s2.players).toBe(1);
+    expect(s2.kills.map((row) => row.name)).toEqual(['Di']);
+    expect(s2.rookie).toMatchObject({ name: 'Di' });
+    expect(s2.days[0]).toMatchObject({ day: '2026-10-15', players: 1 });
+  });
+
+  it('names Season 2\'s rookie when the records go back far enough, even if the day 28 days before it was empty', () => {
+    // As the bot reads them: only the 28 days before the season, the first of them with nobody on.
+    const before = Array.from({ length: 28 }, (_, i) => day(new Date(at('2026-09-17') + i * 86_400_000).toISOString().slice(0, 10), {}));
+    const s2 = buildSeason(
+      sources({ season: SEASON_2, firstDay: '2026-08-01', now: at('2026-11-12', 12), days: [...before.slice(0, 25), ...days], weaponDays: [], weaponsSince: null }),
+    ) as SeasonRoundup;
+    expect(s2.rookie).toMatchObject({ name: 'Di' });
+    // Records that start inside the 28 days are too short to tell.
+    const short = buildSeason(sources({ season: SEASON_2, firstDay: '2026-10-12', now: at('2026-11-12', 12), weaponDays: [], weaponsSince: null }));
+    expect(short?.rookie).toBeNull();
   });
 });
 

@@ -362,6 +362,7 @@ import {
   parseRoundupsPosted,
   periodDays,
   periodFor,
+  ROOKIE_LOOKBACK_DAYS,
   type FeedSources,
   type Period,
   type Roundup,
@@ -372,11 +373,17 @@ import {
   keptSeason,
   keptSteamIds,
   parseKeptSeason,
+  isOver,
+  listedSeason,
   publicSeason,
-  SEASON,
-  SEASON_KEY,
+  SEASONS,
   SEASON_SETTLE_MS,
+  seasonAt,
+  seasonOf,
+  seasonKey,
   seasonPeriod,
+  shownSeason,
+  type Season,
   type SeasonPage,
   type SeasonRoundup,
 } from './season.ts';
@@ -841,8 +848,8 @@ export class Watcher extends DurableObject<Env> {
   private idKey: Promise<CryptoKey> | null = null;
   // Saves reading 'winsSettled' on every check once it is set.
   private winsSettled = false;
-  // Whether this instance has made sure the season roundup is kept (see keepSeason).
-  private seasonLooked = false;
+  // The seasons whose roundup this instance has made sure is kept (see keepSeasons).
+  private seasonsLooked = new Set<number>();
   // Kill feed event ids already counted, oldest first.
   private eventsSeen = new Set<string>();
   private payingBounties = false;
@@ -1397,7 +1404,7 @@ export class Watcher extends DurableObject<Env> {
       }
     }
     await this.roundingUp(() => this.postRoundups(config));
-    await this.keepSeason();
+    await this.keepSeasons();
     // Live pages get the new score, players and map.
     await this.broadcastLive();
   }
@@ -1599,14 +1606,14 @@ export class Watcher extends DurableObject<Env> {
     return this.roundupFor(periodFor(choice, now), now);
   }
 
-  // The website's season page (see season.ts). The public gets the roundup once the season is over; staff (`early`) get
-  // the season so far before that.
-  async season(early = false): Promise<SeasonPage> {
+  // The website's season page (see season.ts): the season asked for, or else the newest that is over. The public gets
+  // its roundup once it is over; staff (`early`) get the season so far before that.
+  async season(asked: Season | null = null, early = false): Promise<SeasonPage> {
     const now = Date.now();
-    const open = now >= SEASON.endsAt;
-    const page = { number: SEASON.number, name: SEASON.name, endsAt: SEASON.endsAt, open };
-    if (!open && !early) return { ...page, roundup: null };
-    const roundup = open ? await this.seasonOver(now) : await this.seasonRoundup(now);
+    const season = asked ?? shownSeason(now);
+    const page = { ...listedSeason(season, now), seasons: SEASONS.map((s) => listedSeason(s, now)) };
+    if (!page.open && !early) return { ...page, roundup: null };
+    const roundup = page.open ? await this.seasonOver(season, now) : await this.seasonRoundup(season, now);
     if (roundup === null) return { ...page, roundup: null };
     const ids = await this.idsFor(keptSteamIds(roundup));
     const idOf = publicIdOf(await this.privateSteam(), (steamId) => ids.get(steamId));
@@ -1615,42 +1622,49 @@ export class Watcher extends DurableObject<Env> {
 
   // The roundup of a season that is over: the kept one, or else one built now, which is kept once the season has been
   // over SEASON_SETTLE_MS. Null when nobody played.
-  private async seasonOver(now: number): Promise<SeasonRoundup | null> {
+  private async seasonOver(season: Season, now: number): Promise<SeasonRoundup | null> {
     const storage = this.ctx.storage;
-    const kept = parseKeptSeason(await storage.get(SEASON_KEY));
+    const kept = parseKeptSeason(await storage.get(seasonKey(season.number)));
     if (kept !== null) return kept;
-    const roundup = await this.seasonRoundup(now);
-    if (roundup !== null && now >= SEASON.endsAt + SEASON_SETTLE_MS) {
-      await storage.put(SEASON_KEY, keptSeason(roundup));
-      console.info(`Kept the ${SEASON.name} roundup`);
+    const roundup = await this.seasonRoundup(season, now);
+    if (roundup !== null && season.endsAt !== null && now >= season.endsAt + SEASON_SETTLE_MS) {
+      await storage.put(seasonKey(season.number), keptSeason(roundup));
+      console.info(`Kept the ${season.name} roundup`);
     }
     return roundup;
   }
 
-  // The checks keep the season roundup once the season has been over SEASON_SETTLE_MS, so it is kept even if nobody
-  // opens the season page before the kill feed's records of those days are gone. Each instance looks once it is due,
-  // and again after /removematch takes a match out of it. A failure is tried again at the next check.
-  private async keepSeason(): Promise<void> {
+  // The checks keep each season's roundup once it has been over SEASON_SETTLE_MS, so it is kept even if nobody opens the
+  // season page before the kill feed's records of those days are gone. Each instance looks once a season is due, and
+  // again after /removematch takes a match out of it. A failure is tried again at the next check.
+  private async keepSeasons(): Promise<void> {
     const now = Date.now();
-    if (this.seasonLooked || now < SEASON.endsAt + SEASON_SETTLE_MS) return;
-    try {
-      await this.seasonOver(now);
-      this.seasonLooked = true;
-    } catch (error) {
-      console.error(`Keeping the ${SEASON.name} roundup failed: ${errorText(error)}`);
+    for (const season of SEASONS) {
+      if (this.seasonsLooked.has(season.number) || season.endsAt === null || now < season.endsAt + SEASON_SETTLE_MS) continue;
+      try {
+        await this.seasonOver(season, now);
+        this.seasonsLooked.add(season.number);
+      } catch (error) {
+        console.error(`Keeping the ${season.name} roundup failed: ${errorText(error)}`);
+      }
     }
   }
 
   // From the player records since their first day, the match records, each day's weapons and the kill feed's records.
-  // Players are kept by Steam ID (see buildSeason). Null before the records start, or when nobody played.
-  private async seasonRoundup(now: number): Promise<SeasonRoundup | null> {
+  // The days up to ROOKIE_LOOKBACK_DAYS before the season are read too, to tell its rookies. Players are kept by Steam ID
+  // (see buildSeason). Null before the season or the records start, or when nobody played.
+  private async seasonRoundup(season: Season, now: number): Promise<SeasonRoundup | null> {
     const storage = this.ctx.storage;
     const [firstKey] = (await storage.list({ prefix: 'players:', limit: 1 })).keys();
     const firstDay = firstKey === undefined ? null : dayOfKey(firstKey);
-    const period = firstDay === null ? null : seasonPeriod(firstDay, now);
+    const period = firstDay === null ? null : seasonPeriod(season, firstDay, now);
     if (firstDay === null || period === null) return null;
     const covered = periodDays(period);
-    const dayKeys = covered.map((day) => playerDayKey(Date.parse(`${day}T00:00:00Z`)));
+    const before = Array.from({ length: ROOKIE_LOOKBACK_DAYS }, (_, i) => dayOf(period.start - (ROOKIE_LOOKBACK_DAYS - i) * DAY_MS)).filter(
+      (day) => day >= firstDay,
+    );
+    const read = [...before, ...covered];
+    const dayKeys = read.map((day) => playerDayKey(Date.parse(`${day}T00:00:00Z`)));
     const weaponKeys = covered.map((day) => weaponDayKey(Date.parse(`${day}T00:00:00Z`)));
     const keys = [...dayKeys, ...weaponKeys, 'killFeedSince', STAFF_PROFILES_KEY];
     const stored = new Map<string, unknown>();
@@ -1662,9 +1676,10 @@ export class Watcher extends DurableObject<Env> {
     const since = stored.get('killFeedSince');
     const feed = this.roundupFeed(covered, now);
     return buildSeason({
+      season,
       firstDay,
       now,
-      days: covered.map((day, i) => ({ day, players: withoutStaffSeeding(parsePlayerDay(stored.get(dayKeys[i] ?? '')), staff) })),
+      days: read.map((day, i) => ({ day, players: withoutStaffSeeding(parsePlayerDay(stored.get(dayKeys[i] ?? '')), staff) })),
       matches: [...records.values()].flatMap((value) => parseMatchRecord(value) ?? []),
       weaponDays: weaponKeys.map((key) => parseWeaponDay(stored.get(key))),
       weaponsSince: typeof since === 'string' ? since : null,
@@ -5140,13 +5155,14 @@ export class Watcher extends DurableObject<Env> {
           )
         : {};
     // A match of a season that is over leaves its kept roundup, which is built again without it.
-    const gone = endedAt < SEASON.endsAt ? [found[0], SEASON_KEY] : [found[0]];
+    const ended = seasonAt(endedAt);
+    const gone = ended !== null && isOver(ended, Date.now()) ? [found[0], seasonKey(ended.number)] : [found[0]];
     // Issued together with no await in between, so they are written at once: a failure cannot leave it half removed.
     await Promise.all([storage.put({ stats, [dayKey]: day, ...unfolded }), storage.delete(gone)]);
     // The player pages read the records again, without it, and the next check keeps the season roundup again.
     this.dayCache.clear();
     this.matchCache.clear();
-    this.seasonLooked = false;
+    if (ended !== null) this.seasonsLooked.delete(ended.number);
     // The long-term records lose it too (a failure is only logged, as the match is removed already).
     try {
       removeArchivedMatch(this.lifetimeSql(), endedAt, record.players.map((p) => p.steamId));
@@ -5454,6 +5470,14 @@ const serveJson = async (key: string, load: () => Promise<unknown>, ctx: Executi
   return new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', ...headers } });
 };
 
+// The season `?number=` asks for, `'shown'` without it (the newest that is over, see shownSeason), or null for one not
+// listed.
+const seasonAsked = (url: URL): Season | 'shown' | null => {
+  const asked = url.searchParams.get('number');
+  if (asked === null || asked === '') return 'shown';
+  return /^\d{1,3}$/.test(asked) ? seasonOf(Number(asked)) : null;
+};
+
 // The website's JSON: the server's stats, the live match, everyone to find a player page for, the season roundup, and one
 // player's page.
 const publicRoute = (
@@ -5466,7 +5490,12 @@ const publicRoute = (
   if (url.pathname === '/api/vote') return { key: 'vote', load: () => watcher().mapVote(), keepMs: LIVE_CACHE_MS };
   if (url.pathname === '/api/shame') return { key: 'shame', load: () => watcher().shame() };
   if (url.pathname === '/api/coins') return { key: 'coins', load: () => watcher().publicCoins() };
-  if (url.pathname === '/api/season') return { key: 'season', load: () => watcher().season() };
+  if (url.pathname === '/api/season') {
+    const season = seasonAsked(url);
+    if (season === null) return null;
+    const chosen = season === 'shown' ? shownSeason(Date.now()) : season;
+    return { key: `season:${chosen.number}`, load: () => watcher().season(chosen) };
+  }
   // Kept for the usual time and no longer: it names the regulars, so a profile made private must leave it within a minute.
   if (url.pathname === '/api/lifetime') return { key: 'lifetime', load: () => watcher().publicLifetime() };
   const id = url.searchParams.get('id') ?? '';
@@ -6002,8 +6031,13 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
   }
   // The season page's roundup before the season is over, so staff can check it before the public sees it.
   if (route === 'GET /api/admin/season') {
+    const season = seasonAsked(new URL(request.url));
+    if (season === null) return Response.json({ error: 'No such season.' }, { status: 404, headers });
     try {
-      return Response.json(await watcher().season(true), { headers });
+      // Without a number, staff get the season going on now, to check it before it opens.
+      const now = Date.now();
+      const chosen = season === 'shown' ? (seasonAt(now) ?? shownSeason(now)) : season;
+      return Response.json(await watcher().season(chosen, true), { headers });
     } catch (error) {
       console.error(`Staff page season roundup failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't build the season roundup right now." }, { status: 503, headers });

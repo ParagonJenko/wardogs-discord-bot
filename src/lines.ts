@@ -42,9 +42,10 @@ export const SEEDING = [
   '{needed} to go live. The leaderboard covers 30 days, so anyone can top it.',
   '{needed} to go live. Every match is tracked: kills, deaths, wins.',
   '{needed} to go live. Your K/D, wins and play time are on your player page.',
-  '{needed} to go live. Season 2 stats are being counted: your K/D, wins and play time.',
-  '{needed} to go live. Season 2 is on and every match counts towards your stats.',
-  '{needed} to go live. Start your Season 2 stats off with a win.',
+  '{needed} to go live. Season 3 stats are being counted: your K/D, wins and play time.',
+  '{needed} to go live. Season 3 is on and every match counts towards your stats.',
+  '{needed} to go live. Start your Season 3 stats off with a win.',
+  'Season 2 is over: who carried and who fed is in the Season in Review. {needed} to go live.',
 ];
 
 // 10 minutes after the match goes live. These are the whole message, so each ends on one link to type: the website, a
@@ -62,9 +63,10 @@ export const TEN_MINUTES = [
   '10 minutes in. No grenade launchers and no crates in HQ. Rules: {site}/discord',
   'Reminder: no GLs, no crates in HQ. Admins are watching. Rules: {site}/discord',
   '10 minutes in. Watch the kill feed and streaks live: {site}/live',
-  '10 minutes in. Season 2 stats are live. See where you rank: {site}',
-  'Still alive? Your Season 2 K/D, wins and play time: {site}',
-  '10 minutes in. Every kill counts towards your Season 2 stats: {site}',
+  '10 minutes in. Season 3 stats are live. See where you rank: {site}',
+  'Still alive? Your Season 3 K/D, wins and play time: {site}',
+  '10 minutes in. Every kill counts towards your Season 3 stats: {site}',
+  '10 minutes in. Who carried and who fed in Season 2? The Season in Review: {site}/season',
 ];
 
 // In place of the welcome, at most once a week, for a regular (5 or more matches in 30 days) who has not linked their

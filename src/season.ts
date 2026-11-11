@@ -8,16 +8,38 @@ import { dayOf } from './stats.ts';
 import { teamBoard, type MapTeams } from './teams.ts';
 import { weaponBoard, type WeaponBoard, type WeaponDay } from './weapons.ts';
 
-// The season roundup, for the website's season page: everything the bot recorded in a game season, from the first day of
-// its records up to the wipe that ends the season. The same records and rules as the weekly and monthly roundups (see
+// The season roundups, for the website's season page: everything the bot recorded in a game season, from the wipe that
+// starts it (or the first day of its records) up to the wipe that ends it. The same records and rules as the weekly and monthly roundups (see
 // roundup.ts), with each board's top 10, and on top of them each day's players and matches, the season's totals, each
 // map's wins, the longest winning streak, the longest match and the quickest win, the weapons, and two boards for the
 // season page's jokes: the most deaths and the most team kills. The public only sees
 // it once the season is over; staff can see the season so far. Once the season is over the bot keeps it, so it stays the
 // same when the kill feed's records of those days are gone (KILL_DAYS_STORED in killfeed.ts).
 
-// The wipe that ends the season: 15 October 2026, 00:00 UTC (1am in the UK). Matches count in the season they ended in.
-export const SEASON = { number: 1, name: 'Season 1', endsAt: Date.UTC(2026, 9, 15) } as const;
+// The game's seasons, oldest first. Each ends with a wipe, and the next starts there; the first starts with the bot's
+// records. Matches count in the season they ended in. Season 1 ended with the wipe on 15 October 2026, 00:00 UTC (1am in
+// the UK), Season 2 with the one on 12 November 2026, 00:00 UTC (midnight in the UK). A season whose wipe is not known
+// yet has no end (`endsAt: null`): it is never over, so only staff see it. Set its end once the wipe is announced, and
+// add the next season after it.
+export type Season = { number: number; name: string; startsAt: number | null; endsAt: number | null };
+export const SEASONS: readonly Season[] = [
+  { number: 1, name: 'Season 1', startsAt: null, endsAt: Date.UTC(2026, 9, 15) },
+  { number: 2, name: 'Season 2', startsAt: Date.UTC(2026, 9, 15), endsAt: Date.UTC(2026, 10, 12) },
+  { number: 3, name: 'Season 3', startsAt: Date.UTC(2026, 10, 12), endsAt: null },
+];
+
+// Whether a season is over at `now`, so the public gets its roundup.
+export const isOver = (season: Season, now: number): boolean => season.endsAt !== null && now >= season.endsAt;
+
+// The season the season page shows unless asked for another: the newest that is over, or the first while none is.
+export const shownSeason = (now: number): Season => SEASONS.findLast((s) => isOver(s, now)) ?? (SEASONS[0] as Season);
+
+// The season with this number, or null.
+export const seasonOf = (number: number): Season | null => SEASONS.find((s) => s.number === number) ?? null;
+
+// The season a time falls in (a match counts in the one it ended in), or null when it is after the last one listed.
+export const seasonAt = (at: number): Season | null =>
+  SEASONS.find((s) => (s.endsAt === null || at < s.endsAt) && (s.startsAt === null || at >= s.startsAt)) ?? null;
 
 // Each board's top this many.
 export const SEASON_SHOWN = 10;
@@ -29,8 +51,9 @@ export const SEASON_KD_DAYS = 30;
 // The roundup is kept once the season has been over this long, so the last check before the end has saved its records.
 export const SEASON_SETTLE_MS = 10 * 60_000;
 
-// Where the kept roundup is stored. Changing SEASON_VERSION has it built again, from the records still kept.
-export const SEASON_KEY = `season:${SEASON.number}`;
+// Where each season's kept roundup is stored. Changing SEASON_VERSION has every season's built again, from the records
+// still kept, so only raise it for a change worth losing the kill feed's older days for.
+export const seasonKey = (number: number): string => `season:${number}`;
 export const SEASON_VERSION = 1;
 
 // One UTC day: everyone on the server, their minutes added up, the matches that ended, and the most players in them.
@@ -62,16 +85,28 @@ export type SeasonRoundup = Roundup & {
   teamKills: (RoundupPlayer & { teamKills: number })[] | null;
 };
 
-// What /api/season serves. `open` once the season is over, when the public gets the roundup; before that, only staff
-// do. `roundup` is null for the public before then, and when nobody played.
-export type SeasonPage = { number: number; name: string; endsAt: number; open: boolean; roundup: SeasonRoundup | null };
+// A season as the season page lists it: `open` once it is over, when the public gets its roundup.
+export type SeasonListed = { number: number; name: string; endsAt: number | null; open: boolean };
+
+// What /api/season serves: one season, and every season listed so the page can link to the others. `endsAt` is null for
+// a season whose wipe is not known yet. Before the season
+// is over only staff get its roundup. `roundup` is null for the public before then, and when nobody played.
+export type SeasonPage = SeasonListed & { roundup: SeasonRoundup | null; seasons: SeasonListed[] };
+
+export const listedSeason = (season: Season, now: number): SeasonListed => ({
+  number: season.number,
+  name: season.name,
+  endsAt: season.endsAt,
+  open: isOver(season, now),
+});
 
 export type SeasonSources = {
-  // The first UTC day of the records.
+  season: Season;
+  // The first UTC day of the records: for the season's start, and to tell whether they go back far enough for rookies.
   firstDay: string;
   now: number;
-  // Each UTC day's player totals, staff's seeding counted as playing (see withoutStaffSeeding). Days outside the season
-  // are left out.
+  // Each UTC day's player totals, staff's seeding counted as playing (see withoutStaffSeeding). Days before the season
+  // tell its rookies from the rest (see ROOKIE_LOOKBACK_DAYS in roundup.ts); days after it are left out.
   days: { day: string; players: PlayerDay }[];
   // Match records, in any order. Matches count in the season they ended in.
   matches: MatchRecord[];
@@ -84,12 +119,15 @@ export type SeasonSources = {
   scoreToWin: number;
 };
 
-// From the first day of the records up to the end of the season, or up to now while it is still going. Null before the
-// records start.
-export const seasonPeriod = (firstDay: string, now: number): Period | null => {
-  const start = Date.parse(`${firstDay}T00:00:00Z`);
-  const end = Math.min(now, SEASON.endsAt);
-  return Number.isNaN(start) || start >= end ? null : { kind: 'season', start, end, partial: now < SEASON.endsAt };
+// From the start of the season (or the first day of the records, if later) up to its end, or up to now while it is
+// still going. Null before it starts or the records do.
+export const seasonPeriod = (season: Season, firstDay: string, now: number): Period | null => {
+  const recordsStart = Date.parse(`${firstDay}T00:00:00Z`);
+  if (Number.isNaN(recordsStart)) return null;
+  const start = Math.max(recordsStart, season.startsAt ?? recordsStart);
+  const over = isOver(season, now);
+  const end = over && season.endsAt !== null ? season.endsAt : now;
+  return start >= end ? null : { kind: 'season', start, end, partial: !over };
 };
 
 // The roundup is built with every player's Steam ID as their `id`, so it can be kept and still follow players making
@@ -133,7 +171,7 @@ const longestStreak = (matches: MatchRecord[]): SeasonStreak | null => {
 
 // Null when nobody was on the server in the season, or the records have not started.
 export const buildSeason = (sources: SeasonSources): SeasonRoundup | null => {
-  const period = seasonPeriod(sources.firstDay, sources.now);
+  const period = seasonPeriod(sources.season, sources.firstDay, sources.now);
   if (period === null) return null;
   const { days, matches, feed } = sources;
   const roundup = buildRoundup({
@@ -143,6 +181,8 @@ export const buildSeason = (sources: SeasonSources): SeasonRoundup | null => {
     idOf: steamIds,
     shown: SEASON_SHOWN,
     kdDays: SEASON_KD_DAYS,
+    // The days before the season are only read back ROOKIE_LOOKBACK_DAYS, and the first of them can be empty.
+    recordsFrom: sources.firstDay,
     ...(feed === undefined ? {} : { feed }),
   });
   if (roundup === null) return null;
