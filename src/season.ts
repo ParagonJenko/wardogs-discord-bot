@@ -54,6 +54,12 @@ export const SEASON_SETTLE_MS = 10 * 60_000;
 // Where each season's kept roundup is stored. Changing SEASON_VERSION has every season's built again, from the records
 // still kept, so only raise it for a change worth losing the kill feed's older days for.
 export const seasonKey = (number: number): string => `season:${number}`;
+
+// When a season's roundup was announced in Discord (see the worker's announceSeason), so it is posted once.
+export const seasonAnnouncedKey = (number: number): string => `seasonAnnounced:${number}`;
+
+// A season is only announced this soon after its end, so a season over before the bot announced them is never posted.
+export const SEASON_ANNOUNCE_MS = 2 * 24 * 60 * 60_000;
 export const SEASON_VERSION = 1;
 
 // One UTC day: everyone on the server, their minutes added up, the matches that ended, and the most players in them.
@@ -91,7 +97,28 @@ export type SeasonListed = { number: number; name: string; endsAt: number | null
 // What /api/season serves: one season, and every season listed so the page can link to the others. `endsAt` is null for
 // a season whose wipe is not known yet. Before the season
 // is over only staff get its roundup. `roundup` is null for the public before then, and when nobody played.
-export type SeasonPage = SeasonListed & { roundup: SeasonRoundup | null; seasons: SeasonListed[] };
+export type SeasonPage = SeasonListed & { roundup: SeasonRoundup | null; seasons: SeasonListed[]; going: SeasonTeaser | null };
+
+// The season going on now, for everyone, to tease its roundup before it opens: its headline numbers so far, and nobody's
+// name. Null when no listed season is going on, or nobody has played in it yet.
+export type SeasonTeaser = SeasonListed & {
+  matches: number;
+  players: number;
+  kills: number;
+  playedMs: number;
+  peakPlayers: number | null;
+  days: number;
+};
+
+export const seasonTeaser = (season: Season, roundup: SeasonRoundup, now: number): SeasonTeaser => ({
+  ...listedSeason(season, now),
+  matches: roundup.matches,
+  players: roundup.players,
+  kills: roundup.totals.kills,
+  playedMs: roundup.playedMs,
+  peakPlayers: roundup.peakPlayers,
+  days: roundup.days.length,
+});
 
 export const listedSeason = (season: Season, now: number): SeasonListed => ({
   number: season.number,

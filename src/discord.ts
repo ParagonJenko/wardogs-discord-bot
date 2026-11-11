@@ -925,6 +925,37 @@ export const buildRoundupMessage = (roundup: Roundup, siteUrl?: string, users: R
   return { embeds, allowed_mentions: NO_PINGS };
 };
 
+// Each board's top this many in a season's post: the season page has the top 10.
+export const SEASON_POST_SHOWN = 3;
+
+// A season's roundup in Discord, once it is over: the weekly roundup's layout with each board's top 3, titled with the
+// season's name and linked to its page on the website (`seasonUrl`), under a line saying the season is over.
+export const buildSeasonMessage = (
+  name: string,
+  roundup: Roundup,
+  seasonUrl: string | undefined,
+  siteUrl: string | undefined,
+  users: ReadonlyMap<string, string> = new Map(),
+): DiscordMessage => {
+  const top = <T>(rows: T[]): T[] => rows.slice(0, SEASON_POST_SHOWN);
+  const trimmed: Roundup = {
+    ...roundup,
+    kills: top(roundup.kills),
+    kd: top(roundup.kd),
+    playtime: top(roundup.playtime),
+    seeding: top(roundup.seeding),
+    wins: top(roundup.wins),
+    mvps: top(roundup.mvps),
+    bestMatch: top(roundup.bestMatch),
+    awards: roundup.awards === null ? null : { ...roundup.awards, roles: roundup.awards.roles.map((r) => ({ ...r, top: top(r.top) })) },
+  };
+  const message = buildRoundupMessage(trimmed, siteUrl, users);
+  const [first, ...rest] = message.embeds;
+  const embeds = first === undefined ? [] : [{ ...first, title: first.title.replace('Season roundup', `${name} roundup`), ...(seasonUrl ? { url: seasonUrl } : {}) }, ...rest];
+  const page = seasonUrl ? ` Top 10s, every award and the Season in Review: ${seasonUrl}` : '';
+  return { ...message, content: `🏁 **${escapeMarkdown(name)} is over!** Here's how it went.${page}`, embeds };
+};
+
 export type SeederRow = { steamId: string; name: string; seedingMinutes: number; seedDays: number; vipUntil: number | null };
 
 // For admins, so it shows Steam IDs; the reply is only visible to the admin who asked.

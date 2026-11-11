@@ -456,13 +456,15 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       server.clearLogs();
       const page = await json('/api/season');
       expect(page.status).toBe(200);
-      expect(page.body).toEqual({ ...listed(shownSeason(now)), roundup: null, seasons });
+      const going = seasonAt(now)!;
+      // The season going on now, teased with its numbers so far and nobody's name: today's player.
+      const teaser = { ...listed(going), matches: 0, players: 1, kills: 0, playedMs: 0, peakPlayers: null, days: expect.any(Number) };
+      expect(page.body).toEqual({ ...listed(shownSeason(now)), roundup: null, seasons, going: teaser });
       // Another season by its number.
       const first = await json('/api/season?number=1');
       expect(first.body).toMatchObject({ number: 1, name: 'Season 1', open: true, roundup: null, seasons });
-      const going = seasonAt(now)!;
       // The season going on now: not over, so the public gets no roundup.
-      expect((await json(`/api/season?number=${going.number}`)).body).toEqual({ ...listed(going), roundup: null, seasons });
+      expect((await json(`/api/season?number=${going.number}`)).body).toEqual({ ...listed(going), roundup: null, seasons, going: teaser });
       expect((await server.fetch('/api/season?number=99')).status).toBe(404);
       expect((await server.fetch('/api/season?number=x')).status).toBe(404);
 

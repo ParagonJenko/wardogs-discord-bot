@@ -14,6 +14,7 @@ import {
   buildPlayersEmbed,
   buildRotationEmbed,
   buildRoundupMessage,
+  buildSeasonMessage,
   buildSeedCall,
   buildSeedersEmbed,
   buildSteamAlerts,
@@ -884,6 +885,21 @@ describe('buildRoundupMessage', () => {
     const tooLong = buildRoundupMessage(withAwards(name), site).embeds;
     expect(tooLong).toHaveLength(1);
     expect(length(tooLong[0])).toBeLessThanOrEqual(6000);
+  });
+
+  it('posts a season with the season\'s name, its page and each board\'s top 3', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ name: `P${i}`, id: `p${i}`, kills: 100 - i }));
+    const season: Roundup = { ...week, kind: 'season', kills: many };
+    const url = 'https://gaminginit.com/season?number=2';
+    const message = buildSeasonMessage('Season 2', season, url, 'https://gaminginit.com/');
+    expect(message.content).toContain('Season 2 is over!');
+    expect(message.content).toContain(url);
+    expect(message.embeds[0]?.title).toMatch(/^🏆 Season 2 roundup · /);
+    expect(message.embeds[0]?.url).toBe(url);
+    const kills = message.embeds[0]?.fields?.find((f) => f.name.includes('Most kills'))?.value ?? '';
+    expect(kills).toContain('P2');
+    expect(kills).not.toContain('P3');
+    expect(message.allowed_mentions.parse).toEqual([]);
   });
 });
 

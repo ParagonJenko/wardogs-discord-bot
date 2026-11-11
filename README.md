@@ -302,6 +302,7 @@ and staff signed in on the website can see the season going on now at `GET /api/
 | `open`    | Whether the season is over, so the public gets the roundup                                  |
 | `roundup` | The roundup (below), or null: for the public before the season is over, and when nobody played |
 | `seasons` | Every season listed, oldest first: `{ number, name, endsAt, open }`                        |
+| `going`   | The season going on now, to tease it before it opens: `number`, `name`, `endsAt`, `open` and its numbers so far, `matches`, `players`, `kills`, `playedMs`, `peakPlayers` and `days`, with nobody's name. Null when nobody has played in it yet |
 
 The roundup has everything a [weekly or monthly roundup](#roundups) has, with each board's top 10 rather than 3: `kind`
 (`"season"`), `start`, `end` and `partial` (true while the season is still going: staff only), `matches`, `playedMs`
@@ -328,6 +329,10 @@ day the feed covers). And on top of those:
   profile]` and no `id` for a [private profile](#private-profiles), as they are now, whenever it was made private.
 - A match counts in the season it ended in, and a day by its UTC date, so a match that runs past midnight into 15
   October counts for Season 2. Staff's seeding counts as playing, as in the roundups.
+- **Announced in Discord.** Once a season's roundup is kept, the bot posts it once to the roundups' channel
+  (`DISCORD_ROUNDUP_WEBHOOK_URL`, else `DISCORD_WEBHOOK_URL`): the weekly roundup's layout with each board's top 3, titled
+  with the season's name, and a link to its page (`SITE_URL/season?number=<n>`). Only within 2 days of the season's end,
+  so Season 1 is never posted; `seasonAnnounced:<number>` in storage keeps it to once.
 - **Kept for good.** 10 minutes after a season ends the bot's check saves its roundup (`season:<number>` in its storage),
   whether or not anyone has opened the page, and serves that from then on, so it stays the same once the kill feed's
   records of those days are gone (after 62 days) and however the records change. `/removematch` on a match of a season that is over
