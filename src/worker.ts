@@ -164,6 +164,7 @@ import {
   type ClanMove,
   buildOutageAlert,
   buildRoundupMessage,
+  buildSeasonMessage,
   buildSteamAlerts,
   buildVipMessage,
   factionKey,
@@ -379,13 +380,17 @@ import {
   SEASONS,
   SEASON_SETTLE_MS,
   seasonAt,
+  seasonAnnouncedKey,
+  SEASON_ANNOUNCE_MS,
   seasonOf,
   seasonKey,
   seasonPeriod,
+  seasonTeaser,
   shownSeason,
   type Season,
   type SeasonPage,
   type SeasonRoundup,
+  type SeasonTeaser,
 } from './season.ts';
 import { buildShame, type Shame } from './shame.ts';
 import { socketHttp } from './socket-http.ts';
@@ -1404,7 +1409,7 @@ export class Watcher extends DurableObject<Env> {
       }
     }
     await this.roundingUp(() => this.postRoundups(config));
-    await this.keepSeasons();
+    await this.keepSeasons(config);
     // Live pages get the new score, players and map.
     await this.broadcastLive();
   }
@@ -1611,13 +1616,21 @@ export class Watcher extends DurableObject<Env> {
   async season(asked: Season | null = null, early = false): Promise<SeasonPage> {
     const now = Date.now();
     const season = asked ?? shownSeason(now);
-    const page = { ...listedSeason(season, now), seasons: SEASONS.map((s) => listedSeason(s, now)) };
+    const page = { ...listedSeason(season, now), seasons: SEASONS.map((s) => listedSeason(s, now)), going: await this.seasonGoing(now) };
     if (!page.open && !early) return { ...page, roundup: null };
     const roundup = page.open ? await this.seasonOver(season, now) : await this.seasonRoundup(season, now);
     if (roundup === null) return { ...page, roundup: null };
     const ids = await this.idsFor(keptSteamIds(roundup));
     const idOf = publicIdOf(await this.privateSteam(), (steamId) => ids.get(steamId));
     return { ...page, roundup: publicSeason(roundup, idOf) };
+  }
+
+  // The season going on now, as everyone may see it before it is over: its numbers so far (see seasonTeaser).
+  private async seasonGoing(now: number): Promise<SeasonTeaser | null> {
+    const going = seasonAt(now);
+    if (going === null || isOver(going, now)) return null;
+    const roundup = await this.seasonRoundup(going, now);
+    return roundup === null ? null : seasonTeaser(going, roundup, now);
   }
 
   // The roundup of a season that is over: the kept one, or else one built now, which is kept once the season has been
@@ -1636,17 +1649,42 @@ export class Watcher extends DurableObject<Env> {
 
   // The checks keep each season's roundup once it has been over SEASON_SETTLE_MS, so it is kept even if nobody opens the
   // season page before the kill feed's records of those days are gone. Each instance looks once a season is due, and
-  // again after /removematch takes a match out of it. A failure is tried again at the next check.
-  private async keepSeasons(): Promise<void> {
+  // again after /removematch takes a match out of it. A failure is tried again at the next check. Once kept, the
+  // season's roundup is announced in Discord (see announceSeason).
+  private async keepSeasons(config: Config): Promise<void> {
     const now = Date.now();
     for (const season of SEASONS) {
       if (this.seasonsLooked.has(season.number) || season.endsAt === null || now < season.endsAt + SEASON_SETTLE_MS) continue;
       try {
-        await this.seasonOver(season, now);
+        const roundup = await this.seasonOver(season, now);
+        await this.announceSeason(config, season, roundup, now);
         this.seasonsLooked.add(season.number);
       } catch (error) {
         console.error(`Keeping the ${season.name} roundup failed: ${errorText(error)}`);
       }
+    }
+  }
+
+  // A season's roundup, posted once to the roundups' channel (DISCORD_ROUNDUP_WEBHOOK_URL, else DISCORD_WEBHOOK_URL) with
+  // a link to its page, within SEASON_ANNOUNCE_MS of its end: a season that ended before the bot announced them (Season
+  // 1) is never posted. It is saved as posted before it goes out, so a failure never posts it twice; it is not tried
+  // again.
+  private async announceSeason(config: Config, season: Season, roundup: SeasonRoundup | null, now: number): Promise<void> {
+    if (roundup === null || season.endsAt === null || now >= season.endsAt + SEASON_ANNOUNCE_MS) return;
+    const storage = this.ctx.storage;
+    const key = seasonAnnouncedKey(season.number);
+    if ((await storage.get(key)) !== undefined) return;
+    await storage.put(key, now);
+    try {
+      const ids = await this.idsFor(keptSteamIds(roundup));
+      const shown = publicSeason(roundup, publicIdOf(await this.privateSteam(), (steamId) => ids.get(steamId)));
+      const site = config.siteUrl?.replace(/\/$/, '');
+      const seasonUrl = site === undefined ? undefined : `${site}/season?number=${season.number}`;
+      const webhookUrl = config.roundups?.webhookUrl ?? config.webhookUrl;
+      await postWebhook(webhookUrl, buildSeasonMessage(season.name, shown, seasonUrl, config.siteUrl, await this.roundupUsers(shown)));
+      console.info(`Announced the ${season.name} roundup`);
+    } catch (error) {
+      console.error(`Announcing the ${season.name} roundup failed: ${errorText(error)}`);
     }
   }
 
