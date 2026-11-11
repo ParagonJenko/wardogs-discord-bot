@@ -102,7 +102,7 @@ export const listedSeason = (season: Season, now: number): SeasonListed => ({
 
 export type SeasonSources = {
   season: Season;
-  // The first UTC day of the records.
+  // The first UTC day of the records: for the season's start, and to tell whether they go back far enough for rookies.
   firstDay: string;
   now: number;
   // Each UTC day's player totals, staff's seeding counted as playing (see withoutStaffSeeding). Days before the season
@@ -181,6 +181,8 @@ export const buildSeason = (sources: SeasonSources): SeasonRoundup | null => {
     idOf: steamIds,
     shown: SEASON_SHOWN,
     kdDays: SEASON_KD_DAYS,
+    // The days before the season are only read back ROOKIE_LOOKBACK_DAYS, and the first of them can be empty.
+    recordsFrom: sources.firstDay,
     ...(feed === undefined ? {} : { feed }),
   });
   if (roundup === null) return null;

@@ -199,6 +199,9 @@ export type RoundupSources = {
   shown?: number;
   // The days the K/D board's matches are the share of: the whole week or month (or a season's days) unless set.
   kdDays?: number;
+  // The first UTC day of the records, when `days` does not go back to it: else the first of `days` with anyone on it.
+  // Rookies are only named once the records go back ROOKIE_LOOKBACK_DAYS before the period.
+  recordsFrom?: string;
 };
 
 const ranked = (scores: FactionScore[]): FactionScore[] => [...scores].sort((a, b) => b.score - a.score);
@@ -341,7 +344,7 @@ export const roundupIds = (roundup: Roundup): string[] => {
   return [...found];
 };
 
-export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS_SHOWN, kdDays }: RoundupSources): Roundup | null => {
+export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS_SHOWN, kdDays, recordsFrom: knownFrom }: RoundupSources): Roundup | null => {
   const covered = new Set(periodDays(period));
   const inPeriod = days.filter((d) => covered.has(d.day) && Object.keys(d.players).length > 0);
   if (inPeriod.length === 0) return null;
@@ -421,7 +424,7 @@ export const buildRoundup = ({ period, days, matches, idOf, feed, shown = AWARDS
   const seen = new Set(
     earlier.flatMap((d) => Object.entries(d.players).flatMap(([steamId, t]) => (minutesOf(t) > 0 ? [steamId] : []))),
   );
-  const recordsFrom = earlier.flatMap((d) => (Object.keys(d.players).length > 0 ? [d.day] : [])).sort()[0];
+  const recordsFrom = knownFrom ?? earlier.flatMap((d) => (Object.keys(d.players).length > 0 ? [d.day] : [])).sort()[0];
   const longEnough = recordsFrom !== undefined && recordsFrom <= dayOf(period.start - ROOKIE_LOOKBACK_DAYS * DAY_MS);
   const rookies = [...onDays].flatMap(([steamId, p]) => (seen.has(steamId) ? [] : [{ steamId, ...p }]));
   const [rookie] = longEnough ? mostFirst(rookies, (p) => p.minutes) : [];

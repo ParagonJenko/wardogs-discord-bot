@@ -180,6 +180,18 @@ describe('the seasons', () => {
     expect(s2.rookie).toMatchObject({ name: 'Di' });
     expect(s2.days[0]).toMatchObject({ day: '2026-10-15', players: 1 });
   });
+
+  it('names Season 2\'s rookie when the records go back far enough, even if the day 28 days before it was empty', () => {
+    // As the bot reads them: only the 28 days before the season, the first of them with nobody on.
+    const before = Array.from({ length: 28 }, (_, i) => day(new Date(at('2026-09-17') + i * 86_400_000).toISOString().slice(0, 10), {}));
+    const s2 = buildSeason(
+      sources({ season: SEASON_2, firstDay: '2026-08-01', now: at('2026-11-12', 12), days: [...before.slice(0, 25), ...days], weaponDays: [], weaponsSince: null }),
+    ) as SeasonRoundup;
+    expect(s2.rookie).toMatchObject({ name: 'Di' });
+    // Records that start inside the 28 days are too short to tell.
+    const short = buildSeason(sources({ season: SEASON_2, firstDay: '2026-10-12', now: at('2026-11-12', 12), weaponDays: [], weaponsSince: null }));
+    expect(short?.rookie).toBeNull();
+  });
 });
 
 describe('buildSeason', () => {
