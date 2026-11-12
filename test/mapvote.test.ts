@@ -42,6 +42,7 @@ import {
   withVoteAlert,
   pickOptions,
   ALWAYS_OFFERED,
+  rainSkipped,
   publicVote,
   withPlayed,
   type MapVote,
@@ -88,6 +89,26 @@ describe('maps always offered', () => {
   it('still needs a second map for a vote', () => {
     expect(pickOptions([choice('Now'), choice('Russia')], 'Now', [], 3, () => 0)).toEqual([]);
     expect(pickOptions([choice('Now'), choice('Russia'), choice('A')], 'Now', ['A'], 3, () => 0).map((o) => o.map).sort()).toEqual(['A', 'Russia']);
+  });
+});
+
+describe('rainSkipped', () => {
+  const maps = ['Now', 'Russia', 'A', 'B', 'C'].map((id) => choice(id));
+  const withRule = votePool(maps, 'Now', ['Now'], 3, ['A'], []);
+  const withoutRule = votePool(maps, 'Now', ['Now'], 3, [], []);
+
+  it('names the map left out because it had rain last', () => {
+    expect(rainSkipped('A', [{ map: 'B', name: 'B' }, { map: 'C', name: 'C' }], withRule, withoutRule)).toBe('A');
+  });
+
+  it('never says a map on a button is missing, such as Sabatulo, always offered', () => {
+    const pool = votePool(maps, 'Now', ['Now'], 3, ['Russia'], []);
+    expect(rainSkipped('Russia', [{ map: 'Russia', name: 'Sabatulo' }, { map: 'A', name: 'A' }], pool, withoutRule)).toBeNull();
+  });
+
+  it('says nothing with no rain map, or one missing for another reason', () => {
+    expect(rainSkipped(null, [], withRule, withoutRule)).toBeNull();
+    expect(rainSkipped('Now', [], withRule, withoutRule)).toBeNull();
   });
 });
 

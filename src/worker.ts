@@ -8,6 +8,7 @@ import {
   inGameProblem,
   chooseConditions,
   votePool,
+  rainSkipped,
   chooseWinner,
   closeDue,
   isOpen as isOpenVote,
@@ -2159,8 +2160,7 @@ export class Watcher extends DurableObject<Env> {
     // The maps a Random map button picks from.
     const pool = votePool(maps, playingId, recentIds, rule.options, avoid, off);
     // No rain when the match being played has it; and the map that last had it, if it was left out, is said.
-    const skipped =
-      lastRain !== null && !pool.some((m) => m.id === lastRain) && votePool(maps, playingId, recentIds, rule.options, [], off).some((m) => m.id === lastRain) ? lastRain : null;
+    const skipped = rainSkipped(lastRain, options, pool, votePool(maps, playingId, recentIds, rule.options, [], off));
     const noRain = staffOptions.noRain !== null;
     const rain = { all: (rainNow?.rain ?? false) || noRain, skipped, off: noRain };
     const lightings = catalog?.lightings ?? [];

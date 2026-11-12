@@ -254,6 +254,19 @@ export const pickOptions = (
   return chosen.length < 2 ? [] : sample(chosen, chosen.length, random).map((m) => ({ map: m.id, name: m.name }));
 };
 
+// The map that last had rain, when the vote leaves it out because of that, so the message can say why it is missing: it is
+// not on a button, not in the pool Random picks from, and would have been in that pool without the rain rule. Null otherwise
+// (a map always offered is on a button, so it is never said to be missing).
+export const rainSkipped = (
+  lastRain: string | null,
+  options: readonly VoteOption[],
+  pool: readonly MapChoice[],
+  poolWithoutRainRule: readonly MapChoice[],
+): string | null =>
+  lastRain !== null && !options.some((o) => o.map === lastRain) && !pool.some((m) => m.id === lastRain) && poolWithoutRainRule.some((m) => m.id === lastRain)
+    ? lastRain
+    : null;
+
 // The circles (control-zone layout) each map last had from a vote, by map id, so the next time it wins it gets another.
 export const LAST_ZONES_KEY = 'mapVoteZones';
 
