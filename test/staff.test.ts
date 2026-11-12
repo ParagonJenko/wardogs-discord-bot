@@ -4,7 +4,7 @@ import type { VoteOptions } from '../src/voteoptions.ts';
 import type { Config } from '../src/config.ts';
 import type { CommandRequest } from '../src/interactions.ts';
 import type { PrivateProfiles } from '../src/privacy.ts';
-import type { HttpClient } from '../src/rcon.ts';
+import type { ChatLine, HttpClient } from '../src/rcon.ts';
 import { editRotations, parseRotationBook, rotationDay, type RotationBook, type RotationEdit, type RotationEditResult } from '../src/rotations.ts';
 import type { SteamLookup } from '../src/steam.ts';
 import {
@@ -30,6 +30,8 @@ const config: Config = {
   headshotAlerts: true,
   outageAlerts: true,
   feedAlerts: true,
+  chatMod: true,
+  chatActions: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,
@@ -124,6 +126,7 @@ const fakeRecords = (): StaffRecords & { [K in keyof StaffRecords]: ReturnType<t
   voteOptions: vi.fn(async (): Promise<VoteOptions> => ({ noRain: null, offMaps: {} })),
   setVoteRain: vi.fn(async () => true),
   setVoteMap: vi.fn(async () => ({ changed: true, votable: 3 as number | null })),
+  chat: vi.fn(async (): Promise<ChatLine[]> => []),
 });
 
 const setup = (overrides: Record<string, [number, unknown]> = {}) => {
@@ -179,6 +182,31 @@ describe('runStaffCommand', () => {
     );
     expect(records.log).toHaveBeenCalledWith(BO, { action: 'warn', at: NOW, by: '42', name: 'Bo', reason: 'No spawn camping' });
     expect(reply).toEqual({ content: '⚠️ Warned **Bo** in game: No spawn camping' });
+  });
+
+  it('/chat shows the latest chat the bot read, from everyone or one player, and only while chat moderation is on', async () => {
+    const { run, records } = setup();
+    const said = (id: number, steamId: string, name: string, text: string): ChatLine => ({ id, steamId, name, text, at: NOW });
+    records.chat.mockResolvedValue([said(1, ASH, 'Ash', 'hello'), said(2, BO, 'Bo', 'gg'), said(3, ASH, 'Ash', 'push b')]);
+
+    expect(((await run('chat', {})) as { content: string }).content.split('\n')).toEqual([
+      '💬 Latest chat:',
+      `<t:${NOW / 1000}:T> **Ash**: hello`,
+      `<t:${NOW / 1000}:T> **Bo**: gg`,
+      `<t:${NOW / 1000}:T> **Ash**: push b`,
+    ]);
+    expect(((await run('chat', { player: ASH })) as { content: string }).content).toMatch(/from "76561198000000001".*hello.*push b/s);
+    expect(((await run('chat', { player: 'bo', lines: '1' })) as { content: string }).content).toContain('**Bo**: gg');
+    expect(await run('chat', { player: 'zed' })).toEqual({ content: 'No recent chat from "zed". The bot keeps the last 200 lines.' });
+
+    const off = runStaffCommand({ config: () => ({ ...config, chatMod: false }), http: rcon().http, records, now: () => NOW, log: { info: vi.fn() } });
+    expect(await off('chat', { name: 'chat', options: {}, userId: '42' })).toEqual({ content: 'The bot is not reading the chat: CHAT_MOD is off.' });
+  });
+
+  it('suggests players, in game or not, while typing /chat', async () => {
+    const { suggest } = setup();
+    const names = (await suggest({ name: 'chat', options: { player: 'old' }, focused: 'player' })).map((c) => c.value);
+    expect(names).toContain(OLD);
   });
 
   it('points warned and kicked players at the rules in the Discord, on the website when there is one', async () => {

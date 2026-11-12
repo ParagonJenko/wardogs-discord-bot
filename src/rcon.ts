@@ -320,6 +320,107 @@ export const fetchRoutes = async (rconUrl: string, password: string, http: HttpC
   return (routes ?? []).map((route) => route.trim().replace(/\{[^}]*\}|:[^/\s]+/g, '*').replace(/\s+/g, ' '));
 };
 
+// One line of chat, as the bot keeps it. `id` is the server's own number for the line, which the cursor follows. `steamId`
+// is null for a line with no player behind it (the server speaking), which the bot never acts on. `at` is when the
+// line was said, or when the bot read it when the server gives no time.
+export type ChatLine = { id: number; steamId: string | null; name: string; text: string; channel?: string; at: number };
+
+// GET /v1/chat is not in the community docs, so its shape was never seen: this reads it leniently. The lines come as
+// an array on its own or under `messages`, `chat`, `entries` or `lines`. Each line's fields go by the names below, the
+// first one present winning. A line without an id (the cursor needs one) or without text is skipped.
+export const CHAT_LIST_KEYS = ['messages', 'chat', 'entries', 'lines'] as const;
+export const CHAT_FIELDS = {
+  id: ['id', 'sequence', 'seq', 'cursor'],
+  steamId: ['steamId', 'playerId', 'senderSteamId'],
+  name: ['name', 'playerName', 'sender'],
+  text: ['message', 'text', 'body'],
+  channel: ['channel', 'scope', 'team'],
+  time: ['timestamp', 'time', 'sentAtUtc'],
+} as const;
+
+// A field of the wrong type is as good as missing.
+const ChatScalar = z.union([z.string(), z.number(), z.boolean()]).nullish().catch(undefined);
+const ChatLineSchema = z.object(
+  Object.fromEntries(Object.values(CHAT_FIELDS).flat().map((key) => [key, ChatScalar])),
+);
+const ChatListSchema = z.object(Object.fromEntries(CHAT_LIST_KEYS.map((key) => [key, z.array(z.unknown()).nullish().catch(undefined)])));
+const ChatBodySchema = z.union([z.array(z.unknown()), ChatListSchema]);
+
+const listIn = (body: unknown[] | Record<string, unknown[] | null | undefined>): unknown[] | undefined =>
+  Array.isArray(body) ? body : CHAT_LIST_KEYS.map((key) => body[key]).find((items) => items !== undefined && items !== null) ?? undefined;
+
+const MAX_CHAT_TEXT = 300;
+const MAX_CHAT_NAME = 60;
+
+const firstOf = (fields: Record<string, string | number | boolean | null | undefined>, keys: readonly string[]): string | number | boolean | undefined =>
+  keys.map((key) => fields[key]).find((value) => value !== undefined && value !== null && value !== '') ?? undefined;
+
+// A time as milliseconds: a number (seconds or milliseconds) or a date text. Undefined when it is neither.
+const chatTime = (value: string | number | boolean | undefined): number | undefined => {
+  if (typeof value === 'boolean' || value === undefined) return undefined;
+  const text = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const number = Number(text);
+    return number <= 0 ? undefined : number < 100_000_000_000 ? number * 1000 : number;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+// The only place the chat route's answer is read. `skipped` counts lines it could not use. It throws when the answer
+// holds no list of lines at all, so a changed shape is noticed instead of reading as a quiet server.
+export const parseChat = (raw: unknown, now: number): { lines: ChatLine[]; skipped: number } => {
+  const body = ChatBodySchema.safeParse(raw);
+  const list = body.success ? listIn(body.data) : undefined;
+  if (list === undefined) throw new Error('The chat answer has no list of lines');
+  const lines: ChatLine[] = [];
+  let skipped = 0;
+  for (const item of list) {
+    const read = ChatLineSchema.safeParse(item);
+    if (!read.success) {
+      skipped += 1;
+      continue;
+    }
+    const field = (key: keyof typeof CHAT_FIELDS) => firstOf(read.data, CHAT_FIELDS[key]);
+    const rawId = field('id');
+    const id = typeof rawId === 'number' ? rawId : typeof rawId === 'string' && /^\d+$/.test(rawId.trim()) ? Number(rawId) : NaN;
+    const text = String(field('text') ?? '')
+      .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+      .trim()
+      .slice(0, MAX_CHAT_TEXT);
+    if (!Number.isSafeInteger(id) || id < 0 || text === '') {
+      skipped += 1;
+      continue;
+    }
+    // A Steam ID sent as a JSON number is rounded on the way in, so only text counts.
+    const rawSteam = field('steamId');
+    const steamId = typeof rawSteam === 'string' ? rawSteam.trim() : '';
+    const channel = field('channel');
+    lines.push({
+      id,
+      steamId: STEAM_ID.test(steamId) ? steamId : null,
+      name: String(field('name') ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, MAX_CHAT_NAME),
+      text,
+      ...(channel === undefined || typeof channel === 'boolean' ? {} : { channel: String(channel).slice(0, 30) }),
+      at: chatTime(field('time')) ?? now,
+    });
+  }
+  return { lines: lines.sort((a, b) => a.id - b.id), skipped };
+};
+
+// The chat after the line with id `after` (0 for the beginning), oldest first, at most `limit` lines.
+export const fetchChat = async (
+  rconUrl: string,
+  password: string,
+  after: number,
+  limit: number,
+  http: HttpClient,
+  now = Date.now(),
+): Promise<{ lines: ChatLine[]; skipped: number }> => {
+  if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1) throw new Error('Not a chat cursor');
+  return parseChat(await rconRequest(rconUrl, password, `/v1/chat?after=${after}&limit=${limit}`, http), now);
+};
+
 // Adds an entry at the end of the server's live rotation (not the config document).
 export const addRotationEntry = async (rconUrl: string, password: string, map: string, http: HttpClient, setup: MatchSetup = {}) => {
   await rconRequest(rconUrl, password, '/v1/rotation/entries', http, json('POST', { map, ...setup }));

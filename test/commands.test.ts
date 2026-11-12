@@ -31,6 +31,7 @@ const records: StaffRecords = {
   voteOptions: vi.fn(),
   setVoteRain: vi.fn(),
   setVoteMap: vi.fn(),
+  chat: vi.fn(),
 };
 
 const config: Config = {
@@ -45,6 +46,8 @@ const config: Config = {
   headshotAlerts: true,
   outageAlerts: true,
   feedAlerts: true,
+  chatMod: true,
+  chatActions: true,
   roleId: undefined,
   inviteCode: undefined,
   siteUrl: undefined,

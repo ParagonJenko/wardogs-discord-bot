@@ -666,6 +666,7 @@ describe('COMMANDS', () => {
       'circles',
       'coinadmin',
       'voteoptions',
+      'chat',
     ]);
     for (const command of COMMANDS.slice(8)) {
       expect(command).toMatchObject({ default_member_permissions: '8', contexts: [0] });
@@ -850,6 +851,9 @@ describe('staff commands from the staff page', () => {
     expect(checkOptions('private', { subcommand: 'list', steam_id: '76561198000000001' })).toEqual({ problem: '/private has no option called steam_id.' });
     expect(checkOptions('private', { subcommand: 'add' })).toEqual({ problem: '/private needs steam_id.' });
     expect(checkOptions('private', {})).toEqual({ problem: 'Pick add or remove or list.' });
+    expect(checkOptions('chat', {})).toEqual({ options: {} });
+    expect(checkOptions('chat', { player: 'Ash', lines: 30 })).toEqual({ options: { player: 'Ash', lines: '30' } });
+    expect(checkOptions('chat', { lines: 99 })).toEqual({ problem: 'lines must be a whole number from 1 to 50.' });
   });
 
   it('takes a subcommand for /vip, and checks its options', () => {

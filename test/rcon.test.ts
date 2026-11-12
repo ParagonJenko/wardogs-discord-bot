@@ -4,6 +4,8 @@ import {
   addBan,
   endMatch,
   fetchBans,
+  fetchChat,
+  parseChat,
   fetchConfig,
   fetchExperiences,
   fetchLightings,
@@ -427,5 +429,127 @@ describe('staff actions', () => {
       ['POST', '/v1/match/map', JSON.stringify({ map: 'Europe' })],
       ['POST', '/v1/match/end', '{}'],
     ]);
+  });
+});
+
+describe('the chat route', () => {
+  const NOW = Date.UTC(2026, 9, 7, 20);
+  const ASH = '76561198000000001';
+
+  it('asks for the lines after the cursor, authenticated', async () => {
+    const { get, requests } = respondWith(200, { messages: [] });
+    await expect(fetchChat('http://203.0.113.10:7776', 'secret', 41, 200, get, NOW)).resolves.toEqual({ lines: [], skipped: 0 });
+    expect(requests[0]?.url).toBe('http://203.0.113.10:7776/v1/chat?after=41&limit=200');
+    expect(requests[0]?.headers['Authorization']).toBe('Bearer secret');
+    await expect(fetchChat('http://203.0.113.10:7776', 'secret', -1, 200, get)).rejects.toThrow('Not a chat cursor');
+    await expect(fetchChat('http://203.0.113.10:7776', 'secret', 0, 0, get)).rejects.toThrow('Not a chat cursor');
+  });
+
+  it('says so when the route is not there or the password is wrong', async () => {
+    await expect(fetchChat('http://203.0.113.10:7776', 'secret', 0, 200, respondWith(404, { error: { code: 'not_found' } }).get)).rejects.toMatchObject({ status: 404 });
+    await expect(fetchChat('http://203.0.113.10:7776', 'secret', 0, 200, respondWith(401, {}).get)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('reads the list under any of the names, or a list on its own', () => {
+    const one = { id: 1, steamId: ASH, name: 'Ash', message: 'hi' };
+    for (const raw of [{ messages: [one] }, { chat: [one] }, { entries: [one] }, { lines: [one] }, [one]]) {
+      expect(parseChat(raw, NOW).lines).toEqual([{ id: 1, steamId: ASH, name: 'Ash', text: 'hi', at: NOW }]);
+    }
+  });
+
+  it('takes the first field present under each of the names', () => {
+    const named = (fields: Record<string, unknown>) => parseChat({ messages: [fields] }, NOW).lines[0];
+    expect(named({ sequence: 7, playerId: ASH, playerName: 'Bo', text: 'yo', scope: 'Team', time: '2026-10-07T20:01:00Z' })).toEqual({
+      id: 7,
+      steamId: ASH,
+      name: 'Bo',
+      text: 'yo',
+      channel: 'Team',
+      at: Date.UTC(2026, 9, 7, 20, 1),
+    });
+    expect(named({ seq: 8, senderSteamId: ASH, sender: 'Cy', body: 'hey', team: 'All', sentAtUtc: '2026-10-07T20:02:00.000Z' })).toMatchObject({
+      id: 8,
+      steamId: ASH,
+      name: 'Cy',
+      text: 'hey',
+      channel: 'All',
+      at: Date.UTC(2026, 9, 7, 20, 2),
+    });
+    expect(named({ cursor: '9', steamId: ASH, name: 'Di', message: 'ho' })).toMatchObject({ id: 9 });
+    // The first name wins over a later one.
+    expect(named({ id: 1, sequence: 2, steamId: ASH, playerId: '1', name: 'A', playerName: 'B', message: 'm', text: 't' })).toMatchObject({
+      id: 1,
+      name: 'A',
+      text: 'm',
+    });
+  });
+
+  it('reads a time as seconds, milliseconds or a date, and falls back to when it was read', () => {
+    const at = (time: unknown) => parseChat({ messages: [{ id: 1, name: 'A', message: 'm', time }] }, NOW).lines[0]?.at;
+    expect(at(1_791_400_000)).toBe(1_791_400_000_000);
+    expect(at(1_791_400_000_123)).toBe(1_791_400_000_123);
+    expect(at('1791400000')).toBe(1_791_400_000_000);
+    expect(at('2026-10-07T20:00:00Z')).toBe(NOW);
+    expect(at('not a time')).toBe(NOW);
+    expect(at(undefined)).toBe(NOW);
+    expect(at(true)).toBe(NOW);
+  });
+
+  it('keeps a line with no usable Steam ID, but as nobody', () => {
+    const lines = parseChat(
+      {
+        messages: [
+          { id: 1, name: 'Server', message: 'Match starting' },
+          { id: 2, steamId: 76561198000000001, name: 'A', message: 'rounded' },
+          { id: 3, steamId: 'abc', name: 'A', message: 'odd' },
+        ],
+      },
+      NOW,
+    ).lines;
+    expect(lines.map((l) => l.steamId)).toEqual([null, null, null]);
+  });
+
+  it('skips lines it cannot read, and counts them', () => {
+    const answer = parseChat(
+      {
+        messages: [
+          { id: 1, steamId: ASH, name: 'A', message: 'ok' },
+          { steamId: ASH, name: 'A', message: 'no id' },
+          { id: 'x', steamId: ASH, name: 'A', message: 'odd id' },
+          { id: 3, steamId: ASH, name: 'A' },
+          { id: 4, steamId: ASH, name: 'A', message: '   ' },
+          { id: -5, steamId: ASH, name: 'A', message: 'negative' },
+          'a string',
+          null,
+          { id: 6, steamId: ASH, name: 'A', message: { nested: true } },
+        ],
+      },
+      NOW,
+    );
+    expect(answer.lines.map((l) => l.id)).toEqual([1]);
+    expect(answer.skipped).toBe(8);
+  });
+
+  it('ignores a field of the wrong type instead of failing the line', () => {
+    const [line] = parseChat({ messages: [{ id: 1, steamId: ASH, name: { first: 'A' }, playerName: 'Real', message: 'hi', channel: ['x'] }] }, NOW).lines;
+    expect(line).toMatchObject({ name: 'Real', text: 'hi' });
+    expect(line).not.toHaveProperty('channel');
+  });
+
+  it('puts the lines oldest first, and cleans the text and name', () => {
+    const { lines } = parseChat(
+      { messages: [{ id: 5, name: ' B\n', message: 'second\u0000line' }, { id: 2, name: 'A', message: 'x'.repeat(400) }] },
+      NOW,
+    );
+    expect(lines.map((l) => l.id)).toEqual([2, 5]);
+    expect(lines[0]?.text).toHaveLength(300);
+    expect(lines[1]).toMatchObject({ name: 'B', text: 'second line' });
+  });
+
+  it('throws when the answer holds no list of lines, so a changed shape is noticed', () => {
+    for (const raw of [{}, { ok: true }, { messages: 'none' }, 'text', 5, null]) {
+      expect(() => parseChat(raw, NOW), JSON.stringify(raw)).toThrow('no list of lines');
+    }
+    expect(parseChat({ messages: [] }, NOW)).toEqual({ lines: [], skipped: 0 });
   });
 });

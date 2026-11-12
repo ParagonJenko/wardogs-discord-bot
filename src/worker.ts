@@ -127,6 +127,27 @@ import {
   type AccountView,
   type WebVote,
 } from './accounts.ts';
+import {
+  banReasonText,
+  buildWordsPage,
+  callEvidence,
+  CHAT_STATE_KEY,
+  CHAT_WORDS_KEY,
+  compileWords,
+  editWords,
+  hasChatRoute,
+  judgeChat,
+  parseChatState,
+  parseChatWords,
+  readChat,
+  readWordsAction,
+  WARNING_TEXT,
+  type ChatCall,
+  type ChatWords,
+  type CompiledWords,
+  type WordsAction,
+  type WordsPage,
+} from './chatmod.ts';
 import { addMember, isMember as botIsMember, sendDirectMessage, setRole } from './accountsdiscord.ts';
 import { DISCORD_CLICKS_KEY, parseClicks, sourceOf, summarise as summariseClicks, withClick, type ClickSummary } from './discordclicks.ts';
 import { steamLoginUrl, verifySteamClaim } from './steamopenid.ts';
@@ -157,6 +178,7 @@ import {
 import {
   buildFeedAlert,
   buildGriefAlert,
+  buildChatAlert,
   buildHeadshotAlert,
   buildLiveStatus,
   buildClanMoveMessage,
@@ -327,6 +349,7 @@ import {
   addRotationEntry,
   endMatch,
   fetchBans,
+  fetchChat,
   fetchConfig,
   fetchExperiences,
   fetchLightings,
@@ -348,6 +371,7 @@ import {
   removeBan,
   sendBroadcast,
   validateConfig,
+  type ChatLine,
   type HttpClient,
   type Rotation,
   type ServerConfig,
@@ -459,6 +483,7 @@ import {
   lookUpPlayer,
   PROFILE_DAYS,
   rulesNote,
+  staffWarning,
   type BanRequest,
   type BanResult,
   type Named,
@@ -887,6 +912,14 @@ export class Watcher extends DurableObject<Env> {
   // The weapon rules, once read: every kill feed batch is checked against them. Every write goes through rulesAction, so
   // it is never stale.
   private savedRules: WeaponRule[] | null = null;
+  // The chat word lists staff changed, once read, and the lists as the matcher uses them. Every write goes through
+  // chatWordsAction, so neither is ever stale.
+  private savedChatWords: ChatWords | null = null;
+  private compiledChat: CompiledWords | null = null;
+  // Whether the server lists GET /v1/chat, and when that was asked; asked again an hour after a no. What was already
+  // logged about the chat, and when, so a server that cannot give it does not fill the logs each minute.
+  private chatRoute: { listed: boolean; at: number } | null = null;
+  private chatTold = new Map<string, number>();
   // Kill feed batches are checked against the weapon rules one at a time, so two batches close together never count
   // one offence twice.
   private enforcing = oneAtATime();
@@ -1394,6 +1427,7 @@ export class Watcher extends DurableObject<Env> {
     await this.checkHeadshots(seen.snapshot);
     await this.checkAutoFlags(seen.snapshot);
     await this.watchFeed(config, seen.snapshot);
+    await this.moderateChat(config).catch((error: unknown) => console.error(`Chat moderation failed: ${errorText(error)}`));
 
     const { inviteCode } = config;
     const { botToken } = config.accounts;
@@ -2631,6 +2665,136 @@ export class Watcher extends DurableObject<Env> {
         if (sent.length > 0) await this.ctx.storage.put(RULE_BREAKS_KEY, countSent(judged.breaks, sent));
       }).catch((error: unknown) => console.error(`Weapon rules failed: ${errorText(error)}`)),
     );
+  }
+
+  private async chatWords(): Promise<ChatWords> {
+    this.savedChatWords ??= parseChatWords(await this.ctx.storage.get(CHAT_WORDS_KEY));
+    return this.savedChatWords;
+  }
+
+  private async chatCompiled(): Promise<CompiledWords> {
+    this.compiledChat ??= compileWords(await this.chatWords());
+    return this.compiledChat;
+  }
+
+  private chatSwitches(): { enabled: boolean; actions: boolean } {
+    const config = loadConfig(stringVars(this.env));
+    return { enabled: config.chatMod, actions: config.chatActions };
+  }
+
+  // The staff page's Chat filter tab: the word lists, with the defaults and what staff changed.
+  async chatWordsPage(): Promise<WordsPage> {
+    return buildWordsPage(await this.chatWords(), this.chatSwitches());
+  }
+
+  // A change from the Chat filter tab, and the tab as it is after it. As with the weapon rules, the copy in memory
+  // changes before the write.
+  async chatWordsAction(action: WordsAction, by: string, byName: string): Promise<{ problem: string } | WordsPage> {
+    const edited = editWords(await this.chatWords(), action, { by, byName, now: Date.now() });
+    if ('problem' in edited) return edited;
+    this.savedChatWords = edited.words;
+    this.compiledChat = null;
+    try {
+      await this.ctx.storage.put(CHAT_WORDS_KEY, edited.words);
+    } catch (error) {
+      this.savedChatWords = null;
+      throw error;
+    }
+    return this.chatWordsPage();
+  }
+
+  // The latest chat the bot read, for /chat.
+  async recentChat(): Promise<ChatLine[]> {
+    return parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY)).buffer;
+  }
+
+  // Logs a message about the chat at most once an hour.
+  private tellChat(message: string, now: number, level: 'info' | 'error' = 'error'): void {
+    const told = this.chatTold.get(message);
+    if (told !== undefined && now - told < 60 * 60_000) return;
+    this.chatTold.set(message, now);
+    console[level](message);
+  }
+
+  // Chat moderation (see chatmod.ts): reads the chat since the last check, and for each line with a word from the lists
+  // bans, warns or tells staff. The cursor is saved before anything is done, so a line is never acted on twice, even if
+  // the action fails or the check stops halfway: a failed action is logged, not tried again. Does nothing, with one line
+  // in the logs, when the game has no chat route.
+  private async moderateChat(config: Config): Promise<void> {
+    if (!config.chatMod) return;
+    const now = Date.now();
+    const { rconUrl, rconPassword } = config;
+    const http = socketHttp(connect);
+    if (this.chatRoute === null || (!this.chatRoute.listed && now - this.chatRoute.at >= 60 * 60_000)) {
+      const routes = await fetchRoutes(rconUrl, rconPassword, http).catch(() => null);
+      // A server that does not list its routes at all is asked for the chat anyway.
+      this.chatRoute = { listed: routes === null || hasChatRoute(routes), at: now };
+    }
+    if (!this.chatRoute.listed) {
+      this.tellChat("Chat moderation: the server does not list GET /v1/chat in its capabilities, so the chat is not read.", now, 'info');
+      return;
+    }
+    const stored = parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY));
+    let reading;
+    try {
+      reading = await readChat(stored, (after, limit) => fetchChat(rconUrl, rconPassword, after, limit, http, now));
+    } catch (error) {
+      if (error instanceof RconError && error.status === 404) {
+        this.chatRoute = { listed: false, at: now };
+        this.tellChat('Chat moderation: the server answered 404 for GET /v1/chat, so the chat is not read.', now, 'info');
+      } else {
+        this.tellChat(`Chat moderation: reading the chat failed: ${errorText(error)}`, now);
+      }
+      return;
+    }
+    if (reading.skipped > 0) this.tellChat(`Chat moderation: ${reading.skipped} lines of the chat answer could not be read (no id or no text).`, now);
+    await this.ctx.storage.put(CHAT_STATE_KEY, reading.state);
+    if (reading.first) {
+      console.info(`Chat moderation: started at line ${reading.state.cursor ?? 0}, with ${reading.state.buffer.length} earlier lines kept and not acted on`);
+    }
+    if (reading.fresh.length === 0) return;
+    const calls = judgeChat(reading.fresh, await this.chatCompiled(), await this.staffSteam(), config.chatActions);
+    for (const call of calls) {
+      try {
+        await this.actOnChat(config, http, call, now);
+      } catch (error) {
+        console.error(`Chat moderation: ${call.kind} for ${JSON.stringify(call.line.name)} (${call.line.steamId ?? 'no Steam ID'}) failed: ${errorText(error)}. ${callEvidence(call)}`);
+      }
+    }
+  }
+
+  // One call from judgeChat. A ban and a warning go through the same code as staff's /ban and /warn: the player's staff
+  // history gets the line, and the moderation log gets the post. An alert is only posted.
+  private async actOnChat(config: Config, http: HttpClient, call: ChatCall, now: number): Promise<void> {
+    const { line } = call;
+    const player = `${JSON.stringify(line.name)} (${line.steamId ?? 'no Steam ID'})`;
+    const evidence = callEvidence(call);
+    if (call.kind !== 'alert' && line.steamId !== null) {
+      if (call.kind === 'ban') {
+        const reason = banReasonText(line);
+        const result = await this.ban({ steamId: line.steamId, name: line.name || line.steamId, length: 'permanent', reason, by: 'bot' });
+        if (result.outcome === 'already-banned') {
+          console.info(`Chat moderation: ${player} is banned already, so nothing was done. ${evidence}`);
+          return;
+        }
+        // The ban keeps them out from now on; a kick removes them if they are in game.
+        if (!result.waiting) {
+          await kickPlayer(config.rconUrl, config.rconPassword, line.steamId, banKickReason(reason, config.siteUrl), http).catch((error: unknown) => {
+            if (!isNotInGame(error)) console.error(`Chat moderation: banned ${player} but could not kick them: ${errorText(error)}`);
+          });
+        }
+        console.info(`Chat moderation: banned ${player}. ${evidence}`);
+        return;
+      }
+      await messagePlayer(config.rconUrl, config.rconPassword, line.steamId, staffWarning(WARNING_TEXT, config.siteUrl), http);
+      await this.record(line.steamId, { action: 'warn', at: now, by: 'bot', name: line.name, reason: WARNING_TEXT, detail: evidence });
+      console.info(`Chat moderation: warned ${player}. ${evidence}`);
+      return;
+    }
+    console.info(`Chat moderation: flagged ${player}, no action (${call.why ?? 'none'}). ${evidence}`);
+    const { modLogWebhookUrl, siteUrl } = this.posting();
+    if (modLogWebhookUrl === undefined) return;
+    await postWebhook(modLogWebhookUrl, buildChatAlert(call, siteUrl));
   }
 
   // Lifts timed bans whose time is up, if the ban on the server is still the bot's. One that fails is tried again at
@@ -5889,6 +6053,7 @@ const commandTools = (
     voteOptions: () => watcher().voteOptions(),
     setVoteRain: (on, by, byName) => watcher().setVoteRain(on, by, byName),
     setVoteMap: (map, on, by, byName) => watcher().setVoteMap(map, on, by, byName),
+    chat: () => watcher().recentChat(),
   };
   const coins: CoinTools = {
     view: (userId) => watcher().coinsView(userId),
@@ -6065,6 +6230,23 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page weapon rules failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the weapon rules right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // The Chat filter tab: the word lists chat moderation uses, and a change to them.
+  if (route === 'GET /api/admin/chatwords' || route === 'POST /api/admin/chatwords') {
+    try {
+      if (route === 'GET /api/admin/chatwords') return Response.json(await watcher().chatWordsPage(), { headers });
+      const action = await readWordsAction(request);
+      if (action === null) return Response.json({ error: 'Not a chat filter request' }, { status: 400, headers });
+      console.info(
+        `Staff page: chat filter ${action.action} ${JSON.stringify(action.word)} on the ${action.list} list by ${JSON.stringify(session.name)} (Discord user ${session.userId})`,
+      );
+      const result = await watcher().chatWordsAction(action, session.userId, session.name);
+      if ('problem' in result) return Response.json({ error: result.problem }, { status: 400, headers });
+      return Response.json(result, { headers });
+    } catch (error) {
+      console.error(`Staff page chat filter failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't reach the chat filter right now. If it was a change, check before trying again." }, { status: 503, headers });
     }
   }
   // The season page's roundup before the season is over, so staff can check it before the public sees it.
