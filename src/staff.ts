@@ -18,6 +18,7 @@ import {
 import type { PlayerGrief } from './griefing.ts';
 import type { Choice, CommandReply, CommandRequest } from './interactions.ts';
 import { modesFor, planSetup, setupLabels, type SetupCatalog } from './matchsetup.ts';
+import { lightingsFor } from './maplightings.ts';
 import { BAN_LENGTHS, type BanRecord, type ModEntry } from './moderation.ts';
 import type { PlayerTotals } from './players.ts';
 import { PRIVATE_NAME, type PrivateProfiles } from './privacy.ts';
@@ -442,7 +443,17 @@ export const suggestStaff =
           .filter((m) => [m.id, m.name, mapLabel(m)].some((label) => label.toLowerCase().includes(lower)))
           .map((m) => ({ name: fit(`${mapEmoji(m.id)}${mapLabel(m)}`), value: m.id }));
       }
-      if (focused === 'lighting') return named(await fetchLightings(rconUrl, rconPassword, http));
+      if (focused === 'lighting') {
+        // Only what the map picked so far can be played with, when one is picked (/lighting has no map). The map is found
+        // as the command finds it, by id or name, so a name typed rather than picked is limited too.
+        const picked = (options['map'] ?? '').trim();
+        const [lightings, maps] = await Promise.all([
+          fetchLightings(rconUrl, rconPassword, http),
+          picked === '' ? Promise.resolve(null) : optional(fetchMaps(rconUrl, rconPassword, http)),
+        ]);
+        const mapId = (maps === null ? null : findMap(picked, maps)?.id) ?? picked;
+        return named(mapId === '' ? lightings : lightingsFor(mapId, lightings));
+      }
       // Modes and zone layouts depend on the map, so they are listed once one is picked.
       const map = options['map'] ?? '';
       if (!/^[A-Za-z0-9_]+$/.test(map)) return [];

@@ -986,6 +986,31 @@ describe('suggestStaff', () => {
     await expect(suggest({ name: 'setnextmap', options: { mode: '' }, focused: 'mode' })).resolves.toEqual([]);
   });
 
+  it('offers only the lightings the map picked can be played with', async () => {
+    const { suggest } = setup({
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }, { id: 'DayEarlyFog', displayName: 'Early, fog' }] }],
+    });
+
+    await expect(suggest({ name: 'setnextmap', options: { map: 'Russia', lighting: '' }, focused: 'lighting' })).resolves.toEqual([
+      { name: 'Day, clear', value: 'DayClear' },
+    ]);
+    await expect(suggest({ name: 'setnextmap', options: { map: 'Europe', lighting: '' }, focused: 'lighting' })).resolves.toHaveLength(2);
+  });
+
+  it('limits the lightings for a map typed by name or with spaces, as the command finds it', async () => {
+    const { suggest } = setup({
+      'GET /v1/catalog/lightings': [200, { lightings: [{ id: 'DayClear', displayName: 'Day, clear' }, { id: 'DayEarlyFog', displayName: 'Early, fog' }] }],
+      'GET /v1/catalog/maps': [200, { maps: [{ id: 'Russia', displayName: 'Sabatulo' }, { id: 'Europe', displayName: 'Ozeti' }] }],
+    });
+
+    for (const map of [' Russia ', 'sabatulo', ' Sabatulo']) {
+      await expect(suggest({ name: 'setnextmap', options: { map, lighting: '' }, focused: 'lighting' })).resolves.toEqual([
+        { name: 'Day, clear', value: 'DayClear' },
+      ]);
+    }
+    await expect(suggest({ name: 'setnextmap', options: { map: 'Ozeti', lighting: '' }, focused: 'lighting' })).resolves.toHaveLength(2);
+  });
+
   it('offers maps by the names players know', async () => {
     const { suggest } = setup();
 

@@ -1,3 +1,4 @@
+import { lightingAllowed } from './maplightings.ts';
 import { lightingName, zoneLayoutName } from './names.ts';
 import type { CatalogItem, MatchSetup, Rotation } from './rcon.ts';
 
@@ -89,6 +90,9 @@ export const planSetup = (
   const typedLighting = options['lighting']?.trim();
   const lighting = typedLighting ? pick(typedLighting, catalog.lightings) : entry?.lighting;
   if (lighting === null) return { problem: `No lighting "${typedLighting}". Pick one from the list.` };
+  if (typedLighting && lighting && !lightingAllowed(map, lighting)) {
+    return { problem: `${lightingNameOf(lighting, catalog.lightings)} can't be played on this map. Pick one from the list.` };
+  }
 
   const typedZones = options['zones']?.trim();
   const zoneAlternator = typedZones ? pick(typedZones, catalog.zones) : entry?.zoneAlternator;

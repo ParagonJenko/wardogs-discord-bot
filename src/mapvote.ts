@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { mapEmoji, mapName, type DiscordMessage, type Embed } from './discord.ts';
+import { lightingAllowed } from './maplightings.ts';
 import type { MatchFeed } from './matchfeed.ts';
 import type { MapChoice } from './rotationspage.ts';
 
@@ -480,12 +481,16 @@ const nearestTime = (lightings: readonly Lighting[], time: string): Lighting[] =
 // the rotation has it. The winning time and weather give a lighting that has both. When none does the weather wins, with the
 // time nearest the one chosen. With only a time, the lighting is a clear one when that time has one; with only weather, any
 // time. Rain is liked by some and hated by others, so it wins only by having the most votes: a tie in the weather goes to the
-// safest (Clear, then Fog, then Rain), not to chance.
-export const chooseConditions = (vote: MapVote, random: () => number, noRain = false): Lighting | null => {
+// safest (Clear, then Fog, then Rain), not to chance. `map` is the winner: only lightings it can be played with are chosen.
+export const chooseConditions = (vote: MapVote, random: () => number, noRain = false, map?: string): Lighting | null => {
   // Without rain, no lighting with rain is chosen, and a vote for rain counts for nothing: a group left with no lighting is gone.
+  // The same for a lighting the winning map can't be played with: a time or weather it has none of is left out, so the
+  // other row decides (a time with no lighting there gives way to the weather, and the nearest time the map has is used).
+  const allowed = (l: Lighting): boolean => !(noRain && isRain(l)) && (map === undefined || lightingAllowed(map, l.id));
+  const filtered = noRain || map !== undefined;
   const without = (rows: ConditionOption[]): ConditionOption[] =>
-    noRain ? rows.map((r) => ({ ...r, lightings: r.lightings.filter((l) => !isRain(l)) })).filter((r) => r.lightings.length > 0) : rows;
-  const open = noRain ? { ...vote, conditions: without(vote.conditions), weather: without(vote.weather) } : vote;
+    filtered ? rows.map((r) => ({ ...r, lightings: r.lightings.filter(allowed) })).filter((r) => r.lightings.length > 0) : rows;
+  const open = filtered ? { ...vote, conditions: without(vote.conditions), weather: without(vote.weather) } : vote;
   const time = leader(open.conditions, tallyConditions(open), random);
   const weather = leader(open.weather, tallyWeather(open), random, true);
   const pick = (lightings: readonly Lighting[]): Lighting | null => sample(lightings, 1, random)[0] ?? null;

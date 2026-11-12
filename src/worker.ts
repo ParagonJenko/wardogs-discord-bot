@@ -2033,7 +2033,7 @@ export class Watcher extends DurableObject<Env> {
       if (vote.outcome === null) {
         if (!closeDue(vote, now, leading) && !over) return;
         const winner = chooseWinner(vote, Math.random);
-        const lighting = chooseConditions(vote, Math.random, vote.rain.all);
+        const lighting = chooseConditions(vote, Math.random, vote.rain.all, winner ?? undefined);
         vote = await save(
           ended(
             vote,
