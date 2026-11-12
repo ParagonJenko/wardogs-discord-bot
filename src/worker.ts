@@ -1802,6 +1802,7 @@ export class Watcher extends DurableObject<Env> {
               // Without the rotation, the live status just leaves the next map out.
               await this.serverRotation(config, snapshot, parseReadRotation(stored.get('boardRotation')), now),
               now,
+              tracked?.startedAt ?? null,
             );
       const vote = parseMapVote(stored.get(MAP_VOTE_KEY));
       // Only while people can still vote: a vote is closed by a later step of the check, and the link must not outlive it.
@@ -2483,7 +2484,9 @@ export class Watcher extends DurableObject<Env> {
     const insert = parseVoteInsert(await storage.get(VOTE_INSERT_KEY));
     if (insert === null) return;
     const match = parseState(await storage.get('state'))?.match ?? null;
-    if (restoreDue(insert, playing, match?.startedAt ?? null, Date.now())) await this.putBackRotation(config, insert, playing);
+    // The vote's own map winning (Sabatulo can be voted for while it is played): the status names it, the insert has its id.
+    const sameMap = insert.map === insert.fromMap || mapName(insert.map).toLowerCase() === insert.fromMap.trim().toLowerCase();
+    if (restoreDue(insert, playing, match?.startedAt ?? null, Date.now(), sameMap)) await this.putBackRotation(config, insert, playing);
   }
 
   private async putBackRotation(config: Config, insert: VoteInsert, playing: string): Promise<void> {

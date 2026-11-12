@@ -189,6 +189,16 @@ describe('restoreDue', () => {
     expect(restoreDue(saved, 'Zestafona', saved.at - 1, saved.at + RESTORE_DELAY_MS * 2)).toBe(false);
     expect(restoreDue(saved, 'Zestafona', null, START + RESTORE_DELAY_MS)).toBe(false);
   });
+  it("puts it back when the vote's own map won (Sabatulo again), once the next match on it has run the delay", () => {
+    const again = { ...saved, fromMap: 'Sabatulo', map: 'Russia' };
+    // Still the vote's match: not yet.
+    expect(restoreDue(again, 'Sabatulo', again.at - 1, again.at + RESTORE_DELAY_MS * 2, true)).toBe(false);
+    // The next match, on the same map.
+    expect(restoreDue(again, 'Sabatulo', START, START + RESTORE_DELAY_MS - 1, true)).toBe(false);
+    expect(restoreDue(again, 'Sabatulo', START, START + RESTORE_DELAY_MS, true)).toBe(true);
+    // Without knowing the winner is the same map, the map has to change, as before.
+    expect(restoreDue(again, 'Sabatulo', START, START + RESTORE_DELAY_MS)).toBe(false);
+  });
 });
 
 describe('moveInsert', () => {

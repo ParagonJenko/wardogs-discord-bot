@@ -65,9 +65,17 @@ export const parseStagedMap = (raw: unknown): StagedMap | null => {
 const STAGED_FOR_MS = 2 * 60 * 60_000;
 
 // The map after this one: the one staff picked while it is still to come, otherwise the rotation's next.
-// A picked map has been played once the server leaves the map it was picked on.
-export const nextMap = (currentMap: string, staged: StagedMap | null, rotation: Rotation | null, now: number): string | null => {
-  if (staged !== null && staged.fromMap === currentMap && now - staged.at < STAGED_FOR_MS) return staged.map;
+// A picked map has been played once the server leaves the map it was picked on, or once a new match has started since it
+// was picked (`matchStartedAt`): the same map picked again, as a vote for Sabatulo on Sabatulo can, never changes the name.
+export const nextMap = (
+  currentMap: string,
+  staged: StagedMap | null,
+  rotation: Rotation | null,
+  now: number,
+  matchStartedAt: number | null = null,
+): string | null => {
+  const stillToCome = staged !== null && staged.fromMap === currentMap && now - staged.at < STAGED_FOR_MS && (matchStartedAt === null || matchStartedAt <= staged.at);
+  if (stillToCome) return staged.map;
   if (rotation === null) return null;
   // With the rotation off, the server plays the same map again.
   if (!rotation.enabled) return currentMap || null;

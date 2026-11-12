@@ -46,11 +46,17 @@ export const parseVoteInsert = (raw: unknown): VoteInsert | null => {
 // entry the server is on, so the map was right and its lighting was the old entry's (17 October, a clear vote played in rain).
 export const RESTORE_DELAY_MS = 10 * 60_000;
 
-// Whether the rotation can be put back: the server is on another map than the vote's, and the match it is playing, which began
-// after the insert was written (an earlier match's record is not it), has run RESTORE_DELAY_MS. Going by the match, not by when
-// the map was first seen, the wait starts again with each map change, restart or emptied server.
-export const restoreDue = (insert: VoteInsert, playing: string, matchStartedAt: number | null, now: number): boolean =>
-  playing !== insert.fromMap && matchStartedAt !== null && matchStartedAt > insert.at && now - matchStartedAt >= RESTORE_DELAY_MS;
+// Whether the rotation can be put back: the server is on another map than the vote's (or the vote's own map won, as
+// Sabatulo can, so the map never changes), and the match it is playing, which began after the insert was written (an
+// earlier match's record is not it), has run RESTORE_DELAY_MS. Going by the match, not by when the map was first seen, the
+// wait starts again with each map change, restart or emptied server.
+// `sameMap` says whether the winner is the vote's own map: the insert keeps the map the status named ("Sabatulo") and the
+// winner's id ("Russia"), which only the catalogue relates (see worker.ts).
+export const restoreDue = (insert: VoteInsert, playing: string, matchStartedAt: number | null, now: number, sameMap = insert.map === insert.fromMap): boolean =>
+  (playing !== insert.fromMap || sameMap) &&
+  matchStartedAt !== null &&
+  matchStartedAt > insert.at &&
+  now - matchStartedAt >= RESTORE_DELAY_MS;
 
 // A rotation entry as it is written back: the settings, not whether it is the one playing now.
 const entryOf = (entry: Rotation['entries'][number]): RotationEntry => ({
