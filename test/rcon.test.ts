@@ -460,7 +460,7 @@ describe('the chat route', () => {
 
   it('asks for the lines after the cursor, authenticated', async () => {
     const { get, requests } = respondWith(200, { latestSeq: 0, messages: [], count: 0 });
-    await expect(fetchChat(URL, 'secret', 41, 200, get, NOW)).resolves.toEqual({ lines: [], skipped: 0, latest: 0 });
+    await expect(fetchChat(URL, 'secret', 41, 200, get, NOW)).resolves.toEqual({ lines: [], skipped: 0, latest: 0, maxSeq: null, rows: 0 });
     expect(requests[0]?.url).toBe(`${URL}/v1/chat?after=41&limit=200`);
     expect(requests[0]?.headers['Authorization']).toBe('Bearer secret');
     await expect(fetchChat(URL, 'secret', -1, 200, get)).rejects.toThrow('Not a chat cursor');
@@ -487,6 +487,8 @@ describe('the chat route', () => {
       ],
       skipped: 0,
       latest: 57,
+      maxSeq: 57,
+      rows: 1,
     });
   });
 
@@ -546,6 +548,9 @@ describe('the chat route', () => {
     expect(answer.lines.map((l) => l.id)).toEqual([1]);
     expect(answer.skipped).toBe(8);
     expect(answer.latest).toBe(9);
+    // The highest seq of any row, and the rows, usable or not.
+    expect(answer.maxSeq).toBe(6);
+    expect(answer.rows).toBe(9);
   });
 
   it('ignores a field of the wrong type and fields it does not know', () => {
@@ -561,12 +566,13 @@ describe('the chat route', () => {
       NOW,
     );
     expect(lines.map((l) => l.id)).toEqual([2, 5]);
-    expect(lines[0]?.text).toHaveLength(300);
+    // Not cut: a line is matched whole.
+    expect(lines[0]?.text).toHaveLength(400);
     expect(lines[1]).toMatchObject({ name: 'B', text: 'second line' });
   });
 
   it('leaves latest empty when the answer has no latestSeq', () => {
-    expect(parseChat({ messages: [] }, NOW)).toEqual({ lines: [], skipped: 0, latest: null });
+    expect(parseChat({ messages: [] }, NOW)).toEqual({ lines: [], skipped: 0, latest: null, maxSeq: null, rows: 0 });
   });
 
   it('throws when the answer has no messages list, so a changed shape is noticed', () => {

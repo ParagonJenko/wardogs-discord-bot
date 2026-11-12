@@ -460,12 +460,24 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect(errors()).toEqual([]);
     });
 
+    it('acts once on a line when checks and the live chat overlap', async () => {
+      const staffer = { id: '100000000000000003', name: 'Staffer' };
+      const asStaff = { authorization: `Bearer ${await createSession(CLIENT_SECRET, staffer, Date.now())}` };
+      // Past the live chat's few seconds between readings, so each caller reads.
+      await new Promise((resolve) => setTimeout(resolve, 3_100));
+      rcon.chat.push({ id: 6, steamId: BO, name: 'Bo', message: 'you nigger' });
+      rcon.requests.length = 0;
+      await Promise.all([runCron(), json('/api/admin/chat?after=0', { headers: asStaff }), json('/api/admin/chat?after=0', { headers: asStaff }), runCron()]);
+      expect(rcon.requests.filter((r) => r === 'POST /v1/bans')).toHaveLength(1);
+      expect(errors()).toEqual([]);
+    });
+
     it('gives staff the live chat with each verdict, after a cursor, and nobody else', async () => {
       const staffer = { id: '100000000000000003', name: 'Staffer' };
       const asStaff = { authorization: `Bearer ${await createSession(CLIENT_SECRET, staffer, Date.now())}` };
       const feed = await json('/api/admin/chat?after=0', { headers: asStaff });
       expect(feed.status).toBe(200);
-      expect(feed.body).toMatchObject({ enabled: true, available: true, cursor: 5 });
+      expect(feed.body).toMatchObject({ enabled: true, available: true, cursor: 6 });
       const byId = Object.fromEntries(feed.body.lines.map((l: { id: number }) => [l.id, l]));
       expect(byId[1].verdict).toEqual({ kind: 'clean', action: 'none' });
       expect(byId[2]).toMatchObject({ name: 'Ash', steamId: ASH, verdict: { kind: 'exact', list: 'racism', word: 'nigger', action: 'banned' } });
@@ -474,8 +486,8 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       // Bo was warned for line 3, so the fuzzy line 4 in the same check is folded into it or only noted.
       expect(['alert', 'folded']).toContain(byId[4].verdict.action);
 
-      expect((await json('/api/admin/chat?after=4', { headers: asStaff })).body.lines.map((l: { id: number }) => l.id)).toEqual([5]);
-      expect((await json('/api/admin/chat?after=5', { headers: asStaff })).body.lines).toEqual([]);
+      expect((await json('/api/admin/chat?after=4', { headers: asStaff })).body.lines.map((l: { id: number }) => l.id)).toEqual([5, 6]);
+      expect((await json('/api/admin/chat?after=6', { headers: asStaff })).body.lines).toEqual([]);
       expect((await json('/api/admin/chat?after=-1', { headers: asStaff })).status).toBe(400);
       expect((await json('/api/admin/chat?after=x', { headers: asStaff })).status).toBe(400);
       expect((await server.fetch('/api/admin/chat?after=0')).status).toBe(401);

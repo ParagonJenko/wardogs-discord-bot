@@ -357,28 +357,40 @@ const ChatLineSchema = z.object({
 });
 const ChatBodySchema = z.object({ latestSeq: ChatField(z.number()), messages: z.array(z.unknown()) });
 
-const MAX_CHAT_TEXT = 300;
+// Names are cut; the text is not, as a line is matched whole (cutting could make a word that is not on a list into one).
 const MAX_CHAT_NAME = 60;
 
-const oneLine = (text: string, max: number): string => text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
+const oneLine = (text: string, max = Infinity): string => text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
 
 // The only place the chat route's answer is read. `skipped` counts lines it could not use. `latest` is the server's
 // newest line number (`latestSeq`), when it says. It throws when the answer has no `messages` list, so a changed shape
 // is noticed instead of reading as a quiet server.
-export const parseChat = (raw: unknown, now: number): { lines: ChatLine[]; skipped: number; latest: number | null } => {
+export type ChatAnswer = {
+  lines: ChatLine[];
+  skipped: number;
+  latest: number | null;
+  // The highest seq among the rows, usable or not, and how many rows there were: a page of rows that cannot be used
+  // still moves the cursor on.
+  maxSeq?: number | null;
+  rows?: number;
+};
+
+export const parseChat = (raw: unknown, now: number): Required<ChatAnswer> => {
   const body = ChatBodySchema.safeParse(raw);
   if (!body.success) throw new Error('The chat answer has no messages list');
   const lines: ChatLine[] = [];
   let skipped = 0;
+  let maxSeq: number | null = null;
   for (const item of body.data.messages) {
     const read = ChatLineSchema.safeParse(item);
     const m = read.success ? read.data : null;
-    const text = oneLine(m?.text ?? m?.rawText ?? '', MAX_CHAT_TEXT);
+    if (typeof m?.seq === 'number' && Number.isSafeInteger(m.seq) && m.seq >= 0) maxSeq = Math.max(maxSeq ?? 0, m.seq);
+    const text = oneLine(m?.text ?? m?.rawText ?? '');
     if (m === null || m.seq === undefined || m.seq === null || !Number.isSafeInteger(m.seq) || m.seq < 0 || text === '') {
       skipped += 1;
       continue;
     }
-    const rawText = oneLine(m.rawText ?? '', MAX_CHAT_TEXT);
+    const rawText = oneLine(m.rawText ?? '');
     // A Steam ID sent as a JSON number is rounded on the way in, so only text counts.
     const steamId = (m.steamId ?? '').trim();
     const real = oneLine(m.realName ?? '', MAX_CHAT_NAME);
@@ -397,7 +409,7 @@ export const parseChat = (raw: unknown, now: number): { lines: ChatLine[]; skipp
       at: Number.isFinite(sent) && sent > 0 ? sent : now,
     });
   }
-  return { lines: lines.sort((a, b) => a.id - b.id), skipped, latest: body.data.latestSeq ?? null };
+  return { lines: lines.sort((a, b) => a.id - b.id), skipped, latest: body.data.latestSeq ?? null, maxSeq, rows: body.data.messages.length };
 };
 
 // The chat after the line `after` (0 for the beginning), oldest first, at most `limit` lines. The server's `after` is
@@ -409,7 +421,7 @@ export const fetchChat = async (
   limit: number,
   http: HttpClient,
   now = Date.now(),
-): Promise<{ lines: ChatLine[]; skipped: number; latest: number | null }> => {
+): Promise<Required<ChatAnswer>> => {
   if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1) throw new Error('Not a chat cursor');
   return parseChat(await rconRequest(rconUrl, password, `/v1/chat?after=${after}&limit=${limit}`, http), now);
 };

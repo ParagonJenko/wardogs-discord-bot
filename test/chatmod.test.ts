@@ -27,7 +27,7 @@ import {
   type ChatWords,
 } from '../src/chatmod.ts';
 import { DEFAULT_ALLOWED, DEFAULT_RACISM, DEFAULT_TOXICITY } from '../src/chatwords.ts';
-import type { ChatLine } from '../src/rcon.ts';
+import { parseChat, type ChatLine } from '../src/rcon.ts';
 
 const ASH = '76561198000000001';
 const BO = '76561198000000002';
@@ -100,6 +100,17 @@ describe('fuzzy matches', () => {
     expect(hitsOf('@ss h0le')).toEqual([]);
     expect(hitsOf('sp1c')).toEqual(['fuzzy racism spic']);
     expect(hitsOf('7ard')).toEqual([]);
+  });
+
+  it('read each 1 on its own as an i or an l, so mixed ones are found', () => {
+    expect(hitsOf('k1ll yourse1f')).toEqual(['fuzzy toxicity kill yourself']);
+    expect(hitsOf('k1ll y0urs3lf')).toEqual(['fuzzy toxicity kill yourself']);
+    expect(hitsOf('k1ll yourself')).toEqual(['fuzzy toxicity kill yourself']);
+    const withL = compileWords({ ...NO_WORDS, toxicity: { add: ['killer'], remove: [] } });
+    expect(matchLine('k1ller', withL).map((h) => h.word)).toEqual(['killer']);
+    // A 1 is only an i or an l: not any letter.
+    expect(matchLine('k1ger', withL)).toEqual([]);
+    expect(hitsOf('kiiller')).toEqual([]);
   });
 
   it('read a 1 as an i or an l', () => {
@@ -339,9 +350,10 @@ describe('what the bot does about a batch', () => {
 
   it('says the line and the word as evidence, and keeps a ban reason short', () => {
     const [ban] = call([line(1, 'you nigger')]);
-    expect(callEvidence(ban!)).toBe('Chat: "you nigger" (matched "nigger" on the racism list)');
-    expect(banReasonText(line(1, 'x'.repeat(300))).length).toBeLessThan(140);
-    expect(banReasonText(line(1, 'you nigger'))).toBe('Racist language in chat: "you nigger"');
+    expect(callEvidence(ban!)).toBe('Chat #1: "you nigger" (matched "nigger" on the racism list)');
+    expect(callEvidence({ ...ban!, line: { ...ban!.line, channel: 'Team', faction: 'Lonestar' } })).toContain('Chat #1 (Team, Lonestar): "you nigger"');
+    expect(banReasonText(line(1, 'x'.repeat(300)), 'nigger').length).toBeLessThan(140);
+    expect(banReasonText(line(1, 'you nigger'), 'nigger')).toBe('Racist language in chat (nigger): "you nigger"');
   });
 });
 
@@ -454,6 +466,42 @@ describe('following the chat', () => {
     });
     expect(reading.fresh).toHaveLength(200);
     expect(reading.state.cursor).toBe(200);
+  });
+
+  it('moves the cursor on past rows it could not use, so it is never stuck', async () => {
+    const unusable = vi.fn(async () => ({ lines: [], skipped: 3, latest: 12, maxSeq: 12, rows: 3 }));
+    const reading = await readChat({ cursor: 9, buffer: [] }, unusable);
+    expect(reading.state.cursor).toBe(12);
+    expect(reading.skipped).toBe(3);
+    expect(reading.fresh).toEqual([]);
+    expect(unusable).toHaveBeenCalledTimes(1);
+    // A full page of them goes on to the next page.
+    let n = 0;
+    const full = vi.fn(async (after: number) => {
+      n += 1;
+      return { lines: [], skipped: 200, latest: 999, maxSeq: after + 200, rows: n < 3 ? 200 : 5 };
+    });
+    expect((await readChat({ cursor: 0, buffer: [] }, full)).state.cursor).toBe(600);
+  });
+
+  it('never saves a cursor before it knows where the chat ends: a first reading that cannot find the end saves nothing', async () => {
+    // No latestSeq, and more chat than the pages read at the start.
+    const endless = async (after: number) => ({ lines: [line(after + 200, 'nigger')], skipped: 0, latest: null, maxSeq: after + 200, rows: 200 });
+    await expect(readChat(start, endless)).rejects.toThrow('The end of the chat was not found');
+    // The head page failing, or the newest line failing to be read after it, never leaves a cursor behind the end.
+    await expect(readChat(start, async () => Promise.reject(new Error('down')))).rejects.toThrow('down');
+    let calls = 0;
+    const failing = await readChat(start, async () => {
+      if (calls++ === 1) throw new Error('down');
+      return { lines: [line(1, 'old')], skipped: 0, latest: 500, maxSeq: 1, rows: 1 };
+    });
+    expect(failing.state.cursor).toBe(500);
+    expect(failing.fresh).toEqual([]);
+  });
+
+  it('never moves the cursor backwards', async () => {
+    const behind = async () => ({ lines: [], skipped: 0, latest: 3, maxSeq: 3, rows: 0 });
+    expect((await readChat({ cursor: 50, buffer: [] }, behind)).state.cursor).toBe(50);
   });
 
   it('counts the lines it could not read', async () => {
@@ -595,6 +643,17 @@ describe('the live chat feed', () => {
   });
 });
 
+describe('a line is matched whole, never cut first', () => {
+  it('does not turn a long line into a listed word by cutting it', () => {
+    // 295 letters and " spice": cut to 300 characters it would end in "spic", a listed word.
+    const long = `${'x'.repeat(295)} spice`;
+    const [kept] = parseChat({ messages: [{ seq: 1, text: long, steamId: ASH, realName: 'A' }] }, AT).lines;
+    expect(kept?.text).toBe(long);
+    expect(matchLine(kept!.text, compiled)).toEqual([]);
+    expect(judgeChat([kept!], compiled, new Set(), true)).toEqual([]);
+  });
+});
+
 describe('the text as typed, and names', () => {
   const none = new Set<string>();
 
@@ -611,8 +670,8 @@ describe('the text as typed, and names', () => {
 
   it('gives the line as typed as the evidence and the ban reason', () => {
     const [call] = judgeChat([{ ...line(1, 'you ******'), rawText: 'you nigger' }], compiled, none, true);
-    expect(callEvidence(call!)).toBe('Chat: "you nigger" (matched "nigger" on the racism list)');
-    expect(banReasonText({ ...line(1, 'you ******'), rawText: 'you nigger' })).toBe('Racist language in chat: "you nigger"');
+    expect(callEvidence(call!)).toBe('Chat #1: "you nigger" (matched "nigger" on the racism list)');
+    expect(banReasonText({ ...line(1, 'you ******'), rawText: 'you nigger' }, 'nigger')).toBe('Racist language in chat (nigger): "you nigger"');
   });
 
   it('shows /chat the typed text, the name others saw, the channel, the faction and a ping', () => {

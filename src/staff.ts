@@ -94,7 +94,8 @@ export type PlayerRecord = {
   grief: PlayerGrief | null;
 };
 
-export type BanRequest = Named & { length: string; reason: string; by: string; byName?: string };
+// `detail` is more for the staff history and the moderation log, such as the chat line the bot banned for.
+export type BanRequest = Named & { length: string; reason: string; by: string; byName?: string; detail?: string };
 // `already-banned`: the player has a ban already, which stays as it is. `byBot` says whether the bot made it, and
 // then `until` is when it ends. `waiting`: the server does not have the ban yet, as the player is not in game; the bot
 // bans them when it next sees them.

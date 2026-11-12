@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { readJsonBody } from './body.ts';
 import { DEFAULT_ALLOWED, DEFAULT_RACISM, DEFAULT_TOXICITY } from './chatwords.ts';
-import type { ChatLine } from './rcon.ts';
+import type { ChatAnswer, ChatLine } from './rcon.ts';
 
 // Chat moderation: the bot reads the game's chat (GET /v1/chat) at each check and acts on the lines that use a word on
 // one of two lists (see chatwords.ts for the starter lists, which staff change on the staff page's Chat filter tab).
@@ -106,9 +106,22 @@ type Entry = {
   parts: string[];
   // Whether it can be found inside a longer word.
   inside: boolean;
+  // `fuzzy` as patterns: a repeated letter is one letter, and a 1 in the line (kept as ¹) stands for an i or an l, each
+  // one on its own, so "k1ll yourse1f" is found. `whole` must match all of a word, `part` anywhere in it.
+  whole: RegExp | null;
+  part: RegExp | null;
 };
 
-export type CompiledWords = { entries: Entry[]; allowed: string[] };
+export type CompiledWords = { entries: Entry[]; allowed: RegExp[] };
+
+// What a 1 is read as in the line until it is compared with a word: neither letter, so it can be either.
+const ONE = '\u00b9';
+
+const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A word as a pattern. Each letter may repeat, and an i or an l may be a ONE.
+const patternOf = (word: string, flags: string): RegExp =>
+  new RegExp([...word].map((c) => (c === 'i' || c === 'l' ? `(?:${c}|${ONE})+` : `${escapeRe(c)}+`)).join(''), flags);
 
 // A word shorter than this once cleaned up is only matched as a whole word, never found inside a longer one.
 const INSIDE_MIN = 4;
@@ -124,10 +137,24 @@ export const compileWords = (words: ChatWords): CompiledWords => {
       // such a word is only matched as typed.
       const whole = tokens.map((t) => squash(withoutMarks(t))).join('');
       const usable = fuzzy.length >= INSIDE_MIN || (fuzzy.length >= 3 && fuzzy.length === whole.length);
-      entries.push({ word, list, tokens, fuzzy: usable ? fuzzy : '', parts, inside: fuzzy.length >= INSIDE_MIN });
+      entries.push({
+        word,
+        list,
+        tokens,
+        fuzzy: usable ? fuzzy : '',
+        parts,
+        inside: fuzzy.length >= INSIDE_MIN,
+        whole: usable ? new RegExp(`^${patternOf(fuzzy, '').source}$`) : null,
+        part: usable ? patternOf(fuzzy, 'g') : null,
+      });
     }
   }
-  return { entries, allowed: unique(wordsIn(words, 'allow').map((w) => squash(withoutMarks(w))).filter((w) => w.length >= 3)) };
+  const allowed = unique(wordsIn(words, 'allow').map((w) => squash(withoutMarks(w))).filter((w) => w.length >= 3));
+  // An allowed word is matched as it is typed (letters repeated is a different word), with a ONE for an i or an l.
+  return {
+    entries,
+    allowed: allowed.map((w) => new RegExp([...w].map((c) => (c === 'i' || c === 'l' ? `(?:${c}|${ONE})` : escapeRe(c))).join(''), 'g')),
+  };
 };
 
 export type Hit = { kind: 'exact' | 'fuzzy'; list: WordListId; word: string };
@@ -136,9 +163,9 @@ const RANK = (hit: Hit): number => (hit.kind === 'exact' ? 0 : 2) + (hit.list ==
 
 // A token as the fuzzy match sees it: marks off, symbols read as letters, separators gone, allowed words blanked out
 // (with # so no word is found across the gap), repeated letters collapsed.
-const prepare = (token: string, one: string, allowed: string[]): string => {
-  let text = squash(deleet(withoutMarks(token.toLowerCase()), one));
-  for (const word of allowed) text = text.split(word).join('#'.repeat(word.length));
+const prepare = (token: string, allowed: RegExp[]): string => {
+  let text = squash(deleet(withoutMarks(token.toLowerCase()), ONE));
+  for (const word of allowed) text = text.replace(word, (m) => '#'.repeat(m.length));
   return collapse(text);
 };
 
@@ -171,38 +198,37 @@ export const matchLine = (text: string, compiled: CompiledWords): Hit[] => {
     found.push({ hit: { kind: 'fuzzy', list: entry.list, word: entry.word }, fuzzy: entry.fuzzy });
   };
   const found: { hit: Hit; fuzzy: string }[] = [];
-  const ones = text.includes('1') ? ['i', 'l'] : ['i'];
-  for (const one of ones) {
-    // Each word on its own, and each run of single letters ("k y s") as one word.
-    const pieces = spoken.map((t) => prepare(t, one, compiled.allowed));
-    for (let i = 0; i < spoken.length; i++) {
-      if (!isSingle(spoken[i] ?? '')) continue;
-      let end = i + 1;
-      while (end < spoken.length && isSingle(spoken[end] ?? '')) end++;
-      if (end - i >= 2) pieces.push(prepare(spoken.slice(i, end).join(''), one, compiled.allowed));
-      i = end - 1;
+  // Each word on its own, and each run of single letters ("k y s") as one word.
+  const pieces = spoken.map((t) => prepare(t, compiled.allowed));
+  for (let i = 0; i < spoken.length; i++) {
+    if (!isSingle(spoken[i] ?? '')) continue;
+    let end = i + 1;
+    while (end < spoken.length && isSingle(spoken[end] ?? '')) end++;
+    if (end - i >= 2) pieces.push(prepare(spoken.slice(i, end).join(''), compiled.allowed));
+    i = end - 1;
+  }
+  // Where each word starts in the line with the separators gone, for phrases.
+  const starts: number[] = [];
+  let joined = '';
+  for (const piece of pieces.slice(0, spoken.length)) {
+    starts.push(joined.length);
+    joined += piece;
+  }
+  for (const entry of compiled.entries) {
+    if (entry.whole === null || entry.part === null) continue;
+    const { whole, part } = entry;
+    if (entry.tokens.length === 1) {
+      if (pieces.some((p) => whole.test(p) || (entry.inside && new RegExp(part.source).test(p)))) fuzzy(entry);
+      continue;
     }
-    // Where each word starts in the line with the separators gone, for phrases.
-    const starts: number[] = [];
-    let joined = '';
-    for (const piece of pieces.slice(0, spoken.length)) {
-      starts.push(joined.length);
-      joined += piece;
-    }
-    for (const entry of compiled.entries) {
-      if (entry.fuzzy === '') continue;
-      if (entry.tokens.length === 1) {
-        if (pieces.some((p) => p === entry.fuzzy || (entry.inside && p.includes(entry.fuzzy)))) fuzzy(entry);
-        continue;
-      }
-      for (let at = joined.indexOf(entry.fuzzy); at !== -1; at = joined.indexOf(entry.fuzzy, at + 1)) {
-        const end = at + entry.fuzzy.length;
-        const token = starts.findLastIndex((s) => s <= at);
-        const sameToken = end <= (starts[token + 1] ?? joined.length);
-        if (starts.includes(at) || sameToken) {
-          fuzzy(entry);
-          break;
-        }
+    for (const match of joined.matchAll(part)) {
+      const at = match.index;
+      const end = at + match[0].length;
+      const token = starts.findLastIndex((s) => s <= at);
+      const sameToken = end <= (starts[token + 1] ?? joined.length);
+      if (starts.includes(at) || sameToken) {
+        fuzzy(entry);
+        break;
       }
     }
   }
@@ -325,19 +351,21 @@ export const judgeChat = (lines: ChatLine[], compiled: CompiledWords, staff: Rea
 
 export const LIST_NAMES: Record<WordListId, string> = { racism: 'racism list', toxicity: 'toxicity list' };
 
-// What goes in the player's staff history and the moderation log: the line, and the word.
+// What goes in the player's staff history and the moderation log: the line as typed, the word, and where it was said.
 export const callEvidence = (call: ChatCall): string => {
   const original = typed(call.line);
   const said = original.length > 200 ? `${original.slice(0, 199)}…` : original;
   const more = call.more > 0 ? `, and ${call.more} more line${call.more === 1 ? '' : 's'} in the same minute` : '';
-  return `Chat: "${said}" (matched "${call.hit.word}" on the ${LIST_NAMES[call.hit.list]}${more})`;
+  const where = [call.line.channel, call.line.faction].filter(Boolean).join(', ');
+  return `Chat #${call.line.id}${where === '' ? '' : ` (${where})`}: "${said}" (matched "${call.hit.word}" on the ${LIST_NAMES[call.hit.list]}${more})`;
 };
 
-// A short reason for a ban, which the player sees with the kick. The game's one line holds 200 characters.
-export const banReasonText = (line: ChatLine): string => {
+// The short reason for a ban, which the server keeps and the player sees with the kick (the game's one line holds 200
+// characters). It names the word; the whole line is in the ban's detail (see callEvidence).
+export const banReasonText = (line: ChatLine, word: string): string => {
   const original = typed(line);
-  const said = original.length > 90 ? `${original.slice(0, 89)}…` : original;
-  return `Racist language in chat: "${said}"`;
+  const said = original.length > 80 ? `${original.slice(0, 79)}…` : original;
+  return `Racist language in chat (${word}): "${said}"`;
 };
 
 export const WARNING_TEXT = 'Toxic language in chat is not allowed on this server. Keep it friendly.';
@@ -415,35 +443,38 @@ export type ChatReading = {
 // Reads what is new, a page at a time. The first reading only finds the newest line, so lines said before the bot was
 // first on cannot be acted on. A page that fails after others were read keeps what they had; one that fails with nothing
 // read throws, so the state is left as it was.
-export const readChat = async (
-  state: ChatState,
-  page: (after: number, limit: number) => Promise<{ lines: ChatLine[]; skipped: number; latest: number | null }>,
-): Promise<ChatReading> => {
+export const readChat = async (state: ChatState, page: (after: number, limit: number) => Promise<ChatAnswer>): Promise<ChatReading> => {
   const first = state.cursor === null;
   let cursor = state.cursor ?? 0;
   let skipped = 0;
   const got = new Map<number, ChatLine>();
+  // The highest seq of a page, from all its rows: a page whose rows cannot be used still moves the cursor on.
+  const top = (answer: ChatAnswer): number => Math.max(answer.maxSeq ?? 0, ...answer.lines.map((l) => l.id));
   // Lines at or before `from` are ones already had: the server's `after` is inclusive, and sends the cursor's line again.
-  const take = (answer: { lines: ChatLine[]; skipped: number }, from: number): ChatLine[] => {
+  const take = (answer: ChatAnswer, from: number): void => {
     skipped += answer.skipped;
-    const news = answer.lines.filter((l) => l.id > from);
-    for (const line of news) if (!got.has(line.id)) got.set(line.id, line);
-    return news;
+    for (const line of answer.lines) if (line.id > from && !got.has(line.id)) got.set(line.id, line);
   };
+  const rowsOf = (answer: ChatAnswer): number => answer.rows ?? answer.lines.length;
   if (first) {
-    // The first reading starts at the server's newest line (`latestSeq`), so nothing said before is acted on, and keeps
-    // the last few lines for /chat. Without a latestSeq it reads on to the newest line page by page.
+    // The first reading starts at the server's newest line (`latestSeq`) and acts on nothing older. It keeps the last few
+    // lines for /chat. A page that fails throws, so the cursor is only ever saved once the newest line is known.
     const head = await page(0, 1);
-    if (head.latest === null) take(head, 0);
-    let latest = head.latest ?? Math.max(0, ...head.lines.map((l) => l.id));
-    if (head.latest === null && head.lines.length > 0) {
-      for (let n = 0; n < PAGES_AT_START; n++) {
+    let latest = head.latest ?? 0;
+    if (head.latest === null) {
+      // No latestSeq: read on to the end of the chat, page by page. If that takes more pages than are read at the start,
+      // the end was not found, and nothing is saved.
+      take(head, 0);
+      latest = top(head);
+      let end = rowsOf(head) === 0;
+      for (let n = 0; n < PAGES_AT_START && !end; n++) {
         const answer = await page(latest, CHAT_PAGE);
-        const news = take(answer, latest);
-        if (news.length === 0) break;
-        latest = Math.max(latest, ...news.map((l) => l.id));
-        if (answer.lines.length < CHAT_PAGE) break;
+        take(answer, latest);
+        const next = Math.max(latest, top(answer));
+        end = next === latest || rowsOf(answer) < CHAT_PAGE;
+        latest = next;
       }
+      if (!end) throw new Error('The end of the chat was not found, so the bot has not started on it');
     } else if (latest > 0) {
       const from = Math.max(0, latest - CHAT_BACKLOG);
       try {
@@ -455,22 +486,24 @@ export const readChat = async (
     cursor = Math.max(latest, ...[...got.keys()]);
   } else {
     for (let n = 0; n < PAGES_PER_CHECK; n++) {
-      let answer: { lines: ChatLine[]; skipped: number };
+      let answer: ChatAnswer;
       try {
         answer = await page(cursor, CHAT_PAGE);
       } catch (error) {
-        if (got.size === 0 && n === 0) throw error;
+        if (n === 0) throw error;
         break;
       }
-      const news = take(answer, cursor);
-      if (news.length === 0) break;
-      cursor = Math.max(cursor, ...news.map((l) => l.id));
-      if (answer.lines.length < CHAT_PAGE) break;
+      take(answer, cursor);
+      const next = Math.max(cursor, top(answer));
+      const moved = next > cursor;
+      cursor = next;
+      if (!moved || rowsOf(answer) < CHAT_PAGE) break;
     }
   }
   const lines = [...got.values()].sort((a, b) => a.id - b.id).filter((l) => l.id <= cursor);
   return {
-    state: { cursor, buffer: [...state.buffer, ...lines.map(kept)].slice(-CHAT_KEPT) },
+    // The cursor only moves forward.
+    state: { cursor: Math.max(cursor, state.cursor ?? 0), buffer: [...state.buffer, ...lines.map(kept)].slice(-CHAT_KEPT) },
     fresh: first ? [] : lines,
     lines,
     skipped,

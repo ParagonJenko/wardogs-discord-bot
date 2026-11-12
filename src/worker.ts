@@ -2808,8 +2808,8 @@ export class Watcher extends DurableObject<Env> {
     const evidence = callEvidence(call);
     if (call.kind !== 'alert' && line.steamId !== null) {
       if (call.kind === 'ban') {
-        const reason = banReasonText(line);
-        const result = await this.ban({ steamId: line.steamId, name: line.name || line.steamId, length: 'permanent', reason, by: 'bot' });
+        const reason = banReasonText(line, call.hit.word);
+        const result = await this.ban({ steamId: line.steamId, name: line.name || line.steamId, length: 'permanent', reason, by: 'bot', detail: evidence });
         if (result.outcome === 'already-banned') {
           console.info(`Chat moderation: ${player} is banned already, so nothing was done. ${evidence}`);
           return;
@@ -5466,7 +5466,7 @@ export class Watcher extends DurableObject<Env> {
   // Bans a player on the server, and remembers when a timed ban ends so the bot can lift it. A player who is already
   // banned is left as they are, so no ban is ever lifted to change it: staff /unban first. The game only bans players
   // who are in game, so for anyone else the ban waits, and the check that next sees them puts it on the server.
-  async ban({ steamId, name, length, reason, by, byName }: BanRequest): Promise<BanResult> {
+  async ban({ steamId, name, length, reason, by, byName, detail: more }: BanRequest): Promise<BanResult> {
     const option = BAN_LENGTHS.find((l) => l.value === length);
     if (option === undefined) throw new Error(`Unknown ban length: ${length}`);
     const named = byName === undefined ? {} : { byName };
@@ -5491,7 +5491,7 @@ export class Watcher extends DurableObject<Env> {
         await addBan(config.rconUrl, config.rconPassword, steamId, ban.serverReason, http);
       } catch (error) {
         if (isNotInGame(error)) {
-          const detail = `${option.name}, waits for them to join`;
+          const detail = [`${option.name}, waits for them to join`, more].filter(Boolean).join(' · ');
           await this.record(steamId, { action: 'ban', at, by, ...named, name, reason, detail }, { ban: { ...ban, waiting: true } });
           return { outcome: 'banned', until, byBot: true, waiting: true };
         }
@@ -5500,7 +5500,7 @@ export class Watcher extends DurableObject<Env> {
       }
       await this.record(
         steamId,
-        { action: 'ban', at, by, ...named, name, reason, detail: option.name },
+        { action: 'ban', at, by, ...named, name, reason, detail: [option.name, more].filter(Boolean).join(' · ') },
         { serverBan: { reason: ban.serverReason, bannedBy: null } },
       );
       return { outcome: 'banned', until, byBot: true };
