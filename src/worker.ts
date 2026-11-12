@@ -534,6 +534,7 @@ import {
   type InsertPlan,
   type VoteInsert,
 } from './voteinsert.ts';
+import { motdPage, readMotdEdit, saveMotd, type MotdEdit, type MotdPage, type MotdSave } from './motd.ts';
 import {
   actionEdit,
   buildCatalog,
@@ -2566,6 +2567,24 @@ export class Watcher extends DurableObject<Env> {
     const result = await this.editRotations(actionEdit(action), by, byName);
     if ('problem' in result) return { problem: result.problem };
     return { ...(await this.rotationsPage()), ...(result.server === undefined ? {} : { outcome: result.server }) };
+  }
+
+  // The staff page's Welcome message tab: the popup as the server's settings have it now. Throws when they can't be read
+  // or can't be written, so the tab says so instead of showing something staff could not save.
+  async welcomeMessagePage(): Promise<MotdPage> {
+    const config = await this.settingsFile(this.rcon()).fetchConfig();
+    if (!config.writable) throw new Error('the server settings are read-only over RCON');
+    return motdPage(config);
+  }
+
+  // A save from the Welcome message tab, and the tab as it is after it.
+  async welcomeMessageSave(edit: MotdEdit): Promise<MotdSave & { page?: MotdPage }> {
+    const file = this.settingsFile(this.rcon());
+    const saved = await this.serial(() => saveMotd(file, edit));
+    if (saved.status !== 'saved') return saved;
+    // The new revision, so a second save does not take its own change for someone else's.
+    const page = await file.fetchConfig().then(motdPage, () => undefined);
+    return page === undefined ? saved : { ...saved, page };
   }
 
   // Changes the saved rotations as staff asked, and when that changes what should be on the server today, puts it there.
@@ -6257,6 +6276,37 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page rotations failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the rotations right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // The Welcome message tab: the popup players see when they join, read from and written to the server's settings.
+  if (route === 'GET /api/admin/motd' || route === 'POST /api/admin/motd') {
+    try {
+      if (route === 'GET /api/admin/motd') return Response.json(await watcher().welcomeMessagePage(), { headers });
+      const edit = await readMotdEdit(request);
+      if (edit === null) return Response.json({ error: 'Not a welcome message request' }, { status: 400, headers });
+      const result = await watcher().welcomeMessageSave(edit);
+      if (result.status === 'invalid') {
+        return Response.json({ error: 'The welcome message breaks the rules, so it was not saved.', problems: result.problems }, { status: 400, headers });
+      }
+      if (result.status === 'changed') {
+        return Response.json({ error: 'The welcome message was changed somewhere else since you opened it. Reload it, then make your change again.' }, { status: 409, headers });
+      }
+      if (result.status === 'refused') {
+        return Response.json({ error: `The server won't take it: ${result.reason}.` }, { status: 422, headers });
+      }
+      console.info(`Staff page: welcome message saved by ${JSON.stringify(session.name)} (Discord user ${session.userId}) (${edit.lines.length} lines, ${edit.enabled ? 'on' : 'off'})`);
+      return Response.json({ ...result.page, outcome: result.outcome }, { headers });
+    } catch (error) {
+      console.error(`Staff page welcome message failed: ${errorText(error)}`);
+      const readOnly = errorText(error).includes('read-only');
+      return Response.json(
+        {
+          error: readOnly
+            ? "The server's settings are read-only over RCON, so the welcome message can't be changed here."
+            : "Couldn't reach the server's settings right now. If it was a save, reload before trying again.",
+        },
+        { status: 503, headers },
+      );
     }
   }
   // The Lines tab: the lines the bot says in game, and a change to them.

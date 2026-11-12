@@ -41,6 +41,9 @@ type FakeRcon = {
   infantry: boolean;
   // The chat GET /v1/chat serves, as { messages }.
   chat: { id: number; steamId: string; name: string; message: string }[];
+  // ServerSettings.ini as the fake has it, and a change made behind the bot's back.
+  settings: () => { revision: number; text: string };
+  edit: (text: string) => void;
   close: () => Promise<void>;
 };
 
@@ -127,6 +130,10 @@ const startFakeRcon = async (password: string): Promise<FakeRcon> => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return Object.assign(fake, {
+    settings: () => config,
+    edit: (text: string) => {
+      config = { revision: config.revision + 1, text };
+    },
     url: `http://127.0.0.1:${port}`,
     close: () =>
       new Promise<void>((resolve) => {
@@ -548,6 +555,58 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     });
   });
 
+  describe('the staff page welcome message', () => {
+    const asStaff = async () => ({
+      authorization: `Bearer ${await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now())}`,
+      'content-type': 'application/json',
+    });
+    const get = async () => json('/api/admin/motd', { headers: await asStaff() });
+    const post = async (body: unknown) => json('/api/admin/motd', { method: 'POST', headers: await asStaff(), body: JSON.stringify(body) });
+    const section = '[/Script/WDGame.WDGameStateSession]';
+
+    it('reads the popup from the settings, saves it escaped and never overwrites a change made elsewhere', async () => {
+      rcon.edit([section, 'bLockOverpopulatedTeamsConfig=True', 'bServerWelcomeMessageEnabled=False', '!ServerWelcomeMessageLines=ClearArray', '.ServerWelcomeMessageLines=&lt;Bold&gt;Old&lt;/&gt;', ''].join('\n'));
+      const page = await get();
+      expect(page).toMatchObject({ status: 200, body: { enabled: false, lines: ['<Bold>Old</>'], problems: [] } });
+
+      const lines = ['<Header>Welcome</>', '', '<Italic>Have fun &amp; good hunting!</>'];
+      const saved = await post({ enabled: true, lines, revision: page.body.revision });
+      expect(saved).toMatchObject({ status: 200, body: { outcome: 'next-match', enabled: true, lines } });
+      expect(rcon.settings().text).toBe(
+        [
+          section,
+          'bLockOverpopulatedTeamsConfig=True',
+          'bServerWelcomeMessageEnabled=True',
+          '!ServerWelcomeMessageLines=ClearArray',
+          '.ServerWelcomeMessageLines=&lt;Header&gt;Welcome&lt;/&gt;',
+          '.ServerWelcomeMessageLines=',
+          '.ServerWelcomeMessageLines=&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;',
+          '',
+        ].join('\n'),
+      );
+
+      // The page's copy is behind the file now: nothing is written, and nothing is forced.
+      const before = rcon.settings().text;
+      rcon.edit(`${before}Elsewhere=1\n`);
+      const changed = await post({ enabled: false, lines: [], revision: saved.body.revision });
+      expect(changed.status).toBe(409);
+      expect(changed.body.error).toMatch(/changed somewhere else/);
+      expect(rcon.settings().text).toBe(`${before}Elsewhere=1\n`);
+      expect(errors()).toEqual([]);
+    });
+
+    it('refuses a message that breaks the rules, naming the lines, and a request that is not one', async () => {
+      const page = await get();
+      rcon.requests.length = 0;
+      const bad = await post({ enabled: true, lines: ['fine', '<a href="x">link</>'], revision: page.body.revision });
+      expect(bad.status).toBe(400);
+      expect(bad.body.problems.map((p: { line: number }) => p.line)).toEqual([2]);
+      expect(rcon.requests.filter((r) => r.startsWith('PUT'))).toEqual([]);
+      expect((await post({ enabled: 'yes' })).status).toBe(400);
+      expect((await server.fetch('/api/admin/motd')).status).toBe(401);
+    });
+  });
+
   describe("the website's API", () => {
     it('serves the stats the checks and the kill feed recorded', async () => {
       const response = await server.fetch('/api/stats');
@@ -723,6 +782,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
         ['GET', '/api/admin/growth'],
         ['GET', '/api/admin/kills'],
         ['GET', '/api/admin/lines'],
+        ['GET', '/api/admin/motd'],
         ['GET', '/api/admin/overview'],
         ['GET', '/api/admin/player?player=76561198000000001'],
         ['GET', '/api/admin/rotations'],
@@ -733,6 +793,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
         ['POST', '/api/admin/command'],
         ['POST', '/api/admin/dealt'],
         ['POST', '/api/admin/lines'],
+        ['POST', '/api/admin/motd'],
         ['POST', '/api/admin/profile'],
         ['POST', '/api/admin/rotations'],
         ['POST', '/api/admin/rules'],
