@@ -1452,7 +1452,7 @@ are in `src/chatwords.ts`; staff add to them and take words out on the staff pag
 
 | A line has…                                                               | The bot                                                                                   |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| a word from the **racism** list, on its own (an exact match)              | Bans the player for good, through the same code as `/ban`, and kicks them if they are in game. The chat line is the reason in their staff history |
+| a word from the **racism** list, on its own (an exact match)              | Bans the player for good, through the same code as `/ban`, and kicks them if they are in game. The ban reason (what the server keeps and the player reads when kicked) is just "Racist language in chat"; the line and the word go in their staff history and the moderation log |
 | a word or phrase from the **toxicity** list, on its own (an exact match)  | Warns the player in game, like `/warn` ("Staff warning: Toxic language in chat is not allowed on this server. Keep it friendly. \| Rules: …"), and puts it in their staff history |
 | a word that only **resembles** one on either list (a fuzzy match)         | Posts it to the [moderation log](#moderation-log) with the player, the line and the word it resembled, and does nothing |
 | an exact match, from a **staff member**                                   | Posts it to the moderation log as above, and does nothing: staff are never acted on. A staff member is one who linked their Steam account (see [Staff Steam accounts](#staff-steam-accounts)) |
