@@ -66,6 +66,7 @@ const MAPS: Record<string, { name: string; emoji: string; colour: number }> = {
   Kavkazi: { name: 'Bakurani', emoji: '🟧', colour: 0xe67e22 },
   Europe: { name: 'Ozeti', emoji: '🟦', colour: 0x3498db },
   NorthAmerica: { name: 'Zestafona', emoji: '🟪', colour: 0x9b59b6 },
+  Russia: { name: 'Sabatulo', emoji: '🟩', colour: 0x2ecc71 },
 };
 
 export const mapName = (id: string): string => MAPS[id]?.name ?? id;

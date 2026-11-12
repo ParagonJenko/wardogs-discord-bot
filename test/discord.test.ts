@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { banReason } from '../src/moderation.ts';
 import {
+  MAP_CHOICES,
+  mapName,
+  mapTitle,
   buildFeedAlert,
   buildGriefAlert,
   buildHeadshotAlert,
@@ -549,6 +552,15 @@ describe('faction emojis', () => {
     expect(buildPlayersEmbed([{ steamId: '1', name: 'Ash', kills: 1, deaths: 0, faction: 'Constructor' }]).fields).toEqual([
       { name: 'Constructor', value: '1 player', inline: true },
     ]);
+  });
+});
+
+describe('map names', () => {
+  it('knows Sabatulo by its RCON id, and lists it as a command choice', () => {
+    expect(mapName('Russia')).toBe('Sabatulo');
+    expect(mapTitle('Russia')).toBe('🟩 Sabatulo');
+    expect(mapTitle('Sabatulo')).toBe('🟩 Sabatulo');
+    expect(MAP_CHOICES).toContainEqual({ name: 'Sabatulo', value: 'Russia' });
   });
 });
 
