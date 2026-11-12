@@ -1456,6 +1456,7 @@ are in `src/chatwords.ts`; staff add to them and take words out on the staff pag
 | a word or phrase from the **toxicity** list, on its own (an exact match)  | Warns the player in game, like `/warn` ("Staff warning: Toxic language in chat is not allowed on this server. Keep it friendly. \| Rules: …"), and puts it in their staff history |
 | a word that only **resembles** one on either list (a fuzzy match)         | Posts it to the [moderation log](#moderation-log) with the player, the line and the word it resembled, and does nothing |
 | an exact match, from a **staff member**                                   | Posts it to the moderation log as above, and does nothing: staff are never acted on. A staff member is one who linked their Steam account (see [Staff Steam accounts](#staff-steam-accounts)) |
+| a call for an admin (`!admin`, `@admins`, `any mods?`: `admin`, `mod` or `moderator` as a whole word) | Tells the player privately: "Need an admin? Raise a ticket in our Discord: gaminginit.com/discord" (the site's address from `SITE_URL`). At most once every 5 minutes per player; not staff, and not a player banned for the same batch of lines |
 
 - **Exact** is the listed word as a whole word, in any case, after only lower-casing and taking the punctuation off
   both ends of each word: `NIGGER!!` and `(kys)` are exact, `kys.lol` is not. A phrase is its words in a row: `Kill

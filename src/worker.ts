@@ -130,6 +130,8 @@ import {
 import {
   banReasonText,
   buildWordsPage,
+  adminCallers,
+  adminCallText,
   callEvidence,
   CHAT_STATE_KEY,
   CHAT_WORDS_KEY,
@@ -354,6 +356,7 @@ import {
   addRotationEntry,
   endMatch,
   fetchBans,
+  type ChatLine,
   fetchChat,
   fetchConfig,
   fetchExperiences,
@@ -931,6 +934,9 @@ export class Watcher extends DurableObject<Env> {
   // bot read it more often than every few seconds.
   private chatLocked = oneAtATime();
   private chatReadAt = 0;
+  // When each player who asked for an admin in chat was last told to raise a ticket (kept in memory: at worst a restart
+  // tells someone once more).
+  private adminToldAt = new Map<string, number>();
   // Kill feed batches are checked against the weapon rules one at a time, so two batches close together never count
   // one offence twice.
   private enforcing = oneAtATime();
@@ -2794,10 +2800,25 @@ export class Watcher extends DurableObject<Env> {
         if (was !== undefined && call.kind !== 'alert') failed.set(call.line.id, { ...was, action: 'failed' });
       }
     }
+    if (!reading.first) await this.answerAdminCalls(config, http, reading.fresh, calls, now);
     if (failed.size > 0) {
       const latest = parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY));
       await this.ctx.storage.put(CHAT_STATE_KEY, { ...latest, buffer: withVerdicts(latest.buffer, failed) });
     }
+  }
+
+  // Players who asked for an admin in chat ("!admin") are told, privately, to raise a ticket in our Discord. Staff, and a
+  // player banned in the same batch, are not.
+  private async answerAdminCalls(config: Config, http: HttpClient, lines: ChatLine[], calls: ChatCall[], now: number): Promise<void> {
+    const banned = new Set(calls.flatMap((c) => (c.kind === 'ban' && c.line.steamId !== null ? [c.line.steamId] : [])));
+    const callers = adminCallers(lines, await this.staffSteam(), this.adminToldAt, now, banned);
+    for (const steamId of callers) {
+      this.adminToldAt.set(steamId, now);
+      await messagePlayer(config.rconUrl, config.rconPassword, steamId, adminCallText(config.siteUrl), http).catch((error: unknown) => {
+        if (!isNotInGame(error)) console.error(`Chat moderation: could not tell ${steamId} how to reach an admin: ${errorText(error)}`);
+      });
+    }
+    if (callers.length > 0) console.info(`Chat moderation: told ${callers.length} player(s) who asked for an admin to raise a ticket`);
   }
 
   // One call from judgeChat. A ban and a warning go through the same code as staff's /ban and /warn: the player's staff

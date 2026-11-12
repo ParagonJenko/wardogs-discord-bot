@@ -492,6 +492,20 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect((await json('/api/admin/chat?after=x', { headers: asStaff })).status).toBe(400);
       expect((await server.fetch('/api/admin/chat?after=0')).status).toBe(401);
     });
+
+    it('tells a player who asks for an admin to raise a ticket, once in a while', async () => {
+      rcon.chat.push({ id: 7, steamId: BO, name: 'Bo', message: '!admin someone is team killing' });
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([`POST /v1/players/${BO}/message`]);
+
+      // Asking again straight away is not answered again.
+      rcon.chat.push({ id: 8, steamId: BO, name: 'Bo', message: 'ADMIN??' });
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
+      expect(errors()).toEqual([]);
+    });
   });
 
   describe('the staff page chat filter', () => {
