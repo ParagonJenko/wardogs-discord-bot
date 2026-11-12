@@ -4,6 +4,7 @@ import {
   inGameProblem,
   chooseWinner,
   closeDue,
+  voteCanOpen,
   closeScoreFor,
   isOpen,
   matchIsOver,
@@ -1096,5 +1097,18 @@ describe('inGameProblem', () => {
   });
   it('lets nobody vote when the server cannot be reached', () => {
     expect(inGameProblem('76561198000000001', null)).toMatch(/Join the server/);
+  });
+});
+
+describe('voteCanOpen', () => {
+  it('opens for a live match someone has played in', () => {
+    expect(voteCanOpen({ liveAt: 1, peakPlayers: 3 })).toBe(true);
+  });
+  it('does not open while nobody has been in the match, whose start moves on with every check', () => {
+    expect(voteCanOpen({ liveAt: 1, peakPlayers: 0 })).toBe(false);
+  });
+  it('does not open before the match is live or after it ended', () => {
+    expect(voteCanOpen({ liveAt: null, peakPlayers: 3 })).toBe(false);
+    expect(voteCanOpen({ liveAt: 1, endedAt: 2, peakPlayers: 3 })).toBe(false);
   });
 });

@@ -544,6 +544,12 @@ export const votingNow = (
   return !(vote.closeScore > 0 && leading >= vote.closeScore);
 };
 
+// Whether a vote can open for this match: it is live, not over, and someone has played in it. While the server is empty the
+// match's start moves on with every check (a match starts when someone is first seen in it), so a vote opened then would be
+// for a match that is gone by the next check: the vote would be ended, its message deleted and a new one posted every minute.
+export const voteCanOpen = (match: { liveAt: number | null; endedAt?: number; peakPlayers: number }): boolean =>
+  match.liveAt !== null && match.endedAt === undefined && match.peakPlayers > 0;
+
 // Whether an open vote should close now: its time is up, or a team has reached its close score.
 export const closeDue = (vote: MapVote, now: number, leadingScore: number): boolean =>
   vote.outcome === null && (now >= vote.closesAt || (vote.closeScore > 0 && leadingScore >= vote.closeScore));
