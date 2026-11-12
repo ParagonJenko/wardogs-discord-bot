@@ -4,6 +4,8 @@ import {
   adminCallText,
   cheatReportText,
   helpReplies,
+  withReplies,
+  REPLY_NOTE,
   isAdminCall,
   isCheatClaim,
   BAN_REASON,
@@ -731,8 +733,8 @@ describe('players asking for an admin, or saying someone cheats', () => {
   it('tells someone who says a player cheats to report it with evidence, even if they also asked for an admin', () => {
     const replies = helpReplies([line(1, '!admin', ASH), line(2, 'red sniper is hacking', ASH), line(3, 'admin pls', BO, 'Bo')], new Set(), new Map(), AT, SITE);
     expect(replies).toEqual([
-      { steamId: ASH, kind: 'cheat', text: cheatReportText(SITE) },
-      { steamId: BO, kind: 'admin', text: adminCallText(SITE) },
+      { steamId: ASH, kind: 'cheat', text: cheatReportText(SITE), lineId: 2 },
+      { steamId: BO, kind: 'admin', text: adminCallText(SITE), lineId: 3 },
     ]);
   });
 
@@ -743,6 +745,25 @@ describe('players asking for an admin, or saying someone cheats', () => {
   it('points to the Discord on the website', () => {
     expect(adminCallText('https://gaminginit.com/')).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
     expect(adminCallText(undefined)).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
-    expect(cheatReportText(SITE)).toBe("Think someone's cheating? Report it with a clip or screenshot in our Discord: gaminginit.com/discord");
+    expect(cheatReportText(SITE)).toBe(
+      "Think someone's cheating? Got a clip or screenshot? Report it in our Discord: gaminginit.com/discord. No evidence? Report them from the scoreboard.",
+    );
+    // A whisper is cut off by the game past 256 characters.
+    expect(cheatReportText('https://a-much-longer-community-website-address.example.com').length).toBeLessThanOrEqual(256);
+  });
+});
+
+describe('showing staff the bot answered', () => {
+  it('marks the answered lines and keeps the mark through a stored reading', () => {
+    const buffer = [kept(line(1, 'gg')), kept(line(2, 'he is hacking')), kept(line(3, '!admin', BO, 'Bo'))];
+    const marked = withReplies(buffer, new Map([[2, 'cheat'], [3, 'admin']] as const));
+    expect(marked.map((l) => l.reply)).toEqual([undefined, 'cheat', 'admin']);
+    expect(parseChatState({ cursor: 3, buffer: marked }).buffer.map((l) => l.reply)).toEqual([undefined, 'cheat', 'admin']);
+    expect(withReplies(buffer, new Map())).toBe(buffer);
+  });
+
+  it('says so in /chat', () => {
+    const marked = withReplies([kept(line(2, 'he is hacking'))], new Map([[2, 'cheat']] as const));
+    expect(chatReply(marked, undefined)).toContain(`he is hacking\n   ↳ bot replied: ${REPLY_NOTE.cheat}`);
   });
 });

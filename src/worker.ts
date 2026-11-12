@@ -131,6 +131,7 @@ import {
   BAN_REASON,
   buildWordsPage,
   helpReplies,
+  withReplies,
   callEvidence,
   CHAT_STATE_KEY,
   CHAT_WORDS_KEY,
@@ -2831,11 +2832,20 @@ export class Watcher extends DurableObject<Env> {
   private async answerAdminCalls(config: Config, http: HttpClient, lines: ChatLine[], calls: ChatCall[], now: number): Promise<void> {
     const banned = new Set(calls.flatMap((c) => (c.kind === 'ban' && c.line.steamId !== null ? [c.line.steamId] : [])));
     const replies = helpReplies(lines, await this.staffSteam(), this.adminToldAt, now, config.siteUrl, banned);
-    for (const { steamId, kind, text } of replies) {
+    const sent = new Map<number, 'cheat' | 'admin'>();
+    for (const { steamId, kind, text, lineId } of replies) {
       this.adminToldAt.set(steamId, now);
-      await messagePlayer(config.rconUrl, config.rconPassword, steamId, text, http).catch((error: unknown) => {
+      try {
+        await messagePlayer(config.rconUrl, config.rconPassword, steamId, text, http);
+        sent.set(lineId, kind);
+      } catch (error) {
         if (!isNotInGame(error)) console.error(`Chat moderation: could not send ${steamId} the ${kind === 'cheat' ? 'cheating report' : 'admin ticket'} reply: ${errorText(error)}`);
-      });
+      }
+    }
+    // Marked on the lines, so /chat and the live chat show staff that the bot answered.
+    if (sent.size > 0) {
+      const latest = parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY));
+      await this.ctx.storage.put(CHAT_STATE_KEY, { ...latest, buffer: withReplies(latest.buffer, sent) });
     }
     if (replies.length > 0) {
       const cheats = replies.filter((r) => r.kind === 'cheat').length;

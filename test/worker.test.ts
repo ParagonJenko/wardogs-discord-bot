@@ -519,6 +519,10 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       rcon.requests.length = 0;
       expect(await runCron()).toMatchObject({ outcome: 'ok' });
       expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([`POST /v1/players/${ASH}/message`]);
+      // Staff see in the live chat that the bot answered it.
+      const session = await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now());
+      const feed = await json('/api/admin/chat?after=8', { headers: { authorization: `Bearer ${session}` } });
+      expect(feed.body.lines.find((l: { id: number }) => l.id === 9)).toMatchObject({ reply: 'cheat' });
       expect(errors()).toEqual([]);
     });
   });
