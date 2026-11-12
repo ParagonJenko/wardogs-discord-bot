@@ -691,35 +691,48 @@ export const buildWordsPage = (words: ChatWords, switches: { enabled: boolean; a
   })),
 });
 
-// A player asking for an admin in chat ("!admin", "@admins", "any mods on?") is told how to reach one: a ticket in our
-// Discord. Whole words only, so "badminton" or "administer" is not a call.
+// Two kinds of line get a private reply pointing to our Discord: a player asking for an admin in chat ("!admin",
+// "@admins", "any mods on?"), and one saying someone is hacking or cheating ("hacker!", "aimbot", "he's cheating").
+// Whole words only, so "badminton", "administer" or "modern" is not a call.
 const ADMIN_CALL = /(?:^|[^a-z0-9])[!@/]?(?:admins?|mods?|moderators?)(?![a-z0-9])/i;
+const CHEAT_CLAIM =
+  /(?:^|[^a-z0-9])(?:hack(?:s|ed|er|ers|ing)?|hax|haxx?or|cheat(?:s|ed|er|ers|ing)?|aim ?bot(?:s|ting|ter)?|wall ?hack(?:s|ing|er)?|esp)(?![a-z0-9])/i;
 
 export const isAdminCall = (text: string): boolean => ADMIN_CALL.test(text);
+export const isCheatClaim = (text: string): boolean => CHEAT_CLAIM.test(text);
 
-// The same player is told at most this often, so asking again and again doesn't fill their screen.
+// The same player is told at most this often, whichever reply it was, so asking again and again doesn't fill their screen.
 export const ADMIN_CALL_GAP_MS = 5 * 60_000;
 
-export const adminCallText = (siteUrl: string | undefined): string => {
-  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '') || 'gaminginit.com';
-  return `Need an admin? Raise a ticket in our Discord: ${host}/discord`;
-};
+const discordAt = (siteUrl: string | undefined): string =>
+  `${(siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '') || 'gaminginit.com'}/discord`;
 
-// The players to tell, once each, from new lines: not staff, not a player without a Steam ID, not one told lately, and not
-// one in `skip` (banned in this batch, say). `told` has when each player was last told.
-export const adminCallers = (
+export const adminCallText = (siteUrl: string | undefined): string => `Need an admin? Raise a ticket in our Discord: ${discordAt(siteUrl)}`;
+
+export const cheatReportText = (siteUrl: string | undefined): string =>
+  `Think someone's cheating? Report it with a clip or screenshot in our Discord: ${discordAt(siteUrl)}`;
+
+export type HelpReply = { steamId: string; kind: 'cheat' | 'admin'; text: string };
+
+// The players to reply to from new lines, once each: not staff, not a player without a Steam ID, not one told lately,
+// and not one in `skip` (banned in this batch, say). A player who both calls for an admin and says someone is cheating
+// gets the cheating one, as it says what to bring. `told` has when each player was last told.
+export const helpReplies = (
   lines: readonly ChatLine[],
   staff: ReadonlySet<string>,
   told: ReadonlyMap<string, number>,
   now: number,
+  siteUrl: string | undefined,
   skip: ReadonlySet<string> = new Set(),
-): string[] => {
-  const out = new Set<string>();
+): HelpReply[] => {
+  const kinds = new Map<string, 'cheat' | 'admin'>();
   for (const line of lines) {
     const id = line.steamId;
-    if (id === null || staff.has(id) || skip.has(id) || out.has(id)) continue;
+    if (id === null || staff.has(id) || skip.has(id)) continue;
     if (now - (told.get(id) ?? -Infinity) < ADMIN_CALL_GAP_MS) continue;
-    if (isAdminCall(line.rawText ?? line.text) || isAdminCall(line.text)) out.add(id);
+    const texts = [line.rawText ?? line.text, line.text];
+    if (texts.some(isCheatClaim)) kinds.set(id, 'cheat');
+    else if (!kinds.has(id) && texts.some(isAdminCall)) kinds.set(id, 'admin');
   }
-  return [...out];
+  return [...kinds].map(([steamId, kind]) => ({ steamId, kind, text: kind === 'cheat' ? cheatReportText(siteUrl) : adminCallText(siteUrl) }));
 };
