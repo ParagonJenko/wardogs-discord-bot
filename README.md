@@ -1396,8 +1396,10 @@ message**. The bot reads it from and writes it to the server's `ServerSettings.i
 - `bServerWelcomeMessageEnabled` is whether the popup shows; the message itself is `ServerWelcomeMessageLines`, written
   as `!ServerWelcomeMessageLines=ClearArray` and then one `.ServerWelcomeMessageLines=` for each popup line (an empty
   one is a blank line). Every other line of the file is left as it was; a key that isn't there yet is added.
-- The file keeps each line HTML-escaped once: `<Italic>Fish &amp; chips</>` is stored as
-  `&lt;Italic&gt;Fish &amp;amp; chips&lt;/&gt;`. The page and the API use the real line.
+- The file keeps each line as written, tags and all: `.ServerWelcomeMessageLines=<Italic>Fish &amp; chips</>`. A line
+  saved HTML-escaped (`&lt;Italic&gt;…`), as some editors save it, shows players the tags as text, since `&lt;` is how a
+  line shows a "<". The bot reads such lines as meant, the page says so (`escaped: true` from `GET /api/admin/motd`),
+  and the next save writes real tags.
 - Lines are checked against the game's format before anything is sent: `<Header>…</>`, `<Bold>…</>`, `<Italic>…</>` and
   `<text color="#RRGGBB" size="8 to 24" fontface="Bold or Italic">…</>`, each closed with `</>` and none inside
   another; no other tag, links included. `< > & "` are written `&lt; &gt; &amp; &quot;`. At most 128 lines of 128

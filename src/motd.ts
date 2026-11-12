@@ -7,9 +7,11 @@ import { RconError, type ConfigResult, type ServerConfig } from './rcon.ts';
 // it shows at all. Staff edit it on the staff page. Only those two keys are written, and the section applies from the
 // next match.
 //
-// In the file each line is the popup line HTML-escaped once, so `<Italic>Fish &amp; chips</>` is stored as
-// `&lt;Italic&gt;Fish &amp;amp; chips&lt;/&gt;`. One `.ServerWelcomeMessageLines=` per popup line, after a
-// `!ServerWelcomeMessageLines=ClearArray`; an empty value is a blank spacer line.
+// In the file each line is the popup line as written, tags and all: `<Italic>Fish &amp; chips</>`. One
+// `.ServerWelcomeMessageLines=` per popup line, after a `!ServerWelcomeMessageLines=ClearArray`; an empty value is a
+// blank spacer line. A file that has them HTML-escaped (`&lt;Italic&gt;…`), as an editor may save them, shows players
+// the tags as text, since `&lt;` is how a line shows a "<"; such lines are read back as meant, and the next save writes
+// them as they should be.
 
 const SECTION = '[/Script/WDGame.WDGameStateSession]';
 // As Unreal reads an array: `.` or `+` adds a line, `-` takes one out, and `!` empties the list so far.
@@ -23,13 +25,16 @@ export const MOTD_MAX_SIZE = 24;
 
 const ENTITIES: Record<string, string> = { lt: '<', gt: '>', quot: '"', amp: '&' };
 
-// A line as it is stored in the file. `&` goes first, so the ones the other three add are not escaped again.
-export const escapeMotdLine = (line: string): string =>
-  line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
 // A stored line back as the popup line. One pass, so `&amp;lt;` comes back as `&lt;`, not `<`.
 export const unescapeMotdLine = (stored: string): string =>
   stored.replace(/&(lt|gt|quot|amp);/g, (_, name: string) => ENTITIES[name] ?? '');
+
+// A line saved HTML-escaped: no tag of its own, but one once unescaped. Players see its tags as text.
+const TAG = /<(?:Header|Bold|Italic|text)(?:[\s>])|<\/>/;
+export const isEscapedLine = (stored: string): boolean => !TAG.test(stored) && TAG.test(unescapeMotdLine(stored));
+
+// A line from the file as the popup line it was meant to be.
+export const readStoredLine = (stored: string): string => (isEscapedLine(stored) ? unescapeMotdLine(stored) : stored);
 
 export type MotdProblem = { line: number | null; problem: string };
 
@@ -144,7 +149,7 @@ export const validateMotd = (lines: string[]): MotdProblem[] => [
 
 // What the file says now: whether the popup shows, and its lines as the popup shows them. Missing keys read as off and no
 // lines.
-export const parseMotd = (text: string): { enabled: boolean; lines: string[] } => {
+export const parseMotd = (text: string): { enabled: boolean; lines: string[]; escaped: boolean } => {
   const section = sectionLines(text, SECTION);
   const enabled = section.reduce((on, line) => {
     const match = ENABLED_ENTRY.exec(line);
@@ -158,7 +163,7 @@ export const parseMotd = (text: string): { enabled: boolean; lines: string[] } =
     if (op === '-') return list.filter((stored) => stored !== value);
     return [...list, value];
   }, []);
-  return { enabled, lines: lines.map(unescapeMotdLine) };
+  return { enabled, lines: lines.map(readStoredLine), escaped: lines.some(isEscapedLine) };
 };
 
 // The file with the popup's two keys set, in place of the old ones (or after the section's last line, or in a new
@@ -166,7 +171,7 @@ export const parseMotd = (text: string): { enabled: boolean; lines: string[] } =
 export const setMotd = (text: string, enabled: boolean, lines: string[]): string => {
   if (lines.some((line) => /[\r\n]/.test(line))) throw new Error('refusing to write a welcome message line with a line break');
   const flag = (prefix: string) => `${prefix}bServerWelcomeMessageEnabled=${enabled ? 'True' : 'False'}`;
-  const array = ['!ServerWelcomeMessageLines=ClearArray', ...lines.map((line) => `.ServerWelcomeMessageLines=${escapeMotdLine(line)}`)];
+  const array = ['!ServerWelcomeMessageLines=ClearArray', ...lines.map((line) => `.ServerWelcomeMessageLines=${line}`)];
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const all = text.split(/\r?\n/);
   const { start, end } = sectionRange(all, SECTION);
@@ -197,11 +202,12 @@ export const setMotd = (text: string, enabled: boolean, lines: string[]): string
 };
 
 // The staff page's Welcome message tab.
-export type MotdPage = { enabled: boolean; lines: string[]; revision: string; problems: MotdProblem[] };
+// `escaped` is true when the file has the lines HTML-escaped, so players see the tags as text: a save fixes it.
+export type MotdPage = { enabled: boolean; lines: string[]; revision: string; problems: MotdProblem[]; escaped: boolean };
 
 export const motdPage = (config: ServerConfig): MotdPage => {
-  const { enabled, lines } = parseMotd(config.text);
-  return { enabled, lines, revision: config.revision, problems: validateMotd(lines) };
+  const { enabled, lines, escaped } = parseMotd(config.text);
+  return { enabled, lines, revision: config.revision, problems: validateMotd(lines), escaped };
 };
 
 // What the server did: the section applies from the next match, or the file already said this.
