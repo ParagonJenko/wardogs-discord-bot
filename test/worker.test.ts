@@ -39,11 +39,13 @@ type FakeRcon = {
   down: boolean;
   // Whether the rotation's map playing now is infantry only, and whether the rotation has another map that is.
   infantry: boolean;
+  // The chat GET /v1/chat serves, as { messages }.
+  chat: { id: number; steamId: string; name: string; message: string }[];
   close: () => Promise<void>;
 };
 
 const startFakeRcon = async (password: string): Promise<FakeRcon> => {
-  const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false, infantry: true };
+  const fake = { requests: [] as string[], players: [] as FakePlayer[], down: false, infantry: true, chat: [] as FakeRcon['chat'] };
   // ServerSettings.ini, which the bot writes the map rotation and the whitelist to.
   let config = { revision: 1, text: '' };
   const answer = (req: IncomingMessage, body: string): { status: number; body: unknown } => {
@@ -65,6 +67,31 @@ const startFakeRcon = async (password: string): Promise<FakeRcon> => {
     }
     if (req.method === 'GET' && req.url === '/v1/players') return { status: 200, body: { players: fake.players } };
     if (req.method === 'GET' && req.url === '/v1/bans') return { status: 200, body: { bans: [] } };
+    if (req.method === 'GET' && req.url?.startsWith('/v1/chat?')) {
+      const query = new URL(req.url, 'http://fake').searchParams;
+      const after = Number(query.get('after'));
+      // As the game answers: `after` is inclusive, and the lines have the game's own field names.
+      const messages = fake.chat
+        .filter((m) => m.id >= after)
+        .slice(0, Number(query.get('limit')))
+        .map((m) => ({
+          seq: m.id,
+          sentUtc: '2026-11-12T15:29:11.106Z',
+          channel: 'All',
+          faction: 'Valkyra',
+          steamId: m.steamId,
+          realName: m.name,
+          hiddenName: 'Olive',
+          anonymous: false,
+          text: m.message,
+          rawText: m.message,
+          ping: false,
+        }));
+      return { status: 200, body: { latestSeq: Math.max(0, ...fake.chat.map((m) => m.id)), messages, count: messages.length } };
+    }
+    if (req.method === 'POST' && (req.url === '/v1/bans' || /^\/v1\/players\/\d{17}\/kick$/.test(req.url ?? ''))) {
+      return { status: 200, body: { message: 'OK' } };
+    }
     if (req.method === 'GET' && req.url === '/v1/config') return { status: 200, body: { ...config, writable: true } };
     if (req.method === 'POST' && req.url === '/v1/config/validate') return { status: 200, body: { ok: true } };
     if (req.method === 'PUT' && req.url === '/v1/config') {
@@ -364,6 +391,141 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     });
   });
 
+  describe('chat moderation', () => {
+    const SPOKEN = { name: 'Ash', steamId: ASH };
+
+    it('reads the chat at each check, an empty chat from the start', async () => {
+      // An empty chat to start with: the first reading only finds where it is. (With lines already said, it keeps them
+      // for /chat and acts on none; chatmod.test.ts covers that.)
+      expect(rcon.chat).toEqual([]);
+      rcon.players = [{ name: 'Ash', steamId: ASH, kills: 3, deaths: 1, faction: 'Valkyra' }];
+      server.clearLogs();
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests).toContain('GET /v1/chat?after=0&limit=200');
+      expect(rcon.requests.filter((r) => r.startsWith('POST') && !r.includes('/v1/config'))).toEqual([]);
+      expect(errors()).toEqual([]);
+    });
+
+    it('bans for an exact racist word and warns for an exact toxic one, each line once', async () => {
+      rcon.players = [{ name: 'Ash', steamId: ASH, kills: 3, deaths: 1, faction: 'Valkyra' }];
+      rcon.chat = [
+        { id: 1, ...SPOKEN, message: 'good game everyone' },
+        { id: 2, ...SPOKEN, message: 'you absolute NIGGER' },
+        { id: 3, steamId: BO, name: 'Bo', message: 'kys lol' },
+        { id: 4, steamId: BO, name: 'Bo', message: 'n1gg3r' },
+      ];
+      server.clearLogs();
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+
+      const posts = rcon.requests.filter((r) => r.startsWith('POST'));
+      expect(posts).toContain('POST /v1/bans');
+      expect(posts).toContain(`POST /v1/players/${ASH}/kick`);
+      expect(posts).toContain(`POST /v1/players/${BO}/message`);
+      // Bo's fuzzy line is only an alert, and Bo is warned once, for the exact one.
+      expect(posts.filter((r) => r === `POST /v1/players/${BO}/message`)).toHaveLength(1);
+      expect(posts.filter((r) => r === 'POST /v1/bans')).toHaveLength(1);
+      const logs = server.getLogs().map((log) => log.message);
+      expect(logs.some((m) => m.includes(`Chat moderation: banned "Ash" (${ASH})`))).toBe(true);
+      expect(logs.some((m) => m.includes(`Chat moderation: warned "Bo" (${BO})`))).toBe(true);
+      expect(errors()).toEqual([]);
+
+      // The next check asks after the newest line, and acts on nothing again.
+      server.clearLogs();
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests).toContain('GET /v1/chat?after=4&limit=200');
+      expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
+      expect(errors()).toEqual([]);
+    });
+
+    it('does nothing about a line that is only an alert, and keeps it for /chat', async () => {
+      rcon.chat.push({ id: 5, steamId: BO, name: 'Bo', message: 'k y s' });
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
+
+      const session = await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now());
+      const reply = await json('/api/admin/command', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${session}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'chat', options: { player: 'bo' } }),
+      });
+      expect(reply.status).toBe(200);
+      expect(reply.body.content).toContain('Latest chat from "bo"');
+      expect(reply.body.content).toContain('**Bo** (All, Valkyra): kys lol');
+      expect(reply.body.content).toContain('**Bo** (All, Valkyra): k y s');
+      expect(reply.body.content).not.toContain('**Ash**');
+      expect(errors()).toEqual([]);
+    });
+
+    it('acts once on a line when checks and the live chat overlap', async () => {
+      const staffer = { id: '100000000000000003', name: 'Staffer' };
+      const asStaff = { authorization: `Bearer ${await createSession(CLIENT_SECRET, staffer, Date.now())}` };
+      // Past the live chat's few seconds between readings, so each caller reads.
+      await new Promise((resolve) => setTimeout(resolve, 3_100));
+      rcon.chat.push({ id: 6, steamId: BO, name: 'Bo', message: 'you nigger' });
+      rcon.requests.length = 0;
+      await Promise.all([runCron(), json('/api/admin/chat?after=0', { headers: asStaff }), json('/api/admin/chat?after=0', { headers: asStaff }), runCron()]);
+      expect(rcon.requests.filter((r) => r === 'POST /v1/bans')).toHaveLength(1);
+      expect(errors()).toEqual([]);
+    });
+
+    it('gives staff the live chat with each verdict, after a cursor, and nobody else', async () => {
+      const staffer = { id: '100000000000000003', name: 'Staffer' };
+      const asStaff = { authorization: `Bearer ${await createSession(CLIENT_SECRET, staffer, Date.now())}` };
+      const feed = await json('/api/admin/chat?after=0', { headers: asStaff });
+      expect(feed.status).toBe(200);
+      expect(feed.body).toMatchObject({ enabled: true, available: true, cursor: 6 });
+      const byId = Object.fromEntries(feed.body.lines.map((l: { id: number }) => [l.id, l]));
+      expect(byId[1].verdict).toEqual({ kind: 'clean', action: 'none' });
+      expect(byId[2]).toMatchObject({ name: 'Ash', steamId: ASH, verdict: { kind: 'exact', list: 'racism', word: 'nigger', action: 'banned' } });
+      expect(byId[3].verdict).toMatchObject({ kind: 'exact', list: 'toxicity', action: 'warned' });
+      expect(byId[5].verdict).toMatchObject({ kind: 'fuzzy', word: 'kys', action: 'alert' });
+      // Bo was warned for line 3, so the fuzzy line 4 in the same check is folded into it or only noted.
+      expect(['alert', 'folded']).toContain(byId[4].verdict.action);
+
+      expect((await json('/api/admin/chat?after=4', { headers: asStaff })).body.lines.map((l: { id: number }) => l.id)).toEqual([5, 6]);
+      expect((await json('/api/admin/chat?after=6', { headers: asStaff })).body.lines).toEqual([]);
+      expect((await json('/api/admin/chat?after=-1', { headers: asStaff })).status).toBe(400);
+      expect((await json('/api/admin/chat?after=x', { headers: asStaff })).status).toBe(400);
+      expect((await server.fetch('/api/admin/chat?after=0')).status).toBe(401);
+    });
+  });
+
+  describe('the staff page chat filter', () => {
+    const asStaff = async () => ({
+      authorization: `Bearer ${await createSession(CLIENT_SECRET, { id: '100000000000000003', name: 'Staffer' }, Date.now())}`,
+      'content-type': 'application/json',
+    });
+    const post = async (body: unknown) => json('/api/admin/chatwords', { method: 'POST', headers: await asStaff(), body: JSON.stringify(body) });
+
+    it('serves the lists, takes changes and keeps them', async () => {
+      const page = await json('/api/admin/chatwords', { headers: await asStaff() });
+      expect(page.status).toBe(200);
+      expect(page.body).toMatchObject({ enabled: true, actions: true, changed: null });
+      expect(page.body.lists.map((l: { id: string }) => l.id)).toEqual(['racism', 'toxicity', 'allow']);
+      expect(page.body.lists[0].defaults).toContain('nigger');
+
+      const added = await post({ action: 'add', list: 'toxicity', word: 'Noob Scum' });
+      expect(added.status).toBe(200);
+      expect(added.body.lists[1].added).toEqual(['noob scum']);
+      expect(added.body.changed).toMatchObject({ by: '100000000000000003', byName: 'Staffer' });
+
+      const removed = await post({ action: 'remove', list: 'racism', word: 'chink' });
+      expect(removed.body.lists[0].removed).toEqual(['chink']);
+      const back = await post({ action: 'restore', list: 'racism', word: 'chink' });
+      expect(back.body.lists[0].removed).toEqual([]);
+
+      expect(await post({ action: 'add', list: 'toxicity', word: 'kys' })).toEqual({ status: 400, body: { error: '"kys" is on the list already.' } });
+      expect((await post({ action: 'nope' })).status).toBe(400);
+      const kept = await json('/api/admin/chatwords', { headers: await asStaff() });
+      expect(kept.body.lists[1].added).toEqual(['noob scum']);
+      await post({ action: 'remove', list: 'toxicity', word: 'noob scum' });
+    });
+  });
+
   describe("the website's API", () => {
     it('serves the stats the checks and the kill feed recorded', async () => {
       const response = await server.fetch('/api/stats');
@@ -533,6 +695,8 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
 
     it('gives every staff route to staff only: no session, a player session, a forged one and a session for the wrong thing are all refused', async () => {
       const routes: [string, string][] = [
+        ['GET', '/api/admin/chat?after=0'],
+        ['GET', '/api/admin/chatwords'],
         ['GET', '/api/admin/commands'],
         ['GET', '/api/admin/growth'],
         ['GET', '/api/admin/kills'],
@@ -542,6 +706,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
         ['GET', '/api/admin/rotations'],
         ['GET', '/api/admin/rules'],
         ['GET', '/api/admin/season'],
+        ['POST', '/api/admin/chatwords'],
         ['POST', '/api/admin/check'],
         ['POST', '/api/admin/command'],
         ['POST', '/api/admin/dealt'],

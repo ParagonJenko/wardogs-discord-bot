@@ -1,5 +1,6 @@
 import { phaseFor, type AlertKind, type AlertRules, type Phase } from './alerts.ts';
 import type { VipRule } from './config.ts';
+import type { ChatCall } from './chatmod.ts';
 import type { ModAction, ModEntry } from './moderation.ts';
 import type { Flag, GriefAlert, Incident, PlayerGrief } from './griefing.ts';
 import type { FeedWatchEvent } from './feedwatch.ts';
@@ -1273,6 +1274,49 @@ export const buildModLogMessage = (steamId: string, entry: ModEntry, siteUrl?: s
           ...(entry.detail ? [{ name: 'Details', value: escapeMarkdown(entry.detail.slice(0, MAX_FIELD / 2)), inline: true }] : []),
         ],
         timestamp: new Date(entry.at).toISOString(),
+      },
+    ],
+    allowed_mentions: NO_PINGS,
+  };
+};
+
+// Why a chat line was only posted, with nothing done about it.
+const CHAT_WHY: Record<NonNullable<ChatCall['why']>, string> = {
+  fuzzy: 'Looks like a listed word but is not one as typed, so the bot did nothing. Staff decide.',
+  staff: 'A staff member said it, and the bot never acts on staff.',
+  'no-player': 'No player is behind this line, so there is no one to act on.',
+  'actions-off': 'Automatic actions are off (CHAT_MOD_ACTIONS), so the bot did nothing.',
+};
+
+const MAX_CHAT_SHOWN = 300;
+
+// A chat line that matched one of the word lists, for staff to look at. Exact matches by players are acted on and go
+// to the log as a ban or a warning instead (see buildModLogMessage).
+export const buildChatAlert = (call: ChatCall, siteUrl?: string): DiscordMessage => {
+  const { line, hit } = call;
+  const cut = (text: string): string => (text.length > MAX_CHAT_SHOWN ? `${text.slice(0, MAX_CHAT_SHOWN - 1)}…` : text);
+  const said = cut(line.text);
+  const name = line.name ? `${playerName(line.name)}${line.shownAs ? ` (shown as ${playerName(line.shownAs)})` : ''}` : 'Unknown player';
+  const where = [line.channel, line.faction].filter((w): w is string => Boolean(w));
+  const matched = `${hit.kind === 'exact' ? 'Exactly' : 'Resembles'} **${escapeMarkdown(hit.word)}** on the ${hit.list === 'racism' ? 'racism' : 'toxicity'} list`;
+  const others = call.others.map((o) => escapeMarkdown(o.word));
+  return {
+    embeds: [
+      {
+        title: `💬 Chat flagged · ${name}`,
+        ...staffPage(siteUrl),
+        description: [
+          ...(line.steamId === null ? [] : [steamLine(line.steamId)]),
+          `**Said${where.length > 0 ? ` (${where.map(escapeMarkdown).join(', ')})` : ''}:** ${escapeMarkdown(said)}`,
+          ...(line.rawText === undefined ? [] : [`**Typed:** ${escapeMarkdown(cut(line.rawText))}`]),
+          matched,
+          ...(others.length === 0 ? [] : [`Also: ${others.join(', ')}`]),
+          ...(call.more > 0 ? [`${plural(call.more, 'more line')} from them in the same minute`] : []),
+        ].join('\n'),
+        color: call.why === 'fuzzy' ? 0xe67e22 : 0xe74c3c,
+        fields: call.why === null ? [] : [{ name: 'Why only a post', value: CHAT_WHY[call.why] }],
+        footer: { text: 'From the chat log. A reason to look, not proof: check the line in context with /chat.' },
+        timestamp: new Date(line.at).toISOString(),
       },
     ],
     allowed_mentions: NO_PINGS,

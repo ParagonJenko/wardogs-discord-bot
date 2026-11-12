@@ -379,6 +379,7 @@ The Node/Docker version does not serve the season roundups.
 | `/coinadmin …`  | Staff only           | [INITcoins](#initcoins): `give` or `take` coins (1–10,000, with a reason that goes in the player's log), `show` what a player has |
 | `/private …`    | Staff only           | [Private profiles](#private-profiles): `add` makes a player's profile private, `remove` makes it public again, `list` shows them |
 | `/circles …`    | Staff only           | [Blocked circles](#blocked-circles): `block` keeps a circle (control zone layout) from map votes, `unblock` allows it again, `list` shows them |
+| `/chat`         | Staff only           | The latest chat the bot read ([Chat moderation](#chat-moderation)): the last 20 lines, or `lines` (1–50), from everyone or one `player` (picked from the list, or part of a name or a Steam ID) |
 | `/voteoptions …` | Staff only          | [Vote options](#vote-options): `rain` and `map` switch rain, or a map (such as Zestafona), off or on in map votes, `show` lists what is off |
 
 Every player, team, map and ban option lists the choices as staff type. See [Staff commands](#staff-commands).
@@ -538,7 +539,7 @@ outside the bot, from the deploy with the [moderation log](#moderation-log) on. 
 also logged in the Worker logs with the staff member's Discord user ID. If a reply says an action could not be
 confirmed, check in game before trying again: it may have gone through.
 
-There is no chat log command: the game's RCON API has no way to read chat.
+`/chat` shows the latest chat the bot read, from everyone or one player: see [Chat moderation](#chat-moderation).
 
 ## Support tickets
 
@@ -936,6 +937,8 @@ A staff-only Discord channel where the bot posts, as they happen:
 | ----------------------- | ----------------------------------------------------------------------------------------- |
 | ⚠️ Warning, 👢 Kick, 🔨 Ban, ✅ Unban, 🔀 Team move | Staff use `/warn`, `/kick`, `/ban`, `/unban` or `/switchteam`. With the player, their Steam ID, the reason, the length of a ban and who did it |
 | ⚠️ Warning, 👢 Kick by the bot | A player kills with a weapon a [weapon rule](#weapon-rules) doesn't allow. With the rule, the weapon and which warning it was |
+| 🔨 Ban, ⚠️ Warning by the bot | A player's chat has a word from the [chat lists](#chat-moderation) on its own: a permanent ban for the racism list, a warning in game for the toxicity list. With the chat line as the reason or detail |
+| 💬 Chat flagged          | A chat line looks like a listed word without being one as typed (`n1gger`, `k y s`), or has one from a staff member, or automatic actions are off. Nothing is done: staff decide. With the line, the word and why |
 | 🎖️ VIP added / removed  | Staff use `/vip add` or `/vip remove`. With the player, their Steam ID, the reason (Friend, Regular, Seeder, Paid or Other, and any note), how long and who did it. Not automatic VIP from seeding, which is announced in the alerts channel |
 | ✅ Unban by the bot      | A timed ban runs out                                                                       |
 | 🔨 Ban / ✅ Unban outside the bot | A ban made or lifted some other way: in game, in `ServerSettings.ini`, or by another tool. With the reason and who the server says made it |
@@ -973,6 +976,8 @@ To set it up:
 - **Risky Steam account** posts can be turned off with `STEAM_ALERTS` `"off"`. They are a reason to look, not proof too.
 - **Unlikely headshots** posts can be turned off with `HEADSHOT_ALERTS` `"off"`. The bot judges everyone in game at each
   check, so a post goes out up to a minute after the kill that flags the day. A reason to look, not proof.
+- **Chat** posts can be turned off with `CHAT_MOD` `"off"`, which stops the bot reading the chat at all. See
+  [Chat moderation](#chat-moderation).
 - **Kill feed quiet** posts can be turned off with `FEED_ALERTS` `"off"`. A map change never gets that far: kills start
   again within a few minutes. The post says what to check: the feed's lines in `ServerSettings.ini`, and the Worker's logs.
 - **Outage** posts can be turned off with `OUTAGE_ALERTS` `"off"`. A map change that empties the server for a minute or
@@ -1035,6 +1040,7 @@ lines, weapon rules and admin tools. Staff sign in with Discord, and the pages s
 - **[Rotations](#rotations-tab)**: the week, what is on the server, and a drag and drop editor for the saved rotations.
 - **[Lines](#lines-tab)**: the lines the bot says in game, to reword, add or take out.
 - **[Weapon rules](#weapon-rules)**: weapons the server doesn't allow, and whether the bot warns or kicks for them.
+- **[Chat filter](#chat-moderation)**: the word lists chat moderation uses, with the starter lists, to add words to or take words out of.
 - **[Staff Steam accounts](#staff-steam-accounts)**: who has linked theirs, so the bot never counts them as seeders.
 
 Staff are the same people who can use the [staff commands](#slash-commands): members of `DISCORD_GUILD_ID` with
@@ -1437,6 +1443,85 @@ The Humvee and Kodiak rules are for their guns only: running someone over with o
   and `/kick`), like `/warn` and `/kick`.
 
 The Node/Docker version does not have weapon rules: they need the kill feed.
+
+## Chat moderation
+
+The game's RCON API serves the chat (`GET /v1/chat?after=<cursor>&limit=<n>`), so the bot reads it at each check
+(every minute), keeps the latest lines for `/chat`, and acts on lines that use a word from two lists. The starter lists
+are in `src/chatwords.ts`; staff add to them and take words out on the staff page's **Chat filter** tab.
+
+| A line has…                                                               | The bot                                                                                   |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| a word from the **racism** list, on its own (an exact match)              | Bans the player for good, through the same code as `/ban`, and kicks them if they are in game. The chat line is the reason in their staff history |
+| a word or phrase from the **toxicity** list, on its own (an exact match)  | Warns the player in game, like `/warn` ("Staff warning: Toxic language in chat is not allowed on this server. Keep it friendly. \| Rules: …"), and puts it in their staff history |
+| a word that only **resembles** one on either list (a fuzzy match)         | Posts it to the [moderation log](#moderation-log) with the player, the line and the word it resembled, and does nothing |
+| an exact match, from a **staff member**                                   | Posts it to the moderation log as above, and does nothing: staff are never acted on. A staff member is one who linked their Steam account (see [Staff Steam accounts](#staff-steam-accounts)) |
+
+- **Exact** is the listed word as a whole word, in any case, after only lower-casing and taking the punctuation off
+  both ends of each word: `NIGGER!!` and `(kys)` are exact, `kys.lol` is not. A phrase is its words in a row: `Kill
+  yourself.` is exact for `kill yourself`.
+- **Fuzzy** is what matches once the line is cleaned up: leetspeak (`0` o, `1` i or l, `3` e, `4` a, `5` s, `7` t, `@` a,
+  `$` s), repeated letters (`niiiigger`), separators inside a word (`n.i.g.g.e.r`, `k_y_s`) or letters said one at a
+  time (`k y s`), and a listed word inside a longer one (`retardedly`; only for a word of 4 letters or more, once
+  cleaned up). Phrases are matched with the spaces gone (`killyourself`, `k1ll y0urself`) when they start at the start
+  of a word. An exact match wins over a fuzzy one for the same word.
+- **Allowed words** stop the "Scunthorpe" problem: a listed word found *inside* one of them is ignored (`snigger`,
+  `raccoon`, `Pakistan`, `amongus`, …; the starter list is `DEFAULT_ALLOWED`). They have no effect on a listed word
+  typed on its own. Staff add to the allowed words on the same tab.
+- **A word that loses letters and gets very short** when cleaned up (`coon` becomes `con`) is only ever matched as
+  typed, so it never flags real words.
+- **The lists.** Swearing ("fuck", "shit") is allowed and is on neither list. The racism list is slurs, with their
+  plurals; the toxicity list is "kys", "kill yourself", "retard" and the like. A few slurs have innocent uses
+  (`chink`, `coon`, `dyke`, `faggot`); an exact match on them is a ban like any other, so take one off the list on the
+  tab if that is not wanted.
+- **The Chat filter tab.** Each list shows the starter words, and the words staff added. **Take out** removes an added
+  word, or, for a starter word, keeps it as an exclusion (shown struck through, with **Put back**), so a false positive
+  is fixed without a deploy. Changes work from the next check. Words are saved lower case; a phrase is up to 4 words;
+  an allowed word is one word. The page reads `GET /api/admin/chatwords` and sends changes to
+  `POST /api/admin/chatwords` (`{"action": "add" | "remove" | "restore", "list": "racism" | "toxicity" | "allow",
+  "word": "…"}`); each is logged as `Staff page: chat filter …`. They are kept as `chatWords`, as additions and
+  exclusions on top of the starter lists, so a later change to the starter lists reaches everything staff did not
+  change.
+- **Never twice.** The cursor is the highest line number seen. It is saved before the bot does anything, so a line is
+  never acted on twice, even after a restart, and a ban or warning that fails (the player just left) is logged
+  (`Chat moderation: … failed`) and not tried again. A player with several lines in one check gets one action, for the
+  most serious line, and the rest are counted in its detail.
+- **The first check** starts from the server's newest line number (`latestSeq`) and acts on nothing older; the last 50
+  lines are kept for `/chat` and the live chat, marked as said before the bot started. The game's `after` is inclusive
+  (`after=57` sends line 57 again), so the bot always drops lines at or before its cursor.
+- **What the game sends.** `GET /v1/chat` answers `{ latestSeq, count, messages: [{ seq, sentUtc, channel, faction,
+  steamId, realName, hiddenName, anonymous, text, rawText, ping }] }`; `parseChat` in `src/rcon.ts` reads exactly that
+  (extra fields are ignored, a line without `seq` or text is skipped and counted). The bot matches both `text` (as
+  players saw it) and `rawText` (as typed) and takes the more serious result; staff are shown the typed text when it
+  differs. Staff see `realName` (or `hiddenName` when there is none); for an anonymous line the name other players
+  saw is shown too ("[LAND] Agent Edward (shown as Olive)"). Bans and warnings go by `steamId`. `ping` lines are
+  marked, never acted on.
+- **Live chat.** The staff page's **Live chat** tab polls `GET /api/admin/chat?after=<seq>` every few seconds
+  (staff session only, like the rest of `/api/admin`). It returns `{ enabled, available, cursor, lines }`, each line
+  with its `verdict`: `{ kind: "clean" | "exact" | "fuzzy", list, word, others, action }`, where `action` is `banned`,
+  `warned`, `alert` (only posted), `staff` (no action), `actions-off`, `no-player`, `folded` (the player was acted on for
+  another line in the same check), `backlog`, `failed` or `none`. The verdict is saved with each line in the rolling
+  buffer (200 lines), so the tab and `/chat` show the same thing. When the last reading is 3 seconds old, a request from
+  the tab reads the chat itself (and acts on it, as any check does, one reading at a time), so watching it costs at
+  most one RCON request every 3 seconds however many staff watch.
+- **If the game has no chat route.** The bot looks for `GET /v1/chat` in `GET /v1/capabilities` (a server that does not
+  list its routes is asked anyway), and treats a 404 as no route. It then does nothing, logs one line
+  (`Chat moderation: the server does not list GET /v1/chat …`) and asks again an hour later. If the answer has no list
+  of lines the logs say so (`The chat answer has no list of lines`).
+- **`/chat`** shows the last 200 lines the bot kept (text cut to 160 characters), newest last, with the time in your own
+  time, the channel and faction, and for a flagged line what it matched and what the bot did. Staff only, and the reply is private.
+- **Switches**: `CHAT_MOD` (`"on"` by default) turns reading the chat, the alerts and `/chat` on or off.
+  `CHAT_MOD_ACTIONS` (`"on"` by default) is whether the bot also bans and warns on exact matches; with `"off"` those
+  are posted for staff like fuzzy matches (the post says automatic actions are off). Both are on without being set, so
+  neither is in `wrangler.jsonc`, whose variables are at the free plan's limit (see the test in `test/config.test.ts`):
+  to turn one off, add it to the `vars` block (and take another setting out, or move a group of settings into one
+  JSON variable like `COINS`), or set it in the Cloudflare dashboard, which the file only overrides for the names it lists.
+- **Costs.** One RCON request for the chat at each check, one more per 200 new lines, and a storage write of the saved
+  cursor and lines when there is anything new. An action is the same requests as the staff command it copies.
+- It needs the RCON password's write access, like `/ban` and `/warn`, and `DISCORD_MODLOG_WEBHOOK_URL` for the posts.
+  There is no Unban button in the posts: the bot has no buttons on its moderation log, so staff use `/unban`.
+
+The Node/Docker version does not have chat moderation.
 
 ## Alert review
 

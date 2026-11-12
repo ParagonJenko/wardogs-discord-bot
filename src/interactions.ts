@@ -443,6 +443,15 @@ export const COMMANDS = [
       { type: SUBCOMMAND, name: 'show', description: 'What is switched off in map votes' },
     ],
   },
+  {
+    name: 'chat',
+    description: 'The latest chat the bot read, from everyone or one player (staff only)',
+    ...STAFF_ONLY,
+    options: [
+      { type: STRING, name: 'player', description: 'Only this player: pick from the list, or type part of a name or a Steam ID', required: false, autocomplete: true },
+      { type: INTEGER, name: 'lines', description: 'How many lines (default 20)', required: false, min_value: 1, max_value: 50 },
+    ],
+  },
 ] satisfies ({ name: CommandName } & Record<string, unknown>)[];
 
 // Everything registered with Discord: the commands above, and /ticketpanel, which is not a staff page command.

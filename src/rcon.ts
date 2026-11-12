@@ -320,6 +320,112 @@ export const fetchRoutes = async (rconUrl: string, password: string, http: HttpC
   return (routes ?? []).map((route) => route.trim().replace(/\{[^}]*\}|:[^/\s]+/g, '*').replace(/\s+/g, ' '));
 };
 
+// One line of chat, as the bot keeps it. `id` is the server's own number for the line (`seq`), which the cursor follows.
+// `steamId` is null for a line with no player behind it (the server speaking), which the bot never acts on. `name` is
+// the player's real name, as staff see it; `shownAs` is the name other players saw when they chatted anonymously. `text`
+// is the line as players saw it and `rawText` the line as typed, kept only when it differs. `at` is when it was said.
+export type ChatLine = {
+  id: number;
+  steamId: string | null;
+  name: string;
+  shownAs?: string;
+  text: string;
+  rawText?: string;
+  channel?: string;
+  faction?: string;
+  // A ping (not acted on).
+  ping?: boolean;
+  at: number;
+};
+
+// GET /v1/chat answers { latestSeq, count, messages: [{ seq, sentUtc, channel, faction, steamId, realName, hiddenName,
+// anonymous, text, rawText, ping }] }. Extra fields are ignored; a field of the wrong type counts as missing; a line
+// without a seq (the cursor needs one) or without text is skipped.
+const ChatField = <T extends z.ZodType>(schema: T) => schema.nullish().catch(undefined);
+const ChatLineSchema = z.object({
+  seq: ChatField(z.number()),
+  sentUtc: ChatField(z.string()),
+  channel: ChatField(z.string()),
+  faction: ChatField(z.string()),
+  steamId: ChatField(z.string()),
+  realName: ChatField(z.string()),
+  hiddenName: ChatField(z.string()),
+  anonymous: ChatField(z.boolean()),
+  text: ChatField(z.string()),
+  rawText: ChatField(z.string()),
+  ping: ChatField(z.boolean()),
+});
+const ChatBodySchema = z.object({ latestSeq: ChatField(z.number()), messages: z.array(z.unknown()) });
+
+// Names are cut; the text is not, as a line is matched whole (cutting could make a word that is not on a list into one).
+const MAX_CHAT_NAME = 60;
+
+const oneLine = (text: string, max = Infinity): string => text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
+
+// The only place the chat route's answer is read. `skipped` counts lines it could not use. `latest` is the server's
+// newest line number (`latestSeq`), when it says. It throws when the answer has no `messages` list, so a changed shape
+// is noticed instead of reading as a quiet server.
+export type ChatAnswer = {
+  lines: ChatLine[];
+  skipped: number;
+  latest: number | null;
+  // The highest seq among the rows, usable or not, and how many rows there were: a page of rows that cannot be used
+  // still moves the cursor on.
+  maxSeq?: number | null;
+  rows?: number;
+};
+
+export const parseChat = (raw: unknown, now: number): Required<ChatAnswer> => {
+  const body = ChatBodySchema.safeParse(raw);
+  if (!body.success) throw new Error('The chat answer has no messages list');
+  const lines: ChatLine[] = [];
+  let skipped = 0;
+  let maxSeq: number | null = null;
+  for (const item of body.data.messages) {
+    const read = ChatLineSchema.safeParse(item);
+    const m = read.success ? read.data : null;
+    if (typeof m?.seq === 'number' && Number.isSafeInteger(m.seq) && m.seq >= 0) maxSeq = Math.max(maxSeq ?? 0, m.seq);
+    const text = oneLine(m?.text ?? m?.rawText ?? '');
+    if (m === null || m.seq === undefined || m.seq === null || !Number.isSafeInteger(m.seq) || m.seq < 0 || text === '') {
+      skipped += 1;
+      continue;
+    }
+    const rawText = oneLine(m.rawText ?? '');
+    // A Steam ID sent as a JSON number is rounded on the way in, so only text counts.
+    const steamId = (m.steamId ?? '').trim();
+    const real = oneLine(m.realName ?? '', MAX_CHAT_NAME);
+    const hidden = oneLine(m.hiddenName ?? '', MAX_CHAT_NAME);
+    const sent = m.sentUtc ? Date.parse(m.sentUtc) : NaN;
+    lines.push({
+      id: m.seq,
+      steamId: STEAM_ID.test(steamId) ? steamId : null,
+      name: real || hidden,
+      ...(m.anonymous === true && hidden !== '' && hidden !== real ? { shownAs: hidden } : {}),
+      text,
+      ...(rawText !== '' && rawText !== text ? { rawText } : {}),
+      ...(m.channel ? { channel: oneLine(m.channel, 30) } : {}),
+      ...(m.faction ? { faction: oneLine(m.faction, 30) } : {}),
+      ...(m.ping === true ? { ping: true } : {}),
+      at: Number.isFinite(sent) && sent > 0 ? sent : now,
+    });
+  }
+  return { lines: lines.sort((a, b) => a.id - b.id), skipped, latest: body.data.latestSeq ?? null, maxSeq, rows: body.data.messages.length };
+};
+
+// The chat after the line `after` (0 for the beginning), oldest first, at most `limit` lines. The server's `after` is
+// inclusive (asking after 57 gives line 57 again), so callers drop lines they already have.
+export const fetchChat = async (
+  rconUrl: string,
+  password: string,
+  after: number,
+  limit: number,
+  http: HttpClient,
+  now = Date.now(),
+): Promise<Required<ChatAnswer>> => {
+  if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1) throw new Error('Not a chat cursor');
+  return parseChat(await rconRequest(rconUrl, password, `/v1/chat?after=${after}&limit=${limit}`, http), now);
+};
+
 // Adds an entry at the end of the server's live rotation (not the config document).
 export const addRotationEntry = async (rconUrl: string, password: string, map: string, http: HttpClient, setup: MatchSetup = {}) => {
   await rconRequest(rconUrl, password, '/v1/rotation/entries', http, json('POST', { map, ...setup }));

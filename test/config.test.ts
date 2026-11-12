@@ -21,6 +21,8 @@ describe('loadConfig', () => {
       headshotAlerts: true,
       outageAlerts: true,
       feedAlerts: true,
+      chatMod: true,
+      chatActions: true,
       roleId: undefined,
       inviteCode: undefined,
       siteUrl: undefined,
@@ -107,6 +109,14 @@ describe('loadConfig', () => {
     expect(loadConfig(required).feedAlerts).toBe(true);
     expect(loadConfig({ ...required, FEED_ALERTS: 'off' }).feedAlerts).toBe(false);
     expect(() => loadConfig({ ...required, FEED_ALERTS: 'no' })).toThrow(/FEED_ALERTS/);
+  });
+
+  it('reads the chat and acts on exact matches unless CHAT_MOD or CHAT_MOD_ACTIONS is off', () => {
+    expect(loadConfig(required)).toMatchObject({ chatMod: true, chatActions: true });
+    expect(loadConfig({ ...required, CHAT_MOD: 'off' }).chatMod).toBe(false);
+    expect(loadConfig({ ...required, CHAT_MOD_ACTIONS: 'off' })).toMatchObject({ chatMod: true, chatActions: false });
+    expect(() => loadConfig({ ...required, CHAT_MOD: 'no' })).toThrow(/CHAT_MOD/);
+    expect(() => loadConfig({ ...required, CHAT_MOD_ACTIONS: 'maybe' })).toThrow(/CHAT_MOD_ACTIONS/);
   });
 
   it('holds the seeding alert for SEEDING_ALERT_MINUTES, 5 by default, and 0 sends it straight away', () => {

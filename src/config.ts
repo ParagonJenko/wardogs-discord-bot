@@ -211,6 +211,12 @@ const EnvSchema = z
     // Posts to the moderation log when the server is live and the kill feed has sent nothing for 10 minutes, and when
     // kills arrive again: "on" or "off".
     FEED_ALERTS: z.enum(['on', 'off']).default('on'),
+    // Chat moderation: the bot reads the game's chat, keeps the latest lines for /chat and posts lines that look like a
+    // word on the racism or toxicity list to the moderation log (see README, "Chat moderation"): "on" or "off".
+    CHAT_MOD: z.enum(['on', 'off']).default('on'),
+    // With CHAT_MOD on: whether the bot also acts when a line has a listed word as a whole word, a permanent ban for
+    // the racism list and a warning in game for the toxicity list. Off, those are posted for staff like the rest: "on" or "off".
+    CHAT_MOD_ACTIONS: z.enum(['on', 'off']).default('on'),
     // The next-map vote on the website: when a match goes live, a vote between MAP_VOTE_OPTIONS maps, open for
     // MAP_VOTE_MINUTES (or until a team has MAP_VOTE_CLOSE_PERCENT of SCORE_TO_WIN). The winner is put on the server as the next map. "on" or "off".
     MAP_VOTE: z.enum(['on', 'off']).default('off'),
@@ -272,6 +278,9 @@ export type Config = {
   outageAlerts: boolean;
   // Whether the kill feed going quiet on a live server is posted to the moderation log.
   feedAlerts: boolean;
+  // Whether the bot reads the chat (chat moderation), and whether it acts on exact matches or only posts them.
+  chatMod: boolean;
+  chatActions: boolean;
   roleId: string | undefined;
   inviteCode: string | undefined;
   siteUrl: string | undefined;
@@ -339,6 +348,8 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     headshotAlerts: e.HEADSHOT_ALERTS === 'on',
     outageAlerts: e.OUTAGE_ALERTS === 'on',
     feedAlerts: e.FEED_ALERTS === 'on',
+    chatMod: e.CHAT_MOD === 'on',
+    chatActions: e.CHAT_MOD_ACTIONS === 'on',
     roleId: e.DISCORD_ROLE_ID,
     inviteCode: e.DISCORD_INVITE,
     siteUrl: e.SITE_URL,

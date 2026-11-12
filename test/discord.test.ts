@@ -6,6 +6,7 @@ import {
   mapTitle,
   buildFeedAlert,
   buildGriefAlert,
+  buildChatAlert,
   buildHeadshotAlert,
   buildLastMatchEmbed,
   buildClanMoveMessage,
@@ -1793,5 +1794,46 @@ describe('luckOdds', () => {
     expect(luckOdds(4.3e-7)).toBe('1 in 2.3 million');
     expect(luckOdds(1e-12)).toBe('under 1 in a billion');
     expect(luckOdds(0)).toBe('under 1 in a billion');
+  });
+});
+
+describe('buildChatAlert', () => {
+  const NOW = Date.UTC(2026, 9, 7, 18);
+  const line = { id: 7, steamId: '76561198000000001', name: 'Ash *the* Bold', text: 'k y s @everyone', at: NOW };
+  const call = { kind: 'alert' as const, line, hit: { kind: 'fuzzy' as const, list: 'toxicity' as const, word: 'kys' }, others: [], why: 'fuzzy' as const, more: 0 };
+
+  it('shows the player, the line, the word and why nothing was done', () => {
+    const message = buildChatAlert({ ...call, more: 2, others: [{ kind: 'fuzzy', list: 'racism', word: 'spic' }] }, 'https://gaminginit.com');
+    const [embed] = message.embeds ?? [];
+    expect(embed?.title).toBe('💬 Chat flagged · Ash \\*the\\* Bold');
+    expect(embed?.url).toBe('https://gaminginit.com/admin');
+    expect(embed?.description).toContain('`76561198000000001`');
+    expect(embed?.description).toContain('**Said:** k y s @everyone');
+    expect(embed?.description).toContain('Resembles **kys** on the toxicity list');
+    expect(embed?.description).toContain('Also: spic');
+    expect(embed?.description).toContain('2 more lines from them in the same minute');
+    expect(embed?.fields?.[0]?.value).toMatch(/Staff decide/);
+    expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
+  });
+
+  it('shows the channel, the faction, the name others saw and the line as typed', () => {
+    const embed = buildChatAlert({ ...call, line: { ...line, name: '[LAND] Ash', shownAs: 'Olive', channel: 'Team', faction: 'Lonestar', text: 'you ****', rawText: 'you k y s' } }).embeds?.[0];
+    expect(embed?.title).toBe('💬 Chat flagged · \\[LAND\\] Ash (shown as Olive)');
+    expect(embed?.description).toContain('**Said (Team, Lonestar):** you \\*\\*\\*\\*');
+    expect(embed?.description).toContain('**Typed:** you k y s');
+  });
+
+  it('says when a staff member said it, nobody is behind the line, or actions are off', () => {
+    const why = (w: 'staff' | 'no-player' | 'actions-off', hit: 'exact' | 'fuzzy' = 'exact') =>
+      buildChatAlert({ ...call, why: w, hit: { ...call.hit, kind: hit }, line: { ...line, steamId: w === 'no-player' ? null : line.steamId } }).embeds?.[0];
+    expect(why('staff')?.fields?.[0]?.value).toMatch(/staff member/);
+    expect(why('staff')?.description).toContain('Exactly **kys**');
+    expect(why('no-player')?.description).not.toContain('`7656');
+    expect(why('actions-off')?.fields?.[0]?.value).toMatch(/CHAT_MOD_ACTIONS/);
+  });
+
+  it('cuts a long line', () => {
+    const embed = buildChatAlert({ ...call, line: { ...line, text: 'x'.repeat(301) } }).embeds?.[0];
+    expect(embed?.description).toContain(`${'x'.repeat(299)}…`);
   });
 });
