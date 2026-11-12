@@ -568,10 +568,10 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
     const post = async (body: unknown) => json('/api/admin/motd', { method: 'POST', headers: await asStaff(), body: JSON.stringify(body) });
     const section = '[/Script/WDGame.WDGameStateSession]';
 
-    it('reads the popup from the settings, saves it escaped and never overwrites a change made elsewhere', async () => {
+    it('reads the popup from the settings (repairing escaped lines), saves real tags and never overwrites a change made elsewhere', async () => {
       rcon.edit([section, 'bLockOverpopulatedTeamsConfig=True', 'bServerWelcomeMessageEnabled=False', '!ServerWelcomeMessageLines=ClearArray', '.ServerWelcomeMessageLines=&lt;Bold&gt;Old&lt;/&gt;', ''].join('\n'));
       const page = await get();
-      expect(page).toMatchObject({ status: 200, body: { enabled: false, lines: ['<Bold>Old</>'], problems: [] } });
+      expect(page).toMatchObject({ status: 200, body: { enabled: false, lines: ['<Bold>Old</>'], problems: [], escaped: true } });
 
       const lines = ['<Header>Welcome</>', '', '<Italic>Have fun &amp; good hunting!</>'];
       const saved = await post({ enabled: true, lines, revision: page.body.revision });
@@ -582,12 +582,13 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
           'bLockOverpopulatedTeamsConfig=True',
           'bServerWelcomeMessageEnabled=True',
           '!ServerWelcomeMessageLines=ClearArray',
-          '.ServerWelcomeMessageLines=&lt;Header&gt;Welcome&lt;/&gt;',
+          '.ServerWelcomeMessageLines=<Header>Welcome</>',
           '.ServerWelcomeMessageLines=',
-          '.ServerWelcomeMessageLines=&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;',
+          '.ServerWelcomeMessageLines=<Italic>Have fun &amp; good hunting!</>',
           '',
         ].join('\n'),
       );
+      expect(saved.body.escaped).toBe(false);
 
       // The page's copy is behind the file now: nothing is written, and nothing is forced.
       const before = rcon.settings().text;

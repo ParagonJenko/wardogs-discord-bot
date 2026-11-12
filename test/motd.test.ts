@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   checkMotdLine,
-  escapeMotdLine,
+  isEscapedLine,
+  readStoredLine,
   motdPage,
   parseMotd,
   saveMotd,
@@ -31,25 +32,29 @@ const FILE = [
   '',
 ].join('\n');
 
-describe('escaping', () => {
-  it('stores a line escaped once', () => {
-    expect(escapeMotdLine('<Italic>Have fun &amp; good hunting!</>')).toBe('&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;');
-    expect(escapeMotdLine('say "hi"')).toBe('say &quot;hi&quot;');
-  });
-
-  it('reads it back once, so &amp;lt; is not turned into <', () => {
+describe('lines saved escaped', () => {
+  it('unescapes once, so &amp;lt; is not turned into <', () => {
     expect(unescapeMotdLine('&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;')).toBe('<Italic>Have fun &amp; good hunting!</>');
     expect(unescapeMotdLine('&amp;lt;')).toBe('&lt;');
-    expect(unescapeMotdLine('&quot;x&quot;')).toBe('"x"');
     expect(unescapeMotdLine('a &unknown; b')).toBe('a &unknown; b');
   });
 
-  it.each(['', 'plain', '<Bold>1. No cheats</> - no hacks', '<Italic>Have fun &amp; good hunting!</>', '&lt;&gt;&amp;&quot;', 'a &amp;lt; b', '<text color="#FF4D4D">x</>'])(
-    'round-trips %j',
-    (line) => {
-      expect(unescapeMotdLine(escapeMotdLine(line))).toBe(line);
-    },
-  );
+  it('spots a line whose tags were escaped, which players see as text', () => {
+    expect(isEscapedLine('&lt;Header&gt;Welcome to gaminginit&lt;/&gt;')).toBe(true);
+    expect(isEscapedLine('&lt;text color="#E8A33D" size="16"&gt;Play hard&lt;/&gt;')).toBe(true);
+    expect(isEscapedLine('Ask in our Discord: &lt;text color="#7FD6FF"&gt;discord.gg/x&lt;/&gt;')).toBe(true);
+    // A real tag, or text that only shows a "<", is as meant.
+    expect(isEscapedLine('<Header>Welcome</>')).toBe(false);
+    expect(isEscapedLine('<Italic>Have fun &amp; good hunting!</>')).toBe(false);
+    expect(isEscapedLine('I &lt;3 this server')).toBe(false);
+    expect(isEscapedLine('')).toBe(false);
+  });
+
+  it('reads an escaped line as meant, and any other as it is', () => {
+    expect(readStoredLine('&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;')).toBe('<Italic>Have fun &amp; good hunting!</>');
+    expect(readStoredLine('<Italic>Have fun &amp; good hunting!</>')).toBe('<Italic>Have fun &amp; good hunting!</>');
+    expect(readStoredLine('I &lt;3 this server')).toBe('I &lt;3 this server');
+  });
 });
 
 describe('the validator', () => {
@@ -145,11 +150,12 @@ describe('reading the settings', () => {
     expect(parseMotd(FILE)).toEqual({
       enabled: true,
       lines: ['<Header>Welcome</>', '', '<Italic>Have fun &amp; good hunting!</>'],
+      escaped: true,
     });
   });
 
   it('reads missing keys as off with no lines, and the file as CRLF', () => {
-    expect(parseMotd('[/Script/Other]\nA=1\n')).toEqual({ enabled: false, lines: [] });
+    expect(parseMotd('[/Script/Other]\nA=1\n')).toEqual({ enabled: false, lines: [], escaped: false });
     expect(parseMotd(FILE.replace(/\n/g, '\r\n')).lines).toHaveLength(3);
     expect(parseMotd(FILE.replace('Enabled=True', 'Enabled=False')).enabled).toBe(false);
   });
@@ -171,12 +177,13 @@ describe('reading the settings', () => {
     expect(parseMotd(['[/Script/Other]', 'bServerWelcomeMessageEnabled=True', '.ServerWelcomeMessageLines=x'].join('\n'))).toEqual({
       enabled: false,
       lines: [],
+      escaped: false,
     });
   });
 });
 
 describe('writing the settings', () => {
-  it('replaces the two keys in place and touches nothing else', () => {
+  it('replaces the two keys in place, writing the lines as they are, and touches nothing else', () => {
     const next = setMotd(FILE, false, ['<Bold>Hi</>', '', 'a &amp; b']);
     expect(next).toBe(
       FILE.replace('bServerWelcomeMessageEnabled=True', 'bServerWelcomeMessageEnabled=False').replace(
@@ -185,10 +192,10 @@ describe('writing the settings', () => {
           '.ServerWelcomeMessageLines=',
           '.ServerWelcomeMessageLines=&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;',
         ].join('\n'),
-        ['.ServerWelcomeMessageLines=&lt;Bold&gt;Hi&lt;/&gt;', '.ServerWelcomeMessageLines=', '.ServerWelcomeMessageLines=a &amp;amp; b'].join('\n'),
+        ['.ServerWelcomeMessageLines=<Bold>Hi</>', '.ServerWelcomeMessageLines=', '.ServerWelcomeMessageLines=a &amp; b'].join('\n'),
       ),
     );
-    expect(parseMotd(next)).toEqual({ enabled: false, lines: ['<Bold>Hi</>', '', 'a &amp; b'] });
+    expect(parseMotd(next)).toEqual({ enabled: false, lines: ['<Bold>Hi</>', '', 'a &amp; b'], escaped: false });
   });
 
   it('round-trips lines through the file, &amp; and quotes included', () => {
@@ -197,9 +204,11 @@ describe('writing the settings', () => {
     expect(parseMotd(setMotd('', true, lines)).lines).toEqual(lines);
   });
 
-  it('writes the file as the live server has it', () => {
-    const next = setMotd(FILE, true, ['<Italic>Have fun &amp; good hunting!</>']);
-    expect(next).toContain('!ServerWelcomeMessageLines=ClearArray\n.ServerWelcomeMessageLines=&lt;Italic&gt;Have fun &amp;amp; good hunting!&lt;/&gt;\nSomethingElse=1');
+  it('reads the live file, saved escaped, as meant and says so; a save writes real tags', () => {
+    expect(parseMotd(FILE)).toMatchObject({ lines: ['<Header>Welcome</>', '', '<Italic>Have fun &amp; good hunting!</>'], escaped: true });
+    const next = setMotd(FILE, true, parseMotd(FILE).lines);
+    expect(next).toContain('!ServerWelcomeMessageLines=ClearArray\n.ServerWelcomeMessageLines=<Header>Welcome</>\n.ServerWelcomeMessageLines=\n.ServerWelcomeMessageLines=<Italic>Have fun &amp; good hunting!</>\nSomethingElse=1');
+    expect(parseMotd(next).escaped).toBe(false);
   });
 
   it('drops old lines with any prefix, and a second copy of the flag', () => {
@@ -290,9 +299,18 @@ describe('saving', () => {
   });
 
   it('writes nothing when the file says it already', async () => {
-    const f = file(config());
-    expect(await saveMotd(f, { ...parseMotd(FILE), revision: '7' })).toEqual({ status: 'saved', outcome: 'unchanged' });
+    const fixed = setMotd(FILE, true, parseMotd(FILE).lines);
+    const f = file(config({ text: fixed }));
+    const { enabled, lines } = parseMotd(fixed);
+    expect(await saveMotd(f, { enabled, lines, revision: '7' })).toEqual({ status: 'saved', outcome: 'unchanged' });
     expect(f.put).not.toHaveBeenCalled();
+  });
+
+  it('rewrites a file saved escaped even when staff changed nothing, so players see the formatting', async () => {
+    const f = file(config());
+    const { enabled, lines } = parseMotd(FILE);
+    expect(await saveMotd(f, { enabled, lines, revision: '7' })).toEqual({ status: 'saved', outcome: 'next-match' });
+    expect(f.put).toHaveBeenCalledOnce();
   });
 
   it('throws when the settings are read-only, or another error comes back from the server', async () => {
@@ -305,6 +323,12 @@ describe('saving', () => {
 
   it('shows the page with problems in what the file has now', () => {
     const bad = [SECTION, '.ServerWelcomeMessageLines=&lt;Bold&gt;oops'].join('\n');
-    expect(motdPage(config({ text: bad }))).toEqual({ enabled: false, lines: ['<Bold>oops'], revision: '7', problems: [{ line: 1, problem: '<Bold> is never closed. End it with </>.' }] });
+    expect(motdPage(config({ text: bad }))).toEqual({
+      enabled: false,
+      lines: ['<Bold>oops'],
+      revision: '7',
+      problems: [{ line: 1, problem: '<Bold> is never closed. End it with </>.' }],
+      escaped: true,
+    });
   });
 });
