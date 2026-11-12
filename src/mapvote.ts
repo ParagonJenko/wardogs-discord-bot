@@ -231,7 +231,13 @@ export const votePool = (
   return without.length > 0 || avoid.length === 0 ? without : poolOf(playable);
 };
 
-// The maps on the buttons: `count` of the pool, chosen at random.
+// Maps on every vote's buttons, by id, whether or not they were played lately or last had rain: Sabatulo (Russia), which
+// players can always vote for. Not while it is the map being played (a vote never picks the same map again), and not when
+// staff switched it off or the server can't play it with infantry only.
+export const ALWAYS_OFFERED: readonly string[] = ['Russia'];
+
+// The maps on the buttons: the ones always offered, and the rest of `count` from the pool, chosen at random, in a random
+// order. Fewer than two is no vote.
 export const pickOptions = (
   maps: readonly MapChoice[],
   playing: string,
@@ -240,7 +246,26 @@ export const pickOptions = (
   random: () => number,
   avoid: readonly string[] = [],
   exclude: readonly string[] = [],
-): VoteOption[] => sample(votePool(maps, playing, recent, count, avoid, exclude), count, random).map((m) => ({ map: m.id, name: m.name }));
+  always: readonly string[] = ALWAYS_OFFERED,
+): VoteOption[] => {
+  const fixed = maps.filter((m) => always.includes(m.id) && m.id !== playing && canBeVoted(m) && !exclude.includes(m.id)).slice(0, count);
+  const rest = votePool(maps, playing, recent, count, avoid, exclude).filter((m) => !fixed.some((f) => f.id === m.id));
+  const chosen = [...fixed, ...sample(rest, Math.max(0, count - fixed.length), random)];
+  return chosen.length < 2 ? [] : sample(chosen, chosen.length, random).map((m) => ({ map: m.id, name: m.name }));
+};
+
+// The map that last had rain, when the vote leaves it out because of that, so the message can say why it is missing: it is
+// not on a button, not in the pool Random picks from, and would have been in that pool without the rain rule. Null otherwise
+// (a map always offered is on a button, so it is never said to be missing).
+export const rainSkipped = (
+  lastRain: string | null,
+  options: readonly VoteOption[],
+  pool: readonly MapChoice[],
+  poolWithoutRainRule: readonly MapChoice[],
+): string | null =>
+  lastRain !== null && !options.some((o) => o.map === lastRain) && !pool.some((m) => m.id === lastRain) && poolWithoutRainRule.some((m) => m.id === lastRain)
+    ? lastRain
+    : null;
 
 // The circles (control-zone layout) each map last had from a vote, by map id, so the next time it wins it gets another.
 export const LAST_ZONES_KEY = 'mapVoteZones';

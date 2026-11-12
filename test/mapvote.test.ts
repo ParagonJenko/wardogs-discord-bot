@@ -41,6 +41,8 @@ import {
   parseVoteAlerts,
   withVoteAlert,
   pickOptions,
+  ALWAYS_OFFERED,
+  rainSkipped,
   publicVote,
   withPlayed,
   type MapVote,
@@ -60,6 +62,55 @@ const NOW = 1_000_000;
 const vote = (): MapVote =>
   openVote({ startedAt: 42 }, 'Kavkazi', [{ map: 'A', name: 'Alpha' }, { map: 'B', name: 'Bravo' }, { map: 'C', name: 'Charlie' }], { options: 3, minutes: 15, closePercent: 95, channelId: '1', botToken: 't', staging: 'rotation', inGame: false }, NOW, 95);
 const ballot = (n: number, map: string) => ({ user: `user${n}`, map });
+
+describe('maps always offered', () => {
+  it('is Sabatulo (Russia)', () => {
+    expect(ALWAYS_OFFERED).toEqual(['Russia']);
+  });
+
+  it('puts Sabatulo on every vote even when it was played lately or last had rain, at a random place', () => {
+    const maps = ['Now', 'Russia', 'A', 'B', 'C', 'D'].map((id) => choice(id));
+    for (const roll of [0, 0.3, 0.6, 0.99]) {
+      const offered = pickOptions(maps, 'Now', ['Russia', 'Now'], 3, () => roll, ['Russia']).map((o) => o.map);
+      expect(offered).toHaveLength(3);
+      expect(offered).toContain('Russia');
+      expect(new Set(offered).size).toBe(3);
+      expect(offered).not.toContain('Now');
+    }
+  });
+
+  it('not while Sabatulo is being played, nor when staff switched it off or it has no infantry only', () => {
+    const maps = ['Russia', 'A', 'B', 'C'].map((id) => choice(id));
+    expect(pickOptions(maps, 'Russia', ['Russia'], 3, () => 0).map((o) => o.map)).not.toContain('Russia');
+    expect(pickOptions([...maps, choice('Now')], 'Now', [], 3, () => 0, [], ['Russia']).map((o) => o.map)).not.toContain('Russia');
+    expect(pickOptions([choice('Russia', 1, false), choice('A'), choice('B'), choice('Now')], 'Now', [], 3, () => 0).map((o) => o.map)).not.toContain('Russia');
+  });
+
+  it('still needs a second map for a vote', () => {
+    expect(pickOptions([choice('Now'), choice('Russia')], 'Now', [], 3, () => 0)).toEqual([]);
+    expect(pickOptions([choice('Now'), choice('Russia'), choice('A')], 'Now', ['A'], 3, () => 0).map((o) => o.map).sort()).toEqual(['A', 'Russia']);
+  });
+});
+
+describe('rainSkipped', () => {
+  const maps = ['Now', 'Russia', 'A', 'B', 'C'].map((id) => choice(id));
+  const withRule = votePool(maps, 'Now', ['Now'], 3, ['A'], []);
+  const withoutRule = votePool(maps, 'Now', ['Now'], 3, [], []);
+
+  it('names the map left out because it had rain last', () => {
+    expect(rainSkipped('A', [{ map: 'B', name: 'B' }, { map: 'C', name: 'C' }], withRule, withoutRule)).toBe('A');
+  });
+
+  it('never says a map on a button is missing, such as Sabatulo, always offered', () => {
+    const pool = votePool(maps, 'Now', ['Now'], 3, ['Russia'], []);
+    expect(rainSkipped('Russia', [{ map: 'Russia', name: 'Sabatulo' }, { map: 'A', name: 'A' }], pool, withoutRule)).toBeNull();
+  });
+
+  it('says nothing with no rain map, or one missing for another reason', () => {
+    expect(rainSkipped(null, [], withRule, withoutRule)).toBeNull();
+    expect(rainSkipped('Now', [], withRule, withoutRule)).toBeNull();
+  });
+});
 
 describe('pickOptions', () => {
   it('offers playable maps other than the one being played, up to the count', () => {
