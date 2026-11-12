@@ -79,9 +79,19 @@ describe('maps always offered', () => {
     }
   });
 
-  it('not while Sabatulo is being played, nor when staff switched it off or it has no infantry only', () => {
+  it('even while Sabatulo is being played, so it can be played again', () => {
     const maps = ['Russia', 'A', 'B', 'C'].map((id) => choice(id));
-    expect(pickOptions(maps, 'Russia', ['Russia'], 3, () => 0).map((o) => o.map)).not.toContain('Russia');
+    for (const roll of [0, 0.5, 0.99]) {
+      const offered = pickOptions(maps, 'Russia', ['Russia'], 3, () => roll).map((o) => o.map);
+      expect(offered).toContain('Russia');
+      expect(offered).toHaveLength(3);
+    }
+    // Random still picks from the usual pool, which never has the map being played.
+    expect(votePool(maps, 'Russia', ['Russia'], 3).map((m) => m.id)).not.toContain('Russia');
+  });
+
+  it('not when staff switched it off or it has no infantry only', () => {
+    const maps = ['Russia', 'A', 'B', 'C'].map((id) => choice(id));
     expect(pickOptions([...maps, choice('Now')], 'Now', [], 3, () => 0, [], ['Russia']).map((o) => o.map)).not.toContain('Russia');
     expect(pickOptions([choice('Russia', 1, false), choice('A'), choice('B'), choice('Now')], 'Now', [], 3, () => 0).map((o) => o.map)).not.toContain('Russia');
   });
