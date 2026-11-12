@@ -687,9 +687,10 @@ export const buildWordsPage = (words: ChatWords, switches: { enabled: boolean; a
   })),
 });
 
-// Two kinds of line get a private reply pointing to our Discord: a player asking for an admin in chat ("!admin",
-// "@admins", "any mods on?"), and one saying someone is hacking or cheating ("hacker!", "aimbot", "he's cheating").
-// Whole words only, so "badminton", "administer" or "modern" is not a call.
+// Two kinds of line get a private reply. A player asking for an admin ("!admin", "@admins", "any mods on?") is told to
+// raise a ticket in our Discord. One saying someone is hacking or cheating ("hacker!", "aimbot", "he's cheating") is told
+// to report it in our Discord with a clip or screenshot, or from the scoreboard without one. Whole words only, so
+// "badminton", "administer" or "modern" is not a call.
 const ADMIN_CALL = /(?:^|[^a-z0-9])[!@/]?(?:admins?|mods?|moderators?)(?![a-z0-9])/i;
 const CHEAT_CLAIM =
   /(?:^|[^a-z0-9])(?:hack(?:s|ed|er|ers|ing)?|hax|haxx?or|cheat(?:s|ed|er|ers|ing)?|aim ?bot(?:s|ting|ter)?|wall ?hack(?:s|ing|er)?|esp)(?![a-z0-9])/i;
@@ -706,7 +707,7 @@ const discordAt = (siteUrl: string | undefined): string =>
 export const adminCallText = (siteUrl: string | undefined): string => `Need an admin? Raise a ticket in our Discord: ${discordAt(siteUrl)}`;
 
 export const cheatReportText = (siteUrl: string | undefined): string =>
-  `Think someone's cheating? Report it with a clip or screenshot in our Discord: ${discordAt(siteUrl)}`;
+  `Think someone's cheating? Got a clip or screenshot? Report it in our Discord: ${discordAt(siteUrl)}. No evidence? Report them from the scoreboard.`;
 
 export type HelpReply = { steamId: string; kind: 'cheat' | 'admin'; text: string };
 

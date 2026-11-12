@@ -743,6 +743,10 @@ describe('players asking for an admin, or saying someone cheats', () => {
   it('points to the Discord on the website', () => {
     expect(adminCallText('https://gaminginit.com/')).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
     expect(adminCallText(undefined)).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
-    expect(cheatReportText(SITE)).toBe("Think someone's cheating? Report it with a clip or screenshot in our Discord: gaminginit.com/discord");
+    expect(cheatReportText(SITE)).toBe(
+      "Think someone's cheating? Got a clip or screenshot? Report it in our Discord: gaminginit.com/discord. No evidence? Report them from the scoreboard.",
+    );
+    // A whisper is cut off by the game past 256 characters.
+    expect(cheatReportText('https://a-much-longer-community-website-address.example.com').length).toBeLessThanOrEqual(256);
   });
 });
