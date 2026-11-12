@@ -506,6 +506,14 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
       expect(errors()).toEqual([]);
     });
+
+    it('tells a player who says someone is cheating to report it with evidence', async () => {
+      rcon.chat.push({ id: 9, steamId: ASH, name: 'Ash', message: 'blue sniper is hacking' });
+      rcon.requests.length = 0;
+      expect(await runCron()).toMatchObject({ outcome: 'ok' });
+      expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([`POST /v1/players/${ASH}/message`]);
+      expect(errors()).toEqual([]);
+    });
   });
 
   describe('the staff page chat filter', () => {

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_CALL_GAP_MS,
-  adminCallers,
   adminCallText,
+  cheatReportText,
+  helpReplies,
   isAdminCall,
+  isCheatClaim,
   banReasonText,
   buildWordsPage,
   chatFeed,
@@ -686,7 +688,10 @@ describe('the text as typed, and names', () => {
   });
 });
 
-describe('players asking for an admin', () => {
+describe('players asking for an admin, or saying someone cheats', () => {
+  const SITE = 'https://gaminginit.com';
+  const ids = (replies: { steamId: string }[]) => replies.map((r) => r.steamId);
+
   it('spots a call for an admin or a mod, as a whole word', () => {
     for (const text of ['!admin', '!ADMINS', '@admin', 'admin pls', 'any admins on?', 'mods?', '/admin team killer', 'need a moderator']) {
       expect(isAdminCall(text), text).toBe(true);
@@ -696,7 +701,16 @@ describe('players asking for an admin', () => {
     }
   });
 
-  it('tells each caller once, not staff, not one told lately, not one banned in the same batch', () => {
+  it('spots someone saying another player hacks or cheats, as a whole word', () => {
+    for (const text of ['hacker!', 'this guy is hacking', 'HACKS', 'obvious hax', 'cheater on red', 'he is cheating', 'aimbot', 'aim bot lol', 'wallhacks', 'wall hacking', 'ESP for sure', 'he hacked']) {
+      expect(isCheatClaim(text), text).toBe(true);
+    }
+    for (const text of ['shackles', 'cheetahs are fast', 'respawn', 'whack a mole', 'stop apc', '']) {
+      expect(isCheatClaim(text), text).toBe(false);
+    }
+  });
+
+  it('replies once to each, not staff, not one told lately, not one banned in the same batch', () => {
     const OTHER = '76561190000000002';
     const STAFFER = '76561190000000003';
     const BANNED = '76561190000000004';
@@ -709,18 +723,27 @@ describe('players asking for an admin', () => {
       line(6, '@admins', OTHER, 'Other'),
     ];
     const staff = new Set([STAFFER]);
-    expect(adminCallers(lines, staff, new Map(), AT, new Set([BANNED]))).toEqual([ASH, OTHER]);
+    expect(ids(helpReplies(lines, staff, new Map(), AT, SITE, new Set([BANNED])))).toEqual([ASH, OTHER]);
     // Told a minute ago: not again yet; told longer ago than the gap: again.
-    expect(adminCallers(lines, staff, new Map([[ASH, AT - 60_000]]), AT, new Set([BANNED]))).toEqual([OTHER]);
-    expect(adminCallers(lines, staff, new Map([[ASH, AT - ADMIN_CALL_GAP_MS]]), AT, new Set([BANNED]))).toEqual([ASH, OTHER]);
+    expect(ids(helpReplies(lines, staff, new Map([[ASH, AT - 60_000]]), AT, SITE, new Set([BANNED])))).toEqual([OTHER]);
+    expect(ids(helpReplies(lines, staff, new Map([[ASH, AT - ADMIN_CALL_GAP_MS]]), AT, SITE, new Set([BANNED])))).toEqual([ASH, OTHER]);
+  });
+
+  it('tells someone who says a player cheats to report it with evidence, even if they also asked for an admin', () => {
+    const replies = helpReplies([line(1, '!admin', ASH), line(2, 'red sniper is hacking', ASH), line(3, 'admin pls', BO, 'Bo')], new Set(), new Map(), AT, SITE);
+    expect(replies).toEqual([
+      { steamId: ASH, kind: 'cheat', text: cheatReportText(SITE) },
+      { steamId: BO, kind: 'admin', text: adminCallText(SITE) },
+    ]);
   });
 
   it('reads the typed text too', () => {
-    expect(adminCallers([{ ...line(1, '***', ASH), rawText: '!admin' }], new Set(), new Map(), AT)).toEqual([ASH]);
+    expect(ids(helpReplies([{ ...line(1, '***', ASH), rawText: '!admin' }], new Set(), new Map(), AT, SITE))).toEqual([ASH]);
   });
 
   it('points to the Discord on the website', () => {
     expect(adminCallText('https://gaminginit.com/')).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
     expect(adminCallText(undefined)).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
+    expect(cheatReportText(SITE)).toBe("Think someone's cheating? Report it with a clip or screenshot in our Discord: gaminginit.com/discord");
   });
 });

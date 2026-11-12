@@ -130,8 +130,7 @@ import {
 import {
   banReasonText,
   buildWordsPage,
-  adminCallers,
-  adminCallText,
+  helpReplies,
   callEvidence,
   CHAT_STATE_KEY,
   CHAT_WORDS_KEY,
@@ -2807,18 +2806,22 @@ export class Watcher extends DurableObject<Env> {
     }
   }
 
-  // Players who asked for an admin in chat ("!admin") are told, privately, to raise a ticket in our Discord. Staff, and a
-  // player banned in the same batch, are not.
+  // Players who asked for an admin in chat ("!admin") are told, privately, to raise a ticket in our Discord, and those
+  // who said someone is hacking or cheating to report it there with a clip or screenshot. Staff, and a player banned in
+  // the same batch, are not.
   private async answerAdminCalls(config: Config, http: HttpClient, lines: ChatLine[], calls: ChatCall[], now: number): Promise<void> {
     const banned = new Set(calls.flatMap((c) => (c.kind === 'ban' && c.line.steamId !== null ? [c.line.steamId] : [])));
-    const callers = adminCallers(lines, await this.staffSteam(), this.adminToldAt, now, banned);
-    for (const steamId of callers) {
+    const replies = helpReplies(lines, await this.staffSteam(), this.adminToldAt, now, config.siteUrl, banned);
+    for (const { steamId, kind, text } of replies) {
       this.adminToldAt.set(steamId, now);
-      await messagePlayer(config.rconUrl, config.rconPassword, steamId, adminCallText(config.siteUrl), http).catch((error: unknown) => {
-        if (!isNotInGame(error)) console.error(`Chat moderation: could not tell ${steamId} how to reach an admin: ${errorText(error)}`);
+      await messagePlayer(config.rconUrl, config.rconPassword, steamId, text, http).catch((error: unknown) => {
+        if (!isNotInGame(error)) console.error(`Chat moderation: could not send ${steamId} the ${kind === 'cheat' ? 'cheating report' : 'admin ticket'} reply: ${errorText(error)}`);
       });
     }
-    if (callers.length > 0) console.info(`Chat moderation: told ${callers.length} player(s) who asked for an admin to raise a ticket`);
+    if (replies.length > 0) {
+      const cheats = replies.filter((r) => r.kind === 'cheat').length;
+      console.info(`Chat moderation: pointed ${replies.length} player(s) to the Discord (${cheats} about cheating, ${replies.length - cheats} asking for an admin)`);
+    }
   }
 
   // One call from judgeChat. A ban and a warning go through the same code as staff's /ban and /warn: the player's staff
