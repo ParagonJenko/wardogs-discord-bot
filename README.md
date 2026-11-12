@@ -49,7 +49,7 @@ and "Weekend", pick which one plays on each day of the week, and swap between th
 
 Posts are Discord embeds in one style: a population bar in the colour of the state (🟨 seeding, 🟩 live, 🟥 low
 pop), medals for the top three players, each faction with its own emoji (🤠 Lonestar, 🐻 Valkyra, 🦂 Manticore; any
-other faction gets a dot in its in-game colour), each map with its own colour (🟧 Bakurani, 🟦 Ozeti, 🟪 Zestafona,
+other faction gets a dot in its in-game colour), each map with its own colour (🟧 Bakurani, 🟦 Ozeti, 🟪 Zestafona, 🟩 Sabatulo,
 the same as on the website; `/rotation` takes the colour of the map being played), and match summaries in the winning
 faction's colour.
 
