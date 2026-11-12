@@ -360,13 +360,9 @@ export const callEvidence = (call: ChatCall): string => {
   return `Chat #${call.line.id}${where === '' ? '' : ` (${where})`}: "${said}" (matched "${call.hit.word}" on the ${LIST_NAMES[call.hit.list]}${more})`;
 };
 
-// The short reason for a ban, which the server keeps and the player sees with the kick (the game's one line holds 200
-// characters). It names the word; the whole line is in the ban's detail (see callEvidence).
-export const banReasonText = (line: ChatLine, word: string): string => {
-  const original = typed(line);
-  const said = original.length > 80 ? `${original.slice(0, 79)}…` : original;
-  return `Racist language in chat (${word}): "${said}"`;
-};
+// The ban's reason: what the server keeps on its ban list and the player reads when kicked. It doesn't repeat the word
+// or the line; those go in the staff history and the moderation log (see callEvidence).
+export const BAN_REASON = 'Racist language in chat';
 
 export const WARNING_TEXT = 'Toxic language in chat is not allowed on this server. Keep it friendly.';
 

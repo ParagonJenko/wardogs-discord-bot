@@ -6,7 +6,7 @@ import {
   helpReplies,
   isAdminCall,
   isCheatClaim,
-  banReasonText,
+  BAN_REASON,
   buildWordsPage,
   chatFeed,
   judgeLines,
@@ -354,12 +354,12 @@ describe('what the bot does about a batch', () => {
     expect(call([line(1, 'gg well played'), line(2, 'fuck this map')])).toEqual([]);
   });
 
-  it('says the line and the word as evidence, and keeps a ban reason short', () => {
+  it('says the line and the word as evidence, and keeps them out of the ban reason', () => {
     const [ban] = call([line(1, 'you nigger')]);
     expect(callEvidence(ban!)).toBe('Chat #1: "you nigger" (matched "nigger" on the racism list)');
     expect(callEvidence({ ...ban!, line: { ...ban!.line, channel: 'Team', faction: 'Lonestar' } })).toContain('Chat #1 (Team, Lonestar): "you nigger"');
-    expect(banReasonText(line(1, 'x'.repeat(300)), 'nigger').length).toBeLessThan(140);
-    expect(banReasonText(line(1, 'you nigger'), 'nigger')).toBe('Racist language in chat (nigger): "you nigger"');
+    // What the server keeps and the player reads when kicked: no slur in it.
+    expect(BAN_REASON).toBe('Racist language in chat');
   });
 });
 
@@ -674,10 +674,9 @@ describe('the text as typed, and names', () => {
     expect(judgeLines([fuzzyOnly], compiled, none, true).verdicts.get(3)).toMatchObject({ kind: 'fuzzy', word: 'kys' });
   });
 
-  it('gives the line as typed as the evidence and the ban reason', () => {
+  it('gives the line as typed as the evidence', () => {
     const [call] = judgeChat([{ ...line(1, 'you ******'), rawText: 'you nigger' }], compiled, none, true);
     expect(callEvidence(call!)).toBe('Chat #1: "you nigger" (matched "nigger" on the racism list)');
-    expect(banReasonText({ ...line(1, 'you ******'), rawText: 'you nigger' }, 'nigger')).toBe('Racist language in chat (nigger): "you nigger"');
   });
 
   it('shows /chat the typed text, the name others saw, the channel, the faction and a ping', () => {

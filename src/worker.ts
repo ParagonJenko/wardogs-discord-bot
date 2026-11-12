@@ -128,7 +128,7 @@ import {
   type WebVote,
 } from './accounts.ts';
 import {
-  banReasonText,
+  BAN_REASON,
   buildWordsPage,
   helpReplies,
   callEvidence,
@@ -2832,7 +2832,7 @@ export class Watcher extends DurableObject<Env> {
     const evidence = callEvidence(call);
     if (call.kind !== 'alert' && line.steamId !== null) {
       if (call.kind === 'ban') {
-        const reason = banReasonText(line, call.hit.word);
+        const reason = BAN_REASON;
         const result = await this.ban({ steamId: line.steamId, name: line.name || line.steamId, length: 'permanent', reason, by: 'bot', detail: evidence });
         if (result.outcome === 'already-banned') {
           console.info(`Chat moderation: ${player} is banned already, so nothing was done. ${evidence}`);
