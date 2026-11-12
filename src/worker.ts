@@ -48,6 +48,7 @@ import {
   votingNow,
   voteMessage,
   voteOpenBroadcast,
+  voteCanOpen,
   voteResultBroadcast,
   withPlayed,
   zoneForTry,
@@ -2121,7 +2122,7 @@ export class Watcher extends DurableObject<Env> {
     }
 
     // A match that is live and has no vote yet.
-    if (match === null || match.liveAt === null || match.endedAt !== undefined) return;
+    if (match === null || !voteCanOpen(match)) return;
     if (!rule.botToken || !rule.channelId) {
       console.error('Map vote: MAP_VOTE is on, but DISCORD_BOT_TOKEN and DISCORD_VOTE_CHANNEL_ID are not both set, so no vote opens.');
       return;
