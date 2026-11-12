@@ -258,7 +258,10 @@ export type ChatCall = {
 export const VERDICT_ACTIONS = ['banned', 'warned', 'alert', 'staff', 'actions-off', 'no-player', 'folded', 'backlog', 'failed', 'none'] as const;
 export type VerdictAction = (typeof VERDICT_ACTIONS)[number];
 export type Verdict = { kind: 'clean' | 'exact' | 'fuzzy'; list?: WordListId; word?: string; others?: string[]; action: VerdictAction };
-export type ChatEntry = ChatLine & { verdict?: Verdict };
+// `reply` is set on a line the bot answered privately (see helpReplies): 'cheat' told to report it, 'admin' to raise a
+// ticket, so staff can see it was answered.
+export type HelpKind = 'cheat' | 'admin';
+export type ChatEntry = ChatLine & { verdict?: Verdict; reply?: HelpKind };
 
 const CALL_RANK = { ban: 0, warn: 1, alert: 2 } as const;
 
@@ -393,6 +396,7 @@ const KeptSchema = z.object({
   faction: z.string().optional(),
   ping: z.boolean().optional(),
   at: z.number(),
+  reply: z.enum(['cheat', 'admin']).optional(),
   verdict: z
     .object({
       kind: z.enum(['clean', 'exact', 'fuzzy']),
@@ -545,6 +549,12 @@ const mark = (verdict: Verdict | undefined): string => {
   return `\n   ↳ ${what}${action === undefined ? '' : `, ${action}`}`;
 };
 
+// What staff are told the bot said, in /chat and the live chat.
+export const REPLY_NOTE: Record<HelpKind, string> = {
+  cheat: 'report it in our Discord with a clip or screenshot, or from the scoreboard without',
+  admin: 'raise a ticket in our Discord',
+};
+
 export const chatReply = (buffer: ChatEntry[], player: string | undefined, count: number = CHAT_REPLY_LINES): string => {
   const typed = (player ?? '').trim().toLowerCase();
   const chosen = typed === '' ? buffer : buffer.filter((l) => l.steamId === typed || l.name.toLowerCase().includes(typed));
@@ -556,7 +566,7 @@ export const chatReply = (buffer: ChatEntry[], player: string | undefined, count
     const channel = where.length > 0 ? ` (${where.join(', ')})` : '';
     const shown = l.shownAs ? ` (shown as ${neutral(l.shownAs)})` : '';
     const raw = l.rawText !== undefined && l.rawText !== l.text ? `\n   ↳ typed: ${neutral(l.rawText)}` : '';
-    return `<t:${Math.floor(l.at / 1000)}:T> **${neutral(l.name || 'Unknown')}**${shown}${channel}${l.ping ? ' 📣' : ''}: ${neutral(l.text)}${raw}${mark(l.verdict)}`;
+    return `<t:${Math.floor(l.at / 1000)}:T> **${neutral(l.name || 'Unknown')}**${shown}${channel}${l.ping ? ' 📣' : ''}: ${neutral(l.text)}${raw}${mark(l.verdict)}${l.reply ? `\n   ↳ bot replied: ${REPLY_NOTE[l.reply]}` : ''}`;
   });
   const shown: string[] = [];
   let length = 0;
@@ -709,7 +719,8 @@ export const adminCallText = (siteUrl: string | undefined): string => `Need an a
 export const cheatReportText = (siteUrl: string | undefined): string =>
   `Think someone's cheating? Got a clip or screenshot? Report it in our Discord: ${discordAt(siteUrl)}. No evidence? Report them from the scoreboard.`;
 
-export type HelpReply = { steamId: string; kind: 'cheat' | 'admin'; text: string };
+// `lineId` is the line answered, so it can be marked for staff.
+export type HelpReply = { steamId: string; kind: HelpKind; text: string; lineId: number };
 
 // The players to reply to from new lines, once each: not staff, not a player without a Steam ID, not one told lately,
 // and not one in `skip` (banned in this batch, say). A player who both calls for an admin and says someone is cheating
@@ -722,14 +733,25 @@ export const helpReplies = (
   siteUrl: string | undefined,
   skip: ReadonlySet<string> = new Set(),
 ): HelpReply[] => {
-  const kinds = new Map<string, 'cheat' | 'admin'>();
+  const chosen = new Map<string, { kind: HelpKind; lineId: number }>();
   for (const line of lines) {
     const id = line.steamId;
     if (id === null || staff.has(id) || skip.has(id)) continue;
     if (now - (told.get(id) ?? -Infinity) < ADMIN_CALL_GAP_MS) continue;
     const texts = [line.rawText ?? line.text, line.text];
-    if (texts.some(isCheatClaim)) kinds.set(id, 'cheat');
-    else if (!kinds.has(id) && texts.some(isAdminCall)) kinds.set(id, 'admin');
+    const was = chosen.get(id);
+    if (texts.some(isCheatClaim)) {
+      if (was?.kind !== 'cheat') chosen.set(id, { kind: 'cheat', lineId: line.id });
+    } else if (was === undefined && texts.some(isAdminCall)) chosen.set(id, { kind: 'admin', lineId: line.id });
   }
-  return [...kinds].map(([steamId, kind]) => ({ steamId, kind, text: kind === 'cheat' ? cheatReportText(siteUrl) : adminCallText(siteUrl) }));
+  return [...chosen].map(([steamId, { kind, lineId }]) => ({
+    steamId,
+    kind,
+    lineId,
+    text: kind === 'cheat' ? cheatReportText(siteUrl) : adminCallText(siteUrl),
+  }));
 };
+
+// The buffer with the lines the bot answered marked, by line id.
+export const withReplies = (buffer: ChatEntry[], replies: ReadonlyMap<number, HelpKind>): ChatEntry[] =>
+  replies.size === 0 ? buffer : buffer.map((l) => (replies.has(l.id) ? { ...l, reply: replies.get(l.id)! } : l));
