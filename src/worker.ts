@@ -1802,6 +1802,7 @@ export class Watcher extends DurableObject<Env> {
               // Without the rotation, the live status just leaves the next map out.
               await this.serverRotation(config, snapshot, parseReadRotation(stored.get('boardRotation')), now),
               now,
+              tracked?.startedAt ?? null,
             );
       const vote = parseMapVote(stored.get(MAP_VOTE_KEY));
       // Only while people can still vote: a vote is closed by a later step of the check, and the link must not outlive it.

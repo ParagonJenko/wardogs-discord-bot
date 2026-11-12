@@ -94,6 +94,16 @@ describe('nextMap', () => {
     ],
   };
 
+  it('forgets a staged map once a new match has started, even on the same map (Sabatulo voted again on Sabatulo)', () => {
+    const staged = { map: 'Russia', fromMap: 'Sabatulo', at: NOW - 60_000 };
+    // The vote's own match began before it was staged: still to come.
+    expect(nextMap('Sabatulo', staged, rotation, NOW, NOW - 20 * 60_000)).toBe('Russia');
+    // The repeat began after: played, so the rotation's next.
+    expect(nextMap('Sabatulo', staged, rotation, NOW, NOW - 30_000)).toBe('NorthAmerica');
+    // Without the match's start, as before.
+    expect(nextMap('Sabatulo', staged, rotation, NOW)).toBe('Russia');
+  });
+
   it("is the rotation's next map", () => {
     expect(nextMap('Europe', null, rotation, NOW)).toBe('NorthAmerica');
   });
