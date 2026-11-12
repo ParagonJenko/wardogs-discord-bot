@@ -690,3 +690,36 @@ export const buildWordsPage = (words: ChatWords, switches: { enabled: boolean; a
     removed: words[id].remove,
   })),
 });
+
+// A player asking for an admin in chat ("!admin", "@admins", "any mods on?") is told how to reach one: a ticket in our
+// Discord. Whole words only, so "badminton" or "administer" is not a call.
+const ADMIN_CALL = /(?:^|[^a-z0-9])[!@/]?(?:admins?|mods?|moderators?)(?![a-z0-9])/i;
+
+export const isAdminCall = (text: string): boolean => ADMIN_CALL.test(text);
+
+// The same player is told at most this often, so asking again and again doesn't fill their screen.
+export const ADMIN_CALL_GAP_MS = 5 * 60_000;
+
+export const adminCallText = (siteUrl: string | undefined): string => {
+  const host = (siteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '') || 'gaminginit.com';
+  return `Need an admin? Raise a ticket in our Discord: ${host}/discord`;
+};
+
+// The players to tell, once each, from new lines: not staff, not a player without a Steam ID, not one told lately, and not
+// one in `skip` (banned in this batch, say). `told` has when each player was last told.
+export const adminCallers = (
+  lines: readonly ChatLine[],
+  staff: ReadonlySet<string>,
+  told: ReadonlyMap<string, number>,
+  now: number,
+  skip: ReadonlySet<string> = new Set(),
+): string[] => {
+  const out = new Set<string>();
+  for (const line of lines) {
+    const id = line.steamId;
+    if (id === null || staff.has(id) || skip.has(id) || out.has(id)) continue;
+    if (now - (told.get(id) ?? -Infinity) < ADMIN_CALL_GAP_MS) continue;
+    if (isAdminCall(line.rawText ?? line.text) || isAdminCall(line.text)) out.add(id);
+  }
+  return [...out];
+};

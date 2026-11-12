@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ADMIN_CALL_GAP_MS,
+  adminCallers,
+  adminCallText,
+  isAdminCall,
   banReasonText,
   buildWordsPage,
   chatFeed,
@@ -679,5 +683,44 @@ describe('the text as typed, and names', () => {
     const rows = chatReply([entry], undefined).split('\n');
     expect(rows[1]).toContain('**\\[LAND\\] Ash** (shown as Olive) (Team, Lonestar) 📣: you \\*\\*\\*\\*');
     expect(rows[2]).toBe('   ↳ typed: you nigger');
+  });
+});
+
+describe('players asking for an admin', () => {
+  it('spots a call for an admin or a mod, as a whole word', () => {
+    for (const text of ['!admin', '!ADMINS', '@admin', 'admin pls', 'any admins on?', 'mods?', '/admin team killer', 'need a moderator']) {
+      expect(isAdminCall(text), text).toBe(true);
+    }
+    for (const text of ['badminton later', 'administer the shot', 'modern guns', 'stop apc', '']) {
+      expect(isAdminCall(text), text).toBe(false);
+    }
+  });
+
+  it('tells each caller once, not staff, not one told lately, not one banned in the same batch', () => {
+    const OTHER = '76561190000000002';
+    const STAFFER = '76561190000000003';
+    const BANNED = '76561190000000004';
+    const lines = [
+      line(1, '!admin', ASH),
+      line(2, 'admin!!', ASH),
+      line(3, 'any mods?', STAFFER, 'Staff'),
+      line(4, '!admin', null, 'Nobody'),
+      line(5, '!admin', BANNED, 'Bad'),
+      line(6, '@admins', OTHER, 'Other'),
+    ];
+    const staff = new Set([STAFFER]);
+    expect(adminCallers(lines, staff, new Map(), AT, new Set([BANNED]))).toEqual([ASH, OTHER]);
+    // Told a minute ago: not again yet; told longer ago than the gap: again.
+    expect(adminCallers(lines, staff, new Map([[ASH, AT - 60_000]]), AT, new Set([BANNED]))).toEqual([OTHER]);
+    expect(adminCallers(lines, staff, new Map([[ASH, AT - ADMIN_CALL_GAP_MS]]), AT, new Set([BANNED]))).toEqual([ASH, OTHER]);
+  });
+
+  it('reads the typed text too', () => {
+    expect(adminCallers([{ ...line(1, '***', ASH), rawText: '!admin' }], new Set(), new Map(), AT)).toEqual([ASH]);
+  });
+
+  it('points to the Discord on the website', () => {
+    expect(adminCallText('https://gaminginit.com/')).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
+    expect(adminCallText(undefined)).toBe('Need an admin? Raise a ticket in our Discord: gaminginit.com/discord');
   });
 });
