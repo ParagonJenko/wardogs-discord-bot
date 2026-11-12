@@ -70,7 +70,24 @@ const startFakeRcon = async (password: string): Promise<FakeRcon> => {
     if (req.method === 'GET' && req.url?.startsWith('/v1/chat?')) {
       const query = new URL(req.url, 'http://fake').searchParams;
       const after = Number(query.get('after'));
-      return { status: 200, body: { messages: fake.chat.filter((m) => m.id > after).slice(0, Number(query.get('limit'))) } };
+      // As the game answers: `after` is inclusive, and the lines have the game's own field names.
+      const messages = fake.chat
+        .filter((m) => m.id >= after)
+        .slice(0, Number(query.get('limit')))
+        .map((m) => ({
+          seq: m.id,
+          sentUtc: '2026-11-12T15:29:11.106Z',
+          channel: 'All',
+          faction: 'Valkyra',
+          steamId: m.steamId,
+          realName: m.name,
+          hiddenName: 'Olive',
+          anonymous: false,
+          text: m.message,
+          rawText: m.message,
+          ping: false,
+        }));
+      return { status: 200, body: { latestSeq: Math.max(0, ...fake.chat.map((m) => m.id)), messages, count: messages.length } };
     }
     if (req.method === 'POST' && (req.url === '/v1/bans' || /^\/v1\/players\/\d{17}\/kick$/.test(req.url ?? ''))) {
       return { status: 200, body: { message: 'OK' } };
@@ -377,7 +394,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
   describe('chat moderation', () => {
     const SPOKEN = { name: 'Ash', steamId: ASH };
 
-    it('reads the chat from the first check, without acting on what was said before the bot was there', async () => {
+    it('reads the chat at each check, an empty chat from the start', async () => {
       // An empty chat to start with: the first reading only finds where it is. (With lines already said, it keeps them
       // for /chat and acts on none; chatmod.test.ts covers that.)
       expect(rcon.chat).toEqual([]);
@@ -386,7 +403,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       rcon.requests.length = 0;
       expect(await runCron()).toMatchObject({ outcome: 'ok' });
       expect(rcon.requests).toContain('GET /v1/chat?after=0&limit=200');
-      expect(rcon.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
+      expect(rcon.requests.filter((r) => r.startsWith('POST') && !r.includes('/v1/config'))).toEqual([]);
       expect(errors()).toEqual([]);
     });
 
@@ -437,10 +454,31 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
       });
       expect(reply.status).toBe(200);
       expect(reply.body.content).toContain('Latest chat from "bo"');
-      expect(reply.body.content).toContain('**Bo**: kys lol');
-      expect(reply.body.content).toContain('**Bo**: k y s');
+      expect(reply.body.content).toContain('**Bo** (All, Valkyra): kys lol');
+      expect(reply.body.content).toContain('**Bo** (All, Valkyra): k y s');
       expect(reply.body.content).not.toContain('**Ash**');
       expect(errors()).toEqual([]);
+    });
+
+    it('gives staff the live chat with each verdict, after a cursor, and nobody else', async () => {
+      const staffer = { id: '100000000000000003', name: 'Staffer' };
+      const asStaff = { authorization: `Bearer ${await createSession(CLIENT_SECRET, staffer, Date.now())}` };
+      const feed = await json('/api/admin/chat?after=0', { headers: asStaff });
+      expect(feed.status).toBe(200);
+      expect(feed.body).toMatchObject({ enabled: true, available: true, cursor: 5 });
+      const byId = Object.fromEntries(feed.body.lines.map((l: { id: number }) => [l.id, l]));
+      expect(byId[1].verdict).toEqual({ kind: 'clean', action: 'none' });
+      expect(byId[2]).toMatchObject({ name: 'Ash', steamId: ASH, verdict: { kind: 'exact', list: 'racism', word: 'nigger', action: 'banned' } });
+      expect(byId[3].verdict).toMatchObject({ kind: 'exact', list: 'toxicity', action: 'warned' });
+      expect(byId[5].verdict).toMatchObject({ kind: 'fuzzy', word: 'kys', action: 'alert' });
+      // Bo was warned for line 3, so the fuzzy line 4 in the same check is folded into it or only noted.
+      expect(['alert', 'folded']).toContain(byId[4].verdict.action);
+
+      expect((await json('/api/admin/chat?after=4', { headers: asStaff })).body.lines.map((l: { id: number }) => l.id)).toEqual([5]);
+      expect((await json('/api/admin/chat?after=5', { headers: asStaff })).body.lines).toEqual([]);
+      expect((await json('/api/admin/chat?after=-1', { headers: asStaff })).status).toBe(400);
+      expect((await json('/api/admin/chat?after=x', { headers: asStaff })).status).toBe(400);
+      expect((await server.fetch('/api/admin/chat?after=0')).status).toBe(401);
     });
   });
 
@@ -645,6 +683,7 @@ describe('the Worker in workerd', { timeout: 30_000 }, () => {
 
     it('gives every staff route to staff only: no session, a player session, a forged one and a session for the wrong thing are all refused', async () => {
       const routes: [string, string][] = [
+        ['GET', '/api/admin/chat?after=0'],
         ['GET', '/api/admin/chatwords'],
         ['GET', '/api/admin/commands'],
         ['GET', '/api/admin/growth'],

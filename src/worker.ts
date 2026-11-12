@@ -136,16 +136,21 @@ import {
   compileWords,
   editWords,
   hasChatRoute,
-  judgeChat,
+  chatFeed,
+  judgeLines,
   parseChatState,
   parseChatWords,
   readChat,
   readWordsAction,
+  withVerdicts,
   WARNING_TEXT,
   type ChatCall,
+  type ChatEntry,
+  type ChatFeed,
   type ChatWords,
   type CompiledWords,
   type WordsAction,
+  type Verdict,
   type WordsPage,
 } from './chatmod.ts';
 import { addMember, isMember as botIsMember, sendDirectMessage, setRole } from './accountsdiscord.ts';
@@ -371,7 +376,6 @@ import {
   removeBan,
   sendBroadcast,
   validateConfig,
-  type ChatLine,
   type HttpClient,
   type Rotation,
   type ServerConfig,
@@ -806,6 +810,9 @@ const BAN_WATCH_MS = 10 * 60_000;
 
 const withoutId = ({ steamId: _id, ...rest }: RankedPlayer): PlayerTotals => rest;
 
+// The live chat reads the chat when the last reading is this old.
+const CHAT_LIVE_MS = 3_000;
+
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 // What the Worker hands the Durable Object of a kill feed batch (see parseFeed).
@@ -920,6 +927,10 @@ export class Watcher extends DurableObject<Env> {
   // logged about the chat, and when, so a server that cannot give it does not fill the logs each minute.
   private chatRoute: { listed: boolean; at: number } | null = null;
   private chatTold = new Map<string, number>();
+  // Reading the chat runs one at a time (the check, and staff watching the live chat), and the live chat does not make the
+  // bot read it more often than every few seconds.
+  private chatLocked = oneAtATime();
+  private chatReadAt = 0;
   // Kill feed batches are checked against the weapon rules one at a time, so two batches close together never count
   // one offence twice.
   private enforcing = oneAtATime();
@@ -1427,7 +1438,7 @@ export class Watcher extends DurableObject<Env> {
     await this.checkHeadshots(seen.snapshot);
     await this.checkAutoFlags(seen.snapshot);
     await this.watchFeed(config, seen.snapshot);
-    await this.moderateChat(config).catch((error: unknown) => console.error(`Chat moderation failed: ${errorText(error)}`));
+    await this.chatLocked(() => this.moderateChat(config)).catch((error: unknown) => console.error(`Chat moderation failed: ${errorText(error)}`));
 
     const { inviteCode } = config;
     const { botToken } = config.accounts;
@@ -2704,8 +2715,19 @@ export class Watcher extends DurableObject<Env> {
   }
 
   // The latest chat the bot read, for /chat.
-  async recentChat(): Promise<ChatLine[]> {
+  async recentChat(): Promise<ChatEntry[]> {
     return parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY)).buffer;
+  }
+
+  // The staff page's live chat: the lines after `after`, each with its verdict. The bot reads the chat for it when the
+  // last reading is a few seconds old, and acts on what it reads as at any check, so watching does not slow moderation.
+  async chatFeed(after: number): Promise<ChatFeed> {
+    const config = loadConfig(stringVars(this.env));
+    if (config.chatMod && Date.now() - this.chatReadAt >= CHAT_LIVE_MS) {
+      await this.chatLocked(() => this.moderateChat(config)).catch((error: unknown) => console.error(`Chat moderation failed: ${errorText(error)}`));
+    }
+    const state = parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY));
+    return chatFeed(state, after, { enabled: config.chatMod, available: this.chatRoute?.listed !== false });
   }
 
   // Logs a message about the chat at most once an hour.
@@ -2723,6 +2745,7 @@ export class Watcher extends DurableObject<Env> {
   private async moderateChat(config: Config): Promise<void> {
     if (!config.chatMod) return;
     const now = Date.now();
+    this.chatReadAt = now;
     const { rconUrl, rconPassword } = config;
     const http = socketHttp(connect);
     if (this.chatRoute === null || (!this.chatRoute.listed && now - this.chatRoute.at >= 60 * 60_000)) {
@@ -2748,18 +2771,32 @@ export class Watcher extends DurableObject<Env> {
       return;
     }
     if (reading.skipped > 0) this.tellChat(`Chat moderation: ${reading.skipped} lines of the chat answer could not be read (no id or no text).`, now);
-    await this.ctx.storage.put(CHAT_STATE_KEY, reading.state);
+    // Judged before anything is done, and saved with the cursor, so a line is never acted on twice.
+    const { calls, verdicts } = judgeLines(
+      reading.first ? reading.lines : reading.fresh,
+      await this.chatCompiled(),
+      await this.staffSteam(),
+      config.chatActions,
+      reading.first,
+    );
+    const state = { ...reading.state, buffer: withVerdicts(reading.state.buffer, verdicts) };
+    await this.ctx.storage.put(CHAT_STATE_KEY, state);
     if (reading.first) {
-      console.info(`Chat moderation: started at line ${reading.state.cursor ?? 0}, with ${reading.state.buffer.length} earlier lines kept and not acted on`);
+      console.info(`Chat moderation: started at line ${state.cursor ?? 0}, with ${state.buffer.length} earlier lines kept and not acted on`);
     }
-    if (reading.fresh.length === 0) return;
-    const calls = judgeChat(reading.fresh, await this.chatCompiled(), await this.staffSteam(), config.chatActions);
+    const failed = new Map<number, Verdict>();
     for (const call of calls) {
       try {
         await this.actOnChat(config, http, call, now);
       } catch (error) {
         console.error(`Chat moderation: ${call.kind} for ${JSON.stringify(call.line.name)} (${call.line.steamId ?? 'no Steam ID'}) failed: ${errorText(error)}. ${callEvidence(call)}`);
+        const was = verdicts.get(call.line.id);
+        if (was !== undefined && call.kind !== 'alert') failed.set(call.line.id, { ...was, action: 'failed' });
       }
+    }
+    if (failed.size > 0) {
+      const latest = parseChatState(await this.ctx.storage.get(CHAT_STATE_KEY));
+      await this.ctx.storage.put(CHAT_STATE_KEY, { ...latest, buffer: withVerdicts(latest.buffer, failed) });
     }
   }
 
@@ -6230,6 +6267,17 @@ const staffApi = async (request: Request, vars: Record<string, string>, watcher:
     } catch (error) {
       console.error(`Staff page weapon rules failed: ${errorText(error)}`);
       return Response.json({ error: "Couldn't reach the weapon rules right now. If it was a change, check before trying again." }, { status: 503, headers });
+    }
+  }
+  // The live chat: the lines after `after` with their verdicts. Staff only, like the rest of /api/admin.
+  if (route === 'GET /api/admin/chat') {
+    const after = Number(new URL(request.url).searchParams.get('after') ?? 0);
+    if (!Number.isSafeInteger(after) || after < 0) return Response.json({ error: 'Not a chat cursor' }, { status: 400, headers });
+    try {
+      return Response.json(await watcher().chatFeed(after), { headers });
+    } catch (error) {
+      console.error(`Staff page live chat failed: ${errorText(error)}`);
+      return Response.json({ error: "Couldn't read the chat right now." }, { status: 503, headers });
     }
   }
   // The Chat filter tab: the word lists chat moderation uses, and a change to them.

@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   banReasonText,
   buildWordsPage,
+  chatFeed,
+  judgeLines,
+  withVerdicts,
   callEvidence,
   chatReply,
   compileWords,
@@ -20,6 +23,7 @@ import {
   wordProblem,
   wordsIn,
   type ChatState,
+  type Verdict,
   type ChatWords,
 } from '../src/chatmod.ts';
 import { DEFAULT_ALLOWED, DEFAULT_RACISM, DEFAULT_TOXICITY } from '../src/chatwords.ts';
@@ -342,7 +346,13 @@ describe('what the bot does about a batch', () => {
 });
 
 describe('following the chat', () => {
-  const page = (all: ChatLine[], skipped = 0) => vi.fn(async (after: number, limit: number) => ({ lines: all.filter((l) => l.id > after).slice(0, limit), skipped }));
+  // The server as it really is: `after` is inclusive (after=57 sends line 57 again) and the answer has `latestSeq`.
+  const page = (all: ChatLine[], skipped = 0, latest: number | null | 'newest' = 'newest') =>
+    vi.fn(async (after: number, limit: number) => ({
+      lines: all.filter((l) => l.id >= after).slice(0, limit),
+      skipped,
+      latest: latest === 'newest' ? Math.max(0, ...all.map((l) => l.id)) : latest,
+    }));
   const start: ChatState = { cursor: null, buffer: [] };
 
   it('on the first reading goes to the newest line without acting on the backlog', async () => {
@@ -353,15 +363,52 @@ describe('following the chat', () => {
     expect(reading.state.buffer.map((l) => l.id)).toEqual([5, 9]);
   });
 
-  it('pages on to the newest line when the first reading is more than one page', async () => {
+  it('starts from latestSeq on the first reading, and keeps only the last few lines for /chat', async () => {
     const all = Array.from({ length: 450 }, (_, i) => line(i + 1, `line ${i + 1}`));
     const ask = page(all);
     const reading = await readChat(start, ask);
     expect(reading.state.cursor).toBe(450);
     expect(reading.fresh).toEqual([]);
-    expect(reading.state.buffer).toHaveLength(200);
+    expect(reading.state.buffer).toHaveLength(50);
+    expect(reading.state.buffer[0]?.id).toBe(401);
     expect(reading.state.buffer.at(-1)?.id).toBe(450);
-    expect(ask.mock.calls.map(([after]) => after)).toEqual([0, 200, 400]);
+    expect(ask.mock.calls).toEqual([
+      [0, 1],
+      [400, 200],
+    ]);
+  });
+
+  it('starts from latestSeq even when the lines cannot be read after it', async () => {
+    let calls = 0;
+    const reading = await readChat(start, async () => {
+      if (calls++ > 0) throw new Error('down');
+      return { lines: [line(1, 'old')], skipped: 0, latest: 88 };
+    });
+    expect(reading.state).toEqual({ cursor: 88, buffer: [] });
+    expect(reading.fresh).toEqual([]);
+  });
+
+  it('reads on page by page to the newest line when the server gives no latestSeq', async () => {
+    const all = Array.from({ length: 450 }, (_, i) => line(i + 1, `line ${i + 1}`));
+    const reading = await readChat(start, page(all, 0, null));
+    expect(reading.state.cursor).toBe(450);
+    expect(reading.fresh).toEqual([]);
+    expect(reading.state.buffer.at(-1)?.id).toBe(450);
+  });
+
+  it('is not given the cursor line again when the server repeats it (after is inclusive), so it is never acted on twice', async () => {
+    const all = [line(56, 'a'), line(57, 'kys'), line(58, 'b')];
+    const ask = page(all);
+    const first = await readChat({ cursor: 57, buffer: [] }, ask);
+    expect(ask).toHaveBeenCalledWith(57, 200);
+    expect(first.fresh.map((l) => l.id)).toEqual([58]);
+    // Nothing new: the server sends the cursor's own line and nothing else.
+    const idle = await readChat(first.state, page(all));
+    expect(idle.fresh).toEqual([]);
+    expect(idle.state.cursor).toBe(58);
+    expect(idle.state.buffer.map((l) => l.id)).toEqual([58]);
+    const repeat = await readChat({ cursor: 57, buffer: [] }, page([line(57, 'nigger')]));
+    expect(repeat.fresh).toEqual([]);
   });
 
   it('starts at the beginning when the first reading finds no chat, so what comes next is acted on', async () => {
@@ -383,7 +430,7 @@ describe('following the chat', () => {
   });
 
   it('asks after the cursor, and ignores lines at or before it even if the server sends them', async () => {
-    const ask = vi.fn(async () => ({ lines: [line(3, 'old'), line(4, 'new')], skipped: 0 }));
+    const ask = vi.fn(async () => ({ lines: [line(3, 'old'), line(4, 'new')], skipped: 0, latest: 4 }));
     const reading = await readChat({ cursor: 3, buffer: [] }, ask);
     expect(ask).toHaveBeenCalledWith(3, 200);
     expect(reading.fresh.map((l) => l.id)).toEqual([4]);
@@ -403,7 +450,7 @@ describe('following the chat', () => {
     let calls = 0;
     const reading = await readChat({ cursor: 0, buffer: [] }, async (after, limit) => {
       if (calls++ > 0) throw new Error('down');
-      return { lines: all.filter((l) => l.id > after).slice(0, limit), skipped: 0 };
+      return { lines: all.filter((l) => l.id >= after).slice(0, limit), skipped: 0, latest: null };
     });
     expect(reading.fresh).toHaveLength(200);
     expect(reading.state.cursor).toBe(200);
@@ -467,5 +514,111 @@ describe('/chat', () => {
     const reply = chatReply(many, undefined, 50);
     expect(reply.length).toBeLessThanOrEqual(2000);
     expect(reply.split('\n').length).toBeGreaterThan(2);
+  });
+});
+
+describe('the verdict kept with each line', () => {
+  const none = new Set<string>();
+  const verdictsOf = (lines: ChatLine[], staff = none, actions = true, backlog = false) =>
+    Object.fromEntries([...judgeLines(lines, compiled, staff, actions, backlog).verdicts].map(([id, v]) => [id, v]));
+
+  it('says clean, exact or fuzzy, the word, and what the bot did', () => {
+    expect(verdictsOf([line(1, 'gg'), line(2, 'you nigger', BO), line(3, 'kys'), line(4, 'k y s', BO)])).toEqual({
+      1: { kind: 'clean', action: 'none' },
+      2: { kind: 'exact', list: 'racism', word: 'nigger', action: 'banned' },
+      3: { kind: 'exact', list: 'toxicity', word: 'kys', action: 'warned' },
+      // Bo is banned for the line before: this one is only noted.
+      4: { kind: 'fuzzy', list: 'toxicity', word: 'kys', action: 'alert' },
+    });
+  });
+
+  it('says staff, actions off, no player and folded', () => {
+    expect(verdictsOf([line(1, 'kys')], new Set([ASH]))[1]).toMatchObject({ kind: 'exact', action: 'staff' });
+    expect(verdictsOf([line(1, 'kys')], none, false)[1]).toMatchObject({ action: 'actions-off' });
+    expect(verdictsOf([line(1, 'kys', null, 'Server')])[1]).toMatchObject({ action: 'no-player' });
+    const folded = verdictsOf([line(1, 'kys'), line(2, 'kys again'), line(3, 'nigger')]);
+    expect(folded[1]).toMatchObject({ action: 'folded' });
+    expect(folded[2]).toMatchObject({ action: 'folded' });
+    expect(folded[3]).toMatchObject({ action: 'banned' });
+  });
+
+  it('lists the other words a line holds', () => {
+    expect(verdictsOf([line(1, 'kys nigger')])[1]).toEqual({ kind: 'exact', list: 'racism', word: 'nigger', others: ['kys'], action: 'banned' });
+  });
+
+  it('marks the backlog as not acted on, with no calls', () => {
+    const judged = judgeLines([line(1, 'nigger')], compiled, none, true, true);
+    expect(judged.calls).toEqual([]);
+    expect(judged.verdicts.get(1)).toMatchObject({ kind: 'exact', action: 'backlog' });
+  });
+
+  it('is kept in the saved state, and a failed action can be put on a line', () => {
+    const verdict: Verdict = { kind: 'exact', list: 'racism', word: 'nigger', action: 'banned' };
+    const buffer = withVerdicts([kept(line(1, 'a')), kept(line(2, 'nigger'))], new Map([[2, verdict]]));
+    expect(buffer[0]?.verdict).toBeUndefined();
+    expect(parseChatState({ cursor: 2, buffer })).toEqual({ cursor: 2, buffer });
+    expect(withVerdicts(buffer, new Map([[2, { ...verdict, action: 'failed' as const }]]))[1]?.verdict?.action).toBe('failed');
+    expect(parseChatState({ cursor: 2, buffer: [{ ...kept(line(1, 'a')), verdict: { kind: 'odd', action: 'banned' } }] })).toEqual({ cursor: null, buffer: [] });
+  });
+
+  it('shows in /chat', () => {
+    const buffer = withVerdicts(
+      [kept(line(1, 'you nigger')), kept(line(2, 'k y s', BO, 'Bo')), kept(line(3, 'gg'))],
+      new Map<number, Verdict>([
+        [1, { kind: 'exact', list: 'racism', word: 'nigger', action: 'banned' }],
+        [2, { kind: 'fuzzy', list: 'toxicity', word: 'kys', action: 'alert' }],
+      ]),
+    );
+    const rows = chatReply(buffer, undefined).split('\n');
+    expect(rows).toContain('   ↳ 🚫 exact racism "nigger", banned');
+    expect(rows).toContain('   ↳ ❓ resembles "kys", alert only');
+    expect(rows.filter((r) => r.includes('↳'))).toHaveLength(2);
+  });
+});
+
+describe('the live chat feed', () => {
+  const state: ChatState = {
+    cursor: 5,
+    buffer: [1, 2, 3, 4, 5].map((id) => kept(line(id, `line ${id}`))),
+  };
+  const on = { enabled: true, available: true };
+
+  it('gives the lines after the cursor asked, oldest first, and the newest id', () => {
+    expect(chatFeed(state, 0, on).lines.map((l) => l.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(chatFeed(state, 3, on)).toMatchObject({ cursor: 5, enabled: true, available: true, lines: [{ id: 4 }, { id: 5 }] });
+    expect(chatFeed(state, 5, on).lines).toEqual([]);
+  });
+
+  it('says when nothing is read yet or the chat is not served', () => {
+    expect(chatFeed({ cursor: null, buffer: [] }, 0, { enabled: false, available: false })).toEqual({ enabled: false, available: false, cursor: null, lines: [] });
+    expect(chatFeed({ cursor: 0, buffer: [] }, 0, on).cursor).toBe(0);
+  });
+});
+
+describe('the text as typed, and names', () => {
+  const none = new Set<string>();
+
+  it('reads both what players saw and what was typed, and takes the more serious', () => {
+    const filtered: ChatLine = { ...line(1, 'you ******'), rawText: 'you nigger' };
+    const [call] = judgeChat([filtered], compiled, none, true);
+    expect(call).toMatchObject({ kind: 'ban', hit: { kind: 'exact', word: 'nigger' } });
+    // Exact in one reading and fuzzy in the other: exact.
+    const mixed: ChatLine = { ...line(2, 'n1gger', BO), rawText: 'nigger' };
+    expect(judgeLines([mixed], compiled, none, true).verdicts.get(2)).toMatchObject({ kind: 'exact', action: 'banned' });
+    const fuzzyOnly: ChatLine = { ...line(3, 'gg'), rawText: 'k y s' };
+    expect(judgeLines([fuzzyOnly], compiled, none, true).verdicts.get(3)).toMatchObject({ kind: 'fuzzy', word: 'kys' });
+  });
+
+  it('gives the line as typed as the evidence and the ban reason', () => {
+    const [call] = judgeChat([{ ...line(1, 'you ******'), rawText: 'you nigger' }], compiled, none, true);
+    expect(callEvidence(call!)).toBe('Chat: "you nigger" (matched "nigger" on the racism list)');
+    expect(banReasonText({ ...line(1, 'you ******'), rawText: 'you nigger' })).toBe('Racist language in chat: "you nigger"');
+  });
+
+  it('shows /chat the typed text, the name others saw, the channel, the faction and a ping', () => {
+    const entry = kept({ ...line(1, 'you ****', ASH, '[LAND] Ash'), rawText: 'you nigger', shownAs: 'Olive', channel: 'Team', faction: 'Lonestar', ping: true });
+    const rows = chatReply([entry], undefined).split('\n');
+    expect(rows[1]).toContain('**\\[LAND\\] Ash** (shown as Olive) (Team, Lonestar) 📣: you \\*\\*\\*\\*');
+    expect(rows[2]).toBe('   ↳ typed: you nigger');
   });
 });

@@ -1294,17 +1294,21 @@ const MAX_CHAT_SHOWN = 300;
 // to the log as a ban or a warning instead (see buildModLogMessage).
 export const buildChatAlert = (call: ChatCall, siteUrl?: string): DiscordMessage => {
   const { line, hit } = call;
-  const said = line.text.length > MAX_CHAT_SHOWN ? `${line.text.slice(0, MAX_CHAT_SHOWN - 1)}…` : line.text;
+  const cut = (text: string): string => (text.length > MAX_CHAT_SHOWN ? `${text.slice(0, MAX_CHAT_SHOWN - 1)}…` : text);
+  const said = cut(line.text);
+  const name = line.name ? `${playerName(line.name)}${line.shownAs ? ` (shown as ${playerName(line.shownAs)})` : ''}` : 'Unknown player';
+  const where = [line.channel, line.faction].filter((w): w is string => Boolean(w));
   const matched = `${hit.kind === 'exact' ? 'Exactly' : 'Resembles'} **${escapeMarkdown(hit.word)}** on the ${hit.list === 'racism' ? 'racism' : 'toxicity'} list`;
   const others = call.others.map((o) => escapeMarkdown(o.word));
   return {
     embeds: [
       {
-        title: `💬 Chat flagged · ${line.name ? playerName(line.name) : 'Unknown player'}`,
+        title: `💬 Chat flagged · ${name}`,
         ...staffPage(siteUrl),
         description: [
           ...(line.steamId === null ? [] : [steamLine(line.steamId)]),
-          `**Said:** ${escapeMarkdown(said)}`,
+          `**Said${where.length > 0 ? ` (${where.map(escapeMarkdown).join(', ')})` : ''}:** ${escapeMarkdown(said)}`,
+          ...(line.rawText === undefined ? [] : [`**Typed:** ${escapeMarkdown(cut(line.rawText))}`]),
           matched,
           ...(others.length === 0 ? [] : [`Also: ${others.join(', ')}`]),
           ...(call.more > 0 ? [`${plural(call.more, 'more line')} from them in the same minute`] : []),

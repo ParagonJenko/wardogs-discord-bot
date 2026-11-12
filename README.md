@@ -1486,14 +1486,30 @@ are in `src/chatwords.ts`; staff add to them and take words out on the staff pag
   never acted on twice, even after a restart, and a ban or warning that fails (the player just left) is logged
   (`Chat moderation: … failed`) and not tried again. A player with several lines in one check gets one action, for the
   most serious line, and the rest are counted in its detail.
-- **The first check** only finds the newest line: what was said before the bot first read the chat is kept for `/chat`
-  and never acted on.
+- **The first check** starts from the server's newest line number (`latestSeq`) and acts on nothing older; the last 50
+  lines are kept for `/chat` and the live chat, marked as said before the bot started. The game's `after` is inclusive
+  (`after=57` sends line 57 again), so the bot always drops lines at or before its cursor.
+- **What the game sends.** `GET /v1/chat` answers `{ latestSeq, count, messages: [{ seq, sentUtc, channel, faction,
+  steamId, realName, hiddenName, anonymous, text, rawText, ping }] }`; `parseChat` in `src/rcon.ts` reads exactly that
+  (extra fields are ignored, a line without `seq` or text is skipped and counted). The bot matches both `text` (as
+  players saw it) and `rawText` (as typed) and takes the more serious result; staff are shown the typed text when it
+  differs. Staff see `realName` (or `hiddenName` when there is none); for an anonymous line the name other players
+  saw is shown too ("[LAND] Agent Edward (shown as Olive)"). Bans and warnings go by `steamId`. `ping` lines are
+  marked, never acted on.
+- **Live chat.** The staff page's **Live chat** tab polls `GET /api/admin/chat?after=<seq>` every few seconds
+  (staff session only, like the rest of `/api/admin`). It returns `{ enabled, available, cursor, lines }`, each line
+  with its `verdict`: `{ kind: "clean" | "exact" | "fuzzy", list, word, others, action }`, where `action` is `banned`,
+  `warned`, `alert` (only posted), `staff` (no action), `actions-off`, `no-player`, `folded` (the player was acted on for
+  another line in the same check), `backlog`, `failed` or `none`. The verdict is saved with each line in the rolling
+  buffer (200 lines), so the tab and `/chat` show the same thing. When the last reading is 3 seconds old, a request from
+  the tab reads the chat itself (and acts on it, as any check does, one reading at a time), so watching it costs at
+  most one RCON request every 3 seconds however many staff watch.
 - **If the game has no chat route.** The bot looks for `GET /v1/chat` in `GET /v1/capabilities` (a server that does not
   list its routes is asked anyway), and treats a 404 as no route. It then does nothing, logs one line
   (`Chat moderation: the server does not list GET /v1/chat …`) and asks again an hour later. If the answer has no list
   of lines the logs say so (`The chat answer has no list of lines`).
 - **`/chat`** shows the last 200 lines the bot kept (text cut to 160 characters), newest last, with the time in your own
-  time. Staff only, and the reply is private.
+  time, the channel and faction, and for a flagged line what it matched and what the bot did. Staff only, and the reply is private.
 - **Switches**: `CHAT_MOD` (`"on"` by default) turns reading the chat, the alerts and `/chat` on or off.
   `CHAT_MOD_ACTIONS` (`"on"` by default) is whether the bot also bans and warns on exact matches; with `"off"` those
   are posted for staff like fuzzy matches (the post says automatic actions are off). Both are on without being set, so

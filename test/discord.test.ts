@@ -1816,6 +1816,13 @@ describe('buildChatAlert', () => {
     expect(message.allowed_mentions).toEqual({ parse: [], roles: [] });
   });
 
+  it('shows the channel, the faction, the name others saw and the line as typed', () => {
+    const embed = buildChatAlert({ ...call, line: { ...line, name: '[LAND] Ash', shownAs: 'Olive', channel: 'Team', faction: 'Lonestar', text: 'you ****', rawText: 'you k y s' } }).embeds?.[0];
+    expect(embed?.title).toBe('💬 Chat flagged · \\[LAND\\] Ash (shown as Olive)');
+    expect(embed?.description).toContain('**Said (Team, Lonestar):** you \\*\\*\\*\\*');
+    expect(embed?.description).toContain('**Typed:** you k y s');
+  });
+
   it('says when a staff member said it, nobody is behind the line, or actions are off', () => {
     const why = (w: 'staff' | 'no-player' | 'actions-off', hit: 'exact' | 'fuzzy' = 'exact') =>
       buildChatAlert({ ...call, why: w, hit: { ...call.hit, kind: hit }, line: { ...line, steamId: w === 'no-player' ? null : line.steamId } }).embeds?.[0];
