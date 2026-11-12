@@ -66,6 +66,22 @@ describe('parseSavedLines', () => {
   });
 });
 
+describe('a saved welcome list from before', () => {
+  const old = { welcome: { lines: ['Hi {name}. Be nice.'], at: 1, by: '42', byName: 'Sarge' } };
+
+  it('is ignored: the bot says its own lines and the page has no list for it', () => {
+    const saved = parseSavedLines(old);
+
+    expect(resolveLines(saved)).toEqual(DEFAULT_LINES);
+    expect(buildLinesPage(saved, context).lists.map((l) => l.id)).not.toContain('welcome');
+    expect(buildLinesPage(saved, context).lists.every((l) => l.changed === null)).toBe(true);
+  });
+
+  it('does not break saving another list', () => {
+    expect(editLines(parseSavedLines(old), { action: 'save', list: 'seeding', lines: ['Seed: {needed}'] }, context, who)).toHaveProperty('saved');
+  });
+});
+
 describe('editLines', () => {
   it('saves a list with who changed it, tidying lines and dropping blank ones', () => {
     expect(save({}, 'halfway.valkyra', ['  Red  leads\n on {score}. ', '', '   ', '{team} again'])).toEqual({
@@ -93,13 +109,17 @@ describe('editLines', () => {
     });
   });
 
-  it('refuses a welcome line too long for the game with the Discord and website after it', () => {
-    const room = 200 - ' Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com'.length;
+  it('refuses a welcome back line too long for the game with the Discord and website after it', () => {
+    const room = 200 - ' Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com'.length - '{name}'.length - '{rank}'.length;
+    const fits = (long: number) => `{name}{rank}${'x'.repeat(long)}`;
 
-    expect(save({}, 'welcome', ['x'.repeat(room)])).toHaveProperty('saved');
-    expect(save({}, 'welcome', ['x'.repeat(room + 1)])).toEqual({
-      problem: 'Line 1 is 1 character too long for the game, with what the bot adds to it.',
-    });
+    expect(save({}, 'welcomeBack', [fits(room - NAME_LONGEST - 20)])).toHaveProperty('saved');
+    expect(save({}, 'welcomeBack', [fits(room + 1)])).toHaveProperty('problem');
+  });
+
+  it('has no list for the old everyone welcome', () => {
+    expect(save({}, 'welcome', ['Hi'])).toHaveProperty('problem');
+    expect(buildLinesPage({}, context).lists.map((l) => l.id)).not.toContain('welcome');
   });
 
   it('checks end-of-match lines with {earned} at the longest it can be', () => {
@@ -215,8 +235,8 @@ describe('buildLinesPage', () => {
     expect(page.lists.find((l) => l.id === 'tenMinutes')?.off).toBe(
       'The bot is not sending match messages: MATCH_MESSAGES is off, or SITE_URL is not set.',
     );
-    expect(page.lists.find((l) => l.id === 'welcome')?.after).toBe(' Discord: discord.gg/qsJFYGhSJ4');
-    expect(buildLinesPage({}, { ...context, welcome: false }).lists.find((l) => l.id === 'welcome')?.off).toBe(
+    expect(page.lists.find((l) => l.id === 'welcomeBack')?.after).toBe(' Discord: discord.gg/qsJFYGhSJ4');
+    expect(buildLinesPage({}, { ...context, welcome: false }).lists.find((l) => l.id === 'welcomeBack')?.off).toBe(
       'The bot is not sending welcomes: WELCOME_MESSAGE_MINUTES is 0.',
     );
     expect(buildLinesPage({}, { ...context, end: false }).lists.find((l) => l.id === 'matchEnd')?.off).toBe(
@@ -257,7 +277,7 @@ describe('buildLinesPage', () => {
     );
     expect(seedingMessage(1, 20, { everyMs: 1, siteHost: 'gaminginit.com' }, vip, first)).toBe(shown('seeding', DEFAULT_LINES.seeding[0] ?? ''));
     const welcome = { afterMs: 1, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
-    expect(welcomeMessage(welcome, first, undefined, {}, { name: 'Ghost', rank: null })).toBe(shown('welcome', DEFAULT_LINES.welcome[0] ?? ''));
+    expect(welcomeMessage(welcome, first, undefined, {}, { name: 'Ghost', rank: null })).toBeNull();
     expect(welcomeMessage(welcome, first, undefined, {}, { name: 'Ghost', rank: '3rd for kills' })).toBe(
       shown('welcomeBack', DEFAULT_LINES.welcomeBack[0] ?? ''),
     );

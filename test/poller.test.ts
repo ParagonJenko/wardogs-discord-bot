@@ -1018,8 +1018,10 @@ describe('poller stats', () => {
 describe('welcomes', () => {
   const welcome = { afterMs: 2 * 60_000, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
   const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => player(id)) as [Player, Player, Player, Player];
-  const rulesFor = (id: string) => (DEFAULT_LINES.welcome[0] ?? '').replace('{name}', `P${id}`);
-  const textFor = (id: string) => `${rulesFor(id)} Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com`;
+  // Everyone is on the leaderboard unless a test says who is: a player who is not gets no welcome.
+  const backFor = (id: string) => (DEFAULT_LINES.welcomeBack[0] ?? '').replace('{name}', `P${id}`).replace('{rank}', '2nd for kills');
+  const everyone = async () => new Map(['a', 'b', 'c', 'd'].map((id) => [id, '2nd for kills'] as const));
+  const textFor = (id: string) => `${backFor(id)} Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com`;
 
   // A minute a check; records the minute, the player and the message of each welcome.
   const welcomePoller = (
@@ -1047,10 +1049,10 @@ describe('welcomes', () => {
       store,
       messagePlayer,
       random: () => 0,
-      // One welcome line unless a test gives its own, so each player's welcome is known.
-      lines: lines ?? (async () => ({ ...DEFAULT_LINES, welcome: DEFAULT_LINES.welcome.slice(0, 1) })),
+      // One welcome back line unless a test gives its own, so each player's welcome is known.
+      lines: lines ?? (async () => ({ ...DEFAULT_LINES, welcomeBack: DEFAULT_LINES.welcomeBack.slice(0, 1) })),
       ...(linked === undefined ? {} : { linked }),
-      ...(ranks === undefined ? {} : { ranks }),
+      ranks: ranks ?? everyone,
       ...(nudging ?? {}),
     });
     const run = async (times: number) => {
@@ -1059,7 +1061,7 @@ describe('welcomes', () => {
     return { run, sent, messagePlayer, log, store };
   };
 
-  it('sends each player who joins the rules, the Discord and the website, privately, 2 minutes after the bot sees them', async () => {
+  it('sends each player on the leaderboard who joins their welcome back, the Discord and the website, privately, 2 minutes after the bot sees them', async () => {
     // a and b are on when the bot starts; c joins by minute 2, d by minute 3.
     const { run, sent, log } = welcomePoller([
       snapshot([a, b]),
@@ -1089,13 +1091,28 @@ describe('welcomes', () => {
 
     await run(7);
 
-    const back = (DEFAULT_LINES.welcomeBack[0] ?? '').replace('{name}', 'Pc').replace('{rank}', '2nd for kills');
-    expect(sent).toEqual([
-      [4, 'c', `${back} Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com`],
-      [5, 'd', textFor('d')],
-    ]);
+    // d is not on the leaderboard: no welcome, and not asked again later.
+    expect(sent).toEqual([[4, 'c', textFor('c')]]);
     // Only read when a welcome is due.
     expect(ranks).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends a plain new player no welcome, and does not try again', async () => {
+    const { run, sent, messagePlayer, store } = welcomePoller(
+      [snapshot([a, b]), snapshot([a, b, c]), ...Array.from({ length: 8 }, () => snapshot([a, b, c]))],
+      {},
+      undefined,
+      undefined,
+      async () => new Map(),
+    );
+
+    await run(10);
+
+    expect(sent).toEqual([]);
+    expect(messagePlayer).not.toHaveBeenCalled();
+    const watch = (await store.load())?.welcomes;
+    expect(watch?.waiting).toEqual({});
+    expect(Object.keys(watch?.welcomed ?? {})).toContain('c');
   });
 
   it('asks a regular who has not linked to, and says who was asked', async () => {
@@ -1112,14 +1129,11 @@ describe('welcomes', () => {
     await run(7);
 
     const ask = (DEFAULT_LINES.linkNudge[0] ?? '').replace('{name}', 'Pc').replace('{site}', 'gaminginit.com');
-    expect(sent).toEqual([
-      [4, 'c', `${ask} Discord: discord.gg/qsJFYGhSJ4`],
-      [5, 'd', textFor('d')],
-    ]);
+    expect(sent).toEqual([[4, 'c', `${ask} Discord: discord.gg/qsJFYGhSJ4`]]);
     expect(nudged.mock.calls).toEqual([[['c']]]);
   });
 
-  it('still welcomes everyone when it cannot read the leaderboard', async () => {
+  it('sends no welcome when it cannot read the leaderboard', async () => {
     const { run, sent, log } = welcomePoller(
       [snapshot([a, b]), snapshot([a, b, c]), ...Array.from({ length: 4 }, () => snapshot([a, b, c]))],
       {},
@@ -1132,7 +1146,7 @@ describe('welcomes', () => {
 
     await run(5);
 
-    expect(sent).toEqual([[4, 'c', textFor('c')]]);
+    expect(sent).toEqual([]);
     expect(log.error).toHaveBeenCalledWith('Reading the leaderboard failed, so welcomes leave it out: storage down');
   });
 
@@ -1147,7 +1161,7 @@ describe('welcomes', () => {
     await run(7);
 
     expect(sent).toEqual([
-      [4, 'c', `${rulesFor('c')} Stats: gaminginit.com`],
+      [4, 'c', `${backFor('c')} Stats: gaminginit.com`],
       [5, 'd', textFor('d')],
     ]);
   });
@@ -1198,12 +1212,12 @@ describe('welcomes', () => {
   it("says staff's welcome lines", async () => {
     const { run, sent } = welcomePoller([snapshot([]), snapshot([a]), snapshot([a]), snapshot([a])], {}, async () => ({
       ...DEFAULT_LINES,
-      welcome: ['Hi! Be nice.'],
+      welcomeBack: ['Hi {name}! {rank}.'],
     }));
 
     await run(4);
 
-    expect(sent).toEqual([[4, 'a', 'Hi! Be nice. Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com']]);
+    expect(sent).toEqual([[4, 'a', 'Hi Pa! 2nd for kills. Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com']]);
   });
 
   it('logs a failed welcome and does not send it again', async () => {

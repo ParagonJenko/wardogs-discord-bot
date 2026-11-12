@@ -9,7 +9,8 @@ import type { MatchState } from './tracking.ts';
 // seeder rewards: 10 minutes after the match goes live, when a team is halfway to winning (with a line about the team
 // in front), and when the first team is close to winning. Each goes out once per match. While the server seeds, a
 // seeding message goes out every few minutes too, and 30 seconds after someone joins. And each player who joins gets
-// a welcome of their own, a private message with the basic rules, the Discord and the website. When a match is won, its
+// a welcome back of their own when they are on the leaderboard, a private message with their place, the Discord and the
+// website (calls to action only: the server's welcome popup shows the rules). When a match is won, its
 // best players get a private message too (see matchend.ts).
 
 // `vote` is true while the next-map vote runs each match (see mapvote.ts): the halfway and nearly messages then send people
@@ -334,23 +335,21 @@ export const leaderboardPlaces = (board: Pick<Leaderboard, BoardKey>): Map<strin
 export type Welcomed = { name: string; rank: string | null; nudge?: boolean };
 
 // A regular who should link their account is asked to (it names the website, so only the Discord goes after it); a
-// player on the leaderboard gets the welcome back; everyone else the welcome. Each only when there are lines for it.
+// player on the leaderboard gets the welcome back; everyone else gets nothing (null). Each only when there are lines for it.
 export const welcomePick = (
   rule: WelcomeRule,
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
   recent: Recent = {},
   who: Welcomed = { name: '', rank: null },
-): Picked => {
+): Picked | null => {
   const name = nameOf(who.name);
   if (who.nudge === true && rule.siteHost !== null && lines.linkNudge.length > 0) {
     const pick = pickLine('linkNudge', lines.linkNudge, { name, site: rule.siteHost }, random, recent);
     return { ...pick, text: fit(`${pick.text}${welcomeLinks(null, rule.discord)}`) };
   }
-  const pick =
-    who.rank !== null && lines.welcomeBack.length > 0
-      ? pickLine('welcomeBack', lines.welcomeBack, { name, rank: who.rank }, random, recent)
-      : pickLine('welcome', lines.welcome, { name }, random, recent);
+  if (who.rank === null || lines.welcomeBack.length === 0) return null;
+  const pick = pickLine('welcomeBack', lines.welcomeBack, { name, rank: who.rank }, random, recent);
   return { ...pick, text: fit(`${pick.text}${welcomeLinks(rule.siteHost, rule.discord)}`) };
 };
 
@@ -393,13 +392,14 @@ export const seederThanks = (
   return { messages, recent: lately };
 };
 
+// The welcome as text, or null when this player gets none.
 export const welcomeMessage = (
   rule: WelcomeRule,
   random: () => number = Math.random,
   lines: Lines = DEFAULT_LINES,
   recent: Recent = {},
   who?: Welcomed,
-): string => welcomePick(rule, random, lines, recent, who).text;
+): string | null => welcomePick(rule, random, lines, recent, who)?.text ?? null;
 
 // Who was in game at the last reading (Steam IDs); who joined and is still waiting for their welcome, with when the bot
 // first saw them; and who was welcomed in the last WELCOME_AGAIN_MS, or was on when the bot started watching, with when.

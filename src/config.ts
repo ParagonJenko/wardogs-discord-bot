@@ -178,8 +178,9 @@ const EnvSchema = z
     // While the server seeds, an in-game message about seeding and what it earns, every this many minutes and 30 seconds
     // after someone joins. 0 turns both off.
     SEEDING_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(5),
-    // A private message to each player this many minutes after they join, with the basic rules, the Discord
-    // (DISCORD_INVITE) and the website (SITE_URL). 0 turns it off.
+    // A private message to each player on the leaderboard (or a regular to ask to link their account) this many minutes
+    // after they join, with the Discord (DISCORD_INVITE) and the website (SITE_URL). Calls to action only: the server's
+    // welcome popup shows the rules. 0 turns it off.
     WELCOME_MESSAGE_MINUTES: z.coerce.number().int().min(0).default(2),
     // The moment a team wins a match, a private message to this many of the top players on its scoreboard, with where
     // they finished and the website (SITE_URL) for their stats. Needs SITE_URL. 0 sends none.
