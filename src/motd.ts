@@ -101,6 +101,7 @@ export const checkMotdLine = (line: string): { visible: number; problems: string
       const end = line.indexOf('>', i);
       if (end === -1) {
         add('A "<" with no ">" after it. To show it, write &lt;.');
+        visible += 1;
         i += 1;
         continue;
       }

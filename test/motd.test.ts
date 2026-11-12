@@ -106,6 +106,25 @@ describe('the validator', () => {
     expect(checkMotdLine('\u{1F600}x').visible).toBe(2);
   });
 
+  it('accepts the website rules message the staff site starts from', () => {
+    const rules = [
+      '<Header>Welcome to gaminginit</>',
+      '<text color="#E8A33D" size="16" fontface="Bold">Play hard, play fair.</>',
+      '',
+      '<text size="20" fontface="Bold" color="#FF4D4D">SERVER RULES</>',
+      '<Bold>1. No cheats</> - no aimbots, wallhacks or any other hacks.',
+      '<text color="#6BE38A" fontface="Bold">Admins have the final say.</> Breaking the rules can get you warned, kicked or banned.',
+      'Think a call was wrong? Ask in our Discord: <text color="#7FD6FF">discord.gg/qsJFYGhSJ4</>',
+      '<Italic>Have fun &amp; good hunting!</>',
+    ];
+    expect(validateMotd(rules)).toEqual([]);
+    expect(parseMotd(setMotd(FILE, true, rules)).lines).toEqual(rules);
+  });
+
+  it('counts a "<" with no ">" as a character shown', () => {
+    expect(checkMotdLine('a < b')).toMatchObject({ visible: 5 });
+  });
+
   it('allows 128 characters and refuses 129', () => {
     expect(problems('a'.repeat(128))).toEqual([]);
     expect(problems(`<Bold>${'a'.repeat(128)}</>`)).toEqual([]);
