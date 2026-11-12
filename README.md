@@ -370,7 +370,7 @@ The Node/Docker version does not serve the season roundups.
 | `/moveclan`     | Staff only           | Moves everyone in game whose name starts with a clan tag (`clan`, such as `WD`) to a team (`team`) and respawns them |
 | `/ban`          | Staff only           | Bans a player for 1 hour, 1 day, 3 days, 7 days, 30 days or for good, with a reason |
 | `/unban`        | Staff only           | Lifts a ban                                                        |
-| `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, lighting and zones, without changing the rotation |
+| `/setnextmap`   | Staff only           | Sets the map after this match, and optionally its mode, infantry only, hardcore, limited gear, lighting and zones, without changing the rotation |
 | `/changemap`    | Staff only           | Ends the current match now and changes to the map, with the same options |
 | `/lighting`     | Staff only           | Changes the time of day and weather of the match on now, without a map change |
 | `/vip add`      | Staff only           | Gives a player a whitelist slot for 1–365 days, or for good with `permanent`, with a reason: Friend, Regular, Seeder, Paid or Other |
@@ -499,6 +499,7 @@ works when it matches exactly one player.
   | `mode`          | The game mode, from the modes that map has                                |
   | `infantry_only` | Infantry only: on or off                                                  |
   | `hardcore`      | Hardcore: on or off                                                       |
+  | `limited_gear`  | Limited gear: on or off                                                   |
   | `lighting`      | Time of day and weather                                                   |
   | `zones`         | The control-zone layout, from the layouts that map has                    |
 
@@ -659,7 +660,7 @@ Setting up a weekend rotation, for example (every other day keeps playing Defaul
   rotation on straight away too, and so does deleting today's rotation (Default goes on).
 - **Changing today's rotation** (its maps, or their order) puts it on the server again, from its first map, unless it
   has no maps left: the bot never leaves the server without a rotation.
-- In `add`, anything left out is the map's own: its first game mode, infantry only and hardcore off, and the map's own
+- In `add`, anything left out is the map's own: its first game mode, infantry only, hardcore and limited gear off, and the map's own
   lighting and zones. A map can be in a rotation more than once, such as Bakurani by day and at dusk.
 - If the server can't take the rotation (it is not answering, or the settings file is read-only), the reply says why,
   and the bot tries again at every check until the server has it.
@@ -688,7 +689,7 @@ became Default; if it had no maps, it takes the server's. The Node/Docker versio
 
 The [staff page](#staff-page) has a tab of its own for rotations: the week, with each day's rotation to pick; what is on
 the server now, with the map being played and the next; and an editor where staff drag maps into a rotation, drag them
-into order, and set each one's mode, infantry only, hardcore, lighting and zones. Nothing changes until they press Save,
+into order, and set each one's mode, infantry only, hardcore, limited gear, lighting and zones. Nothing changes until they press Save,
 and Put on server swaps to it for the rest of the day.
 
 It reads `GET /api/admin/rotations` (the saved rotations, the week, the server's rotation, and each map's modes,

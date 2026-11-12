@@ -16,12 +16,13 @@ const catalog: SetupCatalog = {
       { map: 'Europe', status: 'next', experiences: ['Europe_KOTH_01'], lighting: 'DayEarlyFog' },
     ],
   },
-  mapExperiences: ['Kavkazi_KOTH_01', 'Kavkazi_KOTH_02', 'KOTH_InfantryOnly', 'KOTH_Hardcore'],
+  mapExperiences: ['Kavkazi_KOTH_01', 'Kavkazi_KOTH_02', 'KOTH_InfantryOnly', 'KOTH_Hardcore', 'KOTH_LimitedGear'],
   experiences: [
     { id: 'Kavkazi_KOTH_01', name: 'King of the Hill' },
     { id: 'Kavkazi_KOTH_02', name: 'King of the Hill (small)' },
     { id: 'KOTH_InfantryOnly', name: 'Infantry only' },
     { id: 'KOTH_Hardcore', name: 'Hardcore' },
+    { id: 'KOTH_LimitedGear', name: 'Limited gear' },
   ],
   lightings: [
     { id: 'DayClear', name: 'Day, clear' },
@@ -62,6 +63,20 @@ describe('planSetup', () => {
     const planned = planSetup('Kavkazi', { infantry_only: 'true' }, { ...catalog, rotation: null });
 
     expect(planned).toEqual({ setup: { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly'] }, labels: ['King of the Hill', 'Infantry only'] });
+  });
+
+  it('keeps limited gear from the rotation, and turns it on or off when asked', () => {
+    const entry = { map: 'Kavkazi', status: 'now' as const, experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly', 'KOTH_LimitedGear'] };
+    const withGear: SetupCatalog = { ...catalog, rotation: { enabled: true, mode: 'ordered', entries: [entry] } };
+
+    expect(planSetup('Kavkazi', {}, withGear)).toMatchObject({
+      setup: { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly', 'KOTH_LimitedGear'] },
+      labels: ['King of the Hill', 'Infantry only', 'Limited gear'],
+    });
+    expect(planSetup('Kavkazi', { limited_gear: 'false' }, withGear)).toMatchObject({ setup: { experiences: ['Kavkazi_KOTH_01', 'KOTH_InfantryOnly'] } });
+    expect(planSetup('Kavkazi', { limited_gear: 'true' }, { ...catalog, rotation: null })).toMatchObject({
+      setup: { experiences: ['Kavkazi_KOTH_01', 'KOTH_LimitedGear'] },
+    });
   });
 
   it('refuses a mode, lighting or zone layout the server does not have', () => {
@@ -123,6 +138,7 @@ describe('currentExperience', () => {
 describe('modesFor', () => {
   it('lists the game modes of a map, not the modifiers', () => {
     expect(isModifier('KOTH_InfantryOnly')).toBe(true);
+    expect(isModifier('KOTH_LimitedGear')).toBe(true);
     expect(isModifier('Kavkazi_KOTH_01')).toBe(false);
     expect(modesFor(catalog)).toEqual([
       { id: 'Kavkazi_KOTH_01', name: 'King of the Hill' },
