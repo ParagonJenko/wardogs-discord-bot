@@ -442,6 +442,8 @@ export const createPoller = ({
         rank: places.get(steamId) ?? null,
         nudge: nudging.has(steamId),
       });
+      // No welcome for a player who is not on the leaderboard and not due a nudge. They still count as welcomed.
+      if (pick === null) continue;
       const text = pick.text;
       lately = remember(lately, pick);
       if (pick.list === 'linkNudge') asked.push(steamId);

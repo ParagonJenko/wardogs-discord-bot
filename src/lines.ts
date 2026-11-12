@@ -9,20 +9,14 @@
 // private messages, {name} is the player's name in game, cut short at NAME_LONGEST (see messages.ts), and {rank} their best
 // place on the website's leaderboard, such as "3rd for kills". The end-of-match lists below say what else each fills in.
 
-// A private message to each player a couple of minutes after they join (see WELCOME_MESSAGE_MINUTES): the basic rules.
-// The bot puts the Discord and the website after the line.
-export const WELCOME = [
-  'Welcome, {name}! Play fair: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide.',
-  'Welcome in, {name}! Rules: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism, abuse. Listen to admins.',
-  'Boots on the ground, {name}! No cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide.',
-];
-
-// The welcome for a player on the website's leaderboard (the top 10 of any board over 30 days), in place of the one above.
+// The welcome for a player on the website's leaderboard (the top 10 of any board over 30 days), a private message a
+// couple of minutes after they join (see WELCOME_MESSAGE_MINUTES). Calls to action only: the server's welcome popup
+// shows the rules, and a player who is not on the leaderboard gets no welcome at all.
 // {rank} is their best place, such as "3rd for kills". The bot puts the Discord and the website after the line.
 export const WELCOME_BACK = [
-  'Welcome back, {name}! {rank} on the leaderboard. Defend it. No cheats, no TKs, no GLs, no crates in HQ.',
-  '{name} is back! {rank} on the leaderboard. Keep it clean: no cheats, no TKs, no GLs, no crates in HQ.',
-  "Welcome back, {name}. You're {rank}, so everyone's gunning for you. No cheats, no TKs, no GLs, no crates in HQ.",
+  'Welcome back, {name}! {rank} on the leaderboard. Defend it.',
+  '{name} is back! {rank} on the leaderboard. Keep climbing.',
+  "Welcome back, {name}. You're {rank}, so everyone's gunning for you. Hold your spot.",
 ];
 
 // Every few minutes while the server seeds. The bot puts what seeding earns after the line. The ones that say why to
@@ -49,19 +43,13 @@ export const SEEDING = [
 ];
 
 // 10 minutes after the match goes live. These are the whole message, so each ends on one link to type: the website, a
-// page on it, or the rules in the Discord through the website's short link ({site}/discord, see DISCORD_SHORT_LINK).
+// page on it. Calls to action only: the rules are in the server's welcome popup.
 export const TEN_MINUTES = [
   "10 minutes in and nobody's rage quit yet. See where your K/D ranks: {site}",
   'Still alive? Impressive. Your K/D is on the leaderboard: {site}',
-  'Enjoying the chaos, soldier? Rules are in our Discord: {site}/discord',
-  'Your squad lead wants you to read the rules. They are in our Discord: {site}/discord',
   '10 minutes down. Bragging rights live on the leaderboard: {site}',
-  '10 minutes in. Blue, park the spawn truck so people can spawn. Rules: {site}/discord',
   'Still spamming the green join button? We started 10 minutes ago. Stats: {site}',
   '10 minutes in. Cash is nice, the zone is nicer. Leaderboard: {site}',
-  '10 minutes in. Play fair: the rules are in our Discord at {site}/discord',
-  '10 minutes in. No grenade launchers and no crates in HQ. Rules: {site}/discord',
-  'Reminder: no GLs, no crates in HQ. Admins are watching. Rules: {site}/discord',
   '10 minutes in. Watch the kill feed and streaks live: {site}/live',
   '10 minutes in. Season 3 stats are live. See where you rank: {site}',
   'Still alive? Your Season 3 K/D, wins and play time: {site}',
@@ -69,11 +57,11 @@ export const TEN_MINUTES = [
   '10 minutes in. Who carried and who fed in Season 2? The Season in Review: {site}/season',
 ];
 
-// In place of the welcome, at most once a week, for a regular (5 or more matches in 30 days) who has not linked their
+// Instead of the welcome back, at most once a week, for a regular (5 or more matches in 30 days) who has not linked their
 // account on the website. {site} is the website. The bot puts the Discord after the line.
 export const LINK_NUDGE = [
   "{name}, you're a regular! Link your account at {site}/account for a Discord role and VIP alerts.",
-  'Welcome back, {name}! Link Steam and Discord at {site}/account: get a role and VIP alerts. Play fair.',
+  'Welcome back, {name}! Link Steam and Discord at {site}/account: get a role and VIP alerts.',
   'Good to see you, {name}. Link your account at {site}/account for a Discord role and VIP alerts.',
 ];
 
@@ -230,7 +218,6 @@ export const NEARLY_OTHER = ['{team} has {score}! Nearly over.'];
 
 // Every list, as the bot says them: these, or the ones staff put in their place.
 export type Lines = {
-  welcome: string[];
   welcomeBack: string[];
   linkNudge: string[];
   seederThanks: string[];
@@ -251,7 +238,6 @@ export type Lines = {
 };
 
 export const DEFAULT_LINES: Lines = {
-  welcome: WELCOME,
   welcomeBack: WELCOME_BACK,
   linkNudge: LINK_NUDGE,
   seederThanks: SEEDER_THANKS,

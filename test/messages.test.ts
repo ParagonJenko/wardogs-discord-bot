@@ -281,50 +281,48 @@ describe('watchJoins', () => {
 
 describe('welcomeMessage', () => {
   const both = { afterMs: 2 * MINUTE, siteHost: 'gaminginit.com', discord: 'discord.gg/qsJFYGhSJ4' };
-  const rules = (lines.WELCOME[0] ?? '').replace('{name}', 'Ash');
-  const ash = { name: 'Ash', rank: null };
+  const back = (lines.WELCOME_BACK[0] ?? '').replace('{name}', 'Ash').replace('{rank}', '3rd for kills');
+  const ash = { name: 'Ash', rank: '3rd for kills' };
 
-  it('says their name and the basic rules, then the Discord and the website', () => {
+  it('says their name and place, then the Discord and the website', () => {
     expect(welcomeMessage(both, first, undefined, {}, ash)).toBe(
-      'Welcome, Ash! Play fair: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide. ' +
-        'Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
+      'Welcome back, Ash! 3rd for kills on the leaderboard. Defend it. Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
     );
   });
 
   it('leaves out a link it does not have', () => {
-    expect(welcomeMessage({ ...both, discord: null }, first, undefined, {}, ash)).toBe(`${rules} Stats: gaminginit.com`);
-    expect(welcomeMessage({ ...both, siteHost: null }, first, undefined, {}, ash)).toBe(`${rules} Discord: discord.gg/qsJFYGhSJ4`);
-    expect(welcomeMessage({ ...both, siteHost: null, discord: null }, first, undefined, {}, ash)).toBe(rules);
+    expect(welcomeMessage({ ...both, discord: null }, first, undefined, {}, ash)).toBe(`${back} Stats: gaminginit.com`);
+    expect(welcomeMessage({ ...both, siteHost: null }, first, undefined, {}, ash)).toBe(`${back} Discord: discord.gg/qsJFYGhSJ4`);
+    expect(welcomeMessage({ ...both, siteHost: null, discord: null }, first, undefined, {}, ash)).toBe(back);
   });
 
   it('welcomes a player on the leaderboard back, with their place', () => {
-    const pick = welcomePick(both, () => 0, undefined, {}, { name: 'Ash', rank: '3rd for kills' });
+    const pick = welcomePick(both, () => 0, undefined, {}, ash);
 
-    expect(pick.list).toBe('welcomeBack');
-    expect(pick.text).toBe(
-      'Welcome back, Ash! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, no GLs, no crates in HQ. ' +
-        'Discord: discord.gg/qsJFYGhSJ4 | Stats: gaminginit.com',
-    );
+    expect(pick?.list).toBe('welcomeBack');
   });
 
-  it('gives a player on the leaderboard the welcome when there are no welcome back lines', () => {
-    const pick = welcomePick(both, () => 0, { ...lines.DEFAULT_LINES, welcomeBack: [] }, {}, { name: 'Ash', rank: '3rd for kills' });
+  it('gives a player who is not on the leaderboard no welcome', () => {
+    expect(welcomePick(both, () => 0, undefined, {}, { name: 'Ash', rank: null })).toBeNull();
+    expect(welcomeMessage(both, () => 0, undefined, {}, { name: 'Ash', rank: null })).toBeNull();
+  });
 
-    expect(pick.list).toBe('welcome');
+  it('gives a player on the leaderboard no welcome when there are no welcome back lines', () => {
+    expect(welcomePick(both, () => 0, { ...lines.DEFAULT_LINES, welcomeBack: [] }, {}, ash)).toBeNull();
+  });
+
+  it('has no rules in the welcome back lines', () => {
+    for (const line of lines.WELCOME_BACK) expect(line).not.toMatch(/cheat|\bTKs?\b|\bGLs?\b|crates|rules|play fair/i);
   });
 
   it('fits every line in the game with both links and the longest name and place, without cutting it', () => {
     const name = 'x'.repeat(NAME_LONGEST);
-    for (const [list, rank] of [
-      [lines.WELCOME, null],
-      [lines.WELCOME_BACK, '10th for time played'],
-    ] as const) {
-      list.forEach((line, i) => {
-        const text = welcomeMessage(both, () => i / list.length, undefined, {}, { name, rank });
-        expect(text.startsWith(line.replace('{name}', name).replace('{rank}', rank ?? ''))).toBe(true);
-        expect(text.length).toBeLessThanOrEqual(MAX_LENGTH);
-      });
-    }
+    const rank = '10th for time played';
+    lines.WELCOME_BACK.forEach((line, i) => {
+      const text = welcomeMessage(both, () => i / lines.WELCOME_BACK.length, undefined, {}, { name, rank });
+      expect(text?.startsWith(line.replace('{name}', name).replace('{rank}', rank))).toBe(true);
+      expect(text?.length).toBeLessThanOrEqual(MAX_LENGTH);
+    });
   });
 });
 
@@ -334,15 +332,27 @@ describe('the link your account welcome', () => {
   it('asks a regular to link, with only the Discord after it, in place of the welcome back', () => {
     const pick = welcomePick(both, () => 0, undefined, {}, { name: 'Ash', rank: '3rd for kills', nudge: true });
 
-    expect(pick.list).toBe('linkNudge');
-    expect(pick.text).toBe(
+    expect(pick?.list).toBe('linkNudge');
+    expect(pick?.text).toBe(
       "Ash, you're a regular! Link your account at gaminginit.com/account for a Discord role and VIP alerts. " + 'Discord: discord.gg/qsJFYGhSJ4',
     );
   });
 
-  it('gives the usual welcome without a website or lines to ask with', () => {
-    expect(welcomePick({ ...both, siteHost: null }, () => 0, undefined, {}, { name: 'Ash', rank: null, nudge: true }).list).toBe('welcome');
-    expect(welcomePick(both, () => 0, { ...lines.DEFAULT_LINES, linkNudge: [] }, {}, { name: 'Ash', rank: null, nudge: true }).list).toBe('welcome');
+  it('asks a regular who is not on the leaderboard too', () => {
+    expect(welcomePick(both, () => 0, undefined, {}, { name: 'Ash', rank: null, nudge: true })?.list).toBe('linkNudge');
+  });
+
+  it('has no rules in the link your account lines', () => {
+    for (const line of lines.LINK_NUDGE) expect(line).not.toMatch(/play fair|rules/i);
+  });
+
+  it('gives a plain player no welcome without a website or lines to ask with', () => {
+    expect(welcomePick({ ...both, siteHost: null }, () => 0, undefined, {}, { name: 'Ash', rank: null, nudge: true })).toBeNull();
+    expect(welcomePick(both, () => 0, { ...lines.DEFAULT_LINES, linkNudge: [] }, {}, { name: 'Ash', rank: null, nudge: true })).toBeNull();
+  });
+
+  it('gives the welcome back instead without a website to ask with', () => {
+    expect(welcomePick({ ...both, siteHost: null }, () => 0, undefined, {}, { name: 'Ash', rank: '3rd for kills', nudge: true })?.list).toBe('welcomeBack');
   });
 });
 
@@ -569,11 +579,12 @@ describe('not repeating lines', () => {
   });
 
   it('uses the only line of a list that has one', () => {
-    const one = { ...lines.DEFAULT_LINES, welcome: ['Hi'] };
+    const one = { ...lines.DEFAULT_LINES, welcomeBack: ['Hi'] };
     const rule = { afterMs: 0, siteHost: null, discord: null };
-    const picked = welcomePick(rule, first, one);
+    const who = { name: 'Ash', rank: '1st for kills' };
+    const picked = welcomePick(rule, first, one, {}, who)!;
 
-    expect(welcomePick(rule, first, one, remember({}, picked)).text).toBe('Hi');
+    expect(welcomePick(rule, first, one, remember({}, picked), who)?.text).toBe('Hi');
   });
 
   it('remembers a line once, and only the latest few', () => {

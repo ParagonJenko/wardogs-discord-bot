@@ -34,7 +34,7 @@ It also posts:
 - **[Player accounts](#player-accounts)** (Cloudflare only): players sign in to the website with Discord, link their Steam
   account, and get a role and a message when their seeder VIP is earned or about to end. Sign-in can also add them to the server.
   With `ASK_BACK` on, linked players who have been away are asked back when the server seeds.
-- **[Private messages in game](#in-game-messages)**, by name: a welcome (a welcome back with their leaderboard place, or a
+- **[Private messages in game](#in-game-messages)**, by name: a welcome back with their leaderboard place (or a
   nudge to link their account), thanks to the seeders when the server goes live, and at the end of a match their place and
   awards, or a milestone, a personal best, how close they are to the leaderboard, or their nemesis.
 - **A [moderation log](#moderation-log)** (Cloudflare only), in a staff channel: every warning, kick, ban, unban, team
@@ -904,7 +904,7 @@ or is out of the server. The day is saved before any goes out (`returnDay`), so 
 `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`.
 
 **The welcome.** A player who linked their account and is in the server is not sent the Discord invite in their welcome in game.
-Everyone else is. A regular who hasn't linked is asked to, at most once a week (see [Welcome](#welcome)). With `DISCORD_SHORT_LINK` (`/discord`), the welcome says `gaminginit.com/discord` instead of the invite code,
+Everyone else who gets a welcome is. A regular who hasn't linked is asked to, at most once a week (see [Welcome](#welcome)). With `DISCORD_SHORT_LINK` (`/discord`), the welcome says `gaminginit.com/discord` instead of the invite code,
 which is hard to type in game. It is on in `wrangler.jsonc`, and the path is the website's (`public/_redirects`): merge the website
 change too, and if the bot is deployed first the short link does not work until the website is.
 
@@ -2073,17 +2073,15 @@ The server is told in game too (`BOUNTY_ANNOUNCE`, default `on`, `off` for silen
 
 ### Welcome
 
-Each player who joins gets a private message in game (like `/warn`, only they see it) 2 minutes after the bot sees
-them join (`WELCOME_MESSAGE_MINUTES`), by name, with the basic rules and where the Discord and the website are:
+A player on the website's leaderboard (the top 10 of any board over its 30 days) gets a private message in game (like
+`/warn`, only they see it) 2 minutes after the bot sees them join (`WELCOME_MESSAGE_MINUTES`), by name, with their best
+place and where the Discord and the website are (Cloudflare only). The messages are calls to action only: the rules are in
+the server's welcome popup, so the bot doesn't repeat them.
 
-> Welcome, Ghost! Play fair: no cheats, exploits, TKs, crates in HQ, grenade launchers, griefing, racism or abuse. Admins decide.
+> Welcome back, Ghost! 3rd for kills on the leaderboard. Defend it.
 > Discord: gaminginit.com/discord | Stats: gaminginit.com
 
-A player on the website's leaderboard (the top 10 of any board over its 30 days) is welcomed back with their best place
-instead (Cloudflare only):
-
-> Welcome back, Ghost! 3rd for kills on the leaderboard. Defend it. No cheats, no TKs, no GLs, no crates in HQ.
-> Discord: gaminginit.com/discord | Stats: gaminginit.com
+A player who is not on the leaderboard and is not asked to link their account gets no welcome.
 
 - The bot sees joins at its check each minute, so the welcome arrives 2 to 3 minutes after the player joins.
 - **Not again for 6 hours:** a player who rejoins within 6 hours of their welcome (a map change, a crash) doesn't get
@@ -2097,14 +2095,13 @@ instead (Cloudflare only):
   game's line. A blank name is "soldier".
 - **The leaderboard place** (`{rank}`) is their best place on any of the boards: "3rd for kills", "1st for K/D", "5th
   for time played" or "2nd for seeding". Where two are level, kills comes first, then K/D, time played and seeding.
-  [Private profiles](#staff-commands) are left off, as the leaderboard doesn't name them, so they get the usual welcome.
+  [Private profiles](#staff-commands) are left off, as the leaderboard doesn't name them, so they get no welcome.
 - **Link your account** (Cloudflare only, while [player accounts](#player-accounts) are set up): a regular, with 5 or
-  more matches in 30 days, who hasn't linked their account on the website is asked to instead, at most once a week. It
-  comes before the welcome back. Staff are never asked. Who was asked is kept for a week (`linkNudges`).
+  more matches in 30 days, who hasn't linked their account on the website is asked to instead of the welcome back, at most once a week. Staff are never asked. Who was asked is kept for a week (`linkNudges`).
 
   > Ghost, you're a regular! Link your account at gaminginit.com/account for a Discord role and VIP alerts.
   > Discord: gaminginit.com/discord
-- The lines are on the [Lines tab](#lines-tab) (Welcome: Everyone, Welcome: On the leaderboard, and Welcome: Link your
+- The lines are on the [Lines tab](#lines-tab) (Welcome: On the leaderboard, and Welcome: Link your
   account), so staff can change them without a deploy. The defaults are in `src/lines.ts`.
 - A welcome that fails to send is logged (`Welcome to "<name>" (<Steam ID>) failed: …`) and not tried again. Each one
   sent is logged as `Sent welcome to "<name>" (<Steam ID>): …`.
@@ -2276,7 +2273,7 @@ is won at a score other than 100. They need `SITE_URL`; without it none are sent
 ### Lines tab
 
 The [staff page](#staff-page) has a tab for the lines the bot says in game, so staff can reword them, add new ones or
-take some out without a deploy. Each list (seeding and the thanks when live, welcome, welcome back and link your
+take some out without a deploy. Each list (seeding and the thanks when live, welcome back and link your
 account, 10 minutes in, halfway and 90 points for each faction, level scores, any other team, end of match, MVP,
 milestone, personal best, nearly on the leaderboard and nemesis) has its own editor:
 
