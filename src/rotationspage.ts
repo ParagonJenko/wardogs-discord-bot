@@ -26,7 +26,7 @@ import {
 // with, to build rotations from. Staff change them through the same edits as /rotations (see rotations.ts).
 
 // A map, by the name players know it, with what it can be played with: its game modes, the modifiers it has (infantry
-// only, hardcore) with the experience that turns each on, and its control-zone layouts.
+// only, hardcore, limited gear) with the experience that turns each on, and its control-zone layouts.
 export type MapChoice = {
   id: string;
   name: string;

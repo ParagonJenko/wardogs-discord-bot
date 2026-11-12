@@ -75,6 +75,7 @@ const matchSetup = [
   { type: STRING, name: 'mode', description: 'Game mode (default: as in the rotation)', required: false, autocomplete: true },
   { type: BOOLEAN, name: 'infantry_only', description: 'Infantry only (default: as in the rotation)', required: false },
   { type: BOOLEAN, name: 'hardcore', description: 'Hardcore (default: as in the rotation)', required: false },
+  { type: BOOLEAN, name: 'limited_gear', description: 'Limited gear (default: as in the rotation)', required: false },
   { type: STRING, name: 'lighting', description: 'Time of day and weather (default: as in the rotation)', required: false, autocomplete: true },
   { type: STRING, name: 'zones', description: 'Control zone layout (default: as in the rotation)', required: false, autocomplete: true },
 ];
@@ -95,6 +96,7 @@ const rotationMap = [
   { type: STRING, name: 'mode', description: "Game mode (default: the map's first)", required: false, autocomplete: true },
   { type: BOOLEAN, name: 'infantry_only', description: 'Infantry only (default: off)', required: false },
   { type: BOOLEAN, name: 'hardcore', description: 'Hardcore (default: off)', required: false },
+  { type: BOOLEAN, name: 'limited_gear', description: 'Limited gear (default: off)', required: false },
   { type: STRING, name: 'lighting', description: "Time of day and weather (default: the map's own)", required: false, autocomplete: true },
   { type: STRING, name: 'zones', description: "Control zone layout (default: the map's own)", required: false, autocomplete: true },
 ];

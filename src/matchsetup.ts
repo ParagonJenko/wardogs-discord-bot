@@ -1,13 +1,14 @@
 import { lightingName, zoneLayoutName } from './names.ts';
 import type { CatalogItem, MatchSetup, Rotation } from './rcon.ts';
 
-// What /setnextmap and /changemap stage: the map with a game mode, modifiers (infantry only, hardcore), lighting and
+// What /setnextmap and /changemap stage: the map with a game mode, modifiers (infantry only, hardcore, limited gear), lighting and
 // control-zone layout. Anything staff leave out is what the rotation plays that map with.
 
 // Modifiers are experiences too, played alongside a game mode. Each is a yes/no option.
 export const MODIFIERS = [
   { option: 'infantry_only', name: 'Infantry only', pattern: /infantryonly/i, fallback: 'KOTH_InfantryOnly' },
   { option: 'hardcore', name: 'Hardcore', pattern: /hardcore/i, fallback: 'KOTH_Hardcore' },
+  { option: 'limited_gear', name: 'Limited gear', pattern: /limitedgear/i, fallback: 'KOTH_LimitedGear' },
 ] as const;
 
 export const isModifier = (id: string): boolean => MODIFIERS.some((m) => m.pattern.test(id));

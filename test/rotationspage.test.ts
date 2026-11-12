@@ -33,6 +33,7 @@ describe('buildCatalog', () => {
           modifiers: [
             { key: 'infantry_only', name: 'Infantry only', id: 'KOTH_InfantryOnly' },
             { key: 'hardcore', name: 'Hardcore', id: 'KOTH_Hardcore' },
+            { key: 'limited_gear', name: 'Limited gear', id: 'KOTH_LimitedGear' },
           ],
           zones: [],
         },
