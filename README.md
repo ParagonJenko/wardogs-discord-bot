@@ -504,7 +504,9 @@ works when it matches exactly one player.
 
   Anything left out is what the rotation plays that map with (for a map not in the rotation: its first mode, and the
   server's own lighting and zones). So `/setnextmap map:Ozeti infantry_only:True` is the rotation's Ozeti, infantry
-  only. `mode` and `zones` list the choices once a map is picked. The reply says the setup, such as
+  only. `mode` and `zones` list the choices once a map is picked, and `lighting` then lists only what that map can be
+  played with: Sabatulo has just DayClear, DayLateClear, DayLateGray and DayLateRain (a short table in
+  `src/maplightings.ts`; maps not in it allow every lighting), and a lighting it can't have is refused. The reply says the setup, such as
   "Next map: **Ozeti** · King of the Hill · Infantry only · Day, clear".
 - **`/lighting`** changes the time of day and weather of the match being played, live, with no map change and no
   restart (`PUT /v1/world/lighting`). Pick the `lighting` from the server's list. It only lasts for this match: the next
@@ -718,7 +720,8 @@ With `MAP_VOTE` set to `on`, players vote for the next map in Discord, in one ch
    by some and hated by others, so it wins only by having the most weather votes, and a tie in the weather goes to the
    safest: Clear, then Fog, then Rain. When no lighting has both, the weather wins: the lighting is one with that weather
    and the time nearest the one chosen (Dusk and Rain gives the afternoon rain). With only a time voted on, it is a clear
-   lighting at that time when there is one; with only weather, any time. With no votes on a row, that
+   lighting at that time when there is one; with only weather, any time. Only lightings the winning map can be played
+   with are chosen (see `/setnextmap`): a time or weather it has none of counts for nothing. With no votes on a row, that
    part stays as the rotation has it. The **circles** (the map's control-zone layout) are not voted on: the winning map gets
    one of its layouts by chance, never the layout a vote last gave that map (kept under `mapVoteZones`, and updated once the
    winner is on the server). A map with only one layout keeps the rotation's. It is all part of the same message, so

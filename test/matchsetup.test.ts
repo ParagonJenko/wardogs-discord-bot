@@ -74,6 +74,18 @@ describe('planSetup', () => {
     });
   });
 
+  it("refuses a lighting the map can't be played with, but lets the rotation's own through", () => {
+    const sabatulo: SetupCatalog = {
+      ...catalog,
+      rotation: { enabled: true, mode: 'ordered', entries: [{ map: 'Russia', status: 'next', lighting: 'DayEarlyFog' }] },
+      lightings: [...(catalog.lightings ?? []), { id: 'DayLateRain', name: 'Afternoon, rain' }],
+    };
+
+    expect(planSetup('Russia', { lighting: 'Early, fog' }, sabatulo)).toEqual({ problem: "Early, fog can't be played on this map. Pick one from the list." });
+    expect(planSetup('Russia', { lighting: 'daylaterain' }, sabatulo)).toMatchObject({ setup: { lighting: 'DayLateRain' } });
+    expect(planSetup('Kavkazi', { lighting: 'DayEarlyFog' }, sabatulo)).toMatchObject({ setup: { lighting: 'DayEarlyFog' } });
+  });
+
   it('refuses what staff typed when the server lists nothing for it, unlike when it could not be read', () => {
     const empty: SetupCatalog = { ...catalog, rotation: null, mapExperiences: [], lightings: [], zones: [] };
 

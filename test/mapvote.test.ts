@@ -709,6 +709,20 @@ describe('the time of day and weather votes', () => {
     }
   });
 
+  it("only chooses lightings the winning map can be played with, and gives way to the other row when one has none", () => {
+    const sabatulo = (v: MapVote, roll = 0) => chooseConditions(v, () => roll, false, 'Russia')?.id;
+    const allowed = ['DayClear', 'DayLateClear', 'DayLateGray', 'DayLateRain'];
+    for (const roll of [0, 0.3, 0.6, 0.99]) {
+      expect(allowed).toContain(sabatulo(voted({ light: 'random' }, { weather: 'random' }), roll));
+      // Fog has no lighting there, so it counts for nothing and the lighting stays as the rotation has it.
+      expect(sabatulo(voted({ weather: 'fog' }), roll)).toBeUndefined();
+      // Dusk has none either: the weather decides.
+      expect(sabatulo(voted({ light: 'dusk' }, { weather: 'rain' }), roll)).toBe('DayLateRain');
+    }
+    // Any map: unchanged.
+    expect(chooseConditions(voted({ weather: 'fog' }), () => 0, false, 'Kavkazi')).not.toBeNull();
+  });
+
   it('keeps rain out of every lighting Random can give, however many vote for it', () => {
     const many = voted(...Array.from({ length: 6 }, () => ({ weather: 'random' })));
     const rolls = Array.from({ length: 100 }, (_, i) => i / 100);
