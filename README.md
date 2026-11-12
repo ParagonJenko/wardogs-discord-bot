@@ -1387,6 +1387,33 @@ The next check asks Steam about everyone in game. Each account gets points for w
 
 The Node/Docker version does not check Steam accounts.
 
+## Welcome message
+
+The popup players see when they join the server is edited on the website's Server settings page, under **Welcome
+message**. The bot reads it from and writes it to the server's `ServerSettings.ini` over RCON, in the
+`[/Script/WDGame.WDGameStateSession]` section:
+
+- `bServerWelcomeMessageEnabled` is whether the popup shows; the message itself is `ServerWelcomeMessageLines`, written
+  as `!ServerWelcomeMessageLines=ClearArray` and then one `.ServerWelcomeMessageLines=` for each popup line (an empty
+  one is a blank line). Every other line of the file is left as it was; a key that isn't there yet is added.
+- The file keeps each line HTML-escaped once: `<Italic>Fish &amp; chips</>` is stored as
+  `&lt;Italic&gt;Fish &amp;amp; chips&lt;/&gt;`. The page and the API use the real line.
+- Lines are checked against the game's format before anything is sent: `<Header>…</>`, `<Bold>…</>`, `<Italic>…</>` and
+  `<text color="#RRGGBB" size="8 to 24" fontface="Bold or Italic">…</>`, each closed with `</>` and none inside
+  another; no other tag, links included. `< > & "` are written `&lt; &gt; &amp; &quot;`. At most 128 lines of 128
+  characters shown (tags aren't counted, and each of those four counts as one).
+- A save is checked by the server's dry run (`/v1/config/validate`) first, then written with `If-Match` the revision staff
+  were looking at. If the file changed meanwhile the save is refused and staff reload; it is never forced. The server
+  applies this section from the next match.
+- `GET /api/admin/motd` answers `{ "enabled", "lines", "revision", "problems" }` (`problems` are `{ "line", "problem" }`
+  for what the file has now), or an error when the settings can't be read or are read-only over RCON.
+  `POST /api/admin/motd` takes `{ "enabled", "lines", "revision" }` and answers the same, with `"outcome"`: `"next-match"`,
+  or `"unchanged"` when the file already said it. It answers 400 with the `problems` for a message that breaks the rules,
+  409 when the file changed, and 422 when the server won't take it. Each save is logged as `Staff page: welcome message
+  saved by "<staff>" (Discord user <ID>)`.
+
+The Node/Docker version has no staff page, so it doesn't edit the welcome message.
+
 ## Weapon rules
 
 Some servers don't allow some weapons, such as the guns on the Humvee and the Kodiak, or the MGL. The bot sees every
