@@ -20,15 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
       # Builds the Worker as a deploy does, without deploying it.
-      - run: npx wrangler deploy --dry-run
+      - run: pnpm exec wrangler deploy --dry-run
 
   # Deploys main to Cloudflare once the tests pass. See "Deploy from GitHub" in the README.
   deploy:
@@ -38,11 +39,12 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Deploy to Cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -52,4 +54,4 @@ jobs:
             echo "::warning::Not deployed: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (README, Deploy from GitHub)."
             exit 0
           fi
-          npm run deploy
+          pnpm run deploy

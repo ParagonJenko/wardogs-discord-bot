@@ -1,5 +1,5 @@
 // Registers the bot's slash commands with Discord. Run once, and again whenever the commands change.
-// Put DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN in .env (or the environment), then: npm run register
+// Put DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN in .env (or the environment), then: pnpm run register
 import { REGISTERED_COMMANDS } from '../src/interactions.ts';
 
 // Values pasted into .env or a Windows shell often keep their quotes or stray spaces.
