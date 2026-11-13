@@ -3,6 +3,9 @@ product: gaminginit-bot
 # ideaSquared bot project: the deploy message goes to its gaminginit-github channel.
 discord: gaminginit
 checks: [test]
+# `ship deploy gaminginit-bot` starts this workflow (it runs the tests, then deploys main).
+dispatch:
+  workflow: ci.yml
 environments:
   production: {}
 components:
