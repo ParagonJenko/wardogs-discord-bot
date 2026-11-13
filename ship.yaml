@@ -1,5 +1,7 @@
 # How this repo deploys. Read by ideaSquared/shipper's reusable workflow (see its README).
 product: gaminginit-bot
+# ideaSquared bot project: the deploy message goes to its gaminginit-github channel.
+discord: gaminginit
 checks: [test]
 environments:
   production: {}
