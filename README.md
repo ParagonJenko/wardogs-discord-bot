@@ -123,7 +123,9 @@ To change a threshold later, edit `wrangler.jsonc` and run `pnpm run deploy` aga
 ### Deploy from GitHub
 
 With two repository secrets, every push to `main` deploys the bot once the typecheck and tests pass (the CI workflow's
-`deploy` job). A push that fails them is not deployed, and the bot keeps running the last version that passed.
+`deploy` job, which uses the shared [ideaSquared/shipper](https://github.com/ideaSquared/shipper) workflow and this repo's
+`ship.yaml`). A push that fails them is not deployed, and the bot keeps running the last version that passed. After each
+deploy it checks `/api/stats` answers, and rolls the Worker back to the previous version if it does not.
 
 1. In the Cloudflare dashboard: My Profile → API Tokens → Create Token → **Edit Cloudflare Workers** template. Limit it
    to your account, then create it and copy the token.
@@ -131,8 +133,8 @@ With two repository secrets, every push to `main` deploys the bot once the typec
 3. On GitHub: the repository's Settings → Secrets and variables → Actions → New repository secret. Add
    `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
-Until both are set, the `deploy` job passes with a warning and deploys nothing. Actions → CI → Run workflow deploys
-`main` again by hand.
+Until both are set, the `deploy` job fails and deploys nothing. Actions → CI → Run workflow deploys `main` again by
+hand.
 
 A deploy from GitHub is the same as `pnpm run deploy`: it sets `vars` from `wrangler.jsonc` and keeps the secrets set
 with `wrangler secret put`. It does not register slash commands: after adding or changing a command, run
