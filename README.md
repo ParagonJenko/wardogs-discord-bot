@@ -91,14 +91,14 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
 
 1. Create a free Cloudflare account, then log in from this folder:
    ```bash
-   npm ci
-   npx wrangler login
+   pnpm install
+   pnpm exec wrangler login
    ```
 2. Store the RCON address, RCON password and webhook as secrets, so they are never committed:
    ```bash
-   npx wrangler secret put RCON_URL
-   npx wrangler secret put RCON_PASSWORD
-   npx wrangler secret put DISCORD_WEBHOOK_URL
+   pnpm exec wrangler secret put RCON_URL
+   pnpm exec wrangler secret put RCON_PASSWORD
+   pnpm exec wrangler secret put DISCORD_WEBHOOK_URL
    ```
 3. Optionally set the role ID and thresholds in the `vars` block of `wrangler.jsonc`, and `SITE_URL` (your community
    website, such as `https://gaminginit.com`): post titles then link to it, and their footer points people there. A
@@ -107,7 +107,7 @@ on the Workers free plan, and the bot uses about 1,440 invocations a day against
    the [live server status](#live-server-status) show it under **Join the server**, with how to join.
 4. Deploy:
    ```bash
-   npm run deploy
+   pnpm run deploy
    ```
    Wrangler prints the Worker's URL, like `https://wardogs-discord-bot.<you>.workers.dev`. You need it
    for `/serverstatus`.
@@ -117,7 +117,7 @@ logs `Watching "<server name>": N/M players`. `RCON rejected the password (401)`
 is wrong; `timed out` means the address or port is wrong or the host's firewall blocks it. On Workers the check always runs every minute;
 `POLL_INTERVAL_SECONDS` is not used.
 
-To change a threshold later, edit `wrangler.jsonc` and run `npm run deploy` again, or merge it to `main` with
+To change a threshold later, edit `wrangler.jsonc` and run `pnpm run deploy` again, or merge it to `main` with
 [Deploy from GitHub](#deploy-from-github) set up.
 
 ### Deploy from GitHub
@@ -127,16 +127,16 @@ With two repository secrets, every push to `main` deploys the bot once the typec
 
 1. In the Cloudflare dashboard: My Profile → API Tokens → Create Token → **Edit Cloudflare Workers** template. Limit it
    to your account, then create it and copy the token.
-2. Your **Account ID**: `npx wrangler whoami` prints it, or it is on Workers & Pages in the dashboard.
+2. Your **Account ID**: `pnpm exec wrangler whoami` prints it, or it is on Workers & Pages in the dashboard.
 3. On GitHub: the repository's Settings → Secrets and variables → Actions → New repository secret. Add
    `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
 Until both are set, the `deploy` job passes with a warning and deploys nothing. Actions → CI → Run workflow deploys
 `main` again by hand.
 
-A deploy from GitHub is the same as `npm run deploy`: it sets `vars` from `wrangler.jsonc` and keeps the secrets set
+A deploy from GitHub is the same as `pnpm run deploy`: it sets `vars` from `wrangler.jsonc` and keeps the secrets set
 with `wrangler secret put`. It does not register slash commands: after adding or changing a command, run
-`npm run register` as before.
+`pnpm run register` as before.
 
 Workers' `fetch()` cannot call a bare IP address or a port like 7776, so on Workers the bot opens a TCP
 socket to the RCON listener and sends the HTTP request itself.
@@ -164,7 +164,7 @@ To set it up:
    than reusing the alerts one, or alerts would push the status up the channel.
 3. Store it as a secret:
    ```bash
-   npx wrangler secret put DISCORD_STATUS_WEBHOOK_URL
+   pnpm exec wrangler secret put DISCORD_STATUS_WEBHOOK_URL
    ```
 
 The next check posts the message, and every check after that edits it.
@@ -179,7 +179,7 @@ The next check posts the message, and every check after that edits it.
   picks a map, it shows here too.
 - **Vote for the next map:** while people can vote (the vote is open and no team has reached its close score), a link to the
   vote message and the score that closes it.
-- **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
+- **Turning it off:** delete the secret (`pnpm exec wrangler secret delete DISCORD_STATUS_WEBHOOK_URL`).
 
 It costs one Discord edit a minute, and one more RCON request (the rotation) for each map and at least every 15
 minutes. The Node/Docker version does not have it.
@@ -245,7 +245,7 @@ the bot did not keep them apart until then, and have no longest shot.
 - Discord takes 6,000 characters a message. If it would be longer, names lose their links, and if it is still too long
   the awards are left out.
 
-Set them in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
+Set them in the `vars` block of `wrangler.jsonc`, then `pnpm run deploy`:
 
 | Variable       | What                                                       | Default |
 | -------------- | ---------------------------------------------------------- | ------- |
@@ -255,7 +255,7 @@ Set them in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
 To post them in a channel of their own, such as `#hall-of-fame`, make a webhook there and store it as a secret:
 
 ```bash
-npx wrangler secret put DISCORD_ROUNDUP_WEBHOOK_URL
+pnpm exec wrangler secret put DISCORD_ROUNDUP_WEBHOOK_URL
 ```
 
 The Node/Docker version does not post roundups.
@@ -390,8 +390,8 @@ command to the Worker's URL; nothing has to stay connected.
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → New Application.
 2. On **General Information**, copy the **Application ID** and **Public Key**. Store the public key:
    ```bash
-   npx wrangler secret put DISCORD_PUBLIC_KEY
-   npm run deploy
+   pnpm exec wrangler secret put DISCORD_PUBLIC_KEY
+   pnpm run deploy
    ```
 3. Still on **General Information**, set **Interactions Endpoint URL** to the Worker's URL and save.
    Discord checks the endpoint straight away; if saving fails, the public key is wrong or not deployed.
@@ -405,7 +405,7 @@ command to the Worker's URL; nothing has to stay connected.
    ```
    then run:
    ```bash
-   npm run register
+   pnpm run register
    ```
    It prints `Registered: /serverstatus, /players, …`. A 401 means the token is wrong: it must come from **Bot →
    Reset Token**, not the Public Key or the OAuth2 Client Secret.
@@ -419,12 +419,12 @@ server cannot be reached, the reply says so, and the reason is in the Worker log
 is private too: the bot deletes its public "thinking…" reply and sends the error as a follow-up only the sender sees,
 so a failure is not shown to the whole channel. If Discord will not delete the reply, the error is edited into the
 public reply instead (logged as `/<command> could not delete the public reply`). After adding or renaming
-commands, or changing a fixed list of choices (such as `/switchteam`'s teams), run `npm run register` again.
+commands, or changing a fixed list of choices (such as `/switchteam`'s teams), run `pnpm run register` again.
 
 Staff commands use the RCON password's write access, change the records or show Steam IDs, so they are locked down:
 
 - It only works in your own Discord server. Set `DISCORD_GUILD_ID` in the `vars` block of `wrangler.jsonc`
-  (enable Developer Mode, right-click your server's icon → Copy Server ID) and `npm run deploy`. Until it is
+  (enable Developer Mode, right-click your server's icon → Copy Server ID) and `pnpm run deploy`. Until it is
   set, staff commands are refused everywhere. Commands are registered globally, so without this an admin in any
   other server that added the app could control your game server.
 - Only staff can use them: members with Discord's **Administrator** permission, or with a role listed in
@@ -433,7 +433,7 @@ Staff commands use the RCON password's write access, change the records or show 
   see the commands in Discord still does not let them use them.
 - Discord only shows staff commands to Administrators at first. To show them to a staff role too: Server
   Settings → Integrations → the bot → pick each staff command (or the whole app) → Add Roles or Members → the
-  role → ✓. It lasts across deploys and `npm run register`, but new commands need it once each.
+  role → ✓. It lasts across deploys and `pnpm run register`, but new commands need it once each.
 - Each broadcast is logged before it is sent and again once the server confirms it, with the sender's
   Discord user ID. If the reply says delivery could not be confirmed, check in game before sending again.
 
@@ -576,7 +576,7 @@ claim or close. A member can have 3 tickets open at once.
 3. Copy the IDs (Developer Mode → right-click → Copy Channel ID) into `wrangler.jsonc`:
    `DISCORD_TICKET_CATEGORY_ID` and, optionally, `DISCORD_TICKET_LOG_CHANNEL_ID`. The staff roles are the existing
    `DISCORD_ADMIN_ROLE_IDS`. `DISCORD_BOT_TOKEN` must already be set.
-4. Deploy, then register the new command: `npm run register`.
+4. Deploy, then register the new command: `pnpm run register`.
 5. In the channel you want the panel in (such as `#support`), run **`/ticketpanel`**. Make that channel read-only for members.
 
 Tickets work on Cloudflare only. To change the wording or add a kind of ticket, edit `TICKET_KINDS` in `src/tickets.ts`.
@@ -610,7 +610,7 @@ are: on the staff page, in the staff commands (`/player` says their profile is p
   before. Matches recorded before Steam IDs were kept have names only, so they still show the name they had.
 - Kept by Steam ID in the Durable Object (`privateProfiles`). Each change is logged in the Worker logs with the staff
   member's Discord user ID (`/private add by Discord user …`).
-- New commands need `npm run register` once (see [Slash commands](#slash-commands)). The staff page lists them as
+- New commands need `pnpm run register` once (see [Slash commands](#slash-commands)). The staff page lists them as
   soon as the bot is deployed.
 
 ## Map rotations
@@ -776,7 +776,7 @@ Set up (Cloudflare):
 1. Give the bot access to the channel: **View Channel**, **Send Messages** and **Embed Links**.
 2. `DISCORD_VOTE_CHANNEL_ID` (under `vars` in `wrangler.jsonc`, already set) is the channel's ID: Discord → Settings →
    Advanced → Developer Mode, then right-click the channel → Copy Channel ID.
-3. Add the bot's token as a secret: `npx wrangler secret put DISCORD_BOT_TOKEN` (Developer Portal → Bot → Reset Token).
+3. Add the bot's token as a secret: `pnpm exec wrangler secret put DISCORD_BOT_TOKEN` (Developer Portal → Bot → Reset Token).
    This is the same optional secret the staff page uses to name staff. A webhook can't carry buttons, so posting the vote
    needs the bot itself.
 
@@ -812,7 +812,7 @@ circles. A map vote never gives a blocked circle to the winning map; it draws an
 before. `/circles unblock` lists the blocked circles and allows one again, and `/circles list` shows them, the latest first, with
 who blocked them. They are kept under `blockedCircles`. A map left with one circle that is not blocked gets it every time, and a map
 with every circle blocked keeps the circle its rotation has. A vote that has drawn its circle and is still being put on the server keeps it, even if it is blocked meanwhile. Blocking only changes what a vote draws: `/setnextmap`, `/changemap`
-and saved rotations can still use a blocked circle. New commands need registering once (`npm run register`).
+and saved rotations can still use a blocked circle. New commands need registering once (`pnpm run register`).
 
 ### Vote options
 
@@ -827,7 +827,7 @@ Staff can switch things off in map votes with `/voteoptions`:
 - `/voteoptions show` lists what is off, with who switched it off and when.
 
 A change applies from the next vote that opens; a vote that is open keeps its options. The choices are kept under `mapVoteOptions`.
-`/setnextmap`, `/changemap` and saved rotations can still use whatever is off. New commands need registering once (`npm run register`).
+`/setnextmap`, `/changemap` and saved rotations can still use whatever is off. New commands need registering once (`pnpm run register`).
 
 ## Player accounts
 
@@ -959,7 +959,7 @@ To set it up:
 2. In that channel: settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
 3. Store it as a secret:
    ```bash
-   npx wrangler secret put DISCORD_MODLOG_WEBHOOK_URL
+   pnpm exec wrangler secret put DISCORD_MODLOG_WEBHOOK_URL
    ```
 
 - Staff are mentioned by name (`@Sarge`), which never pings them. Posts link to the [staff page](#staff-page) when
@@ -987,7 +987,7 @@ To set it up:
   two is never posted: the players are back to half before the 3 minutes are up. The [alert review](#alert-review)
   keeps every outage either way.
 - A post that fails is logged (`Moderation log post failed`) and not retried: the staff history has it either way.
-- **Turning it off:** delete the secret (`npx wrangler secret delete DISCORD_MODLOG_WEBHOOK_URL`). The staff history and
+- **Turning it off:** delete the secret (`pnpm exec wrangler secret delete DISCORD_MODLOG_WEBHOOK_URL`). The staff history and
   the staff page still record everything.
 
 The Node/Docker version does not have the moderation log.
@@ -1056,7 +1056,7 @@ To set it up, with the [slash commands](#slash-commands) app:
      `https://wardogs-discord-bot.<you>.workers.dev/auth/callback`, and save.
    - Click **Reset Secret** under Client Secret, copy it, and store it:
      ```bash
-     npx wrangler secret put DISCORD_CLIENT_SECRET
+     pnpm exec wrangler secret put DISCORD_CLIENT_SECRET
      ```
 2. In the `vars` block of `wrangler.jsonc`, set `DISCORD_APPLICATION_ID` to the app's **Application ID** (General
    Information; the same one as in `.env`). It is not secret. Don't set it in the Cloudflare dashboard instead: every
@@ -1065,9 +1065,9 @@ To set it up, with the [slash commands](#slash-commands) app:
    staff page, as long as `SITE_URL` itself is set: without it no site may read the bot's answer.
 3. Optionally, so the page names every staff member (see below), store the bot token from `.env` as a secret:
    ```bash
-   npx wrangler secret put DISCORD_BOT_TOKEN
+   pnpm exec wrangler secret put DISCORD_BOT_TOKEN
    ```
-4. `npm run deploy`.
+4. `pnpm run deploy`.
 
 How it works:
 
@@ -1346,7 +1346,7 @@ To turn it on:
    `gaminginit.com`.
 2. Store it as a secret:
    ```bash
-   npx wrangler secret put STEAM_API_KEY
+   pnpm exec wrangler secret put STEAM_API_KEY
    ```
 
 The next check asks Steam about everyone in game. Each account gets points for what Steam says about it:
@@ -1386,7 +1386,7 @@ The next check asks Steam about everyone in game. Each account gets points for w
   wrong.
 - What Steam says is kept with the [player records](#player-records), keyed by Steam ID, so only staff see it: never the
   website's public pages.
-- **Turning it off:** delete the secret (`npx wrangler secret delete STEAM_API_KEY`).
+- **Turning it off:** delete the secret (`pnpm exec wrangler secret delete STEAM_API_KEY`).
 
 The Node/Docker version does not check Steam accounts.
 
@@ -1565,7 +1565,7 @@ there with a token:
 
 1. Make a long random token, such as `openssl rand -hex 32`, and store it as a secret:
    ```bash
-   npx wrangler secret put REVIEW_TOKEN
+   pnpm exec wrangler secret put REVIEW_TOKEN
    ```
 2. Read it with the token as a bearer:
    ```bash
@@ -1694,7 +1694,7 @@ median. Changing it counts busy readings again from the last 24 hours, and older
 readings counted under another threshold, or from before busy counts were kept, are left out.
 
 For the Discord counts, set `DISCORD_INVITE` in the `vars` block of `wrangler.jsonc` to an invite link that
-does not expire (`https://discord.gg/abc123` or just `abc123`), then `npm run deploy`. Leave it empty to skip
+does not expire (`https://discord.gg/abc123` or just `abc123`), then `pnpm run deploy`. Leave it empty to skip
 them.
 
 Every page view that loads the stats is a Worker request, and the free plan allows 100,000 a day,
@@ -1751,7 +1751,7 @@ To turn it on:
 
 1. Make a long random token, such as the output of `openssl rand -hex 32`, and store it as a secret:
    ```bash
-   npx wrangler secret put KILL_FEED_TOKEN
+   pnpm exec wrangler secret put KILL_FEED_TOKEN
    ```
    It must be at least 16 characters.
 2. In the game server's `ServerSettings.ini` (your host's file manager), find the `[/Script/WDRCON.WDRCONSettings]`
@@ -1823,7 +1823,7 @@ them: the game sends them in a new form, and the bot needs changing.
   killed, and a capture of a busy server saw about 550 an hour: some 6,600 a day for a server live 12 hours a day,
   against the free plan's 100,000. Each is one storage write, of the day's totals and each killer's, and one more row
   for each killer's day on the staff page's [Kills tab](#kills-and-headshots).
-- **Turning it off:** delete the secret (`npx wrangler secret delete KILL_FEED_TOKEN`), and the bot's
+- **Turning it off:** delete the secret (`pnpm exec wrangler secret delete KILL_FEED_TOKEN`), and the bot's
   `+EventFeedEndpoints=` line from `ServerSettings.ini`. Without the secret, the bot answers the game with a 404. The stats it kept stay.
 
 The Node/Docker version does not take the kill feed: the game needs a public URL to send it to.
@@ -2054,7 +2054,7 @@ Players who seed get a whitelist slot, so they skip the queue when the server is
   ("🎖️ Whitelist slots for seeders: **Ash and Bo** earned whitelist slots for a week by seeding.") with what seeding
   earns. It never pings anyone. If the post fails it is logged, not retried, so nobody is announced twice.
 
-Set it in the `vars` block of `wrangler.jsonc`, then `npm run deploy`:
+Set it in the `vars` block of `wrangler.jsonc`, then `pnpm run deploy`:
 
 | Variable           | What                                                                   | Default in `wrangler.jsonc` |
 | ------------------ | ---------------------------------------------------------------------- | --------------------------- |
@@ -2332,11 +2332,11 @@ The Node/Docker version has no staff page, so it says the lines in `src/lines.ts
 
 ## Run with Node or Docker
 
-With Node 22.18 or newer, copy `.env.example` to `.env`, fill it in, then:
+With Node 22.18 or newer and pnpm (`corepack enable` sets it up), copy `.env.example` to `.env`, fill it in, then:
 
 ```bash
-npm ci --omit=dev
-npm start
+pnpm install --prod
+pnpm start
 ```
 
 With Docker:
@@ -2441,9 +2441,9 @@ whitelist in `ServerSettings.ini` for [automatic VIP](#automatic-vip) (`PUT /v1/
 ## Development
 
 ```bash
-npm ci
-npm test
-npm run typecheck
+pnpm install
+pnpm test
+pnpm run typecheck
 ```
 
 `test/worker.test.ts` runs the Worker as Cloudflare does: Wrangler builds it from `wrangler.jsonc` and runs it in
